@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "name": "cyrene-continuity",
+  "version": "0.1.0",
+  "description": "Cyrene continuity MCP, Codex skill, and local memory bridge.",
+  "skills": [
+    {
+      "name": "cyrene-continuity",
+      "path": "../skills/cyrene-continuity/SKILL.md"
+    }
+  ]
+}

@@ -1,0 +1,415 @@
+import { randomUUID } from 'node:crypto'
+import { lstat, open, readdir, readFile, realpath, rename, rm, rmdir } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative } from 'node:path'
+import { ensureMemoryRoot } from './paths.js'
+import { ensureWritableMemoryRootPath, readActiveMemories, readActiveMemoriesFromRoot } from './memory-store.js'
+import { deriveProfileVisibility } from './memory-validator.js'
+import type { CyreneMemory } from './types.js'
+
+const GENERATED_HEADER = '<!-- Generated from index.jsonl. Do not edit manually. -->'
+const OLD_GENERATED_HEADER = '<!-- Generated from .cyrene/memory/index.jsonl. Do not edit manually. -->'
+const MODEL_PROFILE_FILE = 'MODEL_PROFILE.md'
+const LEGACY_PROJECTION_FILES = [
+  'MEMORY.md',
+  'projections/MEMORY.md',
+  'projections/PROJECT.md',
+  'projections/PERSONAL.md',
+  'projections/AFFECT.md'
+] as const
+const DEFAULT_MODEL_PROFILE_MAX_CHARS = 6000
+const MODEL_PROFILE_SECTIONS = [
+  'Always Apply',
+  'Project Context',
+  'Interaction Preferences',
+  'Response Policy',
+  'Restricted Notes'
+] as const
+
+type ModelProfileSection = (typeof MODEL_PROFILE_SECTIONS)[number]
+type ProfileEntry = {
+  memory: CyreneMemory
+  section: ModelProfileSection
+  visibility: 'always' | 'safe_summary'
+  content: string
+}
+
+export async function renderMemoryProjections(cwd: string): Promise<void> {
+  const root = await ensureMemoryRoot(cwd)
+  const memories = await readActiveMemories(cwd)
+  await writeMemoryProjections(root, memories)
+}
+
+export async function renderMemoryProjectionsFromRoot(memoryRoot: string): Promise<void> {
+  const root = await assertMemoryProjectionTargetsSafe(memoryRoot)
+  const memories = await readActiveMemoriesFromRoot(root)
+  await writeMemoryProjections(root, memories)
+}
+
+export async function assertMemoryProjectionTargetsSafe(memoryRoot: string): Promise<string> {
+  const root = await ensureWritableMemoryRootPath(memoryRoot)
+  await assertSafeGeneratedFileTarget(root, root, MODEL_PROFILE_FILE)
+
+  return root
+}
+
+async function writeMemoryProjections(root: string, memories: CyreneMemory[]): Promise<void> {
+  const safeRoot = await assertMemoryProjectionTargetsSafe(root)
+  await writeSafeGeneratedFile(safeRoot, safeRoot, MODEL_PROFILE_FILE, formatMemoryProjection(memories))
+  await removeLegacyGeneratedProjectionFiles(safeRoot)
+}
+
+async function writeSafeGeneratedFile(
+  root: string,
+  parentDir: string,
+  filename: string,
+  content: string
+): Promise<void> {
+  await assertSafeGeneratedFileTarget(root, parentDir, filename)
+  const targetPath = join(parentDir, filename)
+  const tempPath = join(parentDir, `.${filename}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`)
+  const file = await open(tempPath, 'wx')
+
+  try {
+    await file.writeFile(content, 'utf8')
+  } catch (error) {
+    await file.close()
+    await rm(tempPath, { force: true })
+    throw error
+  }
+
+  await file.close()
+
+  try {
+    await rename(tempPath, targetPath)
+  } catch (error) {
+    await rm(tempPath, { force: true })
+    throw error
+  }
+}
+
+async function assertSafeGeneratedFileTarget(root: string, parentDir: string, filename: string): Promise<void> {
+  const parentStats = await lstat(parentDir)
+  if (parentStats.isSymbolicLink()) {
+    throw new Error(`Refusing to use memory projection symlink: ${parentDir}`)
+  }
+  if (!parentStats.isDirectory()) {
+    throw new Error(`Refusing to use non-directory memory projection path: ${parentDir}`)
+  }
+
+  const parentRealPath = await realpath(parentDir)
+  if (!isPathInside(root, parentRealPath)) {
+    throw new Error(`Refusing to use memory projection path outside memory root: ${parentDir}`)
+  }
+
+  const targetPath = join(parentRealPath, filename)
+  let stats
+  try {
+    stats = await lstat(targetPath)
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return
+    }
+    throw error
+  }
+
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to use memory projection symlink: ${targetPath}`)
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to use non-file memory projection path: ${targetPath}`)
+  }
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const path = relative(parent, child)
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+function isFileErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code
+}
+
+export function formatMemoryProjection(
+  memories: CyreneMemory[],
+  kind: 'model_profile' = 'model_profile'
+): string {
+  void kind
+  const entries = memories
+    .flatMap((memory) => profileEntry(memory))
+    .sort(compareProfileEntries)
+  return formatModelProfile(applyProfileBudget(entries, DEFAULT_MODEL_PROFILE_MAX_CHARS))
+}
+
+async function removeLegacyGeneratedProjectionFiles(root: string): Promise<void> {
+  for (const legacyFile of LEGACY_PROJECTION_FILES) {
+    await removeLegacyGeneratedProjectionFile(root, legacyFile)
+  }
+  await removeEmptyLegacyProjectionsDirectory(root)
+}
+
+async function removeLegacyGeneratedProjectionFile(root: string, legacyFile: string): Promise<void> {
+  const parent = dirname(legacyFile)
+  if (parent !== '.') {
+    const parentPath = join(root, parent)
+    let parentStats
+    try {
+      parentStats = await lstat(parentPath)
+    } catch (error) {
+      if (isFileErrorCode(error, 'ENOENT')) return
+      throw error
+    }
+    if (parentStats.isSymbolicLink() || !parentStats.isDirectory()) {
+      return
+    }
+  }
+
+  const targetPath = join(root, legacyFile)
+  let stats
+  try {
+    stats = await lstat(targetPath)
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) return
+    throw error
+  }
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    return
+  }
+
+  let content
+  try {
+    content = await readFile(targetPath, 'utf8')
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) return
+    throw error
+  }
+  if (!content.startsWith(GENERATED_HEADER) && !content.startsWith(OLD_GENERATED_HEADER)) {
+    return
+  }
+  await rm(targetPath).catch((error: unknown) => {
+    if (!isFileErrorCode(error, 'ENOENT')) {
+      throw error
+    }
+  })
+}
+
+async function removeEmptyLegacyProjectionsDirectory(root: string): Promise<void> {
+  const projectionsDir = join(root, 'projections')
+  let stats
+  try {
+    stats = await lstat(projectionsDir)
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) return
+    throw error
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    return
+  }
+
+  let entries
+  try {
+    entries = await readdir(projectionsDir)
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) return
+    throw error
+  }
+
+  if (entries.length === 0) {
+    await rmdir(projectionsDir).catch((error: unknown) => {
+      if (!isFileErrorCode(error, 'ENOENT') && !isFileErrorCode(error, 'ENOTEMPTY')) {
+        throw error
+      }
+    })
+  }
+}
+
+function profileEntry(memory: CyreneMemory): ProfileEntry[] {
+  if (memory.status !== 'active') {
+    return []
+  }
+  const visibility = deriveProfileVisibility(memory)
+  if (visibility !== 'always' && visibility !== 'safe_summary') {
+    return []
+  }
+  if (memory.domain === 'affective' && isDiagnosticAffectiveContent(memory.content)) {
+    return []
+  }
+
+  const content = visibility === 'safe_summary' ? profileSafeContent(memory) : sanitizeProfileContent(memory.content)
+  if (content === null) {
+    return []
+  }
+
+  return [{ memory, visibility, content, section: profileSection(memory, visibility) }]
+}
+
+function profileSection(memory: CyreneMemory, visibility: 'always' | 'safe_summary'): ModelProfileSection {
+  if (visibility === 'always') {
+    return 'Always Apply'
+  }
+  if (memory.domain === 'project') {
+    return 'Project Context'
+  }
+  if (memory.domain === 'procedural' || memory.domain === 'system') {
+    return 'Response Policy'
+  }
+  if (memory.domain === 'personal' || memory.domain === 'relationship' || memory.domain === 'affective') {
+    return 'Interaction Preferences'
+  }
+  return 'Restricted Notes'
+}
+
+function profileSafeContent(memory: CyreneMemory): string | null {
+  if (isDiagnosticAffectiveContent(memory.content)) {
+    return null
+  }
+  const content = sanitizeProfileContent(memory.content)
+  if (content === null) {
+    return null
+  }
+  if (memory.domain === 'personal' || memory.domain === 'relationship' || memory.domain === 'affective') {
+    return conciseBehavioralGuidance(content, memory.type)
+  }
+  return content
+}
+
+function sanitizeProfileContent(content: string): string | null {
+  const sanitized = content
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}\b/g, '$1[REDACTED]')
+    .replace(/\b(password|passwd|credential|secret|api[_ -]?key|token|private key|ssh key)\s*[:=]\s*\S+/gi, '$1=[REDACTED]')
+    .replace(/\b[A-Fa-f0-9]{32,}\b/g, '[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (sanitized === '') {
+    return null
+  }
+  return sanitized
+}
+
+function conciseBehavioralGuidance(content: string, type: CyreneMemory['type']): string | null {
+  const guidance = extractBehavioralGuidance(content, type)
+  if (guidance === null) {
+    return null
+  }
+  if (containsRawSensitiveProfileDetail(guidance)) {
+    return null
+  }
+  return guidance
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isDiagnosticAffectiveContent(content: string): boolean {
+  return /\b(anxious|unstable|insecurity|insecure|dependent|dependency|fragile|needy)\b|焦虑|不稳定|缺乏安全感|情感依赖/i.test(
+    content
+  )
+}
+
+function extractBehavioralGuidance(content: string, type: CyreneMemory['type']): string | null {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  const preference =
+    matchGuidance(normalized, /\b(?:makes|made|means|meant|leads|led)\s+(?:them|the user|user)\s+prefer\s+(.+)$/i) ??
+    matchGuidance(normalized, /^(?:the\s+)?user\s+prefers?\s+(.+)$/i) ??
+    matchGuidance(normalized, /^(?:the\s+)?user\s+(?:responds better|works best)\s+when\s+(.+)$/i)
+
+  if (preference !== null) {
+    const phrase = formatGuidancePhrase(preference)
+    return phrase === '' ? null : `Prefer ${phrase}`
+  }
+
+  if (type === 'relationship_boundary') {
+    const boundary = matchGuidance(normalized, /^(?:the\s+)?user\s+(?:asks|asked|wants|wanted)\s+(?:you\s+)?(?:to\s+)?(.+)$/i)
+    if (boundary !== null) {
+      const phrase = formatGuidancePhrase(boundary)
+      return phrase === '' ? null : phrase
+    }
+  }
+
+  return null
+}
+
+function matchGuidance(content: string, pattern: RegExp): string | null {
+  const match = pattern.exec(content)
+  return match?.[1] === undefined ? null : match[1]
+}
+
+function formatGuidancePhrase(content: string): string {
+  const guidance = stripSensitiveRationale(content)
+    .replace(/^(?:to\s+)?prefer\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (guidance === '') {
+    return ''
+  }
+  return `${guidance.charAt(0).toLowerCase()}${guidance.slice(1).replace(/[.?!]*$/, '.')}`
+}
+
+function stripSensitiveRationale(content: string): string {
+  return content.split(/\b(?:because|due to|after|following|since)\b/i)[0]?.trim() ?? ''
+}
+
+function containsRawSensitiveProfileDetail(content: string): boolean {
+  return /\b(private|divorce|medical|diagnosis|diagnosed|trauma|family|partner|spouse|ex[- ]?partner)\b|隐私|离婚|创伤|诊断/i.test(
+    content
+  )
+}
+
+function compareProfileEntries(left: ProfileEntry, right: ProfileEntry): number {
+  return (
+    rank(right.visibility === 'always') - rank(left.visibility === 'always') ||
+    rank(right.memory.strength === 'hard') - rank(left.memory.strength === 'hard') ||
+    rank(right.memory.scope === 'global') - rank(left.memory.scope === 'global') ||
+    rank(isUserBacked(right.memory)) - rank(isUserBacked(left.memory)) ||
+    right.memory.scores.usefulness - left.memory.scores.usefulness ||
+    right.memory.scores.evidenceStrength - left.memory.scores.evidenceStrength ||
+    right.memory.scores.safety - left.memory.scores.safety ||
+    rank(right.visibility === 'safe_summary') - rank(left.visibility === 'safe_summary') ||
+    right.memory.updatedAt.localeCompare(left.memory.updatedAt) ||
+    left.content.localeCompare(right.content)
+  )
+}
+
+function rank(value: boolean): number {
+  return value ? 1 : 0
+}
+
+function isUserBacked(memory: CyreneMemory): boolean {
+  return memory.source === 'user_explicit' || memory.userConfirmed === true
+}
+
+function applyProfileBudget(entries: ProfileEntry[], maxProfileChars: number): ProfileEntry[] {
+  const selected: ProfileEntry[] = []
+  for (const entry of entries) {
+    if (entry.visibility === 'always') {
+      selected.push(entry)
+      continue
+    }
+    const next = [...selected, entry]
+    if (formatModelProfile(next).length <= maxProfileChars) {
+      selected.push(entry)
+    }
+  }
+  return selected
+}
+
+function formatModelProfile(entries: ProfileEntry[]): string {
+  const grouped = new Map<ModelProfileSection, ProfileEntry[]>()
+  for (const entry of entries) {
+    grouped.set(entry.section, [...(grouped.get(entry.section) ?? []), entry])
+  }
+
+  const lines = [GENERATED_HEADER, '', '# Cyrene Model Profile', '']
+  for (const section of MODEL_PROFILE_SECTIONS) {
+    lines.push(`## ${section}`, '')
+    const sectionEntries = grouped.get(section) ?? []
+    if (sectionEntries.length === 0) {
+      lines.push('- None.')
+    } else {
+      for (const entry of sectionEntries) {
+        lines.push(`- ${entry.content}`)
+      }
+    }
+    lines.push('')
+  }
+  return `${lines.join('\n').trimEnd()}\n`
+}
