@@ -82,6 +82,47 @@ describe('Codex Stop hook install', () => {
     expect(installedHooks.find((hook) => hook.command.includes('codex hook stop'))?.timeout).toBe(30)
   })
 
+  it('replaces old Cyrene bridge Stop hooks while preserving unrelated hooks', async () => {
+    const home = await createTempDir('cyrene-codex-hook-replace-home-')
+    const hooksPath = join(home, '.codex', 'hooks.json')
+    await mkdir(join(home, '.codex'), { recursive: true })
+    await writeFile(
+      hooksPath,
+      JSON.stringify(
+        {
+          hooks: {
+            Stop: [
+              {
+                hooks: [{ type: 'command', command: '/Users/phoenix/.codex/hooks/task_done_sound.sh', timeout: 5 }]
+              },
+              {
+                hooks: [
+                  {
+                    type: 'command',
+                    command: 'npm --prefix /Users/phoenix/Assistant/Cyrene run --silent dev -- codex hook stop',
+                    timeout: 30
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        null,
+        2
+      )
+    )
+
+    await installCodexStopHook({ hooksPath })
+
+    const parsed = JSON.parse(await readFile(hooksPath, 'utf8')) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string; timeout: number }> }> }
+    }
+    const commands = parsed.hooks.Stop.flatMap((entry) => entry.hooks).map((hook) => hook.command)
+    expect(commands).toContain('/Users/phoenix/.codex/hooks/task_done_sound.sh')
+    expect(commands).toContain(codexStopHookCommand())
+    expect(commands).not.toContain('npm --prefix /Users/phoenix/Assistant/Cyrene run --silent dev -- codex hook stop')
+  })
+
   it('installs the Cyrene Stop hook with a 30 second timeout', async () => {
     const home = await createTempDir('cyrene-codex-hook-timeout-home-')
     const hooksPath = join(home, '.codex', 'hooks.json')

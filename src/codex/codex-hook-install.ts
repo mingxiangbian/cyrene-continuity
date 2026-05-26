@@ -62,21 +62,33 @@ export function mergeStopHookConfig(existing: unknown): CodexHooksConfig {
   const stop = Array.isArray(hooks.Stop) ? [...hooks.Stop] as CodexHookGroup[] : []
   const command = codexStopHookCommand()
   let alreadyConfigured = false
-  const mergedStop = stop.map((entry) => {
+  const mergedStop = stop.flatMap((entry) => {
     if (!Array.isArray(entry?.hooks)) {
-      return entry
+      return [entry]
     }
 
-    return {
-      ...entry,
-      hooks: entry.hooks.map((hook) => {
-        if (hook?.type === 'command' && hook.command === command) {
-          alreadyConfigured = true
-          return { ...hook, timeout: CODEX_STOP_HOOK_TIMEOUT_SECONDS }
-        }
-        return hook
-      })
+    const nextHooks = entry.hooks.flatMap((hook) => {
+      if (hook?.type !== 'command') {
+        return [hook]
+      }
+      if (hook.command === command) {
+        alreadyConfigured = true
+        return [{ ...hook, timeout: CODEX_STOP_HOOK_TIMEOUT_SECONDS }]
+      }
+      if (isCyreneStopHookCommand(hook.command)) {
+        return []
+      }
+      return [hook]
+    })
+
+    if (nextHooks.length === 0) {
+      return []
     }
+
+    return [{
+      ...entry,
+      hooks: nextHooks
+    }]
   })
 
   if (!alreadyConfigured) {
@@ -92,6 +104,11 @@ export function mergeStopHookConfig(existing: unknown): CodexHooksConfig {
       Stop: mergedStop
     }
   }
+}
+
+function isCyreneStopHookCommand(command: string): boolean {
+  return /\bcodex\s+hook\s+stop\b/.test(command) &&
+    (/\/Assistant\/Cyrene\b/.test(command) || /\/Assistant\/cyrene-continuity\b/.test(command) || /\bcyrene-continuity\b/.test(command))
 }
 
 export async function isCodexStopHookConfigured(input: { hooksPath?: string } = {}): Promise<boolean> {
