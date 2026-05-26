@@ -28,6 +28,13 @@ function cliEnv(home: string): NodeJS.ProcessEnv {
   return { ...env, HOME: home, CYRENE_MEMORY_AUTO_EXTRACT: '0' }
 }
 
+function currentRepoMcpConfigLines(): string[] {
+  return [
+    'command = "npm"',
+    `args = ["--prefix", ${JSON.stringify(process.cwd())}, "run", "--silent", "dev", "--", "mcp-server", "--stdio"]`
+  ]
+}
+
 function createPending(): PendingMemory {
   return {
     id: 'cli-pending-1',
@@ -94,8 +101,7 @@ describe('cyrene-continuity codex CLI', () => {
         'args = ["-y", "@agentmemory/mcp"]',
         '',
         '[mcp_servers.cyrene]',
-        'command = "cyrene-continuity"',
-        'args = ["mcp-server", "--stdio"]'
+        ...currentRepoMcpConfigLines()
       ].join('\n')
     )
 
@@ -115,11 +121,15 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stderr).toBe('')
     expect(result.stdout).toContain('Cyrene Codex Doctor')
     expect(result.stdout).toContain('cyrene mcp: configured')
-    expect(result.stdout).toContain('mcp command: cyrene-continuity mcp-server --stdio')
-    expect(result.stdout).toContain('mcp command freshness: stale or external')
+    expect(result.stdout).toContain('mcp command:')
+    expect(result.stdout).toContain('npm')
+    expect(result.stdout).toContain('--prefix')
+    expect(result.stdout).toContain(process.cwd())
+    expect(result.stdout).toContain('mcp-server')
+    expect(result.stdout).toContain('--stdio')
+    expect(result.stdout).toContain('mcp command freshness: current repo')
     expect(result.stdout).toContain('agentmemory: enabled')
     expect(result.stdout).toContain('status: not ready')
-    expect(result.stdout).toContain('action: rerun codex install --dev and update [mcp_servers.cyrene] from its printed config')
   })
 
   it('doctor is not ready until the Cyrene skill is registered', async () => {
@@ -128,8 +138,7 @@ describe('cyrene-continuity codex CLI', () => {
       join(home, '.codex-config.toml'),
       [
         '[mcp_servers.cyrene]',
-        'command = "cyrene-continuity"',
-        'args = ["mcp-server", "--stdio"]',
+        ...currentRepoMcpConfigLines(),
         'enabled = true'
       ].join('\n')
     )
@@ -152,7 +161,9 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('agentmemory: disabled')
     expect(result.stdout).toContain('cyrene-continuity: missing')
     expect(result.stdout).toContain('status: not ready')
-    expect(result.stdout).toContain('action: run cyrene-continuity codex install --dev')
+    expect(result.stdout).toContain('action: run npm --prefix')
+    expect(result.stdout).toContain(process.cwd())
+    expect(result.stdout).toContain('run --silent dev -- codex install --dev')
   })
 
   it('doctor reports ready after the skill is installed and agentmemory is disabled', async () => {
@@ -162,8 +173,7 @@ describe('cyrene-continuity codex CLI', () => {
       configPath,
       [
         '[mcp_servers.cyrene]',
-        'command = "cyrene-continuity"',
-        'args = ["mcp-server", "--stdio"]',
+        ...currentRepoMcpConfigLines(),
         'enabled = true',
         '',
         '[mcp_servers.agentmemory]',
@@ -198,6 +208,47 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('status: ready')
   })
 
+  it('doctor reports stale MCP commands as not ready even when the skill is installed', async () => {
+    const home = await createTempDir('cyrene-codex-cli-stale-home-')
+    const configPath = join(home, '.codex-config.toml')
+    await writeFile(
+      configPath,
+      [
+        '[mcp_servers.cyrene]',
+        'command = "cyrene-continuity"',
+        'args = ["mcp-server", "--stdio"]',
+        'enabled = true',
+        '',
+        '[mcp_servers.agentmemory]',
+        'command = "npx"',
+        'args = ["-y", "@agentmemory/mcp"]',
+        'enabled = false'
+      ].join('\n')
+    )
+    await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'install', '--dev'],
+      { env: cliEnv(home) }
+    )
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'doctor', '--config', configPath],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('cyrene mcp: configured')
+    expect(result.stdout).toContain('mcp command freshness: stale or external')
+    expect(result.stdout).toContain('agentmemory: disabled')
+    expect(result.stdout).toContain('cyrene-continuity: ok')
+    expect(result.stdout).toContain('status: not ready')
+    expect(result.stdout).toContain('action: rerun npm --prefix')
+    expect(result.stdout).toContain(process.cwd())
+    expect(result.stdout).toContain('run --silent dev -- codex install --dev')
+    expect(result.stdout).toContain('update [mcp_servers.cyrene] from its printed config')
+  })
+
   it('install --dev creates only the skill symlink and Cyrene Codex state root', async () => {
     const home = await createTempDir('cyrene-codex-install-home-')
     const codexConfig = join(home, '.codex', 'config.toml')
@@ -212,8 +263,14 @@ describe('cyrene-continuity codex CLI', () => {
 
     expect(result.stderr).toBe('')
     expect(result.stdout).toContain('[mcp_servers.cyrene]')
-    expect(result.stdout).toContain('command = "cyrene-continuity"')
-    expect(result.stdout).toContain('args = ["mcp-server","--stdio"]')
+    expect(result.stdout).toContain('command = "npm"')
+    expect(result.stdout).toContain('--prefix')
+    expect(result.stdout).toContain(process.cwd())
+    expect(result.stdout).toContain('run')
+    expect(result.stdout).toContain('--silent')
+    expect(result.stdout).toContain('dev')
+    expect(result.stdout).toContain('mcp-server')
+    expect(result.stdout).toContain('--stdio')
     expect(result.stdout).toContain('Disable agentmemory before validating Cyrene')
     await expect(readFile(join(home, '.agents', 'skills', 'cyrene-continuity', 'SKILL.md'), 'utf8')).resolves.toContain(
       'Cyrene Continuity Skill'
@@ -305,8 +362,7 @@ describe('cyrene-continuity codex CLI', () => {
       configPath,
       [
         '[mcp_servers.cyrene]',
-        'command = "cyrene-continuity"',
-        'args = ["mcp-server", "--stdio"]',
+        ...currentRepoMcpConfigLines(),
         'enabled = true',
         '',
         '[mcp_servers.agentmemory]',
@@ -341,8 +397,7 @@ describe('cyrene-continuity codex CLI', () => {
       configPath,
       [
         '[mcp_servers.cyrene]',
-        'command = "cyrene-continuity"',
-        'args = ["mcp-server", "--stdio"]',
+        ...currentRepoMcpConfigLines(),
         'enabled = true',
         '',
         '[mcp_servers.agentmemory]',

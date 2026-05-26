@@ -50,7 +50,8 @@ export async function callModel(input: CallModelInput): Promise<ModelResponse> {
     signal: mergeAbortSignals(AbortSignal.timeout(input.config.llmRequestTimeoutMs), input.signal),
     body: JSON.stringify({
       model,
-      messages: input.messages.map((message) => ({ role: message.role, content: message.content })),
+      messages: input.messages.map(formatRequestMessage),
+      ...(input.tools.length > 0 ? { tools: input.tools } : {}),
       temperature: input.config.model.temperature
     })
   })
@@ -62,6 +63,15 @@ export async function callModel(input: CallModelInput): Promise<ModelResponse> {
   return {
     content: message?.content ?? '',
     toolCalls: message?.tool_calls ?? []
+  }
+}
+
+function formatRequestMessage(message: ChatMessage): ChatMessage {
+  return {
+    role: message.role,
+    content: message.content,
+    ...(message.tool_call_id === undefined ? {} : { tool_call_id: message.tool_call_id }),
+    ...(message.tool_calls === undefined ? {} : { tool_calls: message.tool_calls })
   }
 }
 

@@ -23,8 +23,9 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
   const cyreneConfigured = cyreneMcpBlock !== undefined
   const cyreneMcpCommand = cyreneMcpBlock === undefined ? undefined : readDoctorMcpCommand(cyreneMcpBlock)
   const mcpCommandFreshness = cyreneMcpCommand === undefined ? undefined : readDoctorMcpCommandFreshness(cyreneMcpCommand)
+  const installCommand = formatDoctorInstallCommand()
   const mcpCommandAction = mcpCommandFreshness === 'stale or external'
-    ? '  action: rerun codex install --dev and update [mcp_servers.cyrene] from its printed config'
+    ? `  action: rerun ${installCommand} and update [mcp_servers.cyrene] from its printed config`
     : undefined
   const agentmemoryEnabled = hasEnabledMcpServer(configText, 'agentmemory')
   const skillPath = join(homedir(), '.agents', 'skills', 'cyrene-continuity', 'SKILL.md')
@@ -35,10 +36,11 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
   const memoryState = await readDoctorMemoryState(identity.projectId)
   const actions = [
     cyreneConfigured ? undefined : '  action: add [mcp_servers.cyrene] to Codex config',
+    mcpCommandAction,
     agentmemoryEnabled
       ? '  action: disable [mcp_servers.agentmemory] before validating Cyrene as the authoritative memory source'
       : undefined,
-    skillExists ? undefined : '  action: run cyrene-continuity codex install --dev to register the cyrene-continuity skill'
+    skillExists ? undefined : `  action: run ${installCommand} to register the cyrene-continuity skill`
   ].filter((action): action is string => action !== undefined)
   const ready = actions.length === 0
 
@@ -53,7 +55,6 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  cyrene mcp: ${cyreneConfigured ? 'configured' : 'missing'}`,
     cyreneMcpCommand === undefined ? undefined : `  mcp command: ${formatDoctorMcpCommand(cyreneMcpCommand)}`,
     mcpCommandFreshness === undefined ? undefined : `  mcp command freshness: ${mcpCommandFreshness}`,
-    mcpCommandAction,
     `  agentmemory: ${agentmemoryEnabled ? 'enabled' : 'disabled'}`,
     `  stop hook: ${stopHookConfigured ? 'configured' : 'missing'}`,
     stopHookConfigured ? undefined : '  advisory: optional Stop hook is not installed',
@@ -143,6 +144,10 @@ function referencesCurrentRepoPath(value: string): boolean {
 
 function currentRepoRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+}
+
+function formatDoctorInstallCommand(): string {
+  return `npm --prefix ${currentRepoRoot()} run --silent dev -- codex install --dev`
 }
 
 function formatDoctorMcpCommand(mcpCommand: DoctorMcpCommand): string {

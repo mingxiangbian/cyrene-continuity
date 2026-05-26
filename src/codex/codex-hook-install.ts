@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 interface CodexCommandHook {
   type: 'command'
@@ -23,7 +24,8 @@ interface CodexHooksConfig {
 const CODEX_STOP_HOOK_TIMEOUT_SECONDS = 30
 
 export function codexStopHookCommand(): string {
-  return 'cyrene-continuity codex hook stop'
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+  return `npm --prefix ${repoRoot} run --silent dev -- codex hook stop`
 }
 
 export async function formatCodexStopHookInstall(input: { hooksPath?: string; dryRun?: boolean }): Promise<string> {
