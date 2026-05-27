@@ -1057,11 +1057,11 @@ var require_command = __commonJS({
        * @private
        */
       _getCommandAndAncestors() {
-        const result = [];
+        const result2 = [];
         for (let command = this; command; command = command.parent) {
-          result.push(command);
+          result2.push(command);
         }
-        return result;
+        return result2;
       }
       /**
        * Define a command.
@@ -2134,7 +2134,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @private
        */
       _chainOrCallHooks(promise, event) {
-        let result = promise;
+        let result2 = promise;
         const hooks = [];
         this._getCommandAndAncestors().reverse().filter((cmd) => cmd._lifeCycleHooks[event] !== void 0).forEach((hookedCommand) => {
           hookedCommand._lifeCycleHooks[event].forEach((callback) => {
@@ -2145,11 +2145,11 @@ Expecting one of '${allowedValues.join("', '")}'`);
           hooks.reverse();
         }
         hooks.forEach((hookDetail) => {
-          result = this._chainOrCall(result, () => {
+          result2 = this._chainOrCall(result2, () => {
             return hookDetail.callback(hookDetail.hookedCommand, this);
           });
         });
-        return result;
+        return result2;
       }
       /**
        *
@@ -2160,15 +2160,15 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @private
        */
       _chainOrCallSubCommandHook(promise, subCommand, event) {
-        let result = promise;
+        let result2 = promise;
         if (this._lifeCycleHooks[event] !== void 0) {
           this._lifeCycleHooks[event].forEach((hook) => {
-            result = this._chainOrCall(result, () => {
+            result2 = this._chainOrCall(result2, () => {
               return hook(this, subCommand);
             });
           });
         }
-        return result;
+        return result2;
       }
       /**
        * Process arguments in context of this command.
@@ -2433,13 +2433,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
        */
       opts() {
         if (this._storeOptionsAsProperties) {
-          const result = {};
+          const result2 = {};
           const len = this.options.length;
           for (let i = 0; i < len; i++) {
             const key = this.options[i].attributeName();
-            result[key] = key === this._versionOptionName ? this._version : this[key];
+            result2[key] = key === this._versionOptionName ? this._version : this[key];
           }
-          return result;
+          return result2;
         }
         return this._optionValues;
       }
@@ -4922,10 +4922,10 @@ var require_keyword = __commonJS({
       if (def.async && !schemaEnv.$async)
         throw new Error("async keyword in sync schema");
     }
-    function useKeyword(gen, keyword, result) {
-      if (result === void 0)
+    function useKeyword(gen, keyword, result2) {
+      if (result2 === void 0)
         throw new Error(`keyword "${keyword}" failed to compile`);
-      return gen.scopeValue("keyword", typeof result == "function" ? { ref: result } : { ref: result, code: (0, codegen_1.stringify)(result) });
+      return gen.scopeValue("keyword", typeof result2 == "function" ? { ref: result2 } : { ref: result2, code: (0, codegen_1.stringify)(result2) });
     }
     function validSchemaType(schema, schemaType, allowUndefined = false) {
       return !schemaType.length || schemaType.some((st) => st === "array" ? Array.isArray(schema) : st === "object" ? schema && typeof schema == "object" && !Array.isArray(schema) : typeof schema == st || allowUndefined && typeof schema == "undefined");
@@ -10118,16 +10118,16 @@ async function upsertPendingMemoryFromRoot(memoryRoot, candidate) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   const pending = await readPendingMemoriesFromRoot(root);
   const existingIndex = pending.findIndex((memory) => memory.normalizedKey === candidate.normalizedKey);
-  let result = candidate;
+  let result2 = candidate;
   if (existingIndex >= 0) {
     const existing = pending[existingIndex];
-    result = mergePendingMemory(existing, candidate);
-    pending[existingIndex] = result;
+    result2 = mergePendingMemory(existing, candidate);
+    pending[existingIndex] = result2;
   } else {
     pending.push(candidate);
   }
   await writeJsonLinesAtomic(join4(root, PENDING_FILE), pending);
-  return result;
+  return result2;
 }
 async function appendMemoryEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -10293,16 +10293,23 @@ async function getReadableCodexProjectMemoryRoots() {
     if (!entry.isDirectory()) {
       continue;
     }
-    const projectRoot = await getSafeDirectoryOrNull2(join5(projectsRoot, entry.name), projectsRoot);
+    const projectRoot = await getReadableProjectScanDirectoryOrNull(join5(projectsRoot, entry.name), projectsRoot);
     if (projectRoot === null) {
       continue;
     }
-    const memoryRoot = await getSafeDirectoryOrNull2(join5(projectRoot, "memory"), projectRoot);
+    const memoryRoot = await getReadableProjectScanDirectoryOrNull(join5(projectRoot, "memory"), projectRoot);
     if (memoryRoot !== null) {
       memoryRoots.push(memoryRoot);
     }
   }
   return memoryRoots;
+}
+async function getReadableProjectScanDirectoryOrNull(dirPath, parentRealPath) {
+  try {
+    return await getSafeDirectoryOrNull2(dirPath, parentRealPath);
+  } catch {
+    return null;
+  }
 }
 async function ensureCodexBaseRoot() {
   const homeRoot = await realpath3(homedir2());
@@ -10387,7 +10394,7 @@ function isFileErrorCode4(error2, code) {
 }
 
 // src/codex/codex-memory-index.ts
-import { join as join6 } from "node:path";
+import { basename as basename2, dirname as dirname3, join as join6 } from "node:path";
 
 // src/memory/memory-index.ts
 import { mkdir as mkdir4 } from "node:fs/promises";
@@ -10570,10 +10577,25 @@ var UnavailableMemoryIndexAdapter = class {
   async syncRoot(_root) {
     return this.diagnostics();
   }
+  async upsertProjectMetadata(_metadata) {
+    return this.diagnostics();
+  }
+  async listProjectMetadata() {
+    return [];
+  }
+  async upsertProjectSimilarity(_similarity) {
+    return this.diagnostics();
+  }
+  async listProjectSimilarities(_sourceProjectId) {
+    return [];
+  }
   async queryActive(_input) {
     return [];
   }
   async queryPending(_input) {
+    return [];
+  }
+  async querySimilarActive(_input) {
     return [];
   }
   diagnostics() {
@@ -10607,6 +10629,15 @@ var SqliteMemoryIndexAdapter = class {
         name text,
         created_at text not null,
         updated_at text not null
+      );
+
+      create table if not exists project_similarity (
+        source_project_id text not null,
+        target_project_id text not null,
+        score real not null,
+        reason_json text not null,
+        updated_at text not null,
+        primary key (source_project_id, target_project_id)
       );
 
       create table if not exists memories (
@@ -10647,6 +10678,7 @@ var SqliteMemoryIndexAdapter = class {
         created_at text not null
       );
     `);
+    this.ensureProjectColumns(db);
     if (!this.initialized) {
       this.currentDiagnostics = {
         available: true,
@@ -10660,13 +10692,19 @@ var SqliteMemoryIndexAdapter = class {
   async rebuildFromRoots(input) {
     const diagnostics = await this.initialize();
     const db = this.requireDatabase();
-    db.exec("delete from memory_evidence; delete from memories; delete from projects;");
+    db.exec("delete from memory_evidence; delete from memories;");
     for (const root of input.roots) {
-      await this.syncRoot(root);
+      await this.syncRootRecords(root);
     }
+    this.rebuildFts();
     return diagnostics;
   }
   async syncRoot(root) {
+    const diagnostics = await this.syncRootRecords(root);
+    this.rebuildFts();
+    return diagnostics;
+  }
+  async syncRootRecords(root) {
     const diagnostics = await this.initialize();
     const db = this.requireDatabase();
     db.prepare("delete from memory_evidence where memory_id in (select id from memories where memory_root = ?)").run(root.memoryRoot);
@@ -10674,10 +10712,10 @@ var SqliteMemoryIndexAdapter = class {
     if (root.projectId !== null) {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       db.prepare(`
-        insert into projects (project_id, name, created_at, updated_at)
-        values (?, ?, ?, ?)
+        insert into projects (project_id, name, display_name, created_at, updated_at)
+        values (?, ?, ?, ?, ?)
         on conflict(project_id) do update set updated_at = excluded.updated_at
-      `).run(root.projectId, root.projectId, now, now);
+      `).run(root.projectId, root.projectId, root.projectId, now, now);
     }
     const [active, pending] = await Promise.all([
       readActiveMemoriesFromRoot(root.memoryRoot),
@@ -10689,8 +10727,104 @@ var SqliteMemoryIndexAdapter = class {
     for (const memory of pending) {
       this.insertMemory(root, memory);
     }
-    this.rebuildFts();
     return diagnostics;
+  }
+  async upsertProjectMetadata(metadata) {
+    const diagnostics = await this.initialize();
+    const db = this.requireDatabase();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const timestamp = metadata.updatedAt || now;
+    db.prepare(`
+      insert into projects (
+        project_id,
+        root_hash,
+        remote_hash,
+        name,
+        display_name,
+        package_manager,
+        languages_json,
+        frameworks_json,
+        dependency_names_json,
+        dependency_fingerprint,
+        domain_tags_json,
+        created_at,
+        updated_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(project_id) do update set
+        root_hash = excluded.root_hash,
+        remote_hash = excluded.remote_hash,
+        name = excluded.name,
+        display_name = excluded.display_name,
+        package_manager = excluded.package_manager,
+        languages_json = excluded.languages_json,
+        frameworks_json = excluded.frameworks_json,
+        dependency_names_json = excluded.dependency_names_json,
+        dependency_fingerprint = excluded.dependency_fingerprint,
+        domain_tags_json = excluded.domain_tags_json,
+        updated_at = excluded.updated_at
+    `).run(
+      metadata.projectId,
+      metadata.rootHash ?? null,
+      metadata.remoteHash ?? null,
+      metadata.displayName,
+      metadata.displayName,
+      metadata.packageManager,
+      JSON.stringify(metadata.languages),
+      JSON.stringify(metadata.frameworks),
+      JSON.stringify(metadata.dependencyNames),
+      dependencyFingerprint(metadata.dependencyNames),
+      JSON.stringify(metadata.domainTags),
+      timestamp,
+      timestamp
+    );
+    return diagnostics;
+  }
+  async listProjectMetadata() {
+    await this.initialize();
+    return this.requireDatabase().prepare(`
+      select
+        project_id,
+        root_hash,
+        remote_hash,
+        name,
+        display_name,
+        package_manager,
+        languages_json,
+        frameworks_json,
+        dependency_names_json,
+        domain_tags_json,
+        updated_at
+      from projects
+      order by project_id asc
+    `).all().map(projectMetadataFromRecord);
+  }
+  async upsertProjectSimilarity(similarity) {
+    const diagnostics = await this.initialize();
+    this.requireDatabase().prepare(`
+      insert into project_similarity (source_project_id, target_project_id, score, reason_json, updated_at)
+      values (?, ?, ?, ?, ?)
+      on conflict(source_project_id, target_project_id) do update set
+        score = excluded.score,
+        reason_json = excluded.reason_json,
+        updated_at = excluded.updated_at
+    `).run(
+      similarity.sourceProjectId,
+      similarity.targetProjectId,
+      similarity.score,
+      JSON.stringify(similarity.reason),
+      similarity.updatedAt
+    );
+    return diagnostics;
+  }
+  async listProjectSimilarities(sourceProjectId) {
+    await this.initialize();
+    return this.requireDatabase().prepare(`
+      select source_project_id, target_project_id, score, reason_json, updated_at
+      from project_similarity
+      where source_project_id = ?
+      order by score desc, target_project_id asc
+    `).all(sourceProjectId).map(projectSimilarityFromRecord);
   }
   async queryActive(input) {
     await this.initialize();
@@ -10744,6 +10878,47 @@ var SqliteMemoryIndexAdapter = class {
       input.maxTokens
     );
   }
+  async querySimilarActive(input) {
+    await this.initialize();
+    if (input.targetProjects.length === 0) return [];
+    const targetById = new Map(input.targetProjects.map((project) => [project.projectId, project]));
+    const structuredRows = this.querySimilarStructuredRows({
+      currentProjectId: input.currentProjectId,
+      targetProjectIds: Array.from(targetById.keys())
+    });
+    const ftsMatches = this.queryFtsIds(input.query, "active");
+    const task = input.task;
+    const eligibleRows = task === void 0 ? structuredRows : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+      row.payload,
+      {
+        cwd: "",
+        userCyreneDir: "",
+        query: input.query,
+        task,
+        maxItems: input.maxItems,
+        maxTokens: input.maxTokens
+      },
+      task
+    ));
+    const items = [];
+    for (const row of eligibleRows) {
+      const target = targetById.get(row.homeProjectId ?? "");
+      if (target === void 0) continue;
+      items.push({
+        memory: row.payload,
+        score: scoreRow(row, input.query, ftsMatches) + target.similarityScore * 0.2,
+        portability: row.portability,
+        homeProjectId: target.projectId,
+        similarityScore: target.similarityScore,
+        ...target.displayName === void 0 ? {} : { sourceProjectName: target.displayName }
+      });
+    }
+    return selectWithinBudget(
+      items.filter((item) => input.query.trim() === "" || item.score > 0).sort(compareIndexedItems),
+      input.maxItems,
+      input.maxTokens
+    );
+  }
   diagnostics() {
     return this.currentDiagnostics;
   }
@@ -10783,8 +10958,28 @@ var SqliteMemoryIndexAdapter = class {
       return "unicode61";
     }
   }
+  ensureProjectColumns(db) {
+    for (const sql of [
+      "alter table projects add column display_name text",
+      "alter table projects add column package_manager text",
+      "alter table projects add column languages_json text",
+      "alter table projects add column frameworks_json text",
+      "alter table projects add column dependency_names_json text",
+      "alter table projects add column dependency_fingerprint text",
+      "alter table projects add column domain_tags_json text"
+    ]) {
+      try {
+        db.exec(sql);
+      } catch (error2) {
+        if (!String(error2).includes("duplicate column name")) {
+          throw error2;
+        }
+      }
+    }
+  }
   insertMemory(root, memory) {
     const db = this.requireDatabase();
+    const indexId = memoryIndexId(root, memory.id);
     const portability = deriveMemoryPortability(memory);
     const homeProjectId = root.scope === "global" ? null : root.projectId;
     const tags = memory.tags.join(" ");
@@ -10838,7 +11033,7 @@ var SqliteMemoryIndexAdapter = class {
         updated_at = excluded.updated_at,
         expires_at = excluded.expires_at
     `).run(
-      memory.id,
+      indexId,
       root.memoryRoot,
       memory.scope,
       memory.domain,
@@ -10877,8 +11072,8 @@ var SqliteMemoryIndexAdapter = class {
         )
         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        `${memory.id}:${index}`,
-        memory.id,
+        `${indexId}:${index}`,
+        indexId,
         evidence.sourceKind ?? memory.source,
         homeProjectId,
         evidence.sessionId ?? null,
@@ -10926,6 +11121,34 @@ var SqliteMemoryIndexAdapter = class {
     `).all(...values);
     return rows.map(rowFromRecord);
   }
+  querySimilarStructuredRows(input) {
+    if (input.targetProjectIds.length === 0) return [];
+    const placeholders = input.targetProjectIds.map(() => "?").join(", ");
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        payload_json
+      from memories
+      where status = 'active'
+        and home_project_id is not null
+        and home_project_id != ?
+        and home_project_id in (${placeholders})
+        and portability in ('similar_project', 'project_family')
+        and domain in ('project', 'procedural', 'system')
+    `).all(input.currentProjectId, ...input.targetProjectIds);
+    return rows.map(rowFromRecord);
+  }
   queryFtsIds(query, status) {
     if (query.trim() === "") {
       return /* @__PURE__ */ new Set();
@@ -10947,6 +11170,41 @@ var SqliteMemoryIndexAdapter = class {
     }
   }
 };
+function memoryIndexId(root, memoryId) {
+  return JSON.stringify([root.scope, root.projectId, memoryId]);
+}
+function dependencyFingerprint(dependencyNames) {
+  return dependencyNames.slice().sort().join("\n");
+}
+function projectMetadataFromRecord(row) {
+  const projectId = readString(row.project_id, "project_id");
+  return {
+    projectId,
+    displayName: typeof row.display_name === "string" ? row.display_name : typeof row.name === "string" ? row.name : projectId,
+    rootHash: typeof row.root_hash === "string" ? row.root_hash : void 0,
+    remoteHash: typeof row.remote_hash === "string" ? row.remote_hash : void 0,
+    packageManager: typeof row.package_manager === "string" ? row.package_manager : "unknown",
+    languages: parseStringArray(row.languages_json),
+    frameworks: parseStringArray(row.frameworks_json),
+    dependencyNames: parseStringArray(row.dependency_names_json),
+    domainTags: parseStringArray(row.domain_tags_json),
+    updatedAt: typeof row.updated_at === "string" ? row.updated_at : (/* @__PURE__ */ new Date(0)).toISOString()
+  };
+}
+function projectSimilarityFromRecord(row) {
+  return {
+    sourceProjectId: readString(row.source_project_id, "source_project_id"),
+    targetProjectId: readString(row.target_project_id, "target_project_id"),
+    score: Number(row.score),
+    reason: parseStringArray(row.reason_json),
+    updatedAt: readString(row.updated_at, "updated_at")
+  };
+}
+function parseStringArray(value) {
+  if (typeof value !== "string" || value === "") return [];
+  const parsed = JSON.parse(value);
+  return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+}
 function rowFromRecord(row) {
   const payload = JSON.parse(readString(row.payload_json, "payload_json"));
   return {
@@ -11057,8 +11315,8 @@ function renderModelVisibleProjectIdentity(identity) {
 }
 async function tryGit(args, cwd) {
   try {
-    const result = await execFileAsync("git", args, { cwd });
-    const text = result.stdout.trim();
+    const result2 = await execFileAsync("git", args, { cwd });
+    const text = result2.stdout.trim();
     return text === "" ? void 0 : text;
   } catch {
     return void 0;
@@ -11074,13 +11332,28 @@ function codexMemoryDbPath() {
 }
 async function codexMemoryIndexRoots(projectId) {
   const roots = [];
+  const seen = /* @__PURE__ */ new Set();
+  const addRoot = (root) => {
+    if (seen.has(root.memoryRoot)) return;
+    seen.add(root.memoryRoot);
+    roots.push(root);
+  };
   const globalRoot = await getReadableCodexGlobalMemoryRoot();
   if (globalRoot !== null) {
-    roots.push({ memoryRoot: globalRoot, projectId: null, scope: "global" });
+    addRoot({ memoryRoot: globalRoot, projectId: null, scope: "global" });
   }
   const projectRoot = await getReadableCodexProjectMemoryRoot(projectId);
   if (projectRoot !== null) {
-    roots.push({ memoryRoot: projectRoot, projectId, scope: "project" });
+    addRoot({ memoryRoot: projectRoot, projectId, scope: "project" });
+  }
+  let projectMemoryRoots;
+  try {
+    projectMemoryRoots = await getReadableCodexProjectMemoryRoots();
+  } catch {
+    projectMemoryRoots = [];
+  }
+  for (const memoryRoot of projectMemoryRoots) {
+    addRoot({ memoryRoot, projectId: basename2(dirname3(memoryRoot)), scope: "project" });
   }
   return roots;
 }
@@ -11113,11 +11386,11 @@ async function syncCurrentCodexMemoryIndex(input) {
 // src/codex/codex-hook-install.ts
 import { mkdir as mkdir6, readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname4, join as join7 } from "node:path";
+import { dirname as dirname5, join as join7 } from "node:path";
 
 // src/codex/stable-shim.ts
 import { access, chmod, mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname3, resolve as resolve4 } from "node:path";
+import { dirname as dirname4, resolve as resolve4 } from "node:path";
 function codexStableBinRoot() {
   return resolve4(codexGlobalRoot(), "bin");
 }
@@ -11134,7 +11407,7 @@ async function assertRuntimeExists(runtimePath) {
 async function writeCodexStableShim(runtimePath) {
   await assertRuntimeExists(runtimePath);
   const shimPath = codexStableExecutablePath();
-  await mkdir5(dirname3(shimPath), { recursive: true });
+  await mkdir5(dirname4(shimPath), { recursive: true });
   await writeFile2(shimPath, formatStableShim(runtimePath), "utf8");
   await chmod(shimPath, 493);
   return shimPath;
@@ -11178,7 +11451,7 @@ async function formatCodexStopHookInstall(input) {
 async function installCodexStopHook(input) {
   const hooksPath = input.hooksPath ?? defaultHooksPath();
   const config2 = mergeStopHookConfig(await readHooksConfig(hooksPath));
-  await mkdir6(dirname4(hooksPath), { recursive: true });
+  await mkdir6(dirname5(hooksPath), { recursive: true });
   await writeFile3(hooksPath, `${JSON.stringify(config2, null, 2)}
 `, "utf8");
   return [
@@ -11329,16 +11602,16 @@ function isFileErrorCode5(error2, code) {
 }
 
 // src/codex/runtime-paths.ts
-import { basename as basename2, dirname as dirname5, resolve as resolve5 } from "node:path";
+import { basename as basename3, dirname as dirname6, resolve as resolve5 } from "node:path";
 var PLUGIN_RUNTIME_FILE = "cyrene-continuity.mjs";
 function isPluginRuntimeEntryPath(runtimeEntryPath) {
   const entryPath = resolve5(runtimeEntryPath);
-  return basename2(entryPath) === PLUGIN_RUNTIME_FILE && basename2(dirname5(entryPath)) === "runtime";
+  return basename3(entryPath) === PLUGIN_RUNTIME_FILE && basename3(dirname6(entryPath)) === "runtime";
 }
 function resolvePluginRoot(runtimeEntryPath) {
   const entryPath = resolve5(runtimeEntryPath);
   if (isPluginRuntimeEntryPath(entryPath)) {
-    return dirname5(dirname5(entryPath));
+    return dirname6(dirname6(entryPath));
   }
   return resolve5(requireDevRepoRoot(entryPath), "plugin");
 }
@@ -11354,12 +11627,12 @@ function resolveDevRepoRoot(runtimeEntryPath) {
   if (isPluginRuntimeEntryPath(entryPath)) {
     return null;
   }
-  const entryDir = dirname5(entryPath);
-  if (basename2(entryDir) === "src") {
-    return dirname5(entryDir);
+  const entryDir = dirname6(entryPath);
+  if (basename3(entryDir) === "src") {
+    return dirname6(entryDir);
   }
-  if (basename2(entryDir) === "codex" && basename2(dirname5(entryDir)) === "src") {
-    return dirname5(dirname5(entryDir));
+  if (basename3(entryDir) === "codex" && basename3(dirname6(entryDir)) === "src") {
+    return dirname6(dirname6(entryDir));
   }
   return resolve5(entryDir, "..", "..");
 }
@@ -11670,58 +11943,154 @@ async function pathExists(path) {
   }
 }
 
-// src/codex/codex-hook-stop.ts
-import { readFile as readFile8 } from "node:fs/promises";
-
-// src/llm-client.ts
-async function callModel(input) {
-  const model = modelForUseCase(input.config, input.useCase ?? "chat");
-  validateModelConfig(input.config, model);
-  const response = await fetch(`${input.config.model.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: requestHeaders(input.config),
-    signal: mergeAbortSignals(AbortSignal.timeout(input.config.llmRequestTimeoutMs), input.signal),
-    body: JSON.stringify({
-      model,
-      messages: input.messages.map(formatRequestMessage),
-      ...input.tools.length > 0 ? { tools: input.tools } : {},
-      temperature: input.config.model.temperature
-    })
-  });
-  if (!response.ok) {
-    throw new Error(`LLM request failed with HTTP ${response.status}: ${await response.text()}`);
+// src/affect/affect-runtime.ts
+async function buildContinuitySnapshot(input) {
+  const shouldChallengeUser = shouldChallenge(input);
+  const reason = shouldChallengeUser ? "User request may conflict with active continuity memory or safety constraints." : "No direct conflict with active continuity memory was detected.";
+  return {
+    strategy: {
+      tone: "direct",
+      verbosity: input.task === "planning" ? "structured" : "concise",
+      challenge: shouldChallengeUser ? "direct" : "normal",
+      boundaryMode: "standard",
+      safetyMode: shouldChallengeUser ? "elevated" : "standard",
+      shouldChallengeUser,
+      shouldAskClarifyingQuestion: false,
+      rationale: reason
+    },
+    dissent: {
+      shouldChallenge: shouldChallengeUser,
+      mode: shouldChallengeUser ? "direct" : "none",
+      reason
+    }
+  };
+}
+function shouldChallenge(input) {
+  const text = input.userMessage.toLowerCase();
+  if (/\b(skip|bypass|ignore|disable)\b/.test(text) && /\b(validator|validation|safety|review|memory)\b/.test(text)) {
+    return true;
   }
-  const data = await response.json();
-  const message = data.choices?.[0]?.message;
+  if (/\b(risky|unsafe)\b/.test(text)) {
+    return true;
+  }
+  return input.memories.some(
+    (memory) => memory.strength === "hard" && memory.content.toLowerCase().split(/\W+/).some((token) => token !== "" && text.includes(token))
+  );
+}
+
+// src/eval/eval-runner.ts
+function runSimilarHintsEvalGate(candidates) {
+  const results = [
+    runCrossProjectLeakEval(candidates),
+    runSimilarHintBoundaryEval(candidates)
+  ];
+  const failedChecks = results.filter((result2) => !result2.passed && result2.severity === "error").map((result2) => result2.name);
   return {
-    content: message?.content ?? "",
-    toolCalls: message?.tool_calls ?? []
+    passed: failedChecks.length === 0,
+    failedChecks,
+    results
   };
 }
-function formatRequestMessage(message) {
+function runCrossProjectLeakEval(candidates) {
+  const findings = [];
+  for (const candidate of candidates) {
+    if (candidate.homeProjectId === null) {
+      findings.push({ memoryId: candidate.id, reason: "candidate missing homeProjectId" });
+    } else if (candidate.homeProjectId === candidate.currentProjectId) {
+      findings.push({ memoryId: candidate.id, reason: "candidate comes from current project" });
+    }
+    if (candidate.portability === "local_only") {
+      findings.push({ memoryId: candidate.id, reason: "local_only memory cannot become a similar hint" });
+    }
+    if (candidate.scope === "global") {
+      findings.push({ memoryId: candidate.id, reason: "global memory belongs in globalMemory, not similarProjectHints" });
+    }
+  }
+  return result("cross_project_leak_eval", findings);
+}
+function runSimilarHintBoundaryEval(candidates) {
+  const findings = [];
+  for (const candidate of candidates) {
+    if (isDisallowedSimilarHintDomain(candidate.domain)) {
+      findings.push({ memoryId: candidate.id, reason: `domain not allowed for similar hint: ${candidate.domain}` });
+    }
+    if (containsAbsolutePath(candidate.content)) {
+      findings.push({ memoryId: candidate.id, reason: "content contains absolute path" });
+    }
+    if (containsRawRemote(candidate.content)) {
+      findings.push({ memoryId: candidate.id, reason: "content contains raw remote" });
+    }
+    if (containsSecretLikeValue(candidate.content)) {
+      findings.push({ memoryId: candidate.id, reason: "content contains secret-like value" });
+    }
+    if (!candidate.transferable || !candidate.notCurrentProjectFact) {
+      findings.push({ memoryId: candidate.id, reason: "missing similar hint flags" });
+    }
+  }
+  return result("similar_hint_boundary_eval", findings);
+}
+function result(name, findings) {
   return {
-    role: message.role,
-    content: message.content,
-    ...message.tool_call_id === void 0 ? {} : { tool_call_id: message.tool_call_id },
-    ...message.tool_calls === void 0 ? {} : { tool_calls: message.tool_calls }
+    name,
+    passed: findings.length === 0,
+    severity: findings.length === 0 ? "info" : "error",
+    findings
   };
 }
-function modelForUseCase(config2, useCase) {
-  return ["summarization", "memory_extraction", "affect_analysis"].includes(useCase) ? config2.model.cheapModel || config2.model.strongModel || config2.model.model : config2.model.strongModel || config2.model.model;
+function isDisallowedSimilarHintDomain(domain) {
+  return domain === "personal" || domain === "relationship" || domain === "affective";
 }
-function requestHeaders(config2) {
-  const headers = { "content-type": "application/json" };
-  if (config2.model.apiKey?.trim()) headers.authorization = `Bearer ${config2.model.apiKey}`;
-  return headers;
+function containsAbsolutePath(content) {
+  const unixPath = /(^|[\s`'"([{<:=,;])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-][^\s`'")\]}>]*/;
+  const windowsPath = /(^|[\s`'"([{<:=,;])[A-Za-z]:\\(?:[^\\\s`'")\]}>]+\\)+[^\\\s`'")\]}>]+/;
+  return unixPath.test(content) || windowsPath.test(content);
 }
-function validateModelConfig(config2, routeModel) {
-  const missing = [];
-  if (config2.model.baseUrl.trim() === "") missing.push("CYRENE_BASE_URL");
-  if (config2.model.model.trim() === "" || routeModel.trim() === "") missing.push("CYRENE_MODEL");
-  if (missing.length > 0) throw new Error(`Model config is incomplete: set ${missing.join(" and ")}.`);
+function containsRawRemote(content) {
+  return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|https:\/\/[A-Za-z0-9.-]+\/[^\s`'")]+(?:\.git)?\b)/.test(content);
 }
-function mergeAbortSignals(timeoutSignal, inputSignal) {
-  return inputSignal === void 0 ? timeoutSignal : AbortSignal.any([timeoutSignal, inputSignal]);
+function containsSecretLikeValue(content) {
+  return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)(?:\s*[=:]\s*|\s+)[a-fA-F0-9]{64})\b/.test(content);
+}
+
+// src/memory/project-similarity.ts
+function scoreProjectSimilarity(source, target) {
+  const reason = [];
+  let score = 0;
+  if (source.packageManager === target.packageManager) {
+    score += 0.12;
+    reason.push(`package_manager:${source.packageManager}`);
+  }
+  score += overlapScore("language", source.languages, target.languages, 0.18, reason);
+  score += overlapScore("framework", source.frameworks, target.frameworks, 0.28, reason);
+  score += overlapScore("dependency", source.dependencyNames, target.dependencyNames, 0.26, reason);
+  score += overlapScore("domain", source.domainTags, target.domainTags, 0.16, reason);
+  return {
+    sourceProjectId: source.projectId,
+    targetProjectId: target.projectId,
+    score: Math.min(1, Number(score.toFixed(4))),
+    reason,
+    updatedAt: source.updatedAt
+  };
+}
+function selectSimilarProjects(input) {
+  return input.candidates.filter((candidate) => candidate.projectId !== input.source.projectId).map((candidate) => ({
+    ...scoreProjectSimilarity(input.source, candidate),
+    updatedAt: input.now
+  })).filter((score) => score.score >= input.minScore).sort((left, right) => {
+    const scoreDiff = right.score - left.score;
+    if (scoreDiff !== 0) return scoreDiff;
+    return left.targetProjectId.localeCompare(right.targetProjectId);
+  }).slice(0, input.maxProjects);
+}
+function overlapScore(label, sourceValues, targetValues, weight, reason) {
+  const sourceSet = new Set(sourceValues);
+  const targetSet = new Set(targetValues);
+  const matches = Array.from(sourceSet).filter((value) => targetSet.has(value)).sort();
+  for (const value of matches.slice(0, 5)) {
+    reason.push(`${label}:${value}`);
+  }
+  const denominator = Math.max(sourceSet.size, targetSet.size, 1);
+  return matches.length / denominator * weight;
 }
 
 // src/codex/memory-review.ts
@@ -11736,7 +12105,7 @@ import { setTimeout as delay } from "node:timers/promises";
 // src/memory/memory-exporter.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { lstat as lstat6, open, readdir as readdir2, readFile as readFile6, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
-import { dirname as dirname6, isAbsolute as isAbsolute3, join as join10, relative as relative3 } from "node:path";
+import { dirname as dirname7, isAbsolute as isAbsolute3, join as join10, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
 import { createHash as createHash2 } from "node:crypto";
@@ -12187,7 +12556,7 @@ async function removeLegacyGeneratedProjectionFiles(root) {
   await removeEmptyLegacyProjectionsDirectory(root);
 }
 async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
-  const parent = dirname6(legacyFile);
+  const parent = dirname7(legacyFile);
   if (parent !== ".") {
     const parentPath = join10(root, parent);
     let parentStats;
@@ -13141,8 +13510,578 @@ function previewContent(content) {
   return content.length <= 160 ? content : `${content.slice(0, 157)}...`;
 }
 
+// src/codex/project-fingerprint.ts
+import { createHash as createHash4 } from "node:crypto";
+import { readdir as readdir4, readFile as readFile8, stat } from "node:fs/promises";
+import { join as join13 } from "node:path";
+async function buildCodexProjectFingerprint(input) {
+  const root = input.project.gitRoot ?? input.cwd;
+  const packageJson = await readPackageJson(root);
+  const dependencyNames = packageJson === void 0 ? [] : Object.keys({
+    ...readObject(packageJson.dependencies),
+    ...readObject(packageJson.devDependencies)
+  }).sort();
+  const packageManager = await detectPackageManager(root);
+  const rootEntries = await safeReaddir(root);
+  const languages = detectLanguages(rootEntries, dependencyNames);
+  const frameworks = detectFrameworks(rootEntries, dependencyNames);
+  const domainTags = detectDomainTags(rootEntries, frameworks, dependencyNames, languages);
+  return {
+    projectId: input.project.projectId,
+    displayName: input.project.displayName,
+    rootHash: input.project.gitRoot === void 0 ? void 0 : hashShort(input.project.gitRoot),
+    remoteHash: input.project.gitRemoteHash,
+    packageManager,
+    languages,
+    frameworks,
+    dependencyNames,
+    domainTags,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function readPackageJson(cwd) {
+  try {
+    return JSON.parse(await readFile8(join13(cwd, "package.json"), "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function readObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+async function detectPackageManager(cwd) {
+  if (await exists(join13(cwd, "pnpm-lock.yaml"))) return "pnpm";
+  if (await exists(join13(cwd, "yarn.lock"))) return "yarn";
+  if (await exists(join13(cwd, "bun.lockb")) || await exists(join13(cwd, "bun.lock"))) return "bun";
+  if (await exists(join13(cwd, "package-lock.json"))) return "npm";
+  return "unknown";
+}
+async function safeReaddir(cwd) {
+  try {
+    return (await readdir4(cwd)).sort();
+  } catch {
+    return [];
+  }
+}
+function detectLanguages(rootEntries, dependencyNames) {
+  const languages = /* @__PURE__ */ new Set();
+  const dependencies = new Set(dependencyNames);
+  if (rootEntries.includes("tsconfig.json") || rootEntries.some((entry) => entry.endsWith(".ts")) || dependencies.has("typescript")) {
+    languages.add("typescript");
+  }
+  if (rootEntries.some((entry) => entry.endsWith(".js"))) {
+    languages.add("javascript");
+  }
+  return [...languages].sort();
+}
+function detectFrameworks(rootEntries, dependencyNames) {
+  const frameworks = /* @__PURE__ */ new Set();
+  const dependencies = new Set(dependencyNames);
+  if (dependencies.has("@modelcontextprotocol/sdk")) frameworks.add("mcp");
+  if (dependencies.has("vite") || rootEntries.some((entry) => entry.startsWith("vite.config."))) {
+    frameworks.add("vite");
+  }
+  if (dependencies.has("vitest") || rootEntries.some((entry) => entry.startsWith("vitest.config."))) {
+    frameworks.add("vitest");
+  }
+  if (dependencies.has("tsx")) frameworks.add("tsx");
+  return [...frameworks].sort();
+}
+function detectDomainTags(rootEntries, frameworks, dependencyNames, languages) {
+  const tags = /* @__PURE__ */ new Set();
+  const frameworkSet = new Set(frameworks);
+  const dependencySet = new Set(dependencyNames);
+  if (rootEntries.includes("plugin") || dependencySet.has("@modelcontextprotocol/sdk")) {
+    tags.add("codex-plugin");
+  }
+  if (frameworkSet.has("mcp")) tags.add("mcp");
+  if (languages.includes("typescript")) tags.add("typescript");
+  return [...tags].sort();
+}
+async function exists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function hashShort(value) {
+  return createHash4("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+// src/codex/continuity-context.ts
+async function getCodexContinuityContext(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const config2 = createDefaultConfig(input.cwd);
+  const task = input.task ?? "coding";
+  const globalMemoryRoot = codexGlobalMemoryRoot();
+  const projectMemoryRoot = codexProjectMemoryRoot(project.projectId);
+  const budget = memoryRetrievalBudgetForTask(task);
+  await markProjectDreamDueIfOverdue(project.projectId, config2);
+  const legacyRetrievalInput = {
+    cwd: input.cwd,
+    userCyreneDir: config2.userCyreneDir,
+    memoryRoots: [globalMemoryRoot, projectMemoryRoot],
+    extraMemories: await readLegacyGlobalCodexMemories(project.projectId),
+    query: input.userMessage,
+    task,
+    maxItems: budget.maxItems,
+    maxTokens: budget.maxTokens
+  };
+  const [pendingReview, globalProfile, projectProfile] = await Promise.all([
+    getCodexPendingReviewNotice({ cwd: input.cwd }),
+    readGlobalCodexProfileIfExists(),
+    readProjectCodexProfileIfExists(project.projectId)
+  ]);
+  const routedMemory = await retrieveRoutedMemory({
+    cwd: input.cwd,
+    projectId: project.projectId,
+    query: input.userMessage,
+    task,
+    fallback: legacyRetrievalInput
+  });
+  const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
+  const profileContent = [globalProfile, projectProfile].filter(Boolean).join("\n\n");
+  const snapshot = await buildContinuitySnapshot({
+    config: {
+      ...config2,
+      memoryCwd: input.cwd
+    },
+    userMessage: input.userMessage,
+    task,
+    memories: activeMemory.map((item) => item.memory),
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  return {
+    project: {
+      projectId: project.projectId,
+      displayName: project.displayName
+    },
+    memory: {
+      items: activeMemory.map(({ memory }) => ({
+        id: memory.id,
+        domain: memory.domain,
+        type: memory.type,
+        strength: memory.strength,
+        content: memory.content
+      }))
+    },
+    globalMemory: routedMemory.globalMemory.map(toRoutedMemoryDigestItem),
+    projectMemory: routedMemory.projectMemory.map(toRoutedMemoryDigestItem),
+    pendingHypotheses: routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem),
+    similarProjectHints: routedMemory.similarProjectHints.map(toSimilarProjectHintDigestItem),
+    responseStrategy: {
+      tone: snapshot.strategy.tone,
+      verbosity: snapshot.strategy.verbosity,
+      challengePolicy: snapshot.strategy.challenge,
+      avoid: [
+        "claimed sentience",
+        "psychological diagnosis",
+        "romantic attachment",
+        "emotional manipulation"
+      ],
+      rationale: snapshot.strategy.rationale
+    },
+    reviewReminders: formatReviewReminders(pendingReview),
+    diagnostics: {
+      memoryIndex: {
+        available: routedMemory.diagnostics.available,
+        reason: routedMemory.diagnostics.reason,
+        ftsTokenizer: routedMemory.diagnostics.ftsTokenizer
+      },
+      projectSimilarity: routedMemory.projectSimilarityDiagnostics,
+      evalGate: routedMemory.evalGateDiagnostics
+    },
+    profile: {
+      global: globalProfile,
+      project: projectProfile,
+      content: profileContent
+    },
+    pendingReview,
+    strategy: {
+      tone: snapshot.strategy.tone,
+      verbosity: snapshot.strategy.verbosity,
+      challenge: snapshot.strategy.challenge,
+      boundaryMode: snapshot.strategy.boundaryMode,
+      safetyMode: snapshot.strategy.safetyMode,
+      shouldChallengeUser: snapshot.strategy.shouldChallengeUser,
+      shouldAskClarifyingQuestion: snapshot.strategy.shouldAskClarifyingQuestion,
+      rationale: snapshot.strategy.rationale
+    },
+    dissent: {
+      shouldChallenge: snapshot.dissent.shouldChallenge,
+      mode: snapshot.dissent.mode,
+      reason: snapshot.dissent.reason
+    }
+  };
+}
+async function retrieveRoutedMemory(input) {
+  const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
+  try {
+    const roots = await codexMemoryIndexRoots(input.projectId);
+    const diagnostics = await adapter.rebuildFromRoots({ roots });
+    if (!diagnostics.available) {
+      return fallbackRoutedMemory(input.fallback, diagnostics, input.projectId);
+    }
+    const currentFingerprint = await buildCodexProjectFingerprint({
+      cwd: input.cwd,
+      project: await identifyCodexProject(input.cwd)
+    });
+    await adapter.upsertProjectMetadata(currentFingerprint);
+    const metadata = await adapter.listProjectMetadata();
+    const selectedSimilarities = selectSimilarProjects({
+      source: currentFingerprint,
+      candidates: metadata,
+      minScore: 0.2,
+      maxProjects: 5,
+      now: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    for (const similarity of selectedSimilarities) {
+      await adapter.upsertProjectSimilarity(similarity);
+    }
+    const targetNames = new Map(metadata.map((project) => [project.projectId, project.displayName]));
+    const similarProjectHints = await adapter.querySimilarActive({
+      currentProjectId: input.projectId,
+      query: input.query,
+      targetProjects: selectedSimilarities.map((similarity) => ({
+        projectId: similarity.targetProjectId,
+        similarityScore: similarity.score,
+        displayName: targetNames.get(similarity.targetProjectId)
+      })),
+      task: input.task,
+      maxItems: 6,
+      maxTokens: 500
+    });
+    const evalGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
+      id: item.memory.id,
+      currentProjectId: input.projectId,
+      homeProjectId: item.homeProjectId,
+      domain: item.memory.domain,
+      portability: item.portability,
+      scope: item.memory.scope,
+      content: item.memory.content,
+      transferable: true,
+      notCurrentProjectFact: true
+    })));
+    const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : [];
+    const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
+      adapter.queryActive({
+        currentProjectId: input.projectId,
+        query: input.query,
+        route: "global",
+        task: input.task,
+        maxItems: 8,
+        maxTokens: 500
+      }),
+      adapter.queryActive({
+        currentProjectId: input.projectId,
+        query: input.query,
+        route: "project",
+        task: input.task,
+        maxItems: 12,
+        maxTokens: 900
+      }),
+      adapter.queryPending({
+        currentProjectId: input.projectId,
+        query: input.query,
+        maxItems: 6,
+        maxTokens: 400
+      })
+    ]);
+    return {
+      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
+      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
+      pendingHypotheses,
+      similarProjectHints: safeSimilarProjectHints,
+      diagnostics,
+      projectSimilarityDiagnostics: {
+        indexedProjects: metadata.length,
+        candidateProjects: Math.max(0, metadata.length - 1),
+        selectedProjects: selectedSimilarities.length,
+        reason: projectSimilarityReason(metadata.length, selectedSimilarities.length)
+      },
+      evalGateDiagnostics: {
+        passed: evalGate.passed,
+        failedChecks: evalGate.failedChecks
+      }
+    };
+  } catch (error2) {
+    return fallbackRoutedMemory(
+      input.fallback,
+      {
+        available: false,
+        dbPath: codexMemoryDbPath(),
+        reason: error2 instanceof Error ? error2.message : String(error2)
+      },
+      input.projectId
+    );
+  } finally {
+    adapter.close();
+  }
+}
+async function fallbackRoutedMemory(input, diagnostics, projectId) {
+  const memories = await retrieveMemories(input);
+  return {
+    globalMemory: memories.filter(({ memory }) => memory.scope === "global"),
+    projectMemory: memories.filter(({ memory }) => memory.scope !== "global"),
+    pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
+    similarProjectHints: [],
+    diagnostics,
+    projectSimilarityDiagnostics: {
+      indexedProjects: 0,
+      candidateProjects: 0,
+      selectedProjects: 0,
+      reason: "memory_index_unavailable"
+    },
+    evalGateDiagnostics: {
+      passed: true,
+      failedChecks: []
+    }
+  };
+}
+async function readFallbackPendingHypotheses(input, projectId) {
+  const roots = input.memoryRoots ?? (input.memoryRoot === void 0 ? void 0 : [input.memoryRoot]);
+  if (roots === void 0) {
+    return [];
+  }
+  const pending = (await Promise.all(roots.map((root) => readPendingMemoriesFromRoot(root)))).flat();
+  return selectPendingWithinBudget(
+    pending.map((memory) => ({
+      memory,
+      score: scorePendingMemory(memory, input.query),
+      portability: deriveMemoryPortability(memory),
+      homeProjectId: memory.scope === "global" ? null : projectId,
+      provisional: true
+    })).filter((item) => input.query.trim() === "" || item.score > 0).sort(comparePendingHypotheses),
+    6,
+    400
+  );
+}
+function scorePendingMemory(memory, query) {
+  const tokens = tokenize3(query);
+  if (tokens.length === 0) {
+    return 0.2;
+  }
+  const haystack = tokenize3([
+    memory.content,
+    memory.normalizedKey,
+    memory.domain,
+    memory.type,
+    memory.strength,
+    ...memory.tags
+  ].join(" "));
+  const matches = tokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
+  return matches.length / tokens.length;
+}
+function comparePendingHypotheses(left, right) {
+  const scoreDiff = right.score - left.score;
+  if (scoreDiff !== 0) {
+    return scoreDiff;
+  }
+  return left.memory.id.localeCompare(right.memory.id);
+}
+function selectPendingWithinBudget(items, maxItems, maxTokens) {
+  const selected = [];
+  let tokenCount = 0;
+  for (const item of items) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    const itemTokens = estimateTokens(item.memory.content);
+    if (itemTokens > maxTokens) {
+      continue;
+    }
+    if (tokenCount + itemTokens > maxTokens) {
+      break;
+    }
+    selected.push(item);
+    tokenCount += itemTokens;
+  }
+  return selected;
+}
+function tokenize3(text) {
+  return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
+}
+function toRoutedMemoryDigestItem(item) {
+  return {
+    id: item.memory.id,
+    domain: item.memory.domain,
+    type: item.memory.type,
+    strength: item.memory.strength,
+    scope: item.memory.scope,
+    portability: "portability" in item ? item.portability : item.memory.scope === "global" ? "global" : "local_only",
+    status: item.memory.status,
+    content: item.memory.content,
+    score: item.score
+  };
+}
+function toPendingHypothesisDigestItem(item) {
+  return {
+    id: item.memory.id,
+    domain: item.memory.domain,
+    type: item.memory.type,
+    strength: item.memory.strength,
+    scope: item.memory.scope,
+    portability: item.portability,
+    status: item.memory.status,
+    content: item.memory.content,
+    provisional: true,
+    score: item.score
+  };
+}
+function toSimilarProjectHintDigestItem(item) {
+  return {
+    id: item.memory.id,
+    sourceProjectId: item.homeProjectId,
+    sourceProjectName: item.sourceProjectName,
+    domain: item.memory.domain,
+    type: item.memory.type,
+    strength: item.memory.strength,
+    portability: item.portability,
+    content: item.memory.content,
+    score: item.score,
+    similarityScore: item.similarityScore,
+    transferable: true,
+    notCurrentProjectFact: true,
+    rationale: "Transferable guidance from a similar indexed project; not a current project fact."
+  };
+}
+function formatReviewReminders(pendingReview) {
+  if (pendingReview.newestCandidateId === void 0 || pendingReview.newestPreview === void 0) {
+    return [];
+  }
+  return [{
+    kind: "pending_review",
+    candidateId: pendingReview.newestCandidateId,
+    content: pendingReview.newestPreview
+  }];
+}
+async function markProjectDreamDueIfOverdue(projectId, config2) {
+  if (!config2.memoryDreamCatchUpEnabled) {
+    return;
+  }
+  const root = await getReadableCodexProjectMemoryRoot(projectId);
+  if (root === null) {
+    return;
+  }
+  try {
+    const state = await readCodexMemoryDreamState(root);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    if (state.dreamDue !== true && state.nextDreamDueAt !== void 0 && state.nextDreamDueAt <= now) {
+      await markCodexMemoryDreamDue(root, now);
+    }
+  } catch {
+  }
+}
+async function readGlobalCodexProfileIfExists() {
+  const root = await getReadableCodexGlobalMemoryRoot();
+  if (root === null) {
+    return void 0;
+  }
+  return readModelProfileFromRootIfExists(root);
+}
+async function readProjectCodexProfileIfExists(projectId) {
+  const root = await getReadableCodexProjectMemoryRoot(projectId);
+  if (root === null) {
+    return void 0;
+  }
+  return readModelProfileFromRootIfExists(root);
+}
+async function readLegacyGlobalCodexMemories(currentProjectId) {
+  const currentProjectMemoryRoot = codexProjectMemoryRoot(currentProjectId);
+  let roots;
+  try {
+    roots = await getReadableCodexProjectMemoryRoots();
+  } catch {
+    roots = [];
+  }
+  const legacy = await Promise.all(
+    roots.filter((root) => root !== currentProjectMemoryRoot).map(async (root) => (await readActiveMemoriesFromRoot(root)).filter((memory) => memory.scope === "global"))
+  );
+  return legacy.flat();
+}
+function projectSimilarityReason(indexedProjects, selectedProjects) {
+  if (indexedProjects <= 1) {
+    return "no_similar_projects_indexed";
+  }
+  if (selectedProjects === 0) {
+    return "no_similar_projects_selected";
+  }
+  return void 0;
+}
+
+// src/codex/codex-eval.ts
+async function runCodexSimilarHintsEval(input) {
+  const context = await getCodexContinuityContext({
+    cwd: input.cwd,
+    userMessage: "Run similar-project hints boundary eval.",
+    task: "memory"
+  });
+  return {
+    check: "similar-hints",
+    passed: context.diagnostics?.evalGate?.passed ?? true,
+    failedChecks: context.diagnostics?.evalGate?.failedChecks ?? [],
+    similarProjectHints: context.similarProjectHints.length
+  };
+}
+
+// src/codex/codex-hook-stop.ts
+import { readFile as readFile9 } from "node:fs/promises";
+
+// src/llm-client.ts
+async function callModel(input) {
+  const model = modelForUseCase(input.config, input.useCase ?? "chat");
+  validateModelConfig(input.config, model);
+  const response = await fetch(`${input.config.model.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: requestHeaders(input.config),
+    signal: mergeAbortSignals(AbortSignal.timeout(input.config.llmRequestTimeoutMs), input.signal),
+    body: JSON.stringify({
+      model,
+      messages: input.messages.map(formatRequestMessage),
+      ...input.tools.length > 0 ? { tools: input.tools } : {},
+      temperature: input.config.model.temperature
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`LLM request failed with HTTP ${response.status}: ${await response.text()}`);
+  }
+  const data = await response.json();
+  const message = data.choices?.[0]?.message;
+  return {
+    content: message?.content ?? "",
+    toolCalls: message?.tool_calls ?? []
+  };
+}
+function formatRequestMessage(message) {
+  return {
+    role: message.role,
+    content: message.content,
+    ...message.tool_call_id === void 0 ? {} : { tool_call_id: message.tool_call_id },
+    ...message.tool_calls === void 0 ? {} : { tool_calls: message.tool_calls }
+  };
+}
+function modelForUseCase(config2, useCase) {
+  return ["summarization", "memory_extraction", "affect_analysis"].includes(useCase) ? config2.model.cheapModel || config2.model.strongModel || config2.model.model : config2.model.strongModel || config2.model.model;
+}
+function requestHeaders(config2) {
+  const headers = { "content-type": "application/json" };
+  if (config2.model.apiKey?.trim()) headers.authorization = `Bearer ${config2.model.apiKey}`;
+  return headers;
+}
+function validateModelConfig(config2, routeModel) {
+  const missing = [];
+  if (config2.model.baseUrl.trim() === "") missing.push("CYRENE_BASE_URL");
+  if (config2.model.model.trim() === "" || routeModel.trim() === "") missing.push("CYRENE_MODEL");
+  if (missing.length > 0) throw new Error(`Model config is incomplete: set ${missing.join(" and ")}.`);
+}
+function mergeAbortSignals(timeoutSignal, inputSignal) {
+  return inputSignal === void 0 ? timeoutSignal : AbortSignal.any([timeoutSignal, inputSignal]);
+}
+
 // src/codex/memory-propose.ts
-import { createHash as createHash4, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 var DEFAULT_SCORES = {
   evidenceStrength: 0.75,
   stability: 0.65,
@@ -13231,7 +14170,7 @@ function toPendingMemory(input, now) {
 }
 function normalizeKey(value) {
   const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  return slug.length > 0 ? slug : createHash4("sha256").update(value).digest("hex").slice(0, 16);
+  return slug.length > 0 ? slug : createHash5("sha256").update(value).digest("hex").slice(0, 16);
 }
 function addDays(iso, days) {
   const date3 = new Date(iso);
@@ -13240,7 +14179,7 @@ function addDays(iso, days) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash5, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID7 } from "node:crypto";
 
 // src/codex/review-redaction.ts
 var RULES = [
@@ -13305,11 +14244,11 @@ function redactReviewText(input) {
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile2 } from "node:fs/promises";
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 var REVIEW_SUMMARIES_FILE = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  await appendFile2(join13(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record2)}
+  await appendFile2(join14(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record2)}
 `, "utf8");
 }
 
@@ -13417,13 +14356,13 @@ async function runCodexReviewSummary(input) {
       if (safeCandidate === void 0) {
         continue;
       }
-      const result = await proposeCodexMemoryCandidate({
+      const result2 = await proposeCodexMemoryCandidate({
         cwd: input.cwd,
         candidate: safeCandidate,
         now: input.now
       });
-      if (result.result.action === "pending") {
-        candidateIds.push(result.result.candidateId);
+      if (result2.result.action === "pending") {
+        candidateIds.push(result2.result.candidateId);
       }
     }
     await appendCodexReviewSummary(memoryRoot, {
@@ -13532,7 +14471,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: redactedSummary, sourceKind })];
 }
 function stableEvidenceGroupId(input) {
-  return createHash5("sha256").update(JSON.stringify({
+  return createHash6("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -13612,9 +14551,9 @@ function createOutputRedactor() {
   return {
     counts: {},
     redact(text) {
-      const result = redactReviewText(text);
-      this.counts = mergeRedactionCounts(this.counts, result.counts);
-      return result.text;
+      const result2 = redactReviewText(text);
+      this.counts = mergeRedactionCounts(this.counts, result2.counts);
+      return result2.text;
     }
   };
 }
@@ -13632,14 +14571,14 @@ function isRecord3(value) {
 var DURABLE_SIGNAL = /记住|请记住|以后默认|之后默认|以后你要|以后请|from now on|please remember|remember that|default to/i;
 var GLOBAL_SCOPE_SIGNAL = /所有项目|全部项目|每个项目|所有 repo|全部 repo|全局|global|all projects|every project|all repos|every repo/i;
 async function handleCodexStopHookCommand() {
-  let result;
+  let result2;
   try {
     const payload = await readJsonFromStdin();
-    result = await handleCodexStopHookPayload(payload);
+    result2 = await handleCodexStopHookPayload(payload);
   } catch {
-    result = { action: "summary_failed", reason: "Stop hook command failed." };
+    result2 = { action: "summary_failed", reason: "Stop hook command failed." };
   }
-  return formatCodexStopHookCommandOutput(result);
+  return formatCodexStopHookCommandOutput(result2);
 }
 function formatCodexStopHookCommandOutput(_result) {
   const output = {
@@ -13797,7 +14736,7 @@ function extractRecentExplicitMemoryInstructionFromMessages(messages) {
 }
 async function readTranscriptText(transcriptPath) {
   try {
-    return await readFile8(transcriptPath, "utf8");
+    return await readFile9(transcriptPath, "utf8");
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return void 0;
@@ -13812,7 +14751,7 @@ function asString2(value) {
 // src/codex/codex-install.ts
 import { lstat as lstat8, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile6 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname7, join as join14, resolve as resolve6 } from "node:path";
+import { dirname as dirname8, join as join15, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -13824,13 +14763,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join14(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join15(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
-  await mkdir9(dirname7(skillTarget), { recursive: true });
+  await mkdir9(dirname8(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
   await mkdir9(stateRoot, { recursive: true });
-  await writeFile6(join14(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await writeFile6(join15(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -13882,8 +14821,8 @@ async function removeExistingSkillSymlink(path) {
 
 // src/codex/memory-dream.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
-import { lstat as lstat9, mkdir as mkdir10, readFile as readFile9, rm as rm4, writeFile as writeFile7 } from "node:fs/promises";
-import { join as join15 } from "node:path";
+import { lstat as lstat9, mkdir as mkdir10, readFile as readFile10, rm as rm4, writeFile as writeFile7 } from "node:fs/promises";
+import { join as join16 } from "node:path";
 var DREAM_LOCK_DIR = "dream.lock";
 var DREAM_LOCKS_DIR = ".locks";
 var MAX_PENDING_EVIDENCE2 = 10;
@@ -14042,11 +14981,11 @@ async function runDeepDreamRoot(memoryRoot, now, config2) {
       };
     }
     acquiredLock = lock;
-    const result = await withMemoryMaintenanceLockFromRoot(lock.memoryRoot, async (lockedRoot) => {
+    const result2 = await withMemoryMaintenanceLockFromRoot(lock.memoryRoot, async (lockedRoot) => {
       await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot);
       return runDeepDreamRootLocked(lockedRoot, now, maintenanceBudget(config2), config2.memoryDreamIntervalHours);
     });
-    return result;
+    return result2;
   } catch (error2) {
     await writeDreamFailedFailOpen(memoryRoot, now, error2);
     throw error2;
@@ -14260,12 +15199,12 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join15(locksDir, DREAM_LOCK_DIR);
+  const lockDir = join16(locksDir, DREAM_LOCK_DIR);
   const token = randomUUID8();
   while (true) {
     try {
       await mkdir10(lockDir);
-      await writeFile7(join15(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await writeFile7(join16(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
@@ -14281,7 +15220,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join15(memoryRoot, DREAM_LOCKS_DIR);
+  const locksDir = join16(memoryRoot, DREAM_LOCKS_DIR);
   await mkdir10(locksDir).catch((error2) => {
     if (!isFileErrorCode9(error2, "EEXIST")) {
       throw error2;
@@ -14307,7 +15246,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile9(join15(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile10(join16(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -14381,6 +15320,11 @@ async function handleCodexCommand(input) {
     process.stdout.write(await handleCodexStopHookCommand());
     return;
   }
+  if (command === "eval" && input.args.length === 4 && input.args[1] === "run" && input.args[2] === "--check" && input.args[3] === "similar-hints") {
+    process.stdout.write(`${JSON.stringify(await runCodexSimilarHintsEval({ cwd: input.cwd }), null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "dream") {
     process.stdout.write(`${JSON.stringify(await runCodexMemoryDream({
       cwd: input.cwd,
@@ -14405,7 +15349,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -15059,9 +16003,9 @@ var ParseInputLazyPath = class {
     return this._cachedPath;
   }
 };
-var handleResult = (ctx, result) => {
-  if (isValid(result)) {
-    return { success: true, data: result.value };
+var handleResult = (ctx, result2) => {
+  if (isValid(result2)) {
+    return { success: true, data: result2.value };
   } else {
     if (!ctx.common.issues.length) {
       throw new Error("Validation failed but no issues detected.");
@@ -15132,21 +16076,21 @@ var ZodType = class {
     };
   }
   _parseSync(input) {
-    const result = this._parse(input);
-    if (isAsync(result)) {
+    const result2 = this._parse(input);
+    if (isAsync(result2)) {
       throw new Error("Synchronous parse encountered promise.");
     }
-    return result;
+    return result2;
   }
   _parseAsync(input) {
-    const result = this._parse(input);
-    return Promise.resolve(result);
+    const result2 = this._parse(input);
+    return Promise.resolve(result2);
   }
   parse(data, params) {
-    const result = this.safeParse(data, params);
-    if (result.success)
-      return result.data;
-    throw result.error;
+    const result2 = this.safeParse(data, params);
+    if (result2.success)
+      return result2.data;
+    throw result2.error;
   }
   safeParse(data, params) {
     const ctx = {
@@ -15161,8 +16105,8 @@ var ZodType = class {
       data,
       parsedType: getParsedType(data)
     };
-    const result = this._parseSync({ data, path: ctx.path, parent: ctx });
-    return handleResult(ctx, result);
+    const result2 = this._parseSync({ data, path: ctx.path, parent: ctx });
+    return handleResult(ctx, result2);
   }
   "~validate"(data) {
     const ctx = {
@@ -15178,9 +16122,9 @@ var ZodType = class {
     };
     if (!this["~standard"].async) {
       try {
-        const result = this._parseSync({ data, path: [], parent: ctx });
-        return isValid(result) ? {
-          value: result.value
+        const result2 = this._parseSync({ data, path: [], parent: ctx });
+        return isValid(result2) ? {
+          value: result2.value
         } : {
           issues: ctx.common.issues
         };
@@ -15194,17 +16138,17 @@ var ZodType = class {
         };
       }
     }
-    return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid(result) ? {
-      value: result.value
+    return this._parseAsync({ data, path: [], parent: ctx }).then((result2) => isValid(result2) ? {
+      value: result2.value
     } : {
       issues: ctx.common.issues
     });
   }
   async parseAsync(data, params) {
-    const result = await this.safeParseAsync(data, params);
-    if (result.success)
-      return result.data;
-    throw result.error;
+    const result2 = await this.safeParseAsync(data, params);
+    if (result2.success)
+      return result2.data;
+    throw result2.error;
   }
   async safeParseAsync(data, params) {
     const ctx = {
@@ -15220,8 +16164,8 @@ var ZodType = class {
       parsedType: getParsedType(data)
     };
     const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
-    const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
-    return handleResult(ctx, result);
+    const result2 = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
+    return handleResult(ctx, result2);
   }
   refine(check2, message) {
     const getIssueProperties = (val) => {
@@ -15234,13 +16178,13 @@ var ZodType = class {
       }
     };
     return this._refinement((val, ctx) => {
-      const result = check2(val);
+      const result2 = check2(val);
       const setError = () => ctx.addIssue({
         code: ZodIssueCode.custom,
         ...getIssueProperties(val)
       });
-      if (typeof Promise !== "undefined" && result instanceof Promise) {
-        return result.then((data) => {
+      if (typeof Promise !== "undefined" && result2 instanceof Promise) {
+        return result2.then((data) => {
           if (!data) {
             setError();
             return false;
@@ -15249,7 +16193,7 @@ var ZodType = class {
           }
         });
       }
-      if (!result) {
+      if (!result2) {
         setError();
         return false;
       } else {
@@ -16744,14 +17688,14 @@ var ZodArray = class _ZodArray extends ZodType {
     if (ctx.common.async) {
       return Promise.all([...ctx.data].map((item, i) => {
         return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
-      })).then((result2) => {
-        return ParseStatus.mergeArray(status, result2);
+      })).then((result3) => {
+        return ParseStatus.mergeArray(status, result3);
       });
     }
-    const result = [...ctx.data].map((item, i) => {
+    const result2 = [...ctx.data].map((item, i) => {
       return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
     });
-    return ParseStatus.mergeArray(status, result);
+    return ParseStatus.mergeArray(status, result2);
   }
   get element() {
     return this._def.type;
@@ -17157,18 +18101,18 @@ var ZodUnion = class extends ZodType {
     const { ctx } = this._processInputParams(input);
     const options = this._def.options;
     function handleResults(results) {
-      for (const result of results) {
-        if (result.result.status === "valid") {
-          return result.result;
+      for (const result2 of results) {
+        if (result2.result.status === "valid") {
+          return result2.result;
         }
       }
-      for (const result of results) {
-        if (result.result.status === "dirty") {
-          ctx.common.issues.push(...result.ctx.common.issues);
-          return result.result;
+      for (const result2 of results) {
+        if (result2.result.status === "dirty") {
+          ctx.common.issues.push(...result2.ctx.common.issues);
+          return result2.result;
         }
       }
-      const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
+      const unionErrors = results.map((result2) => new ZodError(result2.ctx.common.issues));
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_union,
         unionErrors
@@ -17206,15 +18150,15 @@ var ZodUnion = class extends ZodType {
           },
           parent: null
         };
-        const result = option._parseSync({
+        const result2 = option._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: childCtx
         });
-        if (result.status === "valid") {
-          return result;
-        } else if (result.status === "dirty" && !dirty) {
-          dirty = { result, ctx: childCtx };
+        if (result2.status === "valid") {
+          return result2;
+        } else if (result2.status === "dirty" && !dirty) {
+          dirty = { result: result2, ctx: childCtx };
         }
         if (childCtx.common.issues.length) {
           issues.push(childCtx.common.issues);
@@ -17759,9 +18703,9 @@ var ZodFunction = class _ZodFunction extends ZodType {
           error2.addIssue(makeArgsIssue(args, e));
           throw error2;
         });
-        const result = await Reflect.apply(fn, this, parsedArgs);
-        const parsedReturns = await me._def.returns._def.type.parseAsync(result, params).catch((e) => {
-          error2.addIssue(makeReturnsIssue(result, e));
+        const result2 = await Reflect.apply(fn, this, parsedArgs);
+        const parsedReturns = await me._def.returns._def.type.parseAsync(result2, params).catch((e) => {
+          error2.addIssue(makeReturnsIssue(result2, e));
           throw error2;
         });
         return parsedReturns;
@@ -17773,10 +18717,10 @@ var ZodFunction = class _ZodFunction extends ZodType {
         if (!parsedArgs.success) {
           throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
         }
-        const result = Reflect.apply(fn, this, parsedArgs.data);
-        const parsedReturns = me._def.returns.safeParse(result, params);
+        const result2 = Reflect.apply(fn, this, parsedArgs.data);
+        const parsedReturns = me._def.returns.safeParse(result2, params);
         if (!parsedReturns.success) {
-          throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
+          throw new ZodError([makeReturnsIssue(result2, parsedReturns.error)]);
         }
         return parsedReturns.data;
       });
@@ -18028,43 +18972,43 @@ var ZodEffects = class extends ZodType {
         return Promise.resolve(processed).then(async (processed2) => {
           if (status.value === "aborted")
             return INVALID;
-          const result = await this._def.schema._parseAsync({
+          const result2 = await this._def.schema._parseAsync({
             data: processed2,
             path: ctx.path,
             parent: ctx
           });
-          if (result.status === "aborted")
+          if (result2.status === "aborted")
             return INVALID;
-          if (result.status === "dirty")
-            return DIRTY(result.value);
+          if (result2.status === "dirty")
+            return DIRTY(result2.value);
           if (status.value === "dirty")
-            return DIRTY(result.value);
-          return result;
+            return DIRTY(result2.value);
+          return result2;
         });
       } else {
         if (status.value === "aborted")
           return INVALID;
-        const result = this._def.schema._parseSync({
+        const result2 = this._def.schema._parseSync({
           data: processed,
           path: ctx.path,
           parent: ctx
         });
-        if (result.status === "aborted")
+        if (result2.status === "aborted")
           return INVALID;
-        if (result.status === "dirty")
-          return DIRTY(result.value);
+        if (result2.status === "dirty")
+          return DIRTY(result2.value);
         if (status.value === "dirty")
-          return DIRTY(result.value);
-        return result;
+          return DIRTY(result2.value);
+        return result2;
       }
     }
     if (effect.type === "refinement") {
       const executeRefinement = (acc) => {
-        const result = effect.refinement(acc, checkCtx);
+        const result2 = effect.refinement(acc, checkCtx);
         if (ctx.common.async) {
-          return Promise.resolve(result);
+          return Promise.resolve(result2);
         }
-        if (result instanceof Promise) {
+        if (result2 instanceof Promise) {
           throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
         }
         return acc;
@@ -18102,18 +19046,18 @@ var ZodEffects = class extends ZodType {
         });
         if (!isValid(base))
           return INVALID;
-        const result = effect.transform(base.value, checkCtx);
-        if (result instanceof Promise) {
+        const result2 = effect.transform(base.value, checkCtx);
+        if (result2 instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
-        return { status: status.value, value: result };
+        return { status: status.value, value: result2 };
       } else {
         return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base) => {
           if (!isValid(base))
             return INVALID;
-          return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base.value, checkCtx)).then((result2) => ({
             status: status.value,
-            value: result
+            value: result2
           }));
         });
       }
@@ -18210,18 +19154,18 @@ var ZodCatch = class extends ZodType {
         issues: []
       }
     };
-    const result = this._def.innerType._parse({
+    const result2 = this._def.innerType._parse({
       data: newCtx.data,
       path: newCtx.path,
       parent: {
         ...newCtx
       }
     });
-    if (isAsync(result)) {
-      return result.then((result2) => {
+    if (isAsync(result2)) {
+      return result2.then((result3) => {
         return {
           status: "valid",
-          value: result2.status === "valid" ? result2.value : this._def.catchValue({
+          value: result3.status === "valid" ? result3.value : this._def.catchValue({
             get error() {
               return new ZodError(newCtx.common.issues);
             },
@@ -18232,7 +19176,7 @@ var ZodCatch = class extends ZodType {
     } else {
       return {
         status: "valid",
-        value: result.status === "valid" ? result.value : this._def.catchValue({
+        value: result2.status === "valid" ? result2.value : this._def.catchValue({
           get error() {
             return new ZodError(newCtx.common.issues);
           },
@@ -18346,14 +19290,14 @@ var ZodPipeline = class _ZodPipeline extends ZodType {
 };
 var ZodReadonly = class extends ZodType {
   _parse(input) {
-    const result = this._def.innerType._parse(input);
+    const result2 = this._def.innerType._parse(input);
     const freeze = (data) => {
       if (isValid(data)) {
         data.value = Object.freeze(data.value);
       }
       return data;
     };
-    return isAsync(result) ? result.then((data) => freeze(data)) : freeze(result);
+    return isAsync(result2) ? result2.then((data) => freeze(data)) : freeze(result2);
   }
   unwrap() {
     return this._def.innerType;
@@ -19145,52 +20089,52 @@ function formatError(error2, _mapper) {
 // node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
-  const result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise) {
+  const result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise) {
     throw new $ZodAsyncError();
   }
-  if (result.issues.length) {
-    const e = new (_params?.Err ?? _Err)(result.issues.map((iss) => finalizeIssue(iss, ctx, config())));
+  if (result2.issues.length) {
+    const e = new (_params?.Err ?? _Err)(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())));
     captureStackTrace(e, _params?.callee);
     throw e;
   }
-  return result.value;
+  return result2.value;
 };
 var parse = /* @__PURE__ */ _parse($ZodRealError);
 var _parseAsync = (_Err) => async (schema, value, _ctx, params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: true }) : { async: true };
-  let result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise)
-    result = await result;
-  if (result.issues.length) {
-    const e = new (params?.Err ?? _Err)(result.issues.map((iss) => finalizeIssue(iss, ctx, config())));
+  let result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise)
+    result2 = await result2;
+  if (result2.issues.length) {
+    const e = new (params?.Err ?? _Err)(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())));
     captureStackTrace(e, params?.callee);
     throw e;
   }
-  return result.value;
+  return result2.value;
 };
 var parseAsync = /* @__PURE__ */ _parseAsync($ZodRealError);
 var _safeParse = (_Err) => (schema, value, _ctx) => {
   const ctx = _ctx ? { ..._ctx, async: false } : { async: false };
-  const result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise) {
+  const result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise) {
     throw new $ZodAsyncError();
   }
-  return result.issues.length ? {
+  return result2.issues.length ? {
     success: false,
-    error: new (_Err ?? $ZodError)(result.issues.map((iss) => finalizeIssue(iss, ctx, config())))
-  } : { success: true, data: result.value };
+    error: new (_Err ?? $ZodError)(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())))
+  } : { success: true, data: result2.value };
 };
 var safeParse = /* @__PURE__ */ _safeParse($ZodRealError);
 var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: true }) : { async: true };
-  let result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise)
-    result = await result;
-  return result.issues.length ? {
+  let result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise)
+    result2 = await result2;
+  return result2.issues.length ? {
     success: false,
-    error: new _Err(result.issues.map((iss) => finalizeIssue(iss, ctx, config())))
-  } : { success: true, data: result.value };
+    error: new _Err(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())))
+  } : { success: true, data: result2.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
 
@@ -19743,13 +20687,13 @@ var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
       return payload;
     };
     inst._zod.run = (payload, ctx) => {
-      const result = inst._zod.parse(payload, ctx);
-      if (result instanceof Promise) {
+      const result2 = inst._zod.parse(payload, ctx);
+      if (result2 instanceof Promise) {
         if (ctx.async === false)
           throw new $ZodAsyncError();
-        return result.then((result2) => runChecks(result2, checks, ctx));
+        return result2.then((result3) => runChecks(result3, checks, ctx));
       }
-      return runChecks(result, checks, ctx);
+      return runChecks(result2, checks, ctx);
     };
   }
   inst["~standard"] = {
@@ -20146,11 +21090,11 @@ var $ZodNever = /* @__PURE__ */ $constructor("$ZodNever", (inst, def) => {
     return payload;
   };
 });
-function handleArrayResult(result, final, index) {
-  if (result.issues.length) {
-    final.issues.push(...prefixIssues(index, result.issues));
+function handleArrayResult(result2, final, index) {
+  if (result2.issues.length) {
+    final.issues.push(...prefixIssues(index, result2.issues));
   }
-  final.value[index] = result.value;
+  final.value[index] = result2.value;
 }
 var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
   $ZodType.init(inst, def);
@@ -20169,14 +21113,14 @@ var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
     const proms = [];
     for (let i = 0; i < input.length; i++) {
       const item = input[i];
-      const result = def.element._zod.run({
+      const result2 = def.element._zod.run({
         value: item,
         issues: []
       }, ctx);
-      if (result instanceof Promise) {
-        proms.push(result.then((result2) => handleArrayResult(result2, payload, i)));
+      if (result2 instanceof Promise) {
+        proms.push(result2.then((result3) => handleArrayResult(result3, payload, i)));
       } else {
-        handleArrayResult(result, payload, i);
+        handleArrayResult(result2, payload, i);
       }
     }
     if (proms.length) {
@@ -20185,28 +21129,28 @@ var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
     return payload;
   };
 });
-function handleObjectResult(result, final, key) {
-  if (result.issues.length) {
-    final.issues.push(...prefixIssues(key, result.issues));
+function handleObjectResult(result2, final, key) {
+  if (result2.issues.length) {
+    final.issues.push(...prefixIssues(key, result2.issues));
   }
-  final.value[key] = result.value;
+  final.value[key] = result2.value;
 }
-function handleOptionalObjectResult(result, final, key, input) {
-  if (result.issues.length) {
+function handleOptionalObjectResult(result2, final, key, input) {
+  if (result2.issues.length) {
     if (input[key] === void 0) {
       if (key in input) {
         final.value[key] = void 0;
       } else {
-        final.value[key] = result.value;
+        final.value[key] = result2.value;
       }
     } else {
-      final.issues.push(...prefixIssues(key, result.issues));
+      final.issues.push(...prefixIssues(key, result2.issues));
     }
-  } else if (result.value === void 0) {
+  } else if (result2.value === void 0) {
     if (key in input)
       final.value[key] = void 0;
   } else {
-    final.value[key] = result.value;
+    final.value[key] = result2.value;
   }
 }
 var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
@@ -20372,9 +21316,9 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   };
 });
 function handleUnionResults(results, final, inst, ctx) {
-  for (const result of results) {
-    if (result.issues.length === 0) {
-      final.value = result.value;
+  for (const result2 of results) {
+    if (result2.issues.length === 0) {
+      final.value = result2.value;
       return final;
     }
   }
@@ -20382,7 +21326,7 @@ function handleUnionResults(results, final, inst, ctx) {
     code: "invalid_union",
     input: final.value,
     inst,
-    errors: results.map((result) => result.issues.map((iss) => finalizeIssue(iss, ctx, config())))
+    errors: results.map((result2) => result2.issues.map((iss) => finalizeIssue(iss, ctx, config())))
   });
   return final;
 }
@@ -20407,17 +21351,17 @@ var $ZodUnion = /* @__PURE__ */ $constructor("$ZodUnion", (inst, def) => {
     let async = false;
     const results = [];
     for (const option of def.options) {
-      const result = option._zod.run({
+      const result2 = option._zod.run({
         value: payload.value,
         issues: []
       }, ctx);
-      if (result instanceof Promise) {
-        results.push(result);
+      if (result2 instanceof Promise) {
+        results.push(result2);
         async = true;
       } else {
-        if (result.issues.length === 0)
-          return result;
-        results.push(result);
+        if (result2.issues.length === 0)
+          return result2;
+        results.push(result2);
       }
     }
     if (!async)
@@ -20550,21 +21494,21 @@ function mergeValues2(a, b) {
   }
   return { valid: false, mergeErrorPath: [] };
 }
-function handleIntersectionResults(result, left, right) {
+function handleIntersectionResults(result2, left, right) {
   if (left.issues.length) {
-    result.issues.push(...left.issues);
+    result2.issues.push(...left.issues);
   }
   if (right.issues.length) {
-    result.issues.push(...right.issues);
+    result2.issues.push(...right.issues);
   }
-  if (aborted(result))
-    return result;
+  if (aborted(result2))
+    return result2;
   const merged = mergeValues2(left.value, right.value);
   if (!merged.valid) {
     throw new Error(`Unmergable intersection. Error path: ${JSON.stringify(merged.mergeErrorPath)}`);
   }
-  result.value = merged.data;
-  return result;
+  result2.value = merged.data;
+  return result2;
 }
 var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
   $ZodType.init(inst, def);
@@ -20585,19 +21529,19 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
       payload.value = {};
       for (const key of values) {
         if (typeof key === "string" || typeof key === "number" || typeof key === "symbol") {
-          const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
-          if (result instanceof Promise) {
-            proms.push(result.then((result2) => {
-              if (result2.issues.length) {
-                payload.issues.push(...prefixIssues(key, result2.issues));
+          const result2 = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+          if (result2 instanceof Promise) {
+            proms.push(result2.then((result3) => {
+              if (result3.issues.length) {
+                payload.issues.push(...prefixIssues(key, result3.issues));
               }
-              payload.value[key] = result2.value;
+              payload.value[key] = result3.value;
             }));
           } else {
-            if (result.issues.length) {
-              payload.issues.push(...prefixIssues(key, result.issues));
+            if (result2.issues.length) {
+              payload.issues.push(...prefixIssues(key, result2.issues));
             }
-            payload.value[key] = result.value;
+            payload.value[key] = result2.value;
           }
         }
       }
@@ -20637,19 +21581,19 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
           payload.value[keyResult.value] = keyResult.value;
           continue;
         }
-        const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
-        if (result instanceof Promise) {
-          proms.push(result.then((result2) => {
-            if (result2.issues.length) {
-              payload.issues.push(...prefixIssues(key, result2.issues));
+        const result2 = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+        if (result2 instanceof Promise) {
+          proms.push(result2.then((result3) => {
+            if (result3.issues.length) {
+              payload.issues.push(...prefixIssues(key, result3.issues));
             }
-            payload.value[keyResult.value] = result2.value;
+            payload.value[keyResult.value] = result3.value;
           }));
         } else {
-          if (result.issues.length) {
-            payload.issues.push(...prefixIssues(key, result.issues));
+          if (result2.issues.length) {
+            payload.issues.push(...prefixIssues(key, result2.issues));
           }
-          payload.value[keyResult.value] = result.value;
+          payload.value[keyResult.value] = result2.value;
         }
       }
     }
@@ -20761,11 +21705,11 @@ var $ZodDefault = /* @__PURE__ */ $constructor("$ZodDefault", (inst, def) => {
       payload.value = def.defaultValue;
       return payload;
     }
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then((result2) => handleDefaultResult(result2, def));
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then((result3) => handleDefaultResult(result3, def));
     }
-    return handleDefaultResult(result, def);
+    return handleDefaultResult(result2, def);
   };
 });
 function handleDefaultResult(payload, def) {
@@ -20792,11 +21736,11 @@ var $ZodNonOptional = /* @__PURE__ */ $constructor("$ZodNonOptional", (inst, def
     return v ? new Set([...v].filter((x) => x !== void 0)) : void 0;
   });
   inst._zod.parse = (payload, ctx) => {
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then((result2) => handleNonOptionalResult(result2, inst));
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then((result3) => handleNonOptionalResult(result3, inst));
     }
-    return handleNonOptionalResult(result, inst);
+    return handleNonOptionalResult(result2, inst);
   };
 });
 function handleNonOptionalResult(payload, inst) {
@@ -20816,15 +21760,15 @@ var $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
   defineLazy(inst._zod, "optout", () => def.innerType._zod.optout);
   defineLazy(inst._zod, "values", () => def.innerType._zod.values);
   inst._zod.parse = (payload, ctx) => {
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then((result2) => {
-        payload.value = result2.value;
-        if (result2.issues.length) {
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then((result3) => {
+        payload.value = result3.value;
+        if (result3.issues.length) {
           payload.value = def.catchValue({
             ...payload,
             error: {
-              issues: result2.issues.map((iss) => finalizeIssue(iss, ctx, config()))
+              issues: result3.issues.map((iss) => finalizeIssue(iss, ctx, config()))
             },
             input: payload.value
           });
@@ -20833,12 +21777,12 @@ var $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
         return payload;
       });
     }
-    payload.value = result.value;
-    if (result.issues.length) {
+    payload.value = result2.value;
+    if (result2.issues.length) {
       payload.value = def.catchValue({
         ...payload,
         error: {
-          issues: result.issues.map((iss) => finalizeIssue(iss, ctx, config()))
+          issues: result2.issues.map((iss) => finalizeIssue(iss, ctx, config()))
         },
         input: payload.value
       });
@@ -20873,11 +21817,11 @@ var $ZodReadonly = /* @__PURE__ */ $constructor("$ZodReadonly", (inst, def) => {
   defineLazy(inst._zod, "optin", () => def.innerType._zod.optin);
   defineLazy(inst._zod, "optout", () => def.innerType._zod.optout);
   inst._zod.parse = (payload, ctx) => {
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then(handleReadonlyResult);
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then(handleReadonlyResult);
     }
-    return handleReadonlyResult(result);
+    return handleReadonlyResult(result2);
   };
 });
 function handleReadonlyResult(payload) {
@@ -20900,8 +21844,8 @@ var $ZodCustom = /* @__PURE__ */ $constructor("$ZodCustom", (inst, def) => {
     return;
   };
 });
-function handleRefineResult(result, payload, input, inst) {
-  if (!result) {
+function handleRefineResult(result2, payload, input, inst) {
+  if (!result2) {
     const _iss = {
       code: "custom",
       input,
@@ -21555,11 +22499,11 @@ var JSONSchemaGenerator = class {
       }
       return seen.schema;
     }
-    const result = { schema: {}, count: 1, cycle: void 0, path: _params.path };
-    this.seen.set(schema, result);
+    const result2 = { schema: {}, count: 1, cycle: void 0, path: _params.path };
+    this.seen.set(schema, result2);
     const overrideSchema = schema._zod.toJSONSchema?.();
     if (overrideSchema) {
-      result.schema = overrideSchema;
+      result2.schema = overrideSchema;
     } else {
       const params = {
         ..._params,
@@ -21568,11 +22512,11 @@ var JSONSchemaGenerator = class {
       };
       const parent = schema._zod.parent;
       if (parent) {
-        result.ref = parent;
+        result2.ref = parent;
         this.process(parent, params);
         this.seen.get(parent).isParent = true;
       } else {
-        const _json = result.schema;
+        const _json = result2.schema;
         switch (def.type) {
           case "string": {
             const json = _json;
@@ -21594,7 +22538,7 @@ var JSONSchemaGenerator = class {
               if (regexes.length === 1)
                 json.pattern = regexes[0].source;
               else if (regexes.length > 1) {
-                result.schema.allOf = [
+                result2.schema.allOf = [
                   ...regexes.map((regex) => ({
                     ...this.target === "draft-7" ? { type: "string" } : {},
                     pattern: regex.source
@@ -21901,7 +22845,7 @@ var JSONSchemaGenerator = class {
           }
           case "nonoptional": {
             this.process(def.innerType, params);
-            result.ref = def.innerType;
+            result2.ref = def.innerType;
             break;
           }
           case "success": {
@@ -21911,20 +22855,20 @@ var JSONSchemaGenerator = class {
           }
           case "default": {
             this.process(def.innerType, params);
-            result.ref = def.innerType;
+            result2.ref = def.innerType;
             _json.default = JSON.parse(JSON.stringify(def.defaultValue));
             break;
           }
           case "prefault": {
             this.process(def.innerType, params);
-            result.ref = def.innerType;
+            result2.ref = def.innerType;
             if (this.io === "input")
               _json._prefault = JSON.parse(JSON.stringify(def.defaultValue));
             break;
           }
           case "catch": {
             this.process(def.innerType, params);
-            result.ref = def.innerType;
+            result2.ref = def.innerType;
             let catchValue;
             try {
               catchValue = def.catchValue(void 0);
@@ -21952,30 +22896,30 @@ var JSONSchemaGenerator = class {
           case "pipe": {
             const innerType = this.io === "input" ? def.in._zod.def.type === "transform" ? def.out : def.in : def.out;
             this.process(innerType, params);
-            result.ref = innerType;
+            result2.ref = innerType;
             break;
           }
           case "readonly": {
             this.process(def.innerType, params);
-            result.ref = def.innerType;
+            result2.ref = def.innerType;
             _json.readOnly = true;
             break;
           }
           // passthrough types
           case "promise": {
             this.process(def.innerType, params);
-            result.ref = def.innerType;
+            result2.ref = def.innerType;
             break;
           }
           case "optional": {
             this.process(def.innerType, params);
-            result.ref = def.innerType;
+            result2.ref = def.innerType;
             break;
           }
           case "lazy": {
             const innerType = schema._zod.innerType;
             this.process(innerType, params);
-            result.ref = innerType;
+            result2.ref = innerType;
             break;
           }
           case "custom": {
@@ -21992,14 +22936,14 @@ var JSONSchemaGenerator = class {
     }
     const meta = this.metadataRegistry.get(schema);
     if (meta)
-      Object.assign(result.schema, meta);
+      Object.assign(result2.schema, meta);
     if (this.io === "input" && isTransforming(schema)) {
-      delete result.schema.examples;
-      delete result.schema.default;
+      delete result2.schema.examples;
+      delete result2.schema.default;
     }
-    if (this.io === "input" && result.schema._prefault)
-      (_a = result.schema).default ?? (_a.default = result.schema._prefault);
-    delete result.schema._prefault;
+    if (this.io === "input" && result2.schema._prefault)
+      (_a = result2.schema).default ?? (_a.default = result2.schema._prefault);
+    delete result2.schema._prefault;
     const _result = this.seen.get(schema);
     return _result.schema;
   }
@@ -22118,11 +23062,11 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     for (const entry of [...this.seen.entries()].reverse()) {
       flattenRef(entry[0], { target: this.target });
     }
-    const result = {};
+    const result2 = {};
     if (this.target === "draft-2020-12") {
-      result.$schema = "https://json-schema.org/draft/2020-12/schema";
+      result2.$schema = "https://json-schema.org/draft/2020-12/schema";
     } else if (this.target === "draft-7") {
-      result.$schema = "http://json-schema.org/draft-07/schema#";
+      result2.$schema = "http://json-schema.org/draft-07/schema#";
     } else {
       console.warn(`Invalid target: ${this.target}`);
     }
@@ -22130,9 +23074,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const id = params.external.registry.get(schema)?.id;
       if (!id)
         throw new Error("Schema is missing an `id` property");
-      result.$id = params.external.uri(id);
+      result2.$id = params.external.uri(id);
     }
-    Object.assign(result, root.def);
+    Object.assign(result2, root.def);
     const defs = params.external?.defs ?? {};
     for (const entry of this.seen.entries()) {
       const seen = entry[1];
@@ -22144,14 +23088,14 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     } else {
       if (Object.keys(defs).length > 0) {
         if (this.target === "draft-2020-12") {
-          result.$defs = defs;
+          result2.$defs = defs;
         } else {
-          result.definitions = defs;
+          result2.definitions = defs;
         }
       }
     }
     try {
-      return JSON.parse(JSON.stringify(result));
+      return JSON.parse(JSON.stringify(result2));
     } catch (_err) {
       throw new Error("Error converting schema to JSON.");
     }
@@ -22355,21 +23299,21 @@ function objectFromShape(shape) {
 }
 function safeParse2(schema, data) {
   if (isZ4Schema(schema)) {
-    const result2 = safeParse(schema, data);
-    return result2;
+    const result3 = safeParse(schema, data);
+    return result3;
   }
   const v3Schema = schema;
-  const result = v3Schema.safeParse(data);
-  return result;
+  const result2 = v3Schema.safeParse(data);
+  return result2;
 }
 async function safeParseAsync2(schema, data) {
   if (isZ4Schema(schema)) {
-    const result2 = await safeParseAsync(schema, data);
-    return result2;
+    const result3 = await safeParseAsync(schema, data);
+    return result3;
   }
   const v3Schema = schema;
-  const result = await v3Schema.safeParseAsync(data);
-  return result;
+  const result2 = await v3Schema.safeParseAsync(data);
+  return result2;
 }
 function getObjectShape(schema) {
   if (!schema)
@@ -25221,14 +26165,14 @@ function escapeLiteralCheckValue(literal2, refs) {
 }
 var ALPHA_NUMERIC = new Set("ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvxyz0123456789");
 function escapeNonAlphaNumeric(source) {
-  let result = "";
+  let result2 = "";
   for (let i = 0; i < source.length; i++) {
     if (!ALPHA_NUMERIC.has(source[i])) {
-      result += "\\";
+      result2 += "\\";
     }
-    result += source[i];
+    result2 += source[i];
   }
-  return result;
+  return result2;
 }
 function addFormat(schema, value, message, refs) {
   if (schema.format || schema.anyOf?.some((x) => x.format)) {
@@ -25625,7 +26569,7 @@ function parseNumberDef(def, refs) {
 // node_modules/zod-to-json-schema/dist/esm/parsers/object.js
 function parseObjectDef(def, refs) {
   const forceOptionalIntoNullable = refs.target === "openAi";
-  const result = {
+  const result2 = {
     type: "object",
     properties: {}
   };
@@ -25654,19 +26598,19 @@ function parseObjectDef(def, refs) {
     if (parsedDef === void 0) {
       continue;
     }
-    result.properties[propName] = parsedDef;
+    result2.properties[propName] = parsedDef;
     if (!propOptional) {
       required2.push(propName);
     }
   }
   if (required2.length) {
-    result.required = required2;
+    result2.required = required2;
   }
   const additionalProperties = decideAdditionalProperties(def, refs);
   if (additionalProperties !== void 0) {
-    result.additionalProperties = additionalProperties;
+    result2.additionalProperties = additionalProperties;
   }
-  return result;
+  return result2;
 }
 function decideAdditionalProperties(def, refs) {
   if (def.catchall._def.typeName !== "ZodNever") {
@@ -26030,11 +26974,11 @@ function getMethodLiteral(schema) {
   return value;
 }
 function parseWithCompat(schema, data) {
-  const result = safeParse2(schema, data);
-  if (!result.success) {
-    throw result.error;
+  const result2 = safeParse2(schema, data);
+  if (!result2.success) {
+    throw result2.error;
   }
-  return result.data;
+  return result2.data;
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
@@ -26112,12 +27056,12 @@ var Protocol = class {
             return await handleTaskResult();
           }
           if (isTerminal(task.status)) {
-            const result = await this._taskStore.getTaskResult(taskId, extra.sessionId);
+            const result2 = await this._taskStore.getTaskResult(taskId, extra.sessionId);
             this._clearTaskQueue(taskId);
             return {
-              ...result,
+              ...result2,
               _meta: {
-                ...result._meta,
+                ...result2._meta,
                 [RELATED_TASK_META_KEY]: {
                   taskId
                 }
@@ -26342,12 +27286,12 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler(request, fullExtra)).then(async (result) => {
+    }).then(() => handler(request, fullExtra)).then(async (result2) => {
       if (abortController.signal.aborted) {
         return;
       }
       const response = {
-        result,
+        result: result2,
         jsonrpc: "2.0",
         id: request.id
       };
@@ -26433,9 +27377,9 @@ var Protocol = class {
     this._cleanupTimeout(messageId);
     let isTaskResponse = false;
     if (isJSONRPCResultResponse(response) && response.result && typeof response.result === "object") {
-      const result = response.result;
-      if (result.task && typeof result.task === "object") {
-        const task = result.task;
+      const result2 = response.result;
+      if (result2.task && typeof result2.task === "object") {
+        const task = result2.task;
         if (typeof task.taskId === "string") {
           isTaskResponse = true;
           this._taskProgressTokens.set(task.taskId, messageId);
@@ -26492,8 +27436,8 @@ var Protocol = class {
     const { task } = options ?? {};
     if (!task) {
       try {
-        const result = await this.request(request, resultSchema, options);
-        yield { type: "result", result };
+        const result2 = await this.request(request, resultSchema, options);
+        yield { type: "result", result: result2 };
       } catch (error2) {
         yield {
           type: "error",
@@ -26516,8 +27460,8 @@ var Protocol = class {
         yield { type: "taskStatus", task: task2 };
         if (isTerminal(task2.status)) {
           if (task2.status === "completed") {
-            const result = await this.getTaskResult({ taskId }, resultSchema, options);
-            yield { type: "result", result };
+            const result2 = await this.getTaskResult({ taskId }, resultSchema, options);
+            yield { type: "result", result: result2 };
           } else if (task2.status === "failed") {
             yield {
               type: "error",
@@ -26532,8 +27476,8 @@ var Protocol = class {
           return;
         }
         if (task2.status === "input_required") {
-          const result = await this.getTaskResult({ taskId }, resultSchema, options);
-          yield { type: "result", result };
+          const result2 = await this.getTaskResult({ taskId }, resultSchema, options);
+          yield { type: "result", result: result2 };
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
@@ -26927,8 +27871,8 @@ var Protocol = class {
         }
         return task;
       },
-      storeTaskResult: async (taskId, status, result) => {
-        await taskStore.storeTaskResult(taskId, status, result, sessionId);
+      storeTaskResult: async (taskId, status, result2) => {
+        await taskStore.storeTaskResult(taskId, status, result2, sessionId);
         const task = await taskStore.getTask(taskId, sessionId);
         if (task) {
           const notification = TaskStatusNotificationSchema.parse({
@@ -26975,20 +27919,20 @@ function isPlainObject2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function mergeCapabilities(base, additional) {
-  const result = { ...base };
+  const result2 = { ...base };
   for (const key in additional) {
     const k = key;
     const addValue = additional[k];
     if (addValue === void 0)
       continue;
-    const baseValue = result[k];
+    const baseValue = result2[k];
     if (isPlainObject2(baseValue) && isPlainObject2(addValue)) {
-      result[k] = { ...baseValue, ...addValue };
+      result2[k] = { ...baseValue, ...addValue };
     } else {
-      result[k] = addValue;
+      result2[k] = addValue;
     }
   }
-  return result;
+  return result2;
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js
@@ -27395,16 +28339,16 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler(request, extra));
+        const result2 = await Promise.resolve(handler(request, extra));
         if (params.task) {
-          const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
+          const taskValidationResult = safeParse2(CreateTaskResultSchema, result2);
           if (!taskValidationResult.success) {
             const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
             throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
           }
           return taskValidationResult.data;
         }
-        const validationResult = safeParse2(CallToolResultSchema, result);
+        const validationResult = safeParse2(CallToolResultSchema, result2);
         if (!validationResult.success) {
           const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage}`);
@@ -27613,11 +28557,11 @@ var Server = class extends Protocol {
           throw new Error("Client does not support form elicitation.");
         }
         const formParams = params.mode === "form" ? params : { ...params, mode: "form" };
-        const result = await this.request({ method: "elicitation/create", params: formParams }, ElicitResultSchema, options);
-        if (result.action === "accept" && result.content && formParams.requestedSchema) {
+        const result2 = await this.request({ method: "elicitation/create", params: formParams }, ElicitResultSchema, options);
+        if (result2.action === "accept" && result2.content && formParams.requestedSchema) {
           try {
             const validator = this._jsonSchemaValidator.getValidator(formParams.requestedSchema);
-            const validationResult = validator(result.content);
+            const validationResult = validator(result2.content);
             if (!validationResult.valid) {
               throw new McpError(ErrorCode.InvalidParams, `Elicitation response content does not match requested schema: ${validationResult.errorMessage}`);
             }
@@ -27628,7 +28572,7 @@ var Server = class extends Protocol {
             throw new McpError(ErrorCode.InternalError, `Error validating elicitation response: ${error2 instanceof Error ? error2.message : String(error2)}`);
           }
         }
-        return result;
+        return result2;
       }
     }
   }
@@ -27754,9 +28698,9 @@ function issueToolNameWarning(name, warnings) {
   }
 }
 function validateAndWarnToolName(name) {
-  const result = validateToolName(name);
-  issueToolNameWarning(name, result.warnings);
-  return result.isValid;
+  const result2 = validateToolName(name);
+  issueToolNameWarning(name, result2.warnings);
+  return result2.isValid;
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.js
@@ -27878,12 +28822,12 @@ var McpServer = class {
           return await this.handleAutomaticTaskPolling(tool, request, extra);
         }
         const args = await this.validateToolInput(tool, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool, args, extra);
+        const result2 = await this.executeToolHandler(tool, args, extra);
         if (isTaskRequest) {
-          return result;
+          return result2;
         }
-        await this.validateToolOutput(tool, result, request.params.name);
-        return result;
+        await this.validateToolOutput(tool, result2, request.params.name);
+        return result2;
       } catch (error2) {
         if (error2 instanceof McpError) {
           if (error2.code === ErrorCode.UrlElicitationRequired) {
@@ -27932,21 +28876,21 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool, result, toolName) {
+  async validateToolOutput(tool, result2, toolName) {
     if (!tool.outputSchema) {
       return;
     }
-    if (!("content" in result)) {
+    if (!("content" in result2)) {
       return;
     }
-    if (result.isError) {
+    if (result2.isError) {
       return;
     }
-    if (!result.structuredContent) {
+    if (!result2.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
     const outputObj = normalizeObjectSchema(tool.outputSchema);
-    const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
+    const parseResult = await safeParseAsync2(outputObj, result2.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
       const errorMessage = getParseErrorMessage(error2);
@@ -28090,8 +29034,8 @@ var McpServer = class {
         if (!template.resourceTemplate.listCallback) {
           continue;
         }
-        const result = await template.resourceTemplate.listCallback(extra);
-        for (const resource of result.resources) {
+        const result2 = await template.resourceTemplate.listCallback(extra);
+        for (const resource of result2.resources) {
           templateResources.push({
             ...template.metadata,
             // the defined resource metadata should override the template metadata if present
@@ -28658,345 +29602,6 @@ var StdioServerTransport = class {
   }
 };
 
-// src/affect/affect-runtime.ts
-async function buildContinuitySnapshot(input) {
-  const shouldChallengeUser = shouldChallenge(input);
-  const reason = shouldChallengeUser ? "User request may conflict with active continuity memory or safety constraints." : "No direct conflict with active continuity memory was detected.";
-  return {
-    strategy: {
-      tone: "direct",
-      verbosity: input.task === "planning" ? "structured" : "concise",
-      challenge: shouldChallengeUser ? "direct" : "normal",
-      boundaryMode: "standard",
-      safetyMode: shouldChallengeUser ? "elevated" : "standard",
-      shouldChallengeUser,
-      shouldAskClarifyingQuestion: false,
-      rationale: reason
-    },
-    dissent: {
-      shouldChallenge: shouldChallengeUser,
-      mode: shouldChallengeUser ? "direct" : "none",
-      reason
-    }
-  };
-}
-function shouldChallenge(input) {
-  const text = input.userMessage.toLowerCase();
-  if (/\b(skip|bypass|ignore|disable)\b/.test(text) && /\b(validator|validation|safety|review|memory)\b/.test(text)) {
-    return true;
-  }
-  if (/\b(risky|unsafe)\b/.test(text)) {
-    return true;
-  }
-  return input.memories.some(
-    (memory) => memory.strength === "hard" && memory.content.toLowerCase().split(/\W+/).some((token) => token !== "" && text.includes(token))
-  );
-}
-
-// src/codex/continuity-context.ts
-async function getCodexContinuityContext(input) {
-  const project = await identifyCodexProject(input.cwd);
-  const config2 = createDefaultConfig(input.cwd);
-  const task = input.task ?? "coding";
-  const globalMemoryRoot = codexGlobalMemoryRoot();
-  const projectMemoryRoot = codexProjectMemoryRoot(project.projectId);
-  const budget = memoryRetrievalBudgetForTask(task);
-  await markProjectDreamDueIfOverdue(project.projectId, config2);
-  const legacyRetrievalInput = {
-    cwd: input.cwd,
-    userCyreneDir: config2.userCyreneDir,
-    memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-    extraMemories: await readLegacyGlobalCodexMemories(project.projectId),
-    query: input.userMessage,
-    task,
-    maxItems: budget.maxItems,
-    maxTokens: budget.maxTokens
-  };
-  const [pendingReview, globalProfile, projectProfile] = await Promise.all([
-    getCodexPendingReviewNotice({ cwd: input.cwd }),
-    readGlobalCodexProfileIfExists(),
-    readProjectCodexProfileIfExists(project.projectId)
-  ]);
-  const routedMemory = await retrieveRoutedMemory({
-    projectId: project.projectId,
-    query: input.userMessage,
-    fallback: legacyRetrievalInput
-  });
-  const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
-  const profileContent = [globalProfile, projectProfile].filter(Boolean).join("\n\n");
-  const snapshot = await buildContinuitySnapshot({
-    config: {
-      ...config2,
-      memoryCwd: input.cwd
-    },
-    userMessage: input.userMessage,
-    task,
-    memories: activeMemory.map((item) => item.memory),
-    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
-  return {
-    project: {
-      projectId: project.projectId,
-      displayName: project.displayName
-    },
-    memory: {
-      items: activeMemory.map(({ memory }) => ({
-        id: memory.id,
-        domain: memory.domain,
-        type: memory.type,
-        strength: memory.strength,
-        content: memory.content
-      }))
-    },
-    globalMemory: routedMemory.globalMemory.map(toRoutedMemoryDigestItem),
-    projectMemory: routedMemory.projectMemory.map(toRoutedMemoryDigestItem),
-    pendingHypotheses: routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem),
-    similarProjectHints: [],
-    responseStrategy: {
-      tone: snapshot.strategy.tone,
-      verbosity: snapshot.strategy.verbosity,
-      challengePolicy: snapshot.strategy.challenge,
-      avoid: [
-        "claimed sentience",
-        "psychological diagnosis",
-        "romantic attachment",
-        "emotional manipulation"
-      ],
-      rationale: snapshot.strategy.rationale
-    },
-    reviewReminders: formatReviewReminders(pendingReview),
-    diagnostics: {
-      memoryIndex: {
-        available: routedMemory.diagnostics.available,
-        reason: routedMemory.diagnostics.reason,
-        ftsTokenizer: routedMemory.diagnostics.ftsTokenizer
-      }
-    },
-    profile: {
-      global: globalProfile,
-      project: projectProfile,
-      content: profileContent
-    },
-    pendingReview,
-    strategy: {
-      tone: snapshot.strategy.tone,
-      verbosity: snapshot.strategy.verbosity,
-      challenge: snapshot.strategy.challenge,
-      boundaryMode: snapshot.strategy.boundaryMode,
-      safetyMode: snapshot.strategy.safetyMode,
-      shouldChallengeUser: snapshot.strategy.shouldChallengeUser,
-      shouldAskClarifyingQuestion: snapshot.strategy.shouldAskClarifyingQuestion,
-      rationale: snapshot.strategy.rationale
-    },
-    dissent: {
-      shouldChallenge: snapshot.dissent.shouldChallenge,
-      mode: snapshot.dissent.mode,
-      reason: snapshot.dissent.reason
-    }
-  };
-}
-async function retrieveRoutedMemory(input) {
-  const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
-  try {
-    const roots = await codexMemoryIndexRoots(input.projectId);
-    const diagnostics = await adapter.rebuildFromRoots({ roots });
-    if (!diagnostics.available) {
-      return fallbackRoutedMemory(input.fallback, diagnostics, input.projectId);
-    }
-    const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
-      adapter.queryActive({
-        currentProjectId: input.projectId,
-        query: input.query,
-        route: "global",
-        task: input.fallback.task,
-        maxItems: 8,
-        maxTokens: 500
-      }),
-      adapter.queryActive({
-        currentProjectId: input.projectId,
-        query: input.query,
-        route: "project",
-        task: input.fallback.task,
-        maxItems: 12,
-        maxTokens: 900
-      }),
-      adapter.queryPending({
-        currentProjectId: input.projectId,
-        query: input.query,
-        maxItems: 6,
-        maxTokens: 400
-      })
-    ]);
-    const task = input.fallback.task ?? "conversation";
-    return {
-      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
-      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
-      pendingHypotheses,
-      diagnostics
-    };
-  } catch (error2) {
-    return fallbackRoutedMemory(
-      input.fallback,
-      {
-        available: false,
-        dbPath: codexMemoryDbPath(),
-        reason: error2 instanceof Error ? error2.message : String(error2)
-      },
-      input.projectId
-    );
-  } finally {
-    adapter.close();
-  }
-}
-async function fallbackRoutedMemory(input, diagnostics, projectId) {
-  const memories = await retrieveMemories(input);
-  return {
-    globalMemory: memories.filter(({ memory }) => memory.scope === "global"),
-    projectMemory: memories.filter(({ memory }) => memory.scope !== "global"),
-    pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
-    diagnostics
-  };
-}
-async function readFallbackPendingHypotheses(input, projectId) {
-  const roots = input.memoryRoots ?? (input.memoryRoot === void 0 ? void 0 : [input.memoryRoot]);
-  if (roots === void 0) {
-    return [];
-  }
-  const pending = (await Promise.all(roots.map((root) => readPendingMemoriesFromRoot(root)))).flat();
-  return selectPendingWithinBudget(
-    pending.map((memory) => ({
-      memory,
-      score: scorePendingMemory(memory, input.query),
-      portability: deriveMemoryPortability(memory),
-      homeProjectId: memory.scope === "global" ? null : projectId,
-      provisional: true
-    })).filter((item) => input.query.trim() === "" || item.score > 0).sort(comparePendingHypotheses),
-    6,
-    400
-  );
-}
-function scorePendingMemory(memory, query) {
-  const tokens = tokenize3(query);
-  if (tokens.length === 0) {
-    return 0.2;
-  }
-  const haystack = tokenize3([
-    memory.content,
-    memory.normalizedKey,
-    memory.domain,
-    memory.type,
-    memory.strength,
-    ...memory.tags
-  ].join(" "));
-  const matches = tokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches.length / tokens.length;
-}
-function comparePendingHypotheses(left, right) {
-  const scoreDiff = right.score - left.score;
-  if (scoreDiff !== 0) {
-    return scoreDiff;
-  }
-  return left.memory.id.localeCompare(right.memory.id);
-}
-function selectPendingWithinBudget(items, maxItems, maxTokens) {
-  const selected = [];
-  let tokenCount = 0;
-  for (const item of items) {
-    if (selected.length >= maxItems) {
-      break;
-    }
-    const itemTokens = estimateTokens(item.memory.content);
-    if (itemTokens > maxTokens) {
-      continue;
-    }
-    if (tokenCount + itemTokens > maxTokens) {
-      break;
-    }
-    selected.push(item);
-    tokenCount += itemTokens;
-  }
-  return selected;
-}
-function tokenize3(text) {
-  return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
-}
-function toRoutedMemoryDigestItem(item) {
-  return {
-    id: item.memory.id,
-    domain: item.memory.domain,
-    type: item.memory.type,
-    strength: item.memory.strength,
-    scope: item.memory.scope,
-    portability: "portability" in item ? item.portability : item.memory.scope === "global" ? "global" : "local_only",
-    status: item.memory.status,
-    content: item.memory.content,
-    score: item.score
-  };
-}
-function toPendingHypothesisDigestItem(item) {
-  return {
-    id: item.memory.id,
-    domain: item.memory.domain,
-    type: item.memory.type,
-    strength: item.memory.strength,
-    scope: item.memory.scope,
-    portability: item.portability,
-    status: item.memory.status,
-    content: item.memory.content,
-    provisional: true,
-    score: item.score
-  };
-}
-function formatReviewReminders(pendingReview) {
-  if (pendingReview.newestCandidateId === void 0 || pendingReview.newestPreview === void 0) {
-    return [];
-  }
-  return [{
-    kind: "pending_review",
-    candidateId: pendingReview.newestCandidateId,
-    content: pendingReview.newestPreview
-  }];
-}
-async function markProjectDreamDueIfOverdue(projectId, config2) {
-  if (!config2.memoryDreamCatchUpEnabled) {
-    return;
-  }
-  const root = await getReadableCodexProjectMemoryRoot(projectId);
-  if (root === null) {
-    return;
-  }
-  try {
-    const state = await readCodexMemoryDreamState(root);
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    if (state.dreamDue !== true && state.nextDreamDueAt !== void 0 && state.nextDreamDueAt <= now) {
-      await markCodexMemoryDreamDue(root, now);
-    }
-  } catch {
-  }
-}
-async function readGlobalCodexProfileIfExists() {
-  const root = await getReadableCodexGlobalMemoryRoot();
-  if (root === null) {
-    return void 0;
-  }
-  return readModelProfileFromRootIfExists(root);
-}
-async function readProjectCodexProfileIfExists(projectId) {
-  const root = await getReadableCodexProjectMemoryRoot(projectId);
-  if (root === null) {
-    return void 0;
-  }
-  return readModelProfileFromRootIfExists(root);
-}
-async function readLegacyGlobalCodexMemories(currentProjectId) {
-  const currentProjectMemoryRoot = codexProjectMemoryRoot(currentProjectId);
-  const roots = await getReadableCodexProjectMemoryRoots();
-  const legacy = await Promise.all(
-    roots.filter((root) => root !== currentProjectMemoryRoot).map(async (root) => (await readActiveMemoriesFromRoot(root)).filter((memory) => memory.scope === "global"))
-  );
-  return legacy.flat();
-}
-
 // src/mcp/mcp-json.ts
 function jsonText(value) {
   return {
@@ -29034,17 +29639,17 @@ var memoryProfileGetInputSchema = {
   cwd: external_exports.string().optional()
 };
 async function handleMemoryDreamRun(input, fallbackCwd) {
-  const result = await runCodexMemoryDream({
+  const result2 = await runCodexMemoryDream({
     cwd: input.cwd ?? fallbackCwd,
     stage: input.stage
   });
-  return jsonText(result);
+  return jsonText(result2);
 }
 async function handleMemoryProfileGet(input, fallbackCwd) {
-  const result = await getCodexMemoryProfile({
+  const result2 = await getCodexMemoryProfile({
     cwd: input.cwd ?? fallbackCwd
   });
-  return jsonText(result);
+  return jsonText(result2);
 }
 
 // src/mcp/tools/memory-propose.ts
@@ -29093,11 +29698,11 @@ var memoryProposeInputSchema = {
   candidate: memoryCandidateSchema
 };
 async function handleMemoryPropose(input, fallbackCwd) {
-  const result = await proposeCodexMemoryCandidate({
+  const result2 = await proposeCodexMemoryCandidate({
     cwd: input.cwd ?? fallbackCwd,
     candidate: input.candidate
   });
-  return jsonText(result);
+  return jsonText(result2);
 }
 
 // src/mcp/tools/memory-review.ts
@@ -29116,36 +29721,36 @@ var memoryReviewDecisionInputSchema = {
   reason: external_exports.string().optional()
 };
 async function handleMemoryPendingList(input, fallbackCwd) {
-  const result = await listCodexPendingMemories({
+  const result2 = await listCodexPendingMemories({
     cwd: input.cwd ?? fallbackCwd,
     limit: input.limit
   });
-  return jsonText(result);
+  return jsonText(result2);
 }
 async function handleMemoryPendingGet(input, fallbackCwd) {
-  const result = await getCodexPendingMemory({
+  const result2 = await getCodexPendingMemory({
     cwd: input.cwd ?? fallbackCwd,
     id: input.id
   });
-  return jsonText(result);
+  return jsonText(result2);
 }
 async function handleMemoryPromote(input, fallbackCwd) {
-  const result = await promoteCodexPendingMemory({
+  const result2 = await promoteCodexPendingMemory({
     cwd: input.cwd ?? fallbackCwd,
     id: input.id,
     reviewHash: input.reviewHash,
     reason: input.reason
   });
-  return jsonText(result);
+  return jsonText(result2);
 }
 async function handleMemoryReject(input, fallbackCwd) {
-  const result = await rejectCodexPendingMemory({
+  const result2 = await rejectCodexPendingMemory({
     cwd: input.cwd ?? fallbackCwd,
     id: input.id,
     reviewHash: input.reviewHash,
     reason: input.reason
   });
-  return jsonText(result);
+  return jsonText(result2);
 }
 
 // src/mcp/tools/project-identify.ts
