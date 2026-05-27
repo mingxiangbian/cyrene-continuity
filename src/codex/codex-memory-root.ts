@@ -56,16 +56,24 @@ export async function getReadableCodexProjectMemoryRoots(): Promise<string[]> {
     if (!entry.isDirectory()) {
       continue
     }
-    const projectRoot = await getSafeDirectoryOrNull(join(projectsRoot, entry.name), projectsRoot)
+    const projectRoot = await getReadableProjectScanDirectoryOrNull(join(projectsRoot, entry.name), projectsRoot)
     if (projectRoot === null) {
       continue
     }
-    const memoryRoot = await getSafeDirectoryOrNull(join(projectRoot, 'memory'), projectRoot)
+    const memoryRoot = await getReadableProjectScanDirectoryOrNull(join(projectRoot, 'memory'), projectRoot)
     if (memoryRoot !== null) {
       memoryRoots.push(memoryRoot)
     }
   }
   return memoryRoots
+}
+
+async function getReadableProjectScanDirectoryOrNull(dirPath: string, parentRealPath: string): Promise<string | null> {
+  try {
+    return await getSafeDirectoryOrNull(dirPath, parentRealPath)
+  } catch {
+    return null
+  }
 }
 
 async function ensureCodexBaseRoot(): Promise<string> {

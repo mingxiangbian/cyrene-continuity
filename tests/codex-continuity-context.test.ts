@@ -552,6 +552,68 @@ describe('Codex continuity context', () => {
     expect(context.diagnostics?.evalGate?.passed).toBe(true)
   })
 
+  it('returns valid similar-project hints when an unrelated project memory root is unsafe', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-similar-unsafe-entry-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-codex-current-similar-unsafe-entry-repo-')
+    const otherRepo = await createTempDir('cyrene-codex-other-similar-unsafe-entry-repo-')
+    const outsideMemory = await createTempDir('cyrene-codex-similar-unsafe-entry-outside-memory-')
+    await writeFile(join(currentRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0', vitest: '^2.0.0' }
+    }), 'utf8')
+    await writeFile(join(currentRepo, 'package-lock.json'), '{}\n', 'utf8')
+    await writeFile(join(otherRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0', vitest: '^2.0.0' }
+    }), 'utf8')
+    await writeFile(join(otherRepo, 'package-lock.json'), '{}\n', 'utf8')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    const currentRoot = codexProjectMemoryRoot(current.projectId)
+    const otherRoot = codexProjectMemoryRoot(other.projectId)
+    const unsafeProjectRoot = join(home, '.cyrene', 'codex', 'projects', 'unsafe-similar-unrelated-project')
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(otherRoot, { recursive: true })
+    await mkdir(unsafeProjectRoot, { recursive: true })
+    await symlink(outsideMemory, join(unsafeProjectRoot, 'memory'))
+    await writeFile(join(currentRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'current-safe-similar-entry',
+      content: 'Current project safe similar entry fact stays local.',
+      normalizedKey: 'current-safe-similar-entry'
+    })) + '\n')
+    await writeFile(join(otherRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'portable-safe-similar-entry',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      portability: 'similar_project',
+      content: 'MCP plugin projects should keep runtime rebuild checks explicit.',
+      normalizedKey: 'mcp-plugin-runtime-rebuild-checks',
+      tags: ['mcp', 'plugin']
+    })) + '\n')
+
+    await getCodexContinuityContext({
+      cwd: otherRepo,
+      userMessage: 'Index this MCP plugin project.',
+      task: 'planning'
+    })
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
+      task: 'planning'
+    })
+
+    expect(context.diagnostics?.memoryIndex?.available).toBe(true)
+    expect(context.similarProjectHints).toEqual([
+      expect.objectContaining({
+        id: 'portable-safe-similar-entry',
+        sourceProjectId: other.projectId,
+        sourceProjectName: other.displayName
+      })
+    ])
+    expect(context.memory.items.map((item) => item.id)).not.toContain('portable-safe-similar-entry')
+  })
+
   it('returns empty similar-project hints when eval gate detects unsafe content', async () => {
     const home = await createTempDir('cyrene-codex-continuity-similar-unsafe-home-')
     process.env.HOME = home
