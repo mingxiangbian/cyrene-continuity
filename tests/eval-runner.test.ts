@@ -118,4 +118,19 @@ describe('similar hints eval gate', () => {
     expect(JSON.stringify(result.results)).toContain('absolute path')
     expect(JSON.stringify(result.results)).toContain('secret-like')
   })
+
+  it('reports HTTPS raw remotes without git suffix with a raw remote finding', () => {
+    const result = runSimilarHintsEvalGate([
+      candidate({ id: 'github-https-no-suffix', content: 'Clone https://github.com/org/private-repo.' }),
+      candidate({ id: 'gitlab-https-no-suffix', content: 'Clone https://gitlab.com/org/private.' })
+    ])
+    const boundary = result.results.find((check) => check.name === 'similar_hint_boundary_eval')
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(boundary?.findings).toEqual(expect.arrayContaining([
+      { memoryId: 'github-https-no-suffix', reason: 'content contains raw remote' },
+      { memoryId: 'gitlab-https-no-suffix', reason: 'content contains raw remote' }
+    ]))
+  })
 })
