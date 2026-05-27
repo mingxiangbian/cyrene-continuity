@@ -43,6 +43,42 @@ export interface MemoryIndexPendingQuery {
   maxTokens: number
 }
 
+export interface ProjectMetadata {
+  projectId: string
+  displayName: string
+  rootHash?: string
+  remoteHash?: string
+  packageManager: string
+  languages: string[]
+  frameworks: string[]
+  dependencyNames: string[]
+  domainTags: string[]
+  updatedAt: string
+}
+
+export interface ProjectSimilarity {
+  sourceProjectId: string
+  targetProjectId: string
+  score: number
+  reason: string[]
+  updatedAt: string
+}
+
+export interface MemoryIndexSimilarTargetProject {
+  projectId: string
+  similarityScore: number
+  displayName?: string
+}
+
+export interface MemoryIndexSimilarQuery {
+  currentProjectId: string
+  query: string
+  targetProjects: MemoryIndexSimilarTargetProject[]
+  task?: NonNullable<RetrieveMemoriesInput['task']>
+  maxItems: number
+  maxTokens: number
+}
+
 export interface IndexedActiveMemory {
   memory: CyreneMemory
   score: number
@@ -58,12 +94,23 @@ export interface IndexedPendingMemory {
   provisional: true
 }
 
+export interface IndexedSimilarMemory extends IndexedActiveMemory {
+  homeProjectId: string
+  similarityScore: number
+  sourceProjectName?: string
+}
+
 export interface MemoryIndexAdapter {
   initialize(): Promise<MemoryIndexDiagnostics>
   rebuildFromRoots(input: MemoryIndexRebuildInput): Promise<MemoryIndexDiagnostics>
   syncRoot(root: MemoryIndexRoot): Promise<MemoryIndexDiagnostics>
+  upsertProjectMetadata(metadata: ProjectMetadata): Promise<MemoryIndexDiagnostics>
+  listProjectMetadata(): Promise<ProjectMetadata[]>
+  upsertProjectSimilarity(similarity: ProjectSimilarity): Promise<MemoryIndexDiagnostics>
+  listProjectSimilarities(sourceProjectId: string): Promise<ProjectSimilarity[]>
   queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]>
   queryPending(input: MemoryIndexPendingQuery): Promise<IndexedPendingMemory[]>
+  querySimilarActive(input: MemoryIndexSimilarQuery): Promise<IndexedSimilarMemory[]>
   diagnostics(): MemoryIndexDiagnostics
   close(): void
 }
@@ -157,11 +204,31 @@ class UnavailableMemoryIndexAdapter implements MemoryIndexAdapter {
     return this.diagnostics()
   }
 
+  async upsertProjectMetadata(_metadata: ProjectMetadata): Promise<MemoryIndexDiagnostics> {
+    return this.diagnostics()
+  }
+
+  async listProjectMetadata(): Promise<ProjectMetadata[]> {
+    return []
+  }
+
+  async upsertProjectSimilarity(_similarity: ProjectSimilarity): Promise<MemoryIndexDiagnostics> {
+    return this.diagnostics()
+  }
+
+  async listProjectSimilarities(_sourceProjectId: string): Promise<ProjectSimilarity[]> {
+    return []
+  }
+
   async queryActive(_input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]> {
     return []
   }
 
   async queryPending(_input: MemoryIndexPendingQuery): Promise<IndexedPendingMemory[]> {
+    return []
+  }
+
+  async querySimilarActive(_input: MemoryIndexSimilarQuery): Promise<IndexedSimilarMemory[]> {
     return []
   }
 
@@ -195,6 +262,15 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         name text,
         created_at text not null,
         updated_at text not null
+      );
+
+      create table if not exists project_similarity (
+        source_project_id text not null,
+        target_project_id text not null,
+        score real not null,
+        reason_json text not null,
+        updated_at text not null,
+        primary key (source_project_id, target_project_id)
       );
 
       create table if not exists memories (
@@ -235,6 +311,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         created_at text not null
       );
     `)
+    this.ensureProjectColumns(db)
     if (!this.initialized) {
       this.currentDiagnostics = {
         available: true,
@@ -249,7 +326,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
   async rebuildFromRoots(input: MemoryIndexRebuildInput): Promise<MemoryIndexDiagnostics> {
     const diagnostics = await this.initialize()
     const db = this.requireDatabase()
-    db.exec('delete from memory_evidence; delete from memories; delete from projects;')
+    db.exec('delete from memory_evidence; delete from memories;')
     for (const root of input.roots) {
       await this.syncRoot(root)
     }
@@ -265,10 +342,10 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     if (root.projectId !== null) {
       const now = new Date().toISOString()
       db.prepare(`
-        insert into projects (project_id, name, created_at, updated_at)
-        values (?, ?, ?, ?)
+        insert into projects (project_id, name, display_name, created_at, updated_at)
+        values (?, ?, ?, ?, ?)
         on conflict(project_id) do update set updated_at = excluded.updated_at
-      `).run(root.projectId, root.projectId, now, now)
+      `).run(root.projectId, root.projectId, root.projectId, now, now)
     }
 
     const [active, pending] = await Promise.all([
@@ -283,6 +360,107 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     }
     this.rebuildFts()
     return diagnostics
+  }
+
+  async upsertProjectMetadata(metadata: ProjectMetadata): Promise<MemoryIndexDiagnostics> {
+    const diagnostics = await this.initialize()
+    const db = this.requireDatabase()
+    const now = new Date().toISOString()
+    const timestamp = metadata.updatedAt || now
+    db.prepare(`
+      insert into projects (
+        project_id,
+        root_hash,
+        remote_hash,
+        name,
+        display_name,
+        package_manager,
+        languages_json,
+        frameworks_json,
+        dependency_names_json,
+        dependency_fingerprint,
+        domain_tags_json,
+        created_at,
+        updated_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(project_id) do update set
+        root_hash = excluded.root_hash,
+        remote_hash = excluded.remote_hash,
+        name = excluded.name,
+        display_name = excluded.display_name,
+        package_manager = excluded.package_manager,
+        languages_json = excluded.languages_json,
+        frameworks_json = excluded.frameworks_json,
+        dependency_names_json = excluded.dependency_names_json,
+        dependency_fingerprint = excluded.dependency_fingerprint,
+        domain_tags_json = excluded.domain_tags_json,
+        updated_at = excluded.updated_at
+    `).run(
+      metadata.projectId,
+      metadata.rootHash ?? null,
+      metadata.remoteHash ?? null,
+      metadata.displayName,
+      metadata.displayName,
+      metadata.packageManager,
+      JSON.stringify(metadata.languages),
+      JSON.stringify(metadata.frameworks),
+      JSON.stringify(metadata.dependencyNames),
+      dependencyFingerprint(metadata.dependencyNames),
+      JSON.stringify(metadata.domainTags),
+      timestamp,
+      timestamp
+    )
+    return diagnostics
+  }
+
+  async listProjectMetadata(): Promise<ProjectMetadata[]> {
+    await this.initialize()
+    return this.requireDatabase().prepare(`
+      select
+        project_id,
+        root_hash,
+        remote_hash,
+        name,
+        display_name,
+        package_manager,
+        languages_json,
+        frameworks_json,
+        dependency_names_json,
+        domain_tags_json,
+        updated_at
+      from projects
+      order by project_id asc
+    `).all().map(projectMetadataFromRecord)
+  }
+
+  async upsertProjectSimilarity(similarity: ProjectSimilarity): Promise<MemoryIndexDiagnostics> {
+    const diagnostics = await this.initialize()
+    this.requireDatabase().prepare(`
+      insert into project_similarity (source_project_id, target_project_id, score, reason_json, updated_at)
+      values (?, ?, ?, ?, ?)
+      on conflict(source_project_id, target_project_id) do update set
+        score = excluded.score,
+        reason_json = excluded.reason_json,
+        updated_at = excluded.updated_at
+    `).run(
+      similarity.sourceProjectId,
+      similarity.targetProjectId,
+      similarity.score,
+      JSON.stringify(similarity.reason),
+      similarity.updatedAt
+    )
+    return diagnostics
+  }
+
+  async listProjectSimilarities(sourceProjectId: string): Promise<ProjectSimilarity[]> {
+    await this.initialize()
+    return this.requireDatabase().prepare(`
+      select source_project_id, target_project_id, score, reason_json, updated_at
+      from project_similarity
+      where source_project_id = ?
+      order by score desc, target_project_id asc
+    `).all(sourceProjectId).map(projectSimilarityFromRecord)
   }
 
   async queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]> {
@@ -347,6 +525,52 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     )
   }
 
+  async querySimilarActive(input: MemoryIndexSimilarQuery): Promise<IndexedSimilarMemory[]> {
+    await this.initialize()
+    if (input.targetProjects.length === 0) return []
+    const targetById = new Map(input.targetProjects.map((project) => [project.projectId, project]))
+    const structuredRows = this.querySimilarStructuredRows({
+      currentProjectId: input.currentProjectId,
+      targetProjectIds: Array.from(targetById.keys())
+    })
+    const ftsMatches = this.queryFtsIds(input.query, 'active')
+    const task = input.task
+    const eligibleRows = task === undefined
+      ? structuredRows
+      : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+        row.payload as CyreneMemory,
+        {
+          cwd: '',
+          userCyreneDir: '',
+          query: input.query,
+          task,
+          maxItems: input.maxItems,
+          maxTokens: input.maxTokens
+        },
+        task
+      ))
+    const items: IndexedSimilarMemory[] = []
+    for (const row of eligibleRows) {
+      const target = targetById.get(row.homeProjectId ?? '')
+      if (target === undefined) continue
+      items.push({
+        memory: row.payload as CyreneMemory,
+        score: scoreRow(row, input.query, ftsMatches) + target.similarityScore * 0.2,
+        portability: row.portability,
+        homeProjectId: target.projectId,
+        similarityScore: target.similarityScore,
+        ...(target.displayName === undefined ? {} : { sourceProjectName: target.displayName })
+      })
+    }
+    return selectWithinBudget(
+      items
+        .filter((item) => input.query.trim() === '' || item.score > 0)
+        .sort(compareIndexedItems),
+      input.maxItems,
+      input.maxTokens
+    )
+  }
+
   diagnostics(): MemoryIndexDiagnostics {
     return this.currentDiagnostics
   }
@@ -388,6 +612,26 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         using fts5(content, normalized_key, tags, tokenize='unicode61', content='memories', content_rowid='rowid');
       `)
       return 'unicode61'
+    }
+  }
+
+  private ensureProjectColumns(db: DatabaseLike): void {
+    for (const sql of [
+      'alter table projects add column display_name text',
+      'alter table projects add column package_manager text',
+      'alter table projects add column languages_json text',
+      'alter table projects add column frameworks_json text',
+      'alter table projects add column dependency_names_json text',
+      'alter table projects add column dependency_fingerprint text',
+      'alter table projects add column domain_tags_json text'
+    ]) {
+      try {
+        db.exec(sql)
+      } catch (error) {
+        if (!String(error).includes('duplicate column name')) {
+          throw error
+        }
+      }
     }
   }
 
@@ -542,6 +786,38 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     return rows.map(rowFromRecord)
   }
 
+  private querySimilarStructuredRows(input: {
+    currentProjectId: string
+    targetProjectIds: string[]
+  }): MemoryIndexRow[] {
+    if (input.targetProjectIds.length === 0) return []
+    const placeholders = input.targetProjectIds.map(() => '?').join(', ')
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        payload_json
+      from memories
+      where status = 'active'
+        and home_project_id is not null
+        and home_project_id != ?
+        and home_project_id in (${placeholders})
+        and portability in ('similar_project', 'project_family')
+        and domain in ('project', 'procedural', 'system')
+    `).all(input.currentProjectId, ...input.targetProjectIds)
+    return rows.map(rowFromRecord)
+  }
+
   private queryFtsIds(query: string, status: 'active' | 'pending'): Set<string> {
     if (query.trim() === '') {
       return new Set()
@@ -562,6 +838,46 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       return new Set()
     }
   }
+}
+
+function dependencyFingerprint(dependencyNames: string[]): string {
+  return dependencyNames.slice().sort().join('\n')
+}
+
+function projectMetadataFromRecord(row: Record<string, unknown>): ProjectMetadata {
+  const projectId = readString(row.project_id, 'project_id')
+  return {
+    projectId,
+    displayName: typeof row.display_name === 'string'
+      ? row.display_name
+      : typeof row.name === 'string'
+        ? row.name
+        : projectId,
+    rootHash: typeof row.root_hash === 'string' ? row.root_hash : undefined,
+    remoteHash: typeof row.remote_hash === 'string' ? row.remote_hash : undefined,
+    packageManager: typeof row.package_manager === 'string' ? row.package_manager : 'unknown',
+    languages: parseStringArray(row.languages_json),
+    frameworks: parseStringArray(row.frameworks_json),
+    dependencyNames: parseStringArray(row.dependency_names_json),
+    domainTags: parseStringArray(row.domain_tags_json),
+    updatedAt: typeof row.updated_at === 'string' ? row.updated_at : new Date(0).toISOString()
+  }
+}
+
+function projectSimilarityFromRecord(row: Record<string, unknown>): ProjectSimilarity {
+  return {
+    sourceProjectId: readString(row.source_project_id, 'source_project_id'),
+    targetProjectId: readString(row.target_project_id, 'target_project_id'),
+    score: Number(row.score),
+    reason: parseStringArray(row.reason_json),
+    updatedAt: readString(row.updated_at, 'updated_at')
+  }
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (typeof value !== 'string' || value === '') return []
+  const parsed = JSON.parse(value) as unknown
+  return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
 }
 
 function rowFromRecord(row: Record<string, unknown>): MemoryIndexRow {

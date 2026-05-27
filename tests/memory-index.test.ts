@@ -294,6 +294,125 @@ describe('memory SQLite index', () => {
     expect(secondQuery.map((item) => item.memory.id)).toEqual(['project-a-z', 'project-a-a'])
   })
 
+  it('stores project metadata and project similarity rows across rebuilds', async () => {
+    const root = await createTempDir('cyrene-memory-index-projects-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [activeMemory({ id: 'project-a-memory' })])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.initialize()
+    await adapter.upsertProjectMetadata({
+      projectId: 'project-a',
+      displayName: 'project-a',
+      packageManager: 'npm',
+      languages: ['typescript'],
+      frameworks: ['mcp'],
+      dependencyNames: ['@modelcontextprotocol/sdk'],
+      domainTags: ['mcp'],
+      updatedAt: '2026-05-27T00:00:00.000Z'
+    })
+    await adapter.upsertProjectMetadata({
+      projectId: 'project-b',
+      displayName: 'project-b',
+      packageManager: 'npm',
+      languages: ['typescript'],
+      frameworks: ['mcp', 'vitest'],
+      dependencyNames: ['@modelcontextprotocol/sdk', 'vitest'],
+      domainTags: ['mcp'],
+      updatedAt: '2026-05-27T00:00:00.000Z'
+    })
+    await adapter.upsertProjectSimilarity({
+      sourceProjectId: 'project-a',
+      targetProjectId: 'project-b',
+      score: 0.83,
+      reason: ['framework:mcp'],
+      updatedAt: '2026-05-27T00:00:00.000Z'
+    })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    await expect(adapter.listProjectMetadata()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ projectId: 'project-a', frameworks: ['mcp'] }),
+      expect.objectContaining({ projectId: 'project-b', frameworks: ['mcp', 'vitest'] })
+    ]))
+    await expect(adapter.listProjectSimilarities('project-a')).resolves.toEqual([
+      expect.objectContaining({
+        sourceProjectId: 'project-a',
+        targetProjectId: 'project-b',
+        score: 0.83,
+        reason: ['framework:mcp']
+      })
+    ])
+  })
+
+  it('queries only eligible similar-project active memories', async () => {
+    const root = await createTempDir('cyrene-memory-index-similar-')
+    const currentRoot = join(root, 'projects', 'project-a', 'memory')
+    const similarRoot = join(root, 'projects', 'project-b', 'memory')
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(similarRoot, { recursive: true })
+    await writeJsonLines(join(currentRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'current-similar',
+        portability: 'similar_project',
+        content: 'Current project similar-portable memory is not a similar hint.',
+        normalizedKey: 'current-similar-memory'
+      })
+    ])
+    await writeJsonLines(join(similarRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'similar-procedural',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        portability: 'similar_project',
+        content: 'MCP plugin projects should keep generated runtime rebuilds explicit.',
+        normalizedKey: 'mcp-plugin-runtime-rebuild',
+        tags: ['mcp', 'plugin']
+      }),
+      activeMemory({
+        id: 'similar-local',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        portability: 'local_only',
+        content: 'Other project local-only detail must not appear.',
+        normalizedKey: 'other-local-only'
+      }),
+      activeMemory({
+        id: 'similar-personal',
+        domain: 'personal',
+        type: 'user_preference',
+        portability: 'similar_project',
+        content: 'Personal preference must not appear as a similar hint.',
+        normalizedKey: 'personal-similar'
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [
+        { memoryRoot: currentRoot, projectId: 'project-a', scope: 'project' },
+        { memoryRoot: similarRoot, projectId: 'project-b', scope: 'project' }
+      ]
+    })
+
+    const hints = await adapter.querySimilarActive({
+      currentProjectId: 'project-a',
+      query: 'mcp plugin runtime',
+      targetProjects: [{ projectId: 'project-b', similarityScore: 0.75, displayName: 'project-b' }],
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(hints.map((item) => item.memory.id)).toEqual(['similar-procedural'])
+    expect(hints[0]).toMatchObject({
+      portability: 'similar_project',
+      homeProjectId: 'project-b',
+      similarityScore: 0.75,
+      sourceProjectName: 'project-b'
+    })
+  })
+
   it('returns unavailable diagnostics when forced unavailable', async () => {
     const root = await createTempDir('cyrene-memory-index-disabled-')
     const adapter = await openMemoryIndexAdapter({
