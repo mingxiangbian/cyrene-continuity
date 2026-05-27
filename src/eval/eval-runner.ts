@@ -108,13 +108,13 @@ function isDisallowedSimilarHintDomain(domain: MemoryDomain): boolean {
 }
 
 function containsAbsolutePath(content: string): boolean {
-  return /(^|\s)\/(?:Users|home|var|etc|tmp)\/[^\s]+/.test(content)
+  return /(^|[\s`'"([{<:=,;])\/(?:Users|home|var|etc|tmp)\/[^\s`'")\]}>]+/.test(content)
 }
 
 function containsRawRemote(content: string): boolean {
-  return /(git@github\.com:[^\s]+|https:\/\/github\.com\/[^\s]+)/.test(content)
+  return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|https:\/\/[A-Za-z0-9.-]+\/[^\s`'")]+\.git\b)/.test(content)
 }
 
 function containsSecretLikeValue(content: string): boolean {
-  return /\b(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}\b/.test(content)
+  return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)=[a-fA-F0-9]{64})\b/.test(content)
 }

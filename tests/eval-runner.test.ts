@@ -70,4 +70,26 @@ describe('similar hints eval gate', () => {
     expect(JSON.stringify(result.results)).toContain('secret-like')
     expect(JSON.stringify(result.results)).toContain('missing similar hint flags')
   })
+
+  it('fails wrapped paths, non-GitHub raw remotes, and review hashes', () => {
+    const result = runSimilarHintsEvalGate([
+      candidate({ id: 'wrapped-path', content: 'Use `/Users/phoenix/private/config.json`.' }),
+      candidate({ id: 'gitlab-ssh', content: 'Clone git@gitlab.com:org/private.git.' }),
+      candidate({ id: 'gitlab-https', content: 'Clone https://gitlab.com/org/private.git.' }),
+      candidate({
+        id: 'review-hash',
+        content: 'reviewHash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      })
+    ])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(JSON.stringify(result.results)).toContain('wrapped-path')
+    expect(JSON.stringify(result.results)).toContain('gitlab-ssh')
+    expect(JSON.stringify(result.results)).toContain('gitlab-https')
+    expect(JSON.stringify(result.results)).toContain('review-hash')
+    expect(JSON.stringify(result.results)).toContain('absolute path')
+    expect(JSON.stringify(result.results)).toContain('raw remote')
+    expect(JSON.stringify(result.results)).toContain('secret-like')
+  })
 })
