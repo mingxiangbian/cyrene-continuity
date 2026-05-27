@@ -328,12 +328,19 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     const db = this.requireDatabase()
     db.exec('delete from memory_evidence; delete from memories;')
     for (const root of input.roots) {
-      await this.syncRoot(root)
+      await this.syncRootRecords(root)
     }
+    this.rebuildFts()
     return diagnostics
   }
 
   async syncRoot(root: MemoryIndexRoot): Promise<MemoryIndexDiagnostics> {
+    const diagnostics = await this.syncRootRecords(root)
+    this.rebuildFts()
+    return diagnostics
+  }
+
+  private async syncRootRecords(root: MemoryIndexRoot): Promise<MemoryIndexDiagnostics> {
     const diagnostics = await this.initialize()
     const db = this.requireDatabase()
     db.prepare('delete from memory_evidence where memory_id in (select id from memories where memory_root = ?)').run(root.memoryRoot)
@@ -358,7 +365,6 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     for (const memory of pending) {
       this.insertMemory(root, memory)
     }
-    this.rebuildFts()
     return diagnostics
   }
 

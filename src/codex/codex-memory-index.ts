@@ -39,7 +39,13 @@ export async function codexMemoryIndexRoots(projectId: string): Promise<MemoryIn
   if (projectRoot !== null) {
     addRoot({ memoryRoot: projectRoot, projectId, scope: 'project' })
   }
-  for (const memoryRoot of await getReadableCodexProjectMemoryRoots()) {
+  let projectMemoryRoots: string[]
+  try {
+    projectMemoryRoots = await getReadableCodexProjectMemoryRoots()
+  } catch {
+    projectMemoryRoots = []
+  }
+  for (const memoryRoot of projectMemoryRoots) {
     addRoot({ memoryRoot, projectId: basename(dirname(memoryRoot)), scope: 'project' })
   }
   return roots

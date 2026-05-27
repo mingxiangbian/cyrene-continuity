@@ -354,7 +354,7 @@ async function retrieveRoutedMemory(input: {
         indexedProjects: metadata.length,
         candidateProjects: Math.max(0, metadata.length - 1),
         selectedProjects: selectedSimilarities.length,
-        reason: metadata.length <= 1 ? 'no_similar_projects_indexed' : undefined
+        reason: projectSimilarityReason(metadata.length, selectedSimilarities.length)
       },
       evalGateDiagnostics: {
         passed: evalGate.passed,
@@ -572,11 +572,26 @@ async function readProjectCodexProfileIfExists(projectId: string): Promise<strin
 
 async function readLegacyGlobalCodexMemories(currentProjectId: string): Promise<CyreneMemory[]> {
   const currentProjectMemoryRoot = codexProjectMemoryRoot(currentProjectId)
-  const roots = await getReadableCodexProjectMemoryRoots()
+  let roots: string[]
+  try {
+    roots = await getReadableCodexProjectMemoryRoots()
+  } catch {
+    roots = []
+  }
   const legacy = await Promise.all(
     roots
       .filter((root) => root !== currentProjectMemoryRoot)
       .map(async (root) => (await readActiveMemoriesFromRoot(root)).filter((memory) => memory.scope === 'global'))
   )
   return legacy.flat()
+}
+
+function projectSimilarityReason(indexedProjects: number, selectedProjects: number): string | undefined {
+  if (indexedProjects <= 1) {
+    return 'no_similar_projects_indexed'
+  }
+  if (selectedProjects === 0) {
+    return 'no_similar_projects_selected'
+  }
+  return undefined
 }

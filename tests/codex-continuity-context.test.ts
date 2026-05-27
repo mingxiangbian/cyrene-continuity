@@ -300,6 +300,43 @@ describe('Codex continuity context', () => {
     )
   })
 
+  it('keeps current and global indexed retrieval when all-project root scanning hits an unsafe unrelated project', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-unsafe-scan-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-unsafe-scan-repo-')
+    const outsideMemory = await createTempDir('cyrene-codex-continuity-outside-memory-')
+    const identity = await identifyCodexProject(repo)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const unsafeProjectRoot = join(home, '.cyrene', 'codex', 'projects', 'unsafe-unrelated-project')
+    await mkdir(globalMemoryRoot, { recursive: true })
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await mkdir(unsafeProjectRoot, { recursive: true })
+    await symlink(outsideMemory, join(unsafeProjectRoot, 'memory'))
+    await writeFile(join(globalMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'global-unsafe-scan-memory',
+      scope: 'global',
+      domain: 'procedural',
+      content: 'Global unsafe scan guidance should still be indexed.',
+      normalizedKey: 'global-unsafe-scan-guidance'
+    })) + '\n')
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'project-unsafe-scan-memory',
+      content: 'Project unsafe scan memory should still be indexed.',
+      normalizedKey: 'project-unsafe-scan-memory'
+    })) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'unsafe scan guidance project memory',
+      task: 'planning'
+    })
+
+    expect(context.diagnostics?.memoryIndex?.available).toBe(true)
+    expect(context.globalMemory.map((item) => item.id)).toEqual(['global-unsafe-scan-memory'])
+    expect(context.projectMemory.map((item) => item.id)).toEqual(['project-unsafe-scan-memory'])
+  })
+
   it('filters expired and non-memory session records from routed active memory', async () => {
     const home = await createTempDir('cyrene-codex-continuity-router-eligibility-home-')
     process.env.HOME = home
@@ -558,6 +595,40 @@ describe('Codex continuity context', () => {
     expect(context.diagnostics?.evalGate).toMatchObject({
       passed: false,
       failedChecks: ['similar_hint_boundary_eval']
+    })
+  })
+
+  it('reports when indexed projects exist but no similar projects are selected', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-no-similar-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-codex-current-no-similar-repo-')
+    const otherRepo = await createTempDir('cyrene-codex-other-no-similar-repo-')
+    await writeFile(join(currentRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0' }
+    }), 'utf8')
+    await writeFile(join(currentRepo, 'package-lock.json'), '{}\n', 'utf8')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    await mkdir(codexProjectMemoryRoot(current.projectId), { recursive: true })
+    await mkdir(codexProjectMemoryRoot(other.projectId), { recursive: true })
+
+    await getCodexContinuityContext({
+      cwd: otherRepo,
+      userMessage: 'Index an unrelated project.',
+      task: 'planning'
+    })
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'What transferable guidance applies?',
+      task: 'planning'
+    })
+
+    expect(context.diagnostics?.projectSimilarity).toMatchObject({
+      indexedProjects: 2,
+      candidateProjects: 1,
+      selectedProjects: 0,
+      reason: 'no_similar_projects_selected'
     })
   })
 })
