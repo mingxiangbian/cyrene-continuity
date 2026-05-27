@@ -375,7 +375,7 @@ git commit -m "feat: add sqlite memory index adapter"
 - Modify: `src/codex/codex-doctor.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write failing CLI and doctor tests**
+- [x] **Step 1: Write failing CLI and doctor tests**
 
 Append tests to `tests/codex-cli.test.ts`:
 
@@ -421,7 +421,7 @@ it('doctor reports memory index diagnostics', async () => {
 })
 ```
 
-- [ ] **Step 2: Run RED for CLI diagnostics**
+- [x] **Step 2: Run RED for CLI diagnostics**
 
 Run:
 
@@ -431,7 +431,7 @@ npx vitest run tests/codex-cli.test.ts --testNamePattern "memory SQLite index|me
 
 Expected: fail because `codex memory db rebuild` and doctor memory index output do not exist.
 
-- [ ] **Step 3: Implement Codex index wrapper**
+- [x] **Step 3: Implement Codex index wrapper**
 
 Create `src/codex/codex-memory-index.ts`:
 
@@ -491,7 +491,7 @@ export async function readCodexMemoryIndexDiagnostics(): Promise<MemoryIndexDiag
 
 If `codexGlobalRoot()` does not exist yet, `rebuildCodexMemoryIndex` must create it through the adapter's `mkdir(dirname(dbPath))`; do not manually create unrelated memory roots.
 
-- [ ] **Step 4: Add CLI command**
+- [x] **Step 4: Add CLI command**
 
 Modify `src/codex/codex-cli.ts`:
 
@@ -514,7 +514,7 @@ Update usage text to include:
 memory db rebuild
 ```
 
-- [ ] **Step 5: Add doctor diagnostics**
+- [x] **Step 5: Add doctor diagnostics**
 
 Modify `src/codex/codex-doctor.ts` to import `codexMemoryDbPath` and `readCodexMemoryIndexDiagnostics`. Include in output under `memory:`:
 
@@ -531,7 +531,7 @@ memoryIndex.ftsTokenizer === undefined ? undefined : `  memory fts: ${memoryInde
 memoryIndex.reason === undefined ? undefined : `  memory index reason: ${memoryIndex.reason}`,
 ```
 
-- [ ] **Step 6: Run GREEN for CLI diagnostics**
+- [x] **Step 6: Run GREEN for CLI diagnostics**
 
 Run:
 
@@ -541,7 +541,7 @@ npx vitest run tests/codex-cli.test.ts --testNamePattern "memory SQLite index|me
 
 Expected: the two new tests pass.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 Run:
 

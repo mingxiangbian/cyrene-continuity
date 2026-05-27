@@ -2,6 +2,7 @@ import { formatCodexDoctor } from './codex-doctor.js'
 import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-install.js'
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
+import { rebuildCodexMemoryIndex } from './codex-memory-index.js'
 import {
   getCodexMemoryProfile,
   runCodexMemoryDream,
@@ -49,6 +50,11 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
+  if (command === 'memory' && input.args[1] === 'db' && input.args[2] === 'rebuild') {
+    process.stdout.write(`${JSON.stringify(await rebuildCodexMemoryIndex({ cwd: input.cwd }), null, 2)}\n`)
+    return
+  }
+
   if (command === 'memory' && input.args[1] === 'profile') {
     const profile = await getCodexMemoryProfile({ cwd: input.cwd })
     process.stdout.write(profile.content === '' ? '' : `${profile.content}\n`)
@@ -60,7 +66,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory maintenance|memory profile>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>')
   process.exit(1)
 }
 

@@ -588,6 +588,47 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('auto promote: enabled')
   })
 
+  it('rebuilds the Codex memory SQLite index from JSONL roots', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-db-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-db-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'db', 'rebuild'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      dbPath: string
+      diagnostics: { available: boolean; ftsTokenizer?: string }
+      syncedRoots: number
+    }
+    expect(parsed.dbPath).toBe(join(home, '.cyrene', 'codex', 'memory.db'))
+    expect(parsed.diagnostics.available).toBe(true)
+    expect(parsed.syncedRoots).toBeGreaterThanOrEqual(1)
+  })
+
+  it('doctor reports memory index diagnostics', async () => {
+    const home = await createTempDir('cyrene-codex-cli-doctor-index-home-')
+    const repo = await createTempDir('cyrene-codex-cli-doctor-index-repo-')
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'doctor'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('memory index:')
+    expect(result.stdout).toContain(join(home, '.cyrene', 'codex', 'memory.db'))
+  })
+
   it('doctor reports pending counts and current repo MCP command freshness', async () => {
     const home = await createTempDir('cyrene-codex-cli-doctor-pending-home-')
     process.env.HOME = home

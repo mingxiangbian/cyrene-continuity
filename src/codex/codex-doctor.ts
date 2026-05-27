@@ -12,6 +12,7 @@ import {
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
+import { codexMemoryDbPath, readCodexMemoryIndexDiagnostics } from './codex-memory-index.js'
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
@@ -46,6 +47,7 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
   const identity = await identifyCodexProject(input.cwd)
   const config = createDefaultConfig(input.cwd)
   const memoryState = await readDoctorMemoryState(identity.projectId)
+  const memoryIndex = await readCodexMemoryIndexDiagnostics()
   const actions = [
     cyreneConfigured || pluginBridgeInstalled ? undefined : `  action: run ${installCommand} to install the Cyrene bridge`,
     mcpCommandAction,
@@ -96,6 +98,10 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  global pending: ${memoryState.globalPendingCount}`,
     `  project profile: ${memoryState.projectProfilePresent ? 'present' : 'missing'}`,
     `  project pending: ${memoryState.projectPendingCount}`,
+    `  memory index: ${memoryIndex.available ? 'available' : 'unavailable'}`,
+    `  memory db: ${codexMemoryDbPath()}`,
+    memoryIndex.ftsTokenizer === undefined ? undefined : `  memory fts: ${memoryIndex.ftsTokenizer}`,
+    memoryIndex.reason === undefined ? undefined : `  memory index reason: ${memoryIndex.reason}`,
     `  dream due: ${memoryState.dreamDue ? 'yes' : 'no'}`,
     `  last dream: ${memoryState.lastDreamAt ?? 'never'}`,
     `  auto promote: ${config.memoryAutoPromoteEnabled ? 'enabled' : 'disabled'}`
