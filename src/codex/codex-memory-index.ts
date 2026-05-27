@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   openMemoryIndexAdapter,
   type MemoryIndexDiagnostics,
@@ -7,7 +7,8 @@ import {
 import {
   codexGlobalRoot,
   getReadableCodexGlobalMemoryRoot,
-  getReadableCodexProjectMemoryRoot
+  getReadableCodexProjectMemoryRoot,
+  getReadableCodexProjectMemoryRoots
 } from './codex-memory-root.js'
 import { identifyCodexProject } from './project-id.js'
 
@@ -23,13 +24,23 @@ export function codexMemoryDbPath(): string {
 
 export async function codexMemoryIndexRoots(projectId: string): Promise<MemoryIndexRoot[]> {
   const roots: MemoryIndexRoot[] = []
+  const seen = new Set<string>()
+  const addRoot = (root: MemoryIndexRoot): void => {
+    if (seen.has(root.memoryRoot)) return
+    seen.add(root.memoryRoot)
+    roots.push(root)
+  }
+
   const globalRoot = await getReadableCodexGlobalMemoryRoot()
   if (globalRoot !== null) {
-    roots.push({ memoryRoot: globalRoot, projectId: null, scope: 'global' })
+    addRoot({ memoryRoot: globalRoot, projectId: null, scope: 'global' })
   }
   const projectRoot = await getReadableCodexProjectMemoryRoot(projectId)
   if (projectRoot !== null) {
-    roots.push({ memoryRoot: projectRoot, projectId, scope: 'project' })
+    addRoot({ memoryRoot: projectRoot, projectId, scope: 'project' })
+  }
+  for (const memoryRoot of await getReadableCodexProjectMemoryRoots()) {
+    addRoot({ memoryRoot, projectId: basename(dirname(memoryRoot)), scope: 'project' })
   }
   return roots
 }

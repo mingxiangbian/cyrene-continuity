@@ -440,6 +440,126 @@ describe('Codex continuity context', () => {
     ])
     expect(context.memory.items).toEqual([])
   })
+
+  it('returns eligible similar-project hints without mixing them into active memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-similar-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-codex-current-similar-repo-')
+    const otherRepo = await createTempDir('cyrene-codex-other-similar-repo-')
+    await writeFile(join(currentRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0', vitest: '^2.0.0' }
+    }), 'utf8')
+    await writeFile(join(currentRepo, 'package-lock.json'), '{}\n', 'utf8')
+    await writeFile(join(otherRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0', vitest: '^2.0.0' }
+    }), 'utf8')
+    await writeFile(join(otherRepo, 'package-lock.json'), '{}\n', 'utf8')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    const currentRoot = codexProjectMemoryRoot(current.projectId)
+    const otherRoot = codexProjectMemoryRoot(other.projectId)
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(otherRoot, { recursive: true })
+    await writeFile(join(currentRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'current-project-fact',
+      content: 'Current project exact fact stays in project memory.',
+      normalizedKey: 'current-project-fact'
+    })) + '\n')
+    await writeFile(join(otherRoot, 'index.jsonl'), [
+      JSON.stringify(createMemory({
+        id: 'portable-similar-hint',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        portability: 'similar_project',
+        content: 'MCP plugin projects should keep generated runtime rebuilds explicit.',
+        normalizedKey: 'mcp-plugin-runtime-rebuild',
+        tags: ['mcp', 'plugin']
+      })),
+      JSON.stringify(createMemory({
+        id: 'other-local-only',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        portability: 'local_only',
+        content: 'Other project local-only detail must not appear.',
+        normalizedKey: 'other-local-only'
+      }))
+    ].join('\n') + '\n')
+
+    await getCodexContinuityContext({
+      cwd: otherRepo,
+      userMessage: 'Index this MCP plugin project.',
+      task: 'planning'
+    })
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
+      task: 'planning'
+    })
+
+    expect(context.similarProjectHints).toEqual([
+      expect.objectContaining({
+        id: 'portable-similar-hint',
+        sourceProjectId: other.projectId,
+        sourceProjectName: other.displayName,
+        portability: 'similar_project',
+        transferable: true,
+        notCurrentProjectFact: true
+      })
+    ])
+    expect(context.memory.items.map((item) => item.id)).toContain('current-project-fact')
+    expect(context.memory.items.map((item) => item.id)).not.toContain('portable-similar-hint')
+    expect(JSON.stringify(context)).not.toContain('other-local-only')
+    expect(context.diagnostics?.projectSimilarity?.selectedProjects).toBeGreaterThanOrEqual(1)
+    expect(context.diagnostics?.evalGate?.passed).toBe(true)
+  })
+
+  it('returns empty similar-project hints when eval gate detects unsafe content', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-similar-unsafe-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-codex-current-unsafe-repo-')
+    const otherRepo = await createTempDir('cyrene-codex-other-unsafe-repo-')
+    await writeFile(join(currentRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0' }
+    }), 'utf8')
+    await writeFile(join(otherRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0' }
+    }), 'utf8')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    const otherRoot = codexProjectMemoryRoot(other.projectId)
+    await mkdir(codexProjectMemoryRoot(current.projectId), { recursive: true })
+    await mkdir(otherRoot, { recursive: true })
+    await writeFile(join(otherRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'unsafe-similar-hint',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      portability: 'similar_project',
+      content: 'Use /Users/phoenix/private/project/config.json for this plugin.',
+      normalizedKey: 'unsafe-path-similar-hint',
+      tags: ['mcp']
+    })) + '\n')
+
+    await getCodexContinuityContext({
+      cwd: otherRepo,
+      userMessage: 'Index this MCP plugin project.',
+      task: 'planning'
+    })
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'What MCP plugin guidance applies?',
+      task: 'planning'
+    })
+
+    expect(context.similarProjectHints).toEqual([])
+    expect(context.diagnostics?.evalGate).toMatchObject({
+      passed: false,
+      failedChecks: ['similar_hint_boundary_eval']
+    })
+  })
 })
 
 function createMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {

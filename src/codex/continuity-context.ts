@@ -1,9 +1,11 @@
 import { buildContinuitySnapshot } from '../affect/affect-runtime.js'
 import type { PrincipledDissentPolicy } from '../affect/types.js'
 import { createDefaultConfig } from '../config.js'
+import { runSimilarHintsEvalGate } from '../eval/eval-runner.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
-import type { IndexedActiveMemory, IndexedPendingMemory, MemoryIndexDiagnostics } from '../memory/memory-index.js'
+import type { IndexedActiveMemory, IndexedPendingMemory, IndexedSimilarMemory, MemoryIndexDiagnostics } from '../memory/memory-index.js'
 import { deriveMemoryPortability, openMemoryIndexAdapter } from '../memory/memory-index.js'
+import { selectSimilarProjects } from '../memory/project-similarity.js'
 import {
   isMemoryEligibleForRetrieval,
   memoryRetrievalBudgetForTask,
@@ -23,6 +25,7 @@ import {
 } from './codex-memory-root.js'
 import { markCodexMemoryDreamDue, readCodexMemoryDreamState } from './memory-dream-state.js'
 import { getCodexPendingReviewNotice } from './memory-review.js'
+import { buildCodexProjectFingerprint } from './project-fingerprint.js'
 import { identifyCodexProject } from './project-id.js'
 import type { CodexPendingReviewNotice } from './memory-review.js'
 
@@ -53,6 +56,34 @@ interface PendingHypothesisDigestItem {
   score: number
 }
 
+interface SimilarProjectHintDigestItem {
+  id: string
+  sourceProjectId: string
+  sourceProjectName?: string
+  domain: 'project' | 'procedural' | 'system'
+  type: string
+  strength: string
+  portability: 'similar_project' | 'project_family'
+  content: string
+  score: number
+  similarityScore: number
+  transferable: true
+  notCurrentProjectFact: true
+  rationale: string
+}
+
+interface ProjectSimilarityDiagnostics {
+  indexedProjects: number
+  candidateProjects: number
+  selectedProjects: number
+  reason?: string
+}
+
+interface EvalGateDiagnostics {
+  passed: boolean
+  failedChecks: string[]
+}
+
 interface ReviewReminder {
   kind: 'pending_review'
   candidateId: string
@@ -76,7 +107,7 @@ export interface CodexContinuityContext {
   globalMemory: RoutedMemoryDigestItem[]
   projectMemory: RoutedMemoryDigestItem[]
   pendingHypotheses: PendingHypothesisDigestItem[]
-  similarProjectHints: []
+  similarProjectHints: SimilarProjectHintDigestItem[]
   responseStrategy: {
     tone: string
     verbosity: string
@@ -91,6 +122,8 @@ export interface CodexContinuityContext {
       reason?: string
       ftsTokenizer?: string
     }
+    projectSimilarity?: ProjectSimilarityDiagnostics
+    evalGate?: EvalGateDiagnostics
   }
   profile: {
     global?: string
@@ -139,8 +172,10 @@ export async function getCodexContinuityContext(input: {
     readProjectCodexProfileIfExists(project.projectId)
   ])
   const routedMemory = await retrieveRoutedMemory({
+    cwd: input.cwd,
     projectId: project.projectId,
     query: input.userMessage,
+    task,
     fallback: legacyRetrievalInput
   })
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory]
@@ -173,7 +208,7 @@ export async function getCodexContinuityContext(input: {
     globalMemory: routedMemory.globalMemory.map(toRoutedMemoryDigestItem),
     projectMemory: routedMemory.projectMemory.map(toRoutedMemoryDigestItem),
     pendingHypotheses: routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem),
-    similarProjectHints: [],
+    similarProjectHints: routedMemory.similarProjectHints.map(toSimilarProjectHintDigestItem),
     responseStrategy: {
       tone: snapshot.strategy.tone,
       verbosity: snapshot.strategy.verbosity,
@@ -192,7 +227,9 @@ export async function getCodexContinuityContext(input: {
         available: routedMemory.diagnostics.available,
         reason: routedMemory.diagnostics.reason,
         ftsTokenizer: routedMemory.diagnostics.ftsTokenizer
-      }
+      },
+      projectSimilarity: routedMemory.projectSimilarityDiagnostics,
+      evalGate: routedMemory.evalGateDiagnostics
     },
     profile: {
       global: globalProfile,
@@ -222,12 +259,17 @@ interface RoutedMemoryResult {
   globalMemory: Array<IndexedActiveMemory | RetrievedMemory>
   projectMemory: Array<IndexedActiveMemory | RetrievedMemory>
   pendingHypotheses: IndexedPendingMemory[]
+  similarProjectHints: IndexedSimilarMemory[]
   diagnostics: MemoryIndexDiagnostics
+  projectSimilarityDiagnostics: ProjectSimilarityDiagnostics
+  evalGateDiagnostics: EvalGateDiagnostics
 }
 
 async function retrieveRoutedMemory(input: {
+  cwd: string
   projectId: string
   query: string
+  task: CodexContinuityTask
   fallback: RetrieveMemoriesInput
 }): Promise<RoutedMemoryResult> {
   const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() })
@@ -237,12 +279,53 @@ async function retrieveRoutedMemory(input: {
     if (!diagnostics.available) {
       return fallbackRoutedMemory(input.fallback, diagnostics, input.projectId)
     }
+    const currentFingerprint = await buildCodexProjectFingerprint({
+      cwd: input.cwd,
+      project: await identifyCodexProject(input.cwd)
+    })
+    await adapter.upsertProjectMetadata(currentFingerprint)
+    const metadata = await adapter.listProjectMetadata()
+    const selectedSimilarities = selectSimilarProjects({
+      source: currentFingerprint,
+      candidates: metadata,
+      minScore: 0.2,
+      maxProjects: 5,
+      now: new Date().toISOString()
+    })
+    for (const similarity of selectedSimilarities) {
+      await adapter.upsertProjectSimilarity(similarity)
+    }
+    const targetNames = new Map(metadata.map((project) => [project.projectId, project.displayName]))
+    const similarProjectHints = await adapter.querySimilarActive({
+      currentProjectId: input.projectId,
+      query: input.query,
+      targetProjects: selectedSimilarities.map((similarity) => ({
+        projectId: similarity.targetProjectId,
+        similarityScore: similarity.score,
+        displayName: targetNames.get(similarity.targetProjectId)
+      })),
+      task: input.task,
+      maxItems: 6,
+      maxTokens: 500
+    })
+    const evalGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
+      id: item.memory.id,
+      currentProjectId: input.projectId,
+      homeProjectId: item.homeProjectId,
+      domain: item.memory.domain,
+      portability: item.portability,
+      scope: item.memory.scope,
+      content: item.memory.content,
+      transferable: true,
+      notCurrentProjectFact: true
+    })))
+    const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : []
     const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
         query: input.query,
         route: 'global',
-        task: input.fallback.task,
+        task: input.task,
         maxItems: 8,
         maxTokens: 500
       }),
@@ -250,7 +333,7 @@ async function retrieveRoutedMemory(input: {
         currentProjectId: input.projectId,
         query: input.query,
         route: 'project',
-        task: input.fallback.task,
+        task: input.task,
         maxItems: 12,
         maxTokens: 900
       }),
@@ -261,12 +344,22 @@ async function retrieveRoutedMemory(input: {
         maxTokens: 400
       })
     ])
-    const task = input.fallback.task ?? 'conversation'
     return {
-      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
-      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
+      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
+      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
       pendingHypotheses,
-      diagnostics
+      similarProjectHints: safeSimilarProjectHints,
+      diagnostics,
+      projectSimilarityDiagnostics: {
+        indexedProjects: metadata.length,
+        candidateProjects: Math.max(0, metadata.length - 1),
+        selectedProjects: selectedSimilarities.length,
+        reason: metadata.length <= 1 ? 'no_similar_projects_indexed' : undefined
+      },
+      evalGateDiagnostics: {
+        passed: evalGate.passed,
+        failedChecks: evalGate.failedChecks
+      }
     }
   } catch (error) {
     return fallbackRoutedMemory(
@@ -293,7 +386,18 @@ async function fallbackRoutedMemory(
     globalMemory: memories.filter(({ memory }) => memory.scope === 'global'),
     projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
     pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
-    diagnostics
+    similarProjectHints: [],
+    diagnostics,
+    projectSimilarityDiagnostics: {
+      indexedProjects: 0,
+      candidateProjects: 0,
+      selectedProjects: 0,
+      reason: 'memory_index_unavailable'
+    },
+    evalGateDiagnostics: {
+      passed: true,
+      failedChecks: []
+    }
   }
 }
 
@@ -398,6 +502,24 @@ function toPendingHypothesisDigestItem(item: IndexedPendingMemory): PendingHypot
     content: item.memory.content,
     provisional: true,
     score: item.score
+  }
+}
+
+function toSimilarProjectHintDigestItem(item: IndexedSimilarMemory): SimilarProjectHintDigestItem {
+  return {
+    id: item.memory.id,
+    sourceProjectId: item.homeProjectId,
+    sourceProjectName: item.sourceProjectName,
+    domain: item.memory.domain as 'project' | 'procedural' | 'system',
+    type: item.memory.type,
+    strength: item.memory.strength,
+    portability: item.portability as 'similar_project' | 'project_family',
+    content: item.memory.content,
+    score: item.score,
+    similarityScore: item.similarityScore,
+    transferable: true,
+    notCurrentProjectFact: true,
+    rationale: 'Transferable guidance from a similar indexed project; not a current project fact.'
   }
 }
 
