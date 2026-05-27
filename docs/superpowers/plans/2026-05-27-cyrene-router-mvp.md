@@ -42,7 +42,7 @@
 - Create: `src/memory/memory-index.ts`
 - Test: `tests/memory-index.test.ts`
 
-- [ ] **Step 1: Write failing memory index tests**
+- [x] **Step 1: Write failing memory index tests**
 
 Create `tests/memory-index.test.ts` with tests for initialization, sync/query, FTS, and disabled adapter diagnostics:
 
@@ -227,7 +227,7 @@ describe('memory SQLite index', () => {
 })
 ```
 
-- [ ] **Step 2: Run RED for memory index tests**
+- [x] **Step 2: Run RED for memory index tests**
 
 Run:
 
@@ -237,7 +237,7 @@ npx vitest run tests/memory-index.test.ts
 
 Expected: fail because `src/memory/memory-index.ts` and `MemoryPortability` do not exist.
 
-- [ ] **Step 3: Add memory portability types**
+- [x] **Step 3: Add memory portability types**
 
 Modify `src/memory/types.ts`:
 
@@ -251,7 +251,7 @@ export type MemoryPortability =
 
 Add optional `portability?: MemoryPortability` to both `CyreneMemory` and `PendingMemory`. Keep it optional so existing JSONL records remain valid without migration.
 
-- [ ] **Step 4: Implement `src/memory/memory-index.ts`**
+- [x] **Step 4: Implement `src/memory/memory-index.ts`**
 
 Create a focused adapter with these exported types and functions:
 
@@ -346,7 +346,7 @@ export function deriveMemoryPortability(memory: Pick<CyreneMemory | PendingMemor
 - If FTS `MATCH` throws on a query, fallback to structured query plus simple token scorer.
 - Enforce `maxItems` and `maxTokens` using `estimateTokens(memory.content)`.
 
-- [ ] **Step 5: Run GREEN for memory index tests**
+- [x] **Step 5: Run GREEN for memory index tests**
 
 Run:
 
@@ -356,7 +356,7 @@ npx vitest run tests/memory-index.test.ts
 
 Expected: all tests in `tests/memory-index.test.ts` pass.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 Run:
 

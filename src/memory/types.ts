@@ -21,6 +21,12 @@ export type MemoryStrength = 'hard' | 'soft' | 'session'
 
 export type MemoryScope = 'global' | 'project' | 'session'
 
+export type MemoryPortability =
+  | 'local_only'
+  | 'project_family'
+  | 'similar_project'
+  | 'global'
+
 export type MemoryStatus =
   | 'active'
   | 'pending'
@@ -71,6 +77,7 @@ export interface CyreneMemory {
   normalizedKey: string
   evidence: MemoryEvidence[]
   source: MemorySource
+  portability?: MemoryPortability
   scores: MemoryScores
   createdAt: string
   updatedAt: string
@@ -97,6 +104,7 @@ export interface PendingMemory {
   normalizedKey: string
   evidence: MemoryEvidence[]
   source: MemorySource
+  portability?: MemoryPortability
   scores: MemoryScores
   seenCount: number
   firstSeenAt: string
