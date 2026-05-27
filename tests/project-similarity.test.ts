@@ -38,6 +38,30 @@ describe('project similarity scoring', () => {
     ]))
   })
 
+  it('scores unknown package manager matches', () => {
+    const result = scoreProjectSimilarity(
+      project({
+        projectId: 'source',
+        packageManager: 'unknown',
+        languages: [],
+        frameworks: [],
+        dependencyNames: [],
+        domainTags: []
+      }),
+      project({
+        projectId: 'target',
+        packageManager: 'unknown',
+        languages: [],
+        frameworks: [],
+        dependencyNames: [],
+        domainTags: []
+      })
+    )
+
+    expect(result.score).toBe(0.12)
+    expect(result.reason).toEqual(['package_manager:unknown'])
+  })
+
   it('selects non-current projects above threshold by score', () => {
     const source = project({ projectId: 'source' })
     const selected = selectSimilarProjects({

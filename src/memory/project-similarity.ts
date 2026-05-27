@@ -6,7 +6,7 @@ export function scoreProjectSimilarity(source: ProjectMetadata, target: ProjectM
   const reason: string[] = []
   let score = 0
 
-  if (source.packageManager !== 'unknown' && source.packageManager === target.packageManager) {
+  if (source.packageManager === target.packageManager) {
     score += 0.12
     reason.push(`package_manager:${source.packageManager}`)
   }
