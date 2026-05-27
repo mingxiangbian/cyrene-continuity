@@ -399,7 +399,10 @@ describe('memory SQLite index', () => {
     const hints = await adapter.querySimilarActive({
       currentProjectId: 'project-a',
       query: 'mcp plugin runtime',
-      targetProjects: [{ projectId: 'project-b', similarityScore: 0.75, displayName: 'project-b' }],
+      targetProjects: [
+        { projectId: 'project-a', similarityScore: 0.99, displayName: 'current' },
+        { projectId: 'project-b', similarityScore: 0.75, displayName: 'project-b' }
+      ],
       maxItems: 10,
       maxTokens: 2_000
     })
