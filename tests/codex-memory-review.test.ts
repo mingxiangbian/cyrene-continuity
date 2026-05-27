@@ -260,6 +260,26 @@ describe('Codex pending memory review', () => {
     expect(snapshots).toHaveLength(1)
   })
 
+  it('best-effort syncs the memory index after promoting pending memory', async () => {
+    const home = await createTempDir('cyrene-codex-review-index-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-review-index-repo-')
+    const candidate = createPending({
+      id: 'pending-index-sync',
+      content: 'Promoted memory should be visible to router index sync.',
+      normalizedKey: 'promoted-router-index-sync'
+    })
+    await seedPending(cwd, [candidate])
+
+    await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate)
+    })
+
+    await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'))).resolves.toBeInstanceOf(Buffer)
+  })
+
   it('promotes affective pending memory using validator-normalized shape', async () => {
     const home = await createTempDir('cyrene-review-home-')
     vi.stubEnv('HOME', home)

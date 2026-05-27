@@ -46,6 +46,26 @@ describe('Codex memory propose', () => {
     await expect(readFile(join(result.memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('best-effort syncs the memory index after proposing pending memory', async () => {
+    const home = await createTempDir('cyrene-codex-propose-index-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-propose-index-repo-')
+
+    const result = await proposeCodexMemoryCandidate({
+      cwd,
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        content: 'Pending proposal should be visible to router index sync.',
+        normalizedKey: 'pending-proposal-router-index-sync',
+        evidence: [{ runId: 'run-index', summary: 'Index sync test.' }]
+      }
+    })
+
+    expect(result.result.action).toBe('pending')
+    await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'))).resolves.toBeInstanceOf(Buffer)
+  })
+
   it('marks the memory dream pass due after writing pending memory', async () => {
     const home = await createTempDir('cyrene-codex-propose-home-')
     vi.stubEnv('HOME', home)

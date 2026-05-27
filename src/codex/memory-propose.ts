@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { markCodexMemoryDreamDue } from './memory-dream-state.js'
 import { summarizePendingMemory } from './memory-review.js'
@@ -122,6 +123,7 @@ export async function proposeCodexMemoryCandidate(input: {
       reason,
       candidateId: merged.id
     })
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
     return {
       project: { projectId: project.projectId, displayName: project.displayName },

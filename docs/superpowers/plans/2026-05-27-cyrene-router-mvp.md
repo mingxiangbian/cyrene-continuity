@@ -782,7 +782,7 @@ git commit -m "feat: return routed continuity digest"
 - Test: `tests/codex-memory-propose.test.ts`
 - Test: `tests/codex-memory-review.test.ts`
 
-- [ ] **Step 1: Write failing sync-after-write tests**
+- [x] **Step 1: Write failing sync-after-write tests**
 
 Add one test to `tests/codex-memory-propose.test.ts`:
 
@@ -835,7 +835,7 @@ it('best-effort syncs the memory index after promoting pending memory', async ()
 
 Use existing helper names in those test files. If a helper has a different name, use the local helper already present in the file instead of creating a duplicate with conflicting semantics.
 
-- [ ] **Step 2: Run RED for write sync tests**
+- [x] **Step 2: Run RED for write sync tests**
 
 Run:
 
@@ -845,7 +845,7 @@ npx vitest run tests/codex-memory-propose.test.ts tests/codex-memory-review.test
 
 Expected: fail because memory writes do not sync `memory.db`.
 
-- [ ] **Step 3: Add best-effort sync helper**
+- [x] **Step 3: Add best-effort sync helper**
 
 In `src/codex/codex-memory-index.ts`, add:
 
@@ -859,7 +859,7 @@ export async function syncCurrentCodexMemoryIndex(input: { cwd: string }): Promi
 }
 ```
 
-- [ ] **Step 4: Call sync helper after successful writes**
+- [x] **Step 4: Call sync helper after successful writes**
 
 In `src/codex/memory-propose.ts`, import and call after the pending event is appended and before returning:
 
@@ -875,7 +875,7 @@ await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
 Do not call sync when validator rejects a proposal before writing pending memory.
 
-- [ ] **Step 5: Run GREEN for write sync tests**
+- [x] **Step 5: Run GREEN for write sync tests**
 
 Run:
 
@@ -885,7 +885,7 @@ npx vitest run tests/codex-memory-propose.test.ts tests/codex-memory-review.test
 
 Expected: new write sync tests pass.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 Run:
 

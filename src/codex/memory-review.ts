@@ -6,6 +6,7 @@ import {
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
+import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { identifyCodexProject } from './project-id.js'
 import {
   assertMemoryMaintenanceTargetsSafeFromRoot,
@@ -375,6 +376,7 @@ export async function promoteCodexPendingMemory(input: {
       now,
       reason: 'after manual memory promotion'
     })
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
     return {
       project,
@@ -467,6 +469,7 @@ export async function rejectCodexPendingMemory(input: {
       reason: input.reason ?? 'Rejected by Codex pending memory review',
       candidateId: lockedCandidate.id
     })
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
     return {
       project,

@@ -54,3 +54,11 @@ export async function readCodexMemoryIndexDiagnostics(): Promise<MemoryIndexDiag
     adapter.close()
   }
 }
+
+export async function syncCurrentCodexMemoryIndex(input: { cwd: string }): Promise<void> {
+  try {
+    await rebuildCodexMemoryIndex(input)
+  } catch {
+    // JSONL is the source of truth. Index sync must not break memory writes.
+  }
+}
