@@ -66,11 +66,20 @@ npm run dev -- codex install --dev
 npm run dev -- codex install --plugin
 npm run dev -- codex install-hook --stop
 npm run dev -- codex hook stop
+npm run dev -- codex eval run --check similar-hints
 npm run dev -- codex memory db rebuild
 npm run dev -- codex memory dream --stage deep
 npm run dev -- codex memory maintenance
 npm run dev -- codex memory profile
 ```
+
+## Similar-Project Hints
+
+`cyrene_continuity_get` can return `similarProjectHints` when another indexed
+project has explicitly portable `similar_project` or `project_family` memory.
+These hints are transferable guidance, not facts about the current project.
+`local_only`, personal, relationship, and affective memories are excluded by
+policy and by the deterministic eval gate.
 
 ## Verify
 

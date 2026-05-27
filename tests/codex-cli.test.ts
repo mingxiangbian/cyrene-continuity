@@ -755,6 +755,40 @@ describe('cyrene-continuity codex CLI', () => {
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('CLI maintenance renders active memory into the model profile.')
   })
 
+  it('runs the similar hints eval check from the Codex CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-eval-home-')
+    const repo = await createTempDir('cyrene-codex-cli-eval-repo-')
+    const repoRoot = process.cwd()
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(repoRoot, 'node_modules/tsx/dist/cli.mjs'),
+        join(repoRoot, 'src/main.ts'),
+        'codex',
+        'eval',
+        'run',
+        '--check',
+        'similar-hints'
+      ],
+      { cwd: repo, env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      check: string
+      passed: boolean
+      failedChecks: string[]
+      similarProjectHints: number
+    }
+    expect(parsed).toEqual({
+      check: 'similar-hints',
+      passed: true,
+      failedChecks: [],
+      similarProjectHints: 0
+    })
+  })
+
   it('rejects memory dream --stage without a value', async () => {
     const home = await createTempDir('cyrene-codex-cli-dream-home-')
     process.env.HOME = home

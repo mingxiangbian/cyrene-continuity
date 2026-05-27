@@ -1,4 +1,5 @@
 import { formatCodexDoctor } from './codex-doctor.js'
+import { runCodexSimilarHintsEval } from './codex-eval.js'
 import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-install.js'
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
@@ -42,6 +43,11 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
+  if (command === 'eval' && input.args[1] === 'run' && input.args[2] === '--check' && input.args[3] === 'similar-hints') {
+    process.stdout.write(`${JSON.stringify(await runCodexSimilarHintsEval({ cwd: input.cwd }), null, 2)}\n`)
+    return
+  }
+
   if (command === 'memory' && input.args[1] === 'dream') {
     process.stdout.write(`${JSON.stringify(await runCodexMemoryDream({
       cwd: input.cwd,
@@ -66,7 +72,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>')
   process.exit(1)
 }
 
