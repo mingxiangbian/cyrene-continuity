@@ -150,7 +150,7 @@ describe('cyrene-continuity codex CLI', () => {
 
     expect(result.stderr).toBe('')
     expect(result.stdout).toContain('Cyrene Codex Doctor')
-    expect(result.stdout).toContain('cyrene mcp: configured')
+    expect(result.stdout).toContain('cyrene-continuity mcp: configured')
     expect(result.stdout).toContain('mcp command:')
     expect(result.stdout).toContain('npm')
     expect(result.stdout).toContain('--prefix')
@@ -187,13 +187,37 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('cyrene mcp: configured')
+    expect(result.stdout).toContain('cyrene-continuity mcp: configured')
     expect(result.stdout).toContain('agentmemory: disabled')
     expect(result.stdout).toContain('cyrene-continuity: missing')
     expect(result.stdout).toContain('status: not ready')
     expect(result.stdout).toContain('action: run npm --prefix')
     expect(result.stdout).toContain(process.cwd())
     expect(result.stdout).toContain('run --silent dev -- codex install --dev')
+  })
+
+  it('doctor reads the cyrene-continuity manual MCP config name', async () => {
+    const home = await createTempDir('cyrene-codex-cli-named-mcp-home-')
+    const configPath = join(home, '.codex-config.toml')
+    await writeFile(
+      configPath,
+      [
+        '[mcp_servers."cyrene-continuity"]',
+        ...currentRepoMcpConfigLines(),
+        'enabled = true'
+      ].join('\n')
+    )
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'doctor', '--config', configPath],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('cyrene-continuity mcp: configured')
+    expect(result.stdout).toContain('manual mcp: enabled')
+    expect(result.stdout).toContain('mcp command freshness: current repo')
   })
 
   it('doctor reports ready after the skill is installed and agentmemory is disabled', async () => {
@@ -232,7 +256,7 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('cyrene mcp: configured')
+    expect(result.stdout).toContain('cyrene-continuity mcp: configured')
     expect(result.stdout).toContain('agentmemory: disabled')
     expect(result.stdout).toContain('cyrene-continuity: ok')
     expect(result.stdout).toContain('status: ready')
@@ -268,7 +292,7 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('cyrene mcp: configured')
+    expect(result.stdout).toContain('cyrene-continuity mcp: configured')
     expect(result.stdout).toContain('mcp command freshness: stale or external')
     expect(result.stdout).toContain('agentmemory: disabled')
     expect(result.stdout).toContain('cyrene-continuity: ok')
@@ -276,7 +300,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('action: rerun npm --prefix')
     expect(result.stdout).toContain(process.cwd())
     expect(result.stdout).toContain('run --silent dev -- codex install --dev')
-    expect(result.stdout).toContain('update [mcp_servers.cyrene] from its printed config')
+    expect(result.stdout).toContain('update [mcp_servers."cyrene-continuity"] from its printed config')
   })
 
   it('install --dev creates only the skill symlink and Cyrene Codex state root', async () => {
@@ -292,7 +316,8 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('[mcp_servers.cyrene]')
+    expect(result.stdout).toContain('[mcp_servers."cyrene-continuity"]')
+    expect(result.stdout).not.toContain('[mcp_servers.cyrene]')
     expect(result.stdout).toContain('command = "npm"')
     expect(result.stdout).toContain('--prefix')
     expect(result.stdout).toContain(process.cwd())
@@ -347,7 +372,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stderr).toBe('')
     expect(result.stdout).toContain('Cyrene Codex plugin bridge installed.')
     expect(result.stdout).toContain(shimPath)
-    expect(result.stdout).toContain('Disable or remove [mcp_servers.cyrene]')
+    expect(result.stdout).toContain('Disable or remove manual Cyrene MCP config')
     expect(shim).toContain('plugin/runtime/cyrene-continuity.mjs')
     expect(shim).toContain('exec node "$runtime" "$@"')
   })
@@ -385,7 +410,7 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('cyrene mcp: missing')
+    expect(result.stdout).toContain('cyrene-continuity mcp: missing')
     expect(result.stdout).toContain('manual mcp: absent')
     expect(result.stdout).toContain('plugin mcp: declared')
     expect(result.stdout).toContain('runtime: present')
@@ -423,7 +448,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('plugin mcp: declared')
     expect(result.stdout).toContain('stable shim: present')
     expect(result.stdout).toContain('status: not ready')
-    expect(result.stdout).toContain('action: disable or remove [mcp_servers.cyrene]')
+    expect(result.stdout).toContain('action: disable or remove manual Cyrene MCP config')
     expect(result.stdout).not.toContain('action: rerun')
   })
 
@@ -636,7 +661,8 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('cyrene mcp: configured')
+    expect(result.stdout).toContain('cyrene-continuity mcp: configured')
+    expect(result.stdout).toContain('legacy mcp name: cyrene')
     expect(result.stdout).toContain('mcp command:')
     expect(result.stdout).toContain('npm')
     expect(result.stdout).toContain('--prefix')

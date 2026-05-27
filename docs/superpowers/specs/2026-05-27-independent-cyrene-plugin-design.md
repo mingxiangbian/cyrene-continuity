@@ -2,7 +2,7 @@
 
 ## 目标
 
-把 `cyrene-continuity` 从“repo 本地开发桥接”升级为真正独立的 Codex plugin。完成后，Codex 应通过 plugin 加载 `cyrene-continuity` skill 和 Cyrene MCP，不再依赖手写的 `~/.codex/config.toml` `[mcp_servers.cyrene]` 配置，也不再要求 hook 或 automation 直接调用 `/Users/phoenix/Assistant/cyrene-continuity` 里的 `npm run dev`。
+把 `cyrene-continuity` 从“repo 本地开发桥接”升级为真正独立的 Codex plugin。完成后，Codex 应通过 plugin 加载 `cyrene-continuity` skill 和同名 MCP，不再依赖手写的 `~/.codex/config.toml` `[mcp_servers.cyrene]` 旧配置，也不再要求 hook 或 automation 直接调用 `/Users/phoenix/Assistant/cyrene-continuity` 里的 `npm run dev`。
 
 ## 非目标
 
@@ -16,7 +16,7 @@
 
 当前 repo 已经实现 MCP server，入口在 `src/mcp/mcp-server.ts`：
 
-- server name: `cyrene`
+- server name: `cyrene-continuity`
 - 主要 tools:
   - `cyrene_project_identify`
   - `cyrene_continuity_get`
@@ -73,7 +73,7 @@ npm run dev -- codex memory dream --stage deep
 ```json
 {
   "mcpServers": {
-    "cyrene": {
+    "cyrene-continuity": {
       "command": "...",
       "args": ["mcp-server", "--stdio"],
       "cwd": "."
@@ -124,7 +124,7 @@ plugin runtime 只能读写这些外部稳定路径，不能把长期 memory 放
 
 迁移后必须保持以下兼容性：
 
-- MCP server name 保持 `cyrene`。
+- MCP server key/name 使用 `cyrene-continuity`；旧手写 `[mcp_servers.cyrene]` 只作为 legacy config 被 doctor 识别。
 - MCP tool 名保持不变。
 - 每个 tool 的 input schema 保持向后兼容。
 - `cyrene-continuity` skill 名保持不变。
@@ -144,7 +144,7 @@ cyrene-continuity codex install --plugin
 1. 确认或创建 `~/.cyrene/codex/bin`。
 2. 写入或更新 `~/.cyrene/codex/bin/cyrene-continuity` shim。
 3. 安装或更新 Codex Stop hook，使它调用 stable shim。
-4. 输出应删除或禁用的旧 `[mcp_servers.cyrene]` 手写配置。
+4. 输出应删除或禁用的手写 Cyrene MCP 配置，包括新表名 `[mcp_servers."cyrene-continuity"]` 和旧表名 `[mcp_servers.cyrene]`。
 5. 输出需要用户在 Codex plugin UI 中重新安装或刷新 plugin 的提示。
 
 实际实现可以拆分为更小命令，但最终用户路径必须清楚，不能要求用户手动拼装多个不稳定路径。

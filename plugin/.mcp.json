@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "cyrene": {
+    "cyrene-continuity": {
       "command": "sh",
       "args": ["-lc", "exec \"$HOME/.cyrene/codex/bin/cyrene-continuity\" mcp-server --stdio"]
     }

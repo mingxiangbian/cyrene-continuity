@@ -7,6 +7,9 @@ import { codexGlobalRoot } from './codex-memory-root.js'
 import { requireDevRepoRoot, resolvePluginRuntimePath } from './runtime-paths.js'
 import { writeCodexStableShim } from './stable-shim.js'
 
+const CURRENT_CYRENE_MCP_CONFIG_TABLE = '[mcp_servers."cyrene-continuity"]'
+const LEGACY_CYRENE_MCP_CONFIG_TABLE = '[mcp_servers.cyrene]'
+
 export { resolvePluginRuntimePath } from './runtime-paths.js'
 
 export async function installCodexDevBridge(input: { runtimeEntryPath?: string } = {}): Promise<string> {
@@ -33,7 +36,7 @@ export async function installCodexDevBridge(input: { runtimeEntryPath?: string }
     '',
     'Add this MCP config manually to ~/.codex/config.toml:',
     '',
-    '[mcp_servers.cyrene]',
+    CURRENT_CYRENE_MCP_CONFIG_TABLE,
     'command = "npm"',
     `args = ${JSON.stringify(['--prefix', repoRoot, 'run', '--silent', 'dev', '--', 'mcp-server', '--stdio'])}`,
     'enabled = true',
@@ -59,7 +62,7 @@ export async function installCodexPluginBridge(input: { runtimeEntryPath?: strin
     '',
     hookOutput.trimEnd(),
     '',
-    'Disable or remove [mcp_servers.cyrene] after validating the installed plugin MCP server in a new Codex session.'
+    `Disable or remove manual Cyrene MCP config (${CURRENT_CYRENE_MCP_CONFIG_TABLE} or legacy ${LEGACY_CYRENE_MCP_CONFIG_TABLE}) after validating the installed plugin MCP server in a new Codex session.`
   ].join('\n') + '\n'
 }
 

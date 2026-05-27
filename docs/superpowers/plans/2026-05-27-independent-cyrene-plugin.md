@@ -35,7 +35,7 @@ import { describe, expect, it } from 'vitest'
 const execFileAsync = promisify(execFile)
 
 describe('plugin runtime package', () => {
-  it('declares a plugin MCP server named cyrene', async () => {
+  it('declares a plugin MCP server named cyrene-continuity', async () => {
     const manifest = JSON.parse(await readFile('plugin/.codex-plugin/plugin.json', 'utf8'))
     const mcp = JSON.parse(await readFile('plugin/.mcp.json', 'utf8'))
 
@@ -43,7 +43,7 @@ describe('plugin runtime package', () => {
     expect(manifest.skills).toBe('./skills/')
     expect(manifest.mcpServers).toBe('./.mcp.json')
     expect(manifest).not.toHaveProperty('schema_version')
-    expect(mcp.mcpServers.cyrene).toMatchObject({
+    expect(mcp.mcpServers['cyrene-continuity']).toMatchObject({
       command: 'node',
       args: ['./runtime/cyrene-continuity.mjs', 'mcp-server', '--stdio'],
       cwd: '.'
@@ -139,7 +139,7 @@ Create `plugin/.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "cyrene": {
+    "cyrene-continuity": {
       "command": "node",
       "args": ["./runtime/cyrene-continuity.mjs", "mcp-server", "--stdio"],
       "cwd": "."
@@ -221,7 +221,7 @@ it('install --plugin writes a stable shim that points at the plugin runtime', as
   expect(result.stderr).toBe('')
   expect(result.stdout).toContain('Cyrene Codex plugin bridge installed.')
   expect(result.stdout).toContain(shimPath)
-  expect(result.stdout).toContain('Disable or remove [mcp_servers.cyrene]')
+  expect(result.stdout).toContain('Disable or remove manual Cyrene MCP config')
   expect(shim).toContain('plugin/runtime/cyrene-continuity.mjs')
   expect(shim).toContain('exec node "$runtime" "$@"')
 })
@@ -319,7 +319,7 @@ export async function installCodexPluginBridge(input: { runtimeEntryPath: string
     '',
     `shim: ${shimPath} -> ${runtimePath}`,
     '',
-    'Disable or remove [mcp_servers.cyrene] from ~/.codex/config.toml after verifying plugin MCP in a new Codex thread.',
+    'Disable or remove manual Cyrene MCP config from ~/.codex/config.toml after verifying plugin MCP in a new Codex thread.',
     'Use the Codex plugin UI to reinstall or refresh cyrene-continuity so .mcp.json is picked up.',
     ''
   ].join('\n')
@@ -437,7 +437,7 @@ it('doctor reports plugin MCP and shim state', async () => {
   expect(result.stderr).toBe('')
   expect(result.stdout).toContain('plugin mcp: present')
   expect(result.stdout).toContain('stable shim: configured')
-  expect(result.stdout).toContain('manual cyrene mcp: missing')
+  expect(result.stdout).toContain('manual mcp: absent')
   expect(result.stdout).toContain('status: ready')
 })
 
@@ -466,9 +466,9 @@ it('doctor marks an enabled manual Cyrene MCP as a conflict after plugin install
   )
 
   expect(result.stderr).toBe('')
-  expect(result.stdout).toContain('manual cyrene mcp: enabled')
+  expect(result.stdout).toContain('manual mcp: enabled')
   expect(result.stdout).toContain('status: not ready')
-  expect(result.stdout).toContain('action: disable or remove [mcp_servers.cyrene]')
+  expect(result.stdout).toContain('action: disable or remove manual Cyrene MCP config')
 })
 ```
 
@@ -490,7 +490,8 @@ Update `src/codex/codex-doctor.ts`:
 - Report:
   - `plugin mcp: present|missing`
   - `stable shim: configured|missing`
-  - `manual cyrene mcp: enabled|disabled|missing`
+  - `cyrene-continuity mcp: configured|missing`
+  - `manual mcp: enabled|absent`
 - Treat enabled manual Cyrene MCP as not ready once plugin MCP exists.
 - Keep `agentmemory` blocking behavior.
 - Keep Stop hook advisory behavior.

@@ -19,7 +19,7 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 describe('plugin runtime package', () => {
-  it('declares a plugin MCP server named cyrene', async () => {
+  it('declares a plugin MCP server named cyrene-continuity', async () => {
     const manifest = JSON.parse(await readFile('plugin/.codex-plugin/plugin.json', 'utf8'))
     const mcp = JSON.parse(await readFile('plugin/.mcp.json', 'utf8'))
 
@@ -27,11 +27,12 @@ describe('plugin runtime package', () => {
     expect(manifest.skills).toBe('./skills/')
     expect(manifest.mcpServers).toBe('./.mcp.json')
     expect(manifest).not.toHaveProperty('schema_version')
-    expect(mcp.mcpServers.cyrene).toMatchObject({
+    expect(mcp.mcpServers['cyrene-continuity']).toMatchObject({
       command: 'sh',
       args: ['-lc', 'exec "$HOME/.cyrene/codex/bin/cyrene-continuity" mcp-server --stdio']
     })
-    expect(mcp.mcpServers.cyrene).not.toHaveProperty('cwd')
+    expect(mcp.mcpServers).not.toHaveProperty('cyrene')
+    expect(mcp.mcpServers['cyrene-continuity']).not.toHaveProperty('cwd')
   })
 
   it('builds a standalone plugin runtime bundle', async () => {

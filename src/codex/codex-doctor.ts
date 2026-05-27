@@ -18,22 +18,25 @@ import { identifyCodexProject } from './project-id.js'
 import { resolveDevRepoRoot, resolvePluginRoot, resolvePluginRuntimePath } from './runtime-paths.js'
 import { codexStableExecutablePath } from './stable-shim.js'
 
+const CURRENT_CYRENE_MCP_CONFIG_TABLE = '[mcp_servers."cyrene-continuity"]'
+const LEGACY_CYRENE_MCP_CONFIG_TABLE = '[mcp_servers.cyrene]'
+
 export async function formatCodexDoctor(input: { cwd: string; configPath?: string; runtimeEntryPath?: string }): Promise<string> {
   const runtimeEntryPath = input.runtimeEntryPath ?? fileURLToPath(import.meta.url)
   const configPath = input.configPath ?? join(homedir(), '.codex', 'config.toml')
   const configText = await readOptional(configPath)
-  const cyreneMcpBlock = readTomlBlock(configText, '[mcp_servers.cyrene]')
-  const cyreneConfigured = cyreneMcpBlock !== undefined
-  const cyreneMcpCommand = cyreneMcpBlock === undefined ? undefined : readDoctorMcpCommand(cyreneMcpBlock)
+  const cyreneMcpConfig = readCyreneManualMcpConfig(configText)
+  const cyreneConfigured = cyreneMcpConfig !== undefined
+  const cyreneMcpCommand = cyreneMcpConfig === undefined ? undefined : readDoctorMcpCommand(cyreneMcpConfig.block)
   const mcpCommandFreshness = cyreneMcpCommand === undefined ? undefined : readDoctorMcpCommandFreshness(cyreneMcpCommand, runtimeEntryPath)
   const pluginState = await readDoctorPluginState(runtimeEntryPath)
   const pluginBridgeInstalled = pluginState.mcpDeclared && pluginState.runtimeExists && pluginState.shimExists
   const installCommand = formatDoctorInstallCommand(runtimeEntryPath)
   const mcpCommandAction = mcpCommandFreshness === 'stale or external' && !pluginBridgeInstalled
-    ? `  action: rerun ${installCommand} and update [mcp_servers.cyrene] from its printed config`
+    ? `  action: rerun ${installCommand} and update ${CURRENT_CYRENE_MCP_CONFIG_TABLE} from its printed config`
     : undefined
   const manualMcpConflictAction = pluginBridgeInstalled && cyreneConfigured
-    ? '  action: disable or remove [mcp_servers.cyrene] after validating the installed plugin MCP server'
+    ? `  action: disable or remove manual Cyrene MCP config (${cyreneMcpConfig.table}) after validating the installed plugin MCP server`
     : undefined
   const agentmemoryEnabled = hasEnabledMcpServer(configText, 'agentmemory')
   const skillPath = join(homedir(), '.agents', 'skills', 'cyrene-continuity', 'SKILL.md')
@@ -62,8 +65,9 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     '',
     'codex:',
     `  config: ${configText === '' ? 'missing' : configPath}`,
-    `  cyrene mcp: ${cyreneConfigured ? 'configured' : 'missing'}`,
+    `  cyrene-continuity mcp: ${cyreneConfigured ? 'configured' : 'missing'}`,
     `  manual mcp: ${cyreneConfigured ? 'enabled' : 'absent'}`,
+    cyreneMcpConfig?.legacy === true ? '  legacy mcp name: cyrene' : undefined,
     cyreneMcpCommand === undefined ? undefined : `  mcp command: ${formatDoctorMcpCommand(cyreneMcpCommand)}`,
     mcpCommandFreshness === undefined ? undefined : `  mcp command freshness: ${mcpCommandFreshness}`,
     `  agentmemory: ${agentmemoryEnabled ? 'enabled' : 'disabled'}`,
@@ -137,6 +141,24 @@ interface DoctorMcpCommand {
 }
 
 type DoctorMcpCommandFreshness = 'current repo' | 'stable shim' | 'stale or external'
+
+interface DoctorManualMcpConfig {
+  block: string
+  table: string
+  legacy: boolean
+}
+
+function readCyreneManualMcpConfig(configText: string): DoctorManualMcpConfig | undefined {
+  const current = readTomlBlock(configText, CURRENT_CYRENE_MCP_CONFIG_TABLE)
+  if (current !== undefined) {
+    return { block: current, table: CURRENT_CYRENE_MCP_CONFIG_TABLE, legacy: false }
+  }
+  const legacy = readTomlBlock(configText, LEGACY_CYRENE_MCP_CONFIG_TABLE)
+  if (legacy !== undefined) {
+    return { block: legacy, table: LEGACY_CYRENE_MCP_CONFIG_TABLE, legacy: true }
+  }
+  return undefined
+}
 
 interface DoctorPluginState {
   root: string

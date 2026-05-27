@@ -10691,19 +10691,21 @@ function requireDevRepoRoot(runtimeEntryPath) {
 }
 
 // src/codex/codex-doctor.ts
+var CURRENT_CYRENE_MCP_CONFIG_TABLE = '[mcp_servers."cyrene-continuity"]';
+var LEGACY_CYRENE_MCP_CONFIG_TABLE = "[mcp_servers.cyrene]";
 async function formatCodexDoctor(input) {
   const runtimeEntryPath = input.runtimeEntryPath ?? fileURLToPath(import.meta.url);
   const configPath = input.configPath ?? join8(homedir4(), ".codex", "config.toml");
   const configText = await readOptional(configPath);
-  const cyreneMcpBlock = readTomlBlock(configText, "[mcp_servers.cyrene]");
-  const cyreneConfigured = cyreneMcpBlock !== void 0;
-  const cyreneMcpCommand = cyreneMcpBlock === void 0 ? void 0 : readDoctorMcpCommand(cyreneMcpBlock);
+  const cyreneMcpConfig = readCyreneManualMcpConfig(configText);
+  const cyreneConfigured = cyreneMcpConfig !== void 0;
+  const cyreneMcpCommand = cyreneMcpConfig === void 0 ? void 0 : readDoctorMcpCommand(cyreneMcpConfig.block);
   const mcpCommandFreshness = cyreneMcpCommand === void 0 ? void 0 : readDoctorMcpCommandFreshness(cyreneMcpCommand, runtimeEntryPath);
   const pluginState = await readDoctorPluginState(runtimeEntryPath);
   const pluginBridgeInstalled = pluginState.mcpDeclared && pluginState.runtimeExists && pluginState.shimExists;
   const installCommand = formatDoctorInstallCommand(runtimeEntryPath);
-  const mcpCommandAction = mcpCommandFreshness === "stale or external" && !pluginBridgeInstalled ? `  action: rerun ${installCommand} and update [mcp_servers.cyrene] from its printed config` : void 0;
-  const manualMcpConflictAction = pluginBridgeInstalled && cyreneConfigured ? "  action: disable or remove [mcp_servers.cyrene] after validating the installed plugin MCP server" : void 0;
+  const mcpCommandAction = mcpCommandFreshness === "stale or external" && !pluginBridgeInstalled ? `  action: rerun ${installCommand} and update ${CURRENT_CYRENE_MCP_CONFIG_TABLE} from its printed config` : void 0;
+  const manualMcpConflictAction = pluginBridgeInstalled && cyreneConfigured ? `  action: disable or remove manual Cyrene MCP config (${cyreneMcpConfig.table}) after validating the installed plugin MCP server` : void 0;
   const agentmemoryEnabled = hasEnabledMcpServer(configText, "agentmemory");
   const skillPath = join8(homedir4(), ".agents", "skills", "cyrene-continuity", "SKILL.md");
   const skillExists = await pathExists(skillPath);
@@ -10728,8 +10730,9 @@ async function formatCodexDoctor(input) {
     "",
     "codex:",
     `  config: ${configText === "" ? "missing" : configPath}`,
-    `  cyrene mcp: ${cyreneConfigured ? "configured" : "missing"}`,
+    `  cyrene-continuity mcp: ${cyreneConfigured ? "configured" : "missing"}`,
     `  manual mcp: ${cyreneConfigured ? "enabled" : "absent"}`,
+    cyreneMcpConfig?.legacy === true ? "  legacy mcp name: cyrene" : void 0,
     cyreneMcpCommand === void 0 ? void 0 : `  mcp command: ${formatDoctorMcpCommand(cyreneMcpCommand)}`,
     mcpCommandFreshness === void 0 ? void 0 : `  mcp command freshness: ${mcpCommandFreshness}`,
     `  agentmemory: ${agentmemoryEnabled ? "enabled" : "disabled"}`,
@@ -10784,6 +10787,17 @@ async function readDoctorMemoryState(projectId) {
 }
 async function profilePresent(memoryRoot) {
   return await readModelProfileFromRootIfExists(memoryRoot) !== void 0;
+}
+function readCyreneManualMcpConfig(configText) {
+  const current = readTomlBlock(configText, CURRENT_CYRENE_MCP_CONFIG_TABLE);
+  if (current !== void 0) {
+    return { block: current, table: CURRENT_CYRENE_MCP_CONFIG_TABLE, legacy: false };
+  }
+  const legacy = readTomlBlock(configText, LEGACY_CYRENE_MCP_CONFIG_TABLE);
+  if (legacy !== void 0) {
+    return { block: legacy, table: LEGACY_CYRENE_MCP_CONFIG_TABLE, legacy: true };
+  }
+  return void 0;
 }
 async function readDoctorPluginState(runtimeEntryPath) {
   const root = resolvePluginRoot(runtimeEntryPath);
@@ -13111,6 +13125,8 @@ import { lstat as lstat8, mkdir as mkdir8, rm as rm3, symlink, writeFile as writ
 import { homedir as homedir5 } from "node:os";
 import { dirname as dirname6, join as join13, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
+var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
+var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
 async function installCodexDevBridge(input = {}) {
   const repoRoot = requireDevRepoRoot(input.runtimeEntryPath ?? fileURLToPath2(import.meta.url));
   const skillSource = resolve6(
@@ -13133,7 +13149,7 @@ async function installCodexDevBridge(input = {}) {
     "",
     "Add this MCP config manually to ~/.codex/config.toml:",
     "",
-    "[mcp_servers.cyrene]",
+    CURRENT_CYRENE_MCP_CONFIG_TABLE2,
     'command = "npm"',
     `args = ${JSON.stringify(["--prefix", repoRoot, "run", "--silent", "dev", "--", "mcp-server", "--stdio"])}`,
     "enabled = true",
@@ -13157,7 +13173,7 @@ async function installCodexPluginBridge(input) {
     "",
     hookOutput.trimEnd(),
     "",
-    "Disable or remove [mcp_servers.cyrene] after validating the installed plugin MCP server in a new Codex session."
+    `Disable or remove manual Cyrene MCP config (${CURRENT_CYRENE_MCP_CONFIG_TABLE2} or legacy ${LEGACY_CYRENE_MCP_CONFIG_TABLE2}) after validating the installed plugin MCP server in a new Codex session.`
   ].join("\n") + "\n";
 }
 async function removeExistingSkillSymlink(path) {
@@ -28389,7 +28405,7 @@ async function handleProjectIdentify(input, fallbackCwd) {
 // src/mcp/mcp-server.ts
 function createCyreneMcpServer(options) {
   const server = new McpServer({
-    name: "cyrene",
+    name: "cyrene-continuity",
     version: "0.1.0"
   });
   server.registerTool(

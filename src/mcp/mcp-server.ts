@@ -21,7 +21,7 @@ import { handleProjectIdentify, projectIdentifyInputSchema } from './tools/proje
 
 export function createCyreneMcpServer(options: { cwd: string }): McpServer {
   const server = new McpServer({
-    name: 'cyrene',
+    name: 'cyrene-continuity',
     version: '0.1.0'
   })
 
