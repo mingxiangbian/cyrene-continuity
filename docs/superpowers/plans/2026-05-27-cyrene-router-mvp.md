@@ -558,7 +558,7 @@ git commit -m "feat: add codex memory index rebuild"
 - Modify: `src/codex/continuity-context.ts`
 - Modify: `tests/codex-continuity-context.test.ts`
 
-- [ ] **Step 1: Write failing router digest tests**
+- [x] **Step 1: Write failing router digest tests**
 
 Append tests to `tests/codex-continuity-context.test.ts`:
 
@@ -631,7 +631,7 @@ it('returns pending hypotheses as provisional without mixing them into active me
 })
 ```
 
-- [ ] **Step 2: Run RED for router digest tests**
+- [x] **Step 2: Run RED for router digest tests**
 
 Run:
 
@@ -641,7 +641,7 @@ npx vitest run tests/codex-continuity-context.test.ts --testNamePattern "routed 
 
 Expected: fail because `globalMemory`, `projectMemory`, `pendingHypotheses`, `similarProjectHints`, and `responseStrategy` do not exist.
 
-- [ ] **Step 3: Add routed digest types**
+- [x] **Step 3: Add routed digest types**
 
 Modify `src/codex/continuity-context.ts`:
 
@@ -702,7 +702,7 @@ diagnostics?: {
 }
 ```
 
-- [ ] **Step 4: Use SQLite index with JSONL fallback**
+- [x] **Step 4: Use SQLite index with JSONL fallback**
 
 In `getCodexContinuityContext`:
 
@@ -743,7 +743,7 @@ responseStrategy: {
 
 - `reviewReminders` should include at most one newest pending review reminder from `pendingReview.newestCandidateId/newestPreview`.
 
-- [ ] **Step 5: Run GREEN for router digest tests**
+- [x] **Step 5: Run GREEN for router digest tests**
 
 Run:
 
@@ -753,7 +753,7 @@ npx vitest run tests/codex-continuity-context.test.ts --testNamePattern "routed 
 
 Expected: new router digest tests pass.
 
-- [ ] **Step 6: Run existing continuity-context tests**
+- [x] **Step 6: Run existing continuity-context tests**
 
 Run:
 
@@ -763,7 +763,7 @@ npx vitest run tests/codex-continuity-context.test.ts
 
 Expected: all existing continuity context tests still pass.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 Run:
 

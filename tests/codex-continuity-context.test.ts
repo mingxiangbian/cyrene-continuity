@@ -262,6 +262,73 @@ describe('Codex continuity context', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(JSON.stringify(context)).not.toContain('nextDreamDueAt')
   })
+
+  it('returns routed global and project memory digest sections', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-router-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-router-repo-')
+    const identity = await identifyCodexProject(repo)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(globalMemoryRoot, { recursive: true })
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(globalMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'global-router-memory',
+      scope: 'global',
+      domain: 'procedural',
+      content: 'Global continuity router guidance applies across projects.',
+      normalizedKey: 'global-continuity-router-guidance'
+    })) + '\n')
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'project-router-memory',
+      content: 'Project continuity router fact stays local.',
+      normalizedKey: 'project-continuity-router-local'
+    })) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'router continuity guidance local project',
+      task: 'planning'
+    })
+
+    expect(context.globalMemory.map((item) => item.id)).toEqual(['global-router-memory'])
+    expect(context.projectMemory.map((item) => item.id)).toEqual(['project-router-memory'])
+    expect(context.similarProjectHints).toEqual([])
+    expect(context.responseStrategy.challengePolicy).toBeDefined()
+    expect(context.memory.items.map((item) => item.id)).toEqual(
+      expect.arrayContaining(['global-router-memory', 'project-router-memory'])
+    )
+  })
+
+  it('returns pending hypotheses as provisional without mixing them into active memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-router-pending-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-router-pending-repo-')
+    const identity = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const pending = createPendingMemory()
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), JSON.stringify({
+      ...pending,
+      content: 'Pending router candidate can guide clarification only.',
+      normalizedKey: 'pending-router-clarification-only'
+    }) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'pending router clarification',
+      task: 'memory'
+    })
+
+    expect(context.pendingHypotheses).toHaveLength(1)
+    expect(context.pendingHypotheses[0]).toMatchObject({
+      id: pending.id,
+      provisional: true,
+      status: 'pending'
+    })
+    expect(context.memory.items).toEqual([])
+    expect(context.profile.content).not.toContain('Pending router candidate can guide clarification only.')
+  })
 })
 
 function createMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
