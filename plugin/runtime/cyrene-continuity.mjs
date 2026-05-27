@@ -12046,7 +12046,7 @@ function containsAbsolutePath(content) {
   return unixPath.test(content) || windowsPath.test(content);
 }
 function containsRawRemote(content) {
-  return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|https:\/\/[A-Za-z0-9.-]+\/[^\s`'")]+(?:\.git)?\b)/.test(content);
+  return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|(?:https?|git|ssh):\/\/(?:git@)?[A-Za-z0-9.-]+\/[^\s`'")]+(?:\.git)?\b)/.test(content);
 }
 function containsSecretLikeValue(content) {
   return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)(?:\s*[=:]\s*|\s+)[a-fA-F0-9]{64})\b/.test(content);
