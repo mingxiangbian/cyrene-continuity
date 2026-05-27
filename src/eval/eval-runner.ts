@@ -108,7 +108,10 @@ function isDisallowedSimilarHintDomain(domain: MemoryDomain): boolean {
 }
 
 function containsAbsolutePath(content: string): boolean {
-  return /(^|[\s`'"([{<:=,;])\/(?:Users|home|var|etc|tmp)\/[^\s`'")\]}>]+/.test(content)
+  const unixPath = /(^|[\s`'"([{<:=,;])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-][^\s`'")\]}>]*/
+  const windowsPath = /(^|[\s`'"([{<:=,;])[A-Za-z]:\\(?:[^\\\s`'")\]}>]+\\)+[^\\\s`'")\]}>]+/
+
+  return unixPath.test(content) || windowsPath.test(content)
 }
 
 function containsRawRemote(content: string): boolean {
@@ -116,5 +119,5 @@ function containsRawRemote(content: string): boolean {
 }
 
 function containsSecretLikeValue(content: string): boolean {
-  return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)=[a-fA-F0-9]{64})\b/.test(content)
+  return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)(?:\s*[=:]\s*|\s+)[a-fA-F0-9]{64})\b/.test(content)
 }

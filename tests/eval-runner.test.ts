@@ -92,4 +92,30 @@ describe('similar hints eval gate', () => {
     expect(JSON.stringify(result.results)).toContain('raw remote')
     expect(JSON.stringify(result.results)).toContain('secret-like')
   })
+
+  it('fails broad absolute paths and hash separator forms', () => {
+    const result = runSimilarHintsEvalGate([
+      candidate({ id: 'path-opt', content: 'Use /opt/private/config.json.' }),
+      candidate({ id: 'path-usr', content: 'Run /usr/local/bin/tool.' }),
+      candidate({ id: 'path-windows', content: 'Use C:\\Users\\phoenix\\secret.txt.' }),
+      candidate({
+        id: 'review-hash-colon',
+        content: 'reviewHash: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      }),
+      candidate({
+        id: 'candidate-hash-space',
+        content: 'candidateHash 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      })
+    ])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(JSON.stringify(result.results)).toContain('path-opt')
+    expect(JSON.stringify(result.results)).toContain('path-usr')
+    expect(JSON.stringify(result.results)).toContain('path-windows')
+    expect(JSON.stringify(result.results)).toContain('review-hash-colon')
+    expect(JSON.stringify(result.results)).toContain('candidate-hash-space')
+    expect(JSON.stringify(result.results)).toContain('absolute path')
+    expect(JSON.stringify(result.results)).toContain('secret-like')
+  })
 })
