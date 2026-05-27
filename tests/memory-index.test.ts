@@ -416,6 +416,61 @@ describe('memory SQLite index', () => {
     })
   })
 
+  it('indexes duplicate memory ids across project roots without collisions', async () => {
+    const root = await createTempDir('cyrene-memory-index-duplicate-ids-')
+    const currentRoot = join(root, 'projects', 'project-a', 'memory')
+    const similarRoot = join(root, 'projects', 'project-b', 'memory')
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(similarRoot, { recursive: true })
+    await writeJsonLines(join(currentRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'shared-memory-id',
+        content: 'Current project duplicate id memory stays local.',
+        normalizedKey: 'current-duplicate-id-memory'
+      })
+    ])
+    await writeJsonLines(join(similarRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'shared-memory-id',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        portability: 'similar_project',
+        content: 'Similar project duplicate id guidance remains retrievable.',
+        normalizedKey: 'similar-duplicate-id-guidance',
+        tags: ['duplicate']
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({
+      roots: [
+        { memoryRoot: currentRoot, projectId: 'project-a', scope: 'project' },
+        { memoryRoot: similarRoot, projectId: 'project-b', scope: 'project' }
+      ]
+    })
+
+    const project = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'current duplicate',
+      route: 'project',
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+    const similar = await adapter.querySimilarActive({
+      currentProjectId: 'project-a',
+      query: 'similar duplicate guidance',
+      targetProjects: [{ projectId: 'project-b', similarityScore: 0.75, displayName: 'project-b' }],
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(project.map((item) => item.memory.content)).toEqual(['Current project duplicate id memory stays local.'])
+    expect(similar.map((item) => item.memory.content)).toEqual(['Similar project duplicate id guidance remains retrievable.'])
+    expect(project[0]?.memory.id).toBe('shared-memory-id')
+    expect(similar[0]?.memory.id).toBe('shared-memory-id')
+    expect(similar[0]?.homeProjectId).toBe('project-b')
+  })
+
   it('returns unavailable diagnostics when forced unavailable', async () => {
     const root = await createTempDir('cyrene-memory-index-disabled-')
     const adapter = await openMemoryIndexAdapter({

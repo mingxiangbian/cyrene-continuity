@@ -643,6 +643,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
 
   private insertMemory(root: MemoryIndexRoot, memory: CyreneMemory | PendingMemory): void {
     const db = this.requireDatabase()
+    const indexId = memoryIndexId(root, memory.id)
     const portability = deriveMemoryPortability(memory)
     const homeProjectId = root.scope === 'global' ? null : root.projectId
     const tags = memory.tags.join(' ')
@@ -696,7 +697,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         updated_at = excluded.updated_at,
         expires_at = excluded.expires_at
     `).run(
-      memory.id,
+      indexId,
       root.memoryRoot,
       memory.scope,
       memory.domain,
@@ -736,8 +737,8 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         )
         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        `${memory.id}:${index}`,
-        memory.id,
+        `${indexId}:${index}`,
+        indexId,
         evidence.sourceKind ?? memory.source,
         homeProjectId,
         evidence.sessionId ?? null,
@@ -844,6 +845,10 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       return new Set()
     }
   }
+}
+
+function memoryIndexId(root: MemoryIndexRoot, memoryId: string): string {
+  return JSON.stringify([root.scope, root.projectId, memoryId])
 }
 
 function dependencyFingerprint(dependencyNames: string[]): string {
