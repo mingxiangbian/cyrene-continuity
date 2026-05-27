@@ -43,7 +43,13 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  if (command === 'eval' && input.args[1] === 'run' && input.args[2] === '--check' && input.args[3] === 'similar-hints') {
+  if (
+    command === 'eval' &&
+    input.args.length === 4 &&
+    input.args[1] === 'run' &&
+    input.args[2] === '--check' &&
+    input.args[3] === 'similar-hints'
+  ) {
     process.stdout.write(`${JSON.stringify(await runCodexSimilarHintsEval({ cwd: input.cwd }), null, 2)}\n`)
     return
   }

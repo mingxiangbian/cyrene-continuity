@@ -789,6 +789,21 @@ describe('cyrene-continuity codex CLI', () => {
     })
   })
 
+  it('rejects similar hints eval check with trailing unsupported args', async () => {
+    const home = await createTempDir('cyrene-codex-cli-eval-extra-home-')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'eval', 'run', '--check', 'similar-hints', 'extra'],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('Usage')
+    })
+  })
+
   it('rejects memory dream --stage without a value', async () => {
     const home = await createTempDir('cyrene-codex-cli-dream-home-')
     process.env.HOME = home
