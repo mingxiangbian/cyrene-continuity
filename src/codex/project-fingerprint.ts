@@ -83,7 +83,11 @@ function detectLanguages(rootEntries: string[], dependencyNames: string[]): stri
   const languages = new Set<string>()
   const dependencies = new Set(dependencyNames)
 
-  if (rootEntries.includes('tsconfig.json') || dependencies.has('typescript')) {
+  if (
+    rootEntries.includes('tsconfig.json') ||
+    rootEntries.some((entry) => entry.endsWith('.ts')) ||
+    dependencies.has('typescript')
+  ) {
     languages.add('typescript')
   }
 

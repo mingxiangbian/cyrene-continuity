@@ -78,4 +78,30 @@ describe('Codex project fingerprint', () => {
     expect(fingerprint.domainTags).toEqual([])
     expect(fingerprint.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
+
+  it('detects typescript from root ts files without package or tsconfig files', async () => {
+    const repo = await createTempDir('cyrene-fingerprint-ts-file-')
+    await writeFile(join(repo, 'index.ts'), 'export const value = 1\n', 'utf8')
+    const identity = await identifyCodexProject(repo)
+
+    const fingerprint = await buildCodexProjectFingerprint({ cwd: repo, project: identity })
+
+    expect(fingerprint.languages).toEqual(['typescript'])
+    expect(fingerprint.domainTags).toEqual(expect.arrayContaining(['typescript']))
+  })
+
+  it.each([
+    ['pnpm-lock.yaml', 'pnpm'],
+    ['yarn.lock', 'yarn'],
+    ['bun.lockb', 'bun'],
+    ['bun.lock', 'bun']
+  ] as const)('detects %s as %s package manager', async (lockfile, packageManager) => {
+    const repo = await createTempDir(`cyrene-fingerprint-${packageManager}-`)
+    await writeFile(join(repo, lockfile), '{}\n', 'utf8')
+    const identity = await identifyCodexProject(repo)
+
+    const fingerprint = await buildCodexProjectFingerprint({ cwd: repo, project: identity })
+
+    expect(fingerprint.packageManager).toBe(packageManager)
+  })
 })
