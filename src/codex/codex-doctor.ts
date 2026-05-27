@@ -1,6 +1,6 @@
 import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDefaultConfig } from '../config.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
@@ -15,32 +15,42 @@ import {
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
+import { resolveDevRepoRoot, resolvePluginRoot, resolvePluginRuntimePath } from './runtime-paths.js'
+import { codexStableExecutablePath } from './stable-shim.js'
 
-export async function formatCodexDoctor(input: { cwd: string; configPath?: string }): Promise<string> {
+export async function formatCodexDoctor(input: { cwd: string; configPath?: string; runtimeEntryPath?: string }): Promise<string> {
+  const runtimeEntryPath = input.runtimeEntryPath ?? fileURLToPath(import.meta.url)
   const configPath = input.configPath ?? join(homedir(), '.codex', 'config.toml')
   const configText = await readOptional(configPath)
   const cyreneMcpBlock = readTomlBlock(configText, '[mcp_servers.cyrene]')
   const cyreneConfigured = cyreneMcpBlock !== undefined
   const cyreneMcpCommand = cyreneMcpBlock === undefined ? undefined : readDoctorMcpCommand(cyreneMcpBlock)
-  const mcpCommandFreshness = cyreneMcpCommand === undefined ? undefined : readDoctorMcpCommandFreshness(cyreneMcpCommand)
-  const installCommand = formatDoctorInstallCommand()
-  const mcpCommandAction = mcpCommandFreshness === 'stale or external'
+  const mcpCommandFreshness = cyreneMcpCommand === undefined ? undefined : readDoctorMcpCommandFreshness(cyreneMcpCommand, runtimeEntryPath)
+  const pluginState = await readDoctorPluginState(runtimeEntryPath)
+  const pluginBridgeInstalled = pluginState.mcpDeclared && pluginState.runtimeExists && pluginState.shimExists
+  const installCommand = formatDoctorInstallCommand(runtimeEntryPath)
+  const mcpCommandAction = mcpCommandFreshness === 'stale or external' && !pluginBridgeInstalled
     ? `  action: rerun ${installCommand} and update [mcp_servers.cyrene] from its printed config`
+    : undefined
+  const manualMcpConflictAction = pluginBridgeInstalled && cyreneConfigured
+    ? '  action: disable or remove [mcp_servers.cyrene] after validating the installed plugin MCP server'
     : undefined
   const agentmemoryEnabled = hasEnabledMcpServer(configText, 'agentmemory')
   const skillPath = join(homedir(), '.agents', 'skills', 'cyrene-continuity', 'SKILL.md')
   const skillExists = await pathExists(skillPath)
+  const cyreneSkillReady = skillExists || (pluginBridgeInstalled && pluginState.skillDeclared)
   const stopHookConfigured = await isCodexStopHookConfigured()
   const identity = await identifyCodexProject(input.cwd)
   const config = createDefaultConfig(input.cwd)
   const memoryState = await readDoctorMemoryState(identity.projectId)
   const actions = [
-    cyreneConfigured ? undefined : '  action: add [mcp_servers.cyrene] to Codex config',
+    cyreneConfigured || pluginBridgeInstalled ? undefined : `  action: run ${installCommand} to install the Cyrene bridge`,
     mcpCommandAction,
+    manualMcpConflictAction,
     agentmemoryEnabled
       ? '  action: disable [mcp_servers.agentmemory] before validating Cyrene as the authoritative memory source'
       : undefined,
-    skillExists ? undefined : `  action: run ${installCommand} to register the cyrene-continuity skill`
+    cyreneSkillReady ? undefined : `  action: run ${installCommand} to register the cyrene-continuity skill`
   ].filter((action): action is string => action !== undefined)
   const ready = actions.length === 0
 
@@ -53,6 +63,7 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     'codex:',
     `  config: ${configText === '' ? 'missing' : configPath}`,
     `  cyrene mcp: ${cyreneConfigured ? 'configured' : 'missing'}`,
+    `  manual mcp: ${cyreneConfigured ? 'enabled' : 'absent'}`,
     cyreneMcpCommand === undefined ? undefined : `  mcp command: ${formatDoctorMcpCommand(cyreneMcpCommand)}`,
     mcpCommandFreshness === undefined ? undefined : `  mcp command freshness: ${mcpCommandFreshness}`,
     `  agentmemory: ${agentmemoryEnabled ? 'enabled' : 'disabled'}`,
@@ -61,8 +72,15 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  status: ${ready ? 'ready' : 'not ready'}`,
     ...actions,
     '',
+    'plugin:',
+    `  root: ${pluginState.root}`,
+    `  manifest: ${pluginState.manifestPresent ? 'ok' : 'missing'}`,
+    `  plugin mcp: ${pluginState.mcpDeclared ? 'declared' : 'missing'}`,
+    `  runtime: ${pluginState.runtimeExists ? 'present' : 'missing'}`,
+    `  stable shim: ${pluginState.shimExists ? 'present' : 'missing'}`,
+    '',
     'skill:',
-    `  cyrene-continuity: ${skillExists ? 'ok' : 'missing'}`,
+    `  cyrene-continuity: ${skillExists ? 'ok' : pluginBridgeInstalled && pluginState.skillDeclared ? 'plugin' : 'missing'}`,
     '',
     'state:',
     `  codex root: ${codexGlobalRoot()}`,
@@ -118,7 +136,32 @@ interface DoctorMcpCommand {
   args: string[]
 }
 
-type DoctorMcpCommandFreshness = 'current repo' | 'stale or external'
+type DoctorMcpCommandFreshness = 'current repo' | 'stable shim' | 'stale or external'
+
+interface DoctorPluginState {
+  root: string
+  manifestPresent: boolean
+  skillDeclared: boolean
+  mcpDeclared: boolean
+  runtimeExists: boolean
+  shimExists: boolean
+}
+
+async function readDoctorPluginState(runtimeEntryPath: string): Promise<DoctorPluginState> {
+  const root = resolvePluginRoot(runtimeEntryPath)
+  const manifestPath = join(root, '.codex-plugin', 'plugin.json')
+  const manifestText = await readOptional(manifestPath)
+  const manifest = parseJsonObject(manifestText)
+
+  return {
+    root,
+    manifestPresent: manifest !== undefined,
+    skillDeclared: typeof manifest?.skills === 'string',
+    mcpDeclared: typeof manifest?.mcpServers === 'string',
+    runtimeExists: await pathExists(resolvePluginRuntimePath(runtimeEntryPath)),
+    shimExists: await pathExists(codexStableExecutablePath())
+  }
+}
 
 function readDoctorMcpCommand(block: string): DoctorMcpCommand | undefined {
   const command = readTomlStringValue(block, 'command')
@@ -131,23 +174,32 @@ function readDoctorMcpCommand(block: string): DoctorMcpCommand | undefined {
   }
 }
 
-function readDoctorMcpCommandFreshness(mcpCommand: DoctorMcpCommand): DoctorMcpCommandFreshness {
-  return [mcpCommand.command, ...mcpCommand.args].some(referencesCurrentRepoPath)
-    ? 'current repo'
-    : 'stale or external'
+function readDoctorMcpCommandFreshness(mcpCommand: DoctorMcpCommand, runtimeEntryPath: string): DoctorMcpCommandFreshness {
+  const parts = [mcpCommand.command, ...mcpCommand.args]
+  if (parts.some((part) => referencesStableShimPath(part))) {
+    return 'stable shim'
+  }
+  const devRepoRoot = resolveDevRepoRoot(runtimeEntryPath)
+  if (devRepoRoot !== null && parts.some((part) => referencesPath(part, devRepoRoot))) {
+    return 'current repo'
+  }
+  return 'stale or external'
 }
 
-function referencesCurrentRepoPath(value: string): boolean {
-  const repoRoot = currentRepoRoot()
-  return value === repoRoot || value.endsWith(`=${repoRoot}`) || value.startsWith(`${repoRoot}/`) || value.includes(`${repoRoot}/`)
+function referencesStableShimPath(value: string): boolean {
+  return referencesPath(value, codexStableExecutablePath())
 }
 
-function currentRepoRoot(): string {
-  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+function referencesPath(value: string, targetPath: string): boolean {
+  return value === targetPath || value.endsWith(`=${targetPath}`) || value.startsWith(`${targetPath}/`) || value.includes(`${targetPath}/`)
 }
 
-function formatDoctorInstallCommand(): string {
-  return `npm --prefix ${currentRepoRoot()} run --silent dev -- codex install --dev`
+function formatDoctorInstallCommand(runtimeEntryPath: string): string {
+  const devRepoRoot = resolveDevRepoRoot(runtimeEntryPath)
+  if (devRepoRoot === null) {
+    return 'cyrene-continuity codex install --plugin'
+  }
+  return `npm --prefix ${devRepoRoot} run --silent dev -- codex install --dev`
 }
 
 function formatDoctorMcpCommand(mcpCommand: DoctorMcpCommand): string {
@@ -200,6 +252,20 @@ function parseTomlString(value: string): string | undefined {
     return value.slice(1, -1)
   }
   return undefined
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | undefined {
+  if (value === '') {
+    return undefined
+  }
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function hasEnabledMcpServer(configText: string, name: string): boolean {

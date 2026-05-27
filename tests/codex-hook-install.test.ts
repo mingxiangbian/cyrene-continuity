@@ -17,12 +17,15 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 describe('Codex Stop hook install', () => {
-  it('uses a repo-local npm command for the Stop hook', () => {
+  it('uses the stable shim command for the Stop hook', () => {
     const command = codexStopHookCommand()
 
-    expect(command).toContain('npm --prefix')
-    expect(command).toContain(process.cwd())
-    expect(command).toContain('run --silent dev -- codex hook stop')
+    expect(command).toContain('.cyrene/codex/bin/cyrene-continuity')
+    expect(command).toContain('codex')
+    expect(command).toContain('hook')
+    expect(command).toContain('stop')
+    expect(command).not.toContain('npm --prefix')
+    expect(command).not.toContain('run --silent dev')
   })
 
   it('dry-runs without writing hooks.json', async () => {

@@ -332,6 +332,101 @@ describe('cyrene-continuity codex CLI', () => {
     await expect(readFile(join(skillPath, 'SKILL.md'), 'utf8')).resolves.toBe('custom skill\n')
   })
 
+  it('install --plugin writes a stable shim that points at the plugin runtime', async () => {
+    const home = await createTempDir('cyrene-codex-plugin-install-home-')
+    await execFileAsync('npm', ['run', 'build:plugin'], { env: cliEnv(home) })
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'install', '--plugin'],
+      { env: cliEnv(home) }
+    )
+
+    const shimPath = join(home, '.cyrene', 'codex', 'bin', 'cyrene-continuity')
+    const shim = await readFile(shimPath, 'utf8')
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('Cyrene Codex plugin bridge installed.')
+    expect(result.stdout).toContain(shimPath)
+    expect(result.stdout).toContain('Disable or remove [mcp_servers.cyrene]')
+    expect(shim).toContain('plugin/runtime/cyrene-continuity.mjs')
+    expect(shim).toContain('exec node "$runtime" "$@"')
+  })
+
+  it('install --plugin refuses to write a shim when the plugin runtime has not been built', async () => {
+    const home = await createTempDir('cyrene-codex-plugin-install-missing-runtime-home-')
+    await rm(join(process.cwd(), 'plugin', 'runtime'), { recursive: true, force: true })
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'install', '--plugin'],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('Cyrene plugin runtime is missing')
+    })
+  })
+
+  it('doctor reports plugin bridge ready without a manual MCP config', async () => {
+    const home = await createTempDir('cyrene-codex-plugin-doctor-home-')
+    const configPath = join(home, '.codex-config.toml')
+    await execFileAsync('npm', ['run', 'build:plugin'], { env: cliEnv(home) })
+    await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'install', '--plugin'],
+      { env: cliEnv(home) }
+    )
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'doctor', '--config', configPath],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('cyrene mcp: missing')
+    expect(result.stdout).toContain('manual mcp: absent')
+    expect(result.stdout).toContain('plugin mcp: declared')
+    expect(result.stdout).toContain('runtime: present')
+    expect(result.stdout).toContain('stable shim: present')
+    expect(result.stdout).toContain('cyrene-continuity: plugin')
+    expect(result.stdout).toContain('status: ready')
+  })
+
+  it('doctor reports a manual MCP config as a plugin bridge conflict', async () => {
+    const home = await createTempDir('cyrene-codex-plugin-conflict-home-')
+    const configPath = join(home, '.codex-config.toml')
+    await writeFile(
+      configPath,
+      [
+        '[mcp_servers.cyrene]',
+        ...currentRepoMcpConfigLines(),
+        'enabled = true'
+      ].join('\n')
+    )
+    await execFileAsync('npm', ['run', 'build:plugin'], { env: cliEnv(home) })
+    await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'install', '--plugin'],
+      { env: cliEnv(home) }
+    )
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'doctor', '--config', configPath],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('manual mcp: enabled')
+    expect(result.stdout).toContain('plugin mcp: declared')
+    expect(result.stdout).toContain('stable shim: present')
+    expect(result.stdout).toContain('status: not ready')
+    expect(result.stdout).toContain('action: disable or remove [mcp_servers.cyrene]')
+    expect(result.stdout).not.toContain('action: rerun')
+  })
+
   it('install-hook --stop --dry-run does not write hooks.json', async () => {
     const home = await createTempDir('cyrene-codex-hook-dry-run-home-')
     const hooksPath = join(home, '.codex', 'hooks.json')

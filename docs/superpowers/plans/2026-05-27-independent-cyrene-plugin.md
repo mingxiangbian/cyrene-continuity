@@ -21,7 +21,7 @@
 - Test: `tests/plugin-runtime.test.ts`
 - Test: `tests/mcp-server.test.ts`
 
-- [ ] **Step 1: Write failing plugin manifest/runtime tests**
+- [x] **Step 1: Write failing plugin manifest/runtime tests**
 
 Add `tests/plugin-runtime.test.ts`:
 
@@ -92,7 +92,7 @@ it('exposes MCP tools from the built plugin runtime', async () => {
 })
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -102,7 +102,7 @@ npx vitest run tests/plugin-runtime.test.ts tests/mcp-server.test.ts --testNameP
 
 Expected: fail because `plugin/.mcp.json`, `npm run build:plugin`, and `plugin/runtime/cyrene-continuity.mjs` do not exist.
 
-- [ ] **Step 3: Implement manifest, `.mcp.json`, and build script**
+- [x] **Step 3: Implement manifest, `.mcp.json`, and build script**
 
 Update `plugin/.codex-plugin/plugin.json` to the validator-compatible shape:
 
@@ -181,7 +181,7 @@ await build({
 await chmod(outfile, 0o755)
 ```
 
-- [ ] **Step 4: Run tests to verify GREEN**
+- [x] **Step 4: Run tests to verify GREEN**
 
 Run:
 
@@ -201,7 +201,7 @@ Expected: plugin runtime tests pass, built MCP runtime lists `cyrene_*` tools, p
 - Modify: `src/main.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write failing install/shim tests**
+- [x] **Step 1: Write failing install/shim tests**
 
 Add tests to `tests/codex-cli.test.ts`:
 
@@ -242,7 +242,7 @@ it('install --plugin refuses to write a shim when the plugin runtime has not bee
 })
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -252,7 +252,7 @@ npx vitest run tests/codex-cli.test.ts --testNamePattern "install --plugin"
 
 Expected: fail because `install --plugin` is not implemented.
 
-- [ ] **Step 3: Implement stable shim and install command**
+- [x] **Step 3: Implement stable shim and install command**
 
 Create `src/codex/stable-shim.ts`:
 
@@ -338,7 +338,7 @@ Update `src/main.ts` to pass `runtimeEntryPath: fileURLToPath(import.meta.url)` 
 
 Update `src/codex/codex-cli.ts` to route `codex install --plugin` to `installCodexPluginBridge`.
 
-- [ ] **Step 4: Run tests to verify GREEN**
+- [x] **Step 4: Run tests to verify GREEN**
 
 Run:
 
@@ -355,7 +355,7 @@ Expected: both install plugin tests pass.
 - Test: `tests/codex-hook-install.test.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write/update failing hook tests**
+- [x] **Step 1: Write/update failing hook tests**
 
 Update `tests/codex-hook-install.test.ts`:
 
@@ -372,7 +372,7 @@ it('uses the stable shim command for the Stop hook', () => {
 
 Update existing expectations that previously required repo-local `npm --prefix`.
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -382,7 +382,7 @@ npx vitest run tests/codex-hook-install.test.ts tests/codex-cli.test.ts --testNa
 
 Expected: fail because `codexStopHookCommand()` still returns repo-local command.
 
-- [ ] **Step 3: Implement stable shim hook command**
+- [x] **Step 3: Implement stable shim hook command**
 
 Change `src/codex/codex-hook-install.ts`:
 
@@ -396,7 +396,7 @@ export function codexStopHookCommand(): string {
 
 Keep `isCyreneStopHookCommand()` broad enough to remove old repo-local Cyrene commands and the new shim command during idempotent merge.
 
-- [ ] **Step 4: Run tests to verify GREEN**
+- [x] **Step 4: Run tests to verify GREEN**
 
 Run:
 
@@ -412,7 +412,7 @@ Expected: hook tests pass and installed hook uses stable shim.
 - Modify: `src/codex/codex-doctor.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write failing doctor tests**
+- [x] **Step 1: Write failing doctor tests**
 
 Add or update tests in `tests/codex-cli.test.ts`:
 
@@ -472,7 +472,7 @@ it('doctor marks an enabled manual Cyrene MCP as a conflict after plugin install
 })
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -482,7 +482,7 @@ npx vitest run tests/codex-cli.test.ts --testNamePattern "doctor reports plugin 
 
 Expected: fail because doctor has no plugin/shim/manual conflict model yet.
 
-- [ ] **Step 3: Implement doctor state**
+- [x] **Step 3: Implement doctor state**
 
 Update `src/codex/codex-doctor.ts`:
 
@@ -497,7 +497,7 @@ Update `src/codex/codex-doctor.ts`:
 
 Use `codexStableExecutablePath()` and `pathExists()` for shim state.
 
-- [ ] **Step 4: Run tests to verify GREEN**
+- [x] **Step 4: Run tests to verify GREEN**
 
 Run:
 
@@ -513,7 +513,7 @@ Expected: doctor tests pass with the new plugin/shim model.
 - External: `/Users/phoenix/.codex/hooks.json`
 - External automation: `cyrene-memory-dream-deep`
 
-- [ ] **Step 1: Build plugin runtime and install shim/hook**
+- [x] **Step 1: Build plugin runtime and install shim/hook**
 
 Run:
 
@@ -525,7 +525,7 @@ npm run dev -- codex install-hook --stop
 
 Expected: `~/.cyrene/codex/bin/cyrene-continuity` exists and `/Users/phoenix/.codex/hooks.json` uses the stable shim command.
 
-- [ ] **Step 2: Update Dream Deep automation to use stable shim**
+- [x] **Step 2: Update Dream Deep automation to use stable shim**
 
 Use `codex_app.automation_update` for automation id `cyrene-memory-dream-deep`, preserving its cadence/model/workspace fields, and change only the prompt command to:
 
@@ -535,7 +535,7 @@ Use `codex_app.automation_update` for automation id `cyrene-memory-dream-deep`, 
 
 Expected: automation no longer instructs Codex to run `npm run dev` from the repo.
 
-- [ ] **Step 3: Do not disable manual MCP automatically**
+- [x] **Step 3: Do not disable manual MCP automatically**
 
 Leave `~/.codex/config.toml` unchanged in this task. The original MCP should be disabled only after plugin MCP is installed and verified in a new Codex thread, because this current thread still depends on the old MCP.
 
@@ -544,7 +544,7 @@ Leave `~/.codex/config.toml` unchanged in this task. The original MCP should be 
 **Files:**
 - All modified source, tests, plugin files, and plan/spec docs.
 
-- [ ] **Step 1: Run plugin validation**
+- [x] **Step 1: Run plugin validation**
 
 Run:
 
@@ -554,7 +554,7 @@ python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plu
 
 Expected: validation passes.
 
-- [ ] **Step 2: Run targeted tests**
+- [x] **Step 2: Run targeted tests**
 
 Run:
 
@@ -564,7 +564,7 @@ npx vitest run tests/plugin-runtime.test.ts tests/mcp-server.test.ts tests/codex
 
 Expected: targeted tests pass.
 
-- [ ] **Step 3: Run full verification**
+- [x] **Step 3: Run full verification**
 
 Run:
 
@@ -575,7 +575,7 @@ npm run typecheck
 
 Expected: all tests and typecheck pass.
 
-- [ ] **Step 4: Run runtime smoke checks**
+- [x] **Step 4: Run runtime smoke checks**
 
 Run:
 

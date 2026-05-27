@@ -205,6 +205,30 @@ describe('Cyrene MCP server', () => {
     }
   })
 
+  it('exposes MCP tools from the built plugin runtime', async () => {
+    await execFileAsync('npm', ['run', 'build:plugin'], { env: cliEnv() })
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+    const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js')
+    const client = new Client({ name: 'cyrene-plugin-mcp-test', version: '0.0.0' })
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ['plugin/runtime/cyrene-continuity.mjs', 'mcp-server', '--stdio'],
+      env: cliEnv()
+    })
+
+    await client.connect(transport)
+    try {
+      const result = await client.listTools()
+      const names = result.tools.map((tool) => tool.name)
+      expect(names).toContain('cyrene_continuity_get')
+      expect(names).toContain('cyrene_memory_pending_list')
+      expect(names).toContain('cyrene_memory_dream_run')
+      expect(names).toContain('cyrene_memory_profile_get')
+    } finally {
+      await client.close()
+    }
+  })
+
   it('documents pending review behavior in the Codex continuity skill', async () => {
     const source = await readFile(
       new URL('../plugin/skills/cyrene-continuity/SKILL.md', import.meta.url),

@@ -1,7 +1,7 @@
 import { formatCodexDoctor } from './codex-doctor.js'
 import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-install.js'
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
-import { installCodexDevBridge } from './codex-install.js'
+import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
 import {
   getCodexMemoryProfile,
   runCodexMemoryDream,
@@ -9,15 +9,24 @@ import {
   type CodexMemoryDreamStage
 } from './memory-dream.js'
 
-export async function handleCodexCommand(input: { cwd: string; args: string[] }): Promise<void> {
+export async function handleCodexCommand(input: { cwd: string; args: string[]; runtimeEntryPath?: string }): Promise<void> {
   const command = input.args[0]
   if (command === 'doctor') {
-    process.stdout.write(await formatCodexDoctor({ cwd: input.cwd, configPath: parseConfigPath(input.args) }))
+    process.stdout.write(await formatCodexDoctor({
+      cwd: input.cwd,
+      configPath: parseConfigPath(input.args),
+      runtimeEntryPath: input.runtimeEntryPath
+    }))
     return
   }
 
   if (command === 'install' && input.args[1] === '--dev') {
-    process.stdout.write(await installCodexDevBridge())
+    process.stdout.write(await installCodexDevBridge({ runtimeEntryPath: input.runtimeEntryPath }))
+    return
+  }
+
+  if (command === 'install' && input.args[1] === '--plugin') {
+    process.stdout.write(await installCodexPluginBridge({ runtimeEntryPath: input.runtimeEntryPath }))
     return
   }
 
@@ -51,7 +60,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[] })
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory maintenance|memory profile>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory maintenance|memory profile>')
   process.exit(1)
 }
 

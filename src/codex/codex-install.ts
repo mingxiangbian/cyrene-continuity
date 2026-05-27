@@ -2,10 +2,15 @@ import { lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { installCodexStopHook } from './codex-hook-install.js'
 import { codexGlobalRoot } from './codex-memory-root.js'
+import { requireDevRepoRoot, resolvePluginRuntimePath } from './runtime-paths.js'
+import { writeCodexStableShim } from './stable-shim.js'
 
-export async function installCodexDevBridge(): Promise<string> {
-  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+export { resolvePluginRuntimePath } from './runtime-paths.js'
+
+export async function installCodexDevBridge(input: { runtimeEntryPath?: string } = {}): Promise<string> {
+  const repoRoot = requireDevRepoRoot(input.runtimeEntryPath ?? fileURLToPath(import.meta.url))
   const skillSource = resolve(
     repoRoot,
     'plugin',
@@ -38,6 +43,23 @@ export async function installCodexDevBridge(): Promise<string> {
     '',
     'Disable agentmemory before validating Cyrene as the authoritative memory source.',
     'Remove/comment [mcp_servers.agentmemory] or set enabled = false if your Codex config supports it.'
+  ].join('\n') + '\n'
+}
+
+export async function installCodexPluginBridge(input: { runtimeEntryPath?: string }): Promise<string> {
+  const runtimePath = resolvePluginRuntimePath(input.runtimeEntryPath ?? fileURLToPath(import.meta.url))
+  const shimPath = await writeCodexStableShim(runtimePath)
+  const hookOutput = await installCodexStopHook({})
+
+  return [
+    'Cyrene Codex plugin bridge installed.',
+    '',
+    `runtime: ${runtimePath}`,
+    `shim: ${shimPath}`,
+    '',
+    hookOutput.trimEnd(),
+    '',
+    'Disable or remove [mcp_servers.cyrene] after validating the installed plugin MCP server in a new Codex session.'
   ].join('\n') + '\n'
 }
 

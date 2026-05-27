@@ -1,5 +1,6 @@
 #!/usr/bin/env -S npx tsx
 import { Command } from 'commander'
+import { fileURLToPath } from 'node:url'
 import { handleCodexCommand } from './codex/codex-cli.js'
 import { startCyreneMcpServer } from './mcp/mcp-server.js'
 
@@ -21,7 +22,8 @@ async function main(): Promise<void> {
   if (command === 'codex') {
     await handleCodexCommand({
       cwd: options.cwd,
-      args: program.args.slice(1)
+      args: program.args.slice(1),
+      runtimeEntryPath: fileURLToPath(import.meta.url)
     })
     return
   }
