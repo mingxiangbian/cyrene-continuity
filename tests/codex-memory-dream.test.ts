@@ -219,6 +219,50 @@ describe('Codex memory dream runtime', () => {
     )
   })
 
+  it('rem re-reads pending after waiting for the maintenance lock', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_MEMORY_MAINTENANCE_LOCK_TIMEOUT_MS', '1000')
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const first = createPending()
+    const second = createPending({
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [first])
+    const lockDir = join(memoryRoot, '.maintenance.lock')
+    await mkdir(lockDir)
+
+    let settled = false
+    const dream = runCodexMemoryDream({ cwd, stage: 'rem', now: '2026-05-26T00:00:00.000Z' })
+      .finally(() => {
+        settled = true
+      })
+
+    await delay(50)
+    expect(settled).toBe(false)
+
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(second)}\n`)
+    await rm(lockDir, { recursive: true, force: true })
+    await dream
+
+    const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        action: 'audit',
+        details: expect.objectContaining({
+          stage: 'rem',
+          candidateId: second.id,
+          distinctEvidenceCount: 2,
+          proposedAction: 'promote'
+        })
+      })
+    )
+  })
+
   it('deep promotes repeated independent procedural memory and writes model profile', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)

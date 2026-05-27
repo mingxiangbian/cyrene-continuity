@@ -91,6 +91,36 @@ function createActive(): CyreneMemory {
 }
 
 describe('cyrene-continuity codex CLI', () => {
+  it('doctor rejects --config without a path', async () => {
+    const home = await createTempDir('cyrene-codex-cli-config-missing-home-')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'doctor', '--config'],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('Invalid doctor config path: missing value')
+    })
+  })
+
+  it('doctor rejects --config= without a path', async () => {
+    const home = await createTempDir('cyrene-codex-cli-config-empty-home-')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'doctor', '--config='],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('Invalid doctor config path: missing value')
+    })
+  })
+
   it('doctor reports agentmemory as not ready when configured', async () => {
     const home = await createTempDir('cyrene-codex-cli-home-')
     await writeFile(

@@ -58,10 +58,21 @@ export async function handleCodexCommand(input: { cwd: string; args: string[] })
 function parseConfigPath(args: string[]): string | undefined {
   const index = args.indexOf('--config')
   if (index >= 0) {
-    return args[index + 1]
+    const value = args[index + 1]
+    if (value === undefined || value === '' || value.startsWith('--')) {
+      throw new Error('Invalid doctor config path: missing value')
+    }
+    return value
   }
   const inline = args.find((arg) => arg.startsWith('--config='))
-  return inline?.slice('--config='.length)
+  if (inline === undefined) {
+    return undefined
+  }
+  const value = inline.slice('--config='.length)
+  if (value === '') {
+    throw new Error('Invalid doctor config path: missing value')
+  }
+  return value
 }
 
 function parseDreamStage(args: string[]): CodexMemoryDreamStage | undefined {

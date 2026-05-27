@@ -208,32 +208,36 @@ async function runRemDreamRoot(
   now: string,
   intervalHours: number
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
-  const pending = await readPendingMemoriesFromRoot(memoryRoot)
-  for (const candidate of pending) {
-    const evaluation = evaluatePendingPromotion(candidate, now)
-    await appendMemoryEventFromRoot(memoryRoot, {
-      id: randomUUID(),
-      action: 'audit',
-      at: now,
-      reason: 'Codex memory dream REM pass evaluated pending memory.',
-      candidateId: candidate.id,
-      details: {
-        stage,
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
+  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot)
+    const pending = await readPendingMemoriesFromRoot(lockedRoot)
+    for (const candidate of pending) {
+      const evaluation = evaluatePendingPromotion(candidate, now)
+      await appendMemoryEventFromRoot(lockedRoot, {
+        id: randomUUID(),
+        action: 'audit',
+        at: now,
+        reason: 'Codex memory dream REM pass evaluated pending memory.',
         candidateId: candidate.id,
-        proposedAction: evaluation.promotable ? 'promote' : proposedActionForPending(candidate, evaluation.reason),
-        reason: evaluation.reason,
-        distinctEvidenceCount: evaluation.distinctEvidenceCount
-      }
-    })
-  }
-  await writeDreamSuccess(memoryRoot, now, intervalHours)
-  return {
-    memoryRoot,
-    stage,
-    promoted: 0,
-    rejected: 0,
-    keptPending: pending.length
-  }
+        details: {
+          stage,
+          candidateId: candidate.id,
+          proposedAction: evaluation.promotable ? 'promote' : proposedActionForPending(candidate, evaluation.reason),
+          reason: evaluation.reason,
+          distinctEvidenceCount: evaluation.distinctEvidenceCount
+        }
+      })
+    }
+    await writeDreamSuccess(lockedRoot, now, intervalHours)
+    return {
+      memoryRoot: lockedRoot,
+      stage,
+      promoted: 0,
+      rejected: 0,
+      keptPending: pending.length
+    }
+  })
 }
 
 async function runDeepDreamRoot(
