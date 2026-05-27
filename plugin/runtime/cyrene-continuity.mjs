@@ -9909,7 +9909,7 @@ import { fileURLToPath as fileURLToPath3 } from "node:url";
 // src/codex/codex-doctor.ts
 import { access as access2, readFile as readFile5 } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/config.ts
@@ -10386,19 +10386,606 @@ function isFileErrorCode4(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/codex-memory-index.ts
+import { join as join6 } from "node:path";
+
+// src/memory/memory-index.ts
+import { mkdir as mkdir4 } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname as dirname2 } from "node:path";
+
+// src/token-counter.ts
+function estimateTokens(text) {
+  const trimmed = text.trim();
+  if (trimmed === "") return 0;
+  return Math.ceil(trimmed.length / 4);
+}
+
+// src/memory/memory-index.ts
+async function openMemoryIndexAdapter(input) {
+  if (input.forceUnavailableReason !== void 0) {
+    return new UnavailableMemoryIndexAdapter(input.dbPath, input.forceUnavailableReason);
+  }
+  try {
+    return new SqliteMemoryIndexAdapter(input.dbPath, await loadSqliteDatabaseSync());
+  } catch (error2) {
+    return new UnavailableMemoryIndexAdapter(input.dbPath, error2 instanceof Error ? error2.message : String(error2));
+  }
+}
+async function loadSqliteDatabaseSync() {
+  try {
+    const sqlite = await import("node:sqlite");
+    return sqlite.DatabaseSync;
+  } catch (importError) {
+    try {
+      const require2 = createRequire(import.meta.url);
+      const sqlite = require2("node:sqlite");
+      return sqlite.DatabaseSync;
+    } catch {
+      throw importError;
+    }
+  }
+}
+function deriveMemoryPortability(memory) {
+  if (memory.portability !== void 0) return memory.portability;
+  return memory.scope === "global" ? "global" : "local_only";
+}
+var UnavailableMemoryIndexAdapter = class {
+  constructor(dbPath, reason) {
+    this.dbPath = dbPath;
+    this.reason = reason;
+  }
+  dbPath;
+  reason;
+  async initialize() {
+    return this.diagnostics();
+  }
+  async rebuildFromRoots(_input) {
+    return this.diagnostics();
+  }
+  async syncRoot(_root) {
+    return this.diagnostics();
+  }
+  async queryActive(_input) {
+    return [];
+  }
+  async queryPending(_input) {
+    return [];
+  }
+  diagnostics() {
+    return {
+      available: false,
+      dbPath: this.dbPath,
+      reason: this.reason
+    };
+  }
+  close() {
+  }
+};
+var SqliteMemoryIndexAdapter = class {
+  constructor(dbPath, DatabaseSync) {
+    this.dbPath = dbPath;
+    this.DatabaseSync = DatabaseSync;
+    this.currentDiagnostics = { available: true, dbPath };
+  }
+  dbPath;
+  DatabaseSync;
+  db;
+  currentDiagnostics;
+  initialized = false;
+  async initialize() {
+    const db = await this.openDatabase();
+    db.exec(`
+      create table if not exists projects (
+        project_id text primary key,
+        root_hash text,
+        remote_hash text,
+        name text,
+        created_at text not null,
+        updated_at text not null
+      );
+
+      create table if not exists memories (
+        id text primary key,
+        memory_root text not null,
+        scope text not null,
+        domain text not null,
+        type text not null,
+        strength text not null,
+        status text not null,
+        home_project_id text,
+        portability text not null,
+        content text not null,
+        normalized_key text not null,
+        tags text not null,
+        tags_json text not null,
+        scores_json text not null,
+        source text not null,
+        profile_visibility text,
+        payload_json text not null,
+        first_seen_at text,
+        last_seen_at text,
+        created_at text not null,
+        updated_at text not null,
+        expires_at text
+      );
+
+      create table if not exists memory_evidence (
+        id text primary key,
+        memory_id text not null,
+        source_kind text,
+        project_id text,
+        session_id text,
+        run_id text,
+        evidence_group_id text,
+        quote_hash text,
+        summary text,
+        created_at text not null
+      );
+    `);
+    if (!this.initialized) {
+      this.currentDiagnostics = {
+        available: true,
+        dbPath: this.dbPath,
+        ftsTokenizer: this.ensureFtsTable(db)
+      };
+      this.initialized = true;
+    }
+    return this.currentDiagnostics;
+  }
+  async rebuildFromRoots(input) {
+    const diagnostics = await this.initialize();
+    const db = this.requireDatabase();
+    db.exec("delete from memory_evidence; delete from memories; delete from projects;");
+    for (const root of input.roots) {
+      await this.syncRoot(root);
+    }
+    return diagnostics;
+  }
+  async syncRoot(root) {
+    const diagnostics = await this.initialize();
+    const db = this.requireDatabase();
+    db.prepare("delete from memory_evidence where memory_id in (select id from memories where memory_root = ?)").run(root.memoryRoot);
+    db.prepare("delete from memories where memory_root = ?").run(root.memoryRoot);
+    if (root.projectId !== null) {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      db.prepare(`
+        insert into projects (project_id, name, created_at, updated_at)
+        values (?, ?, ?, ?)
+        on conflict(project_id) do update set updated_at = excluded.updated_at
+      `).run(root.projectId, root.projectId, now, now);
+    }
+    const [active, pending] = await Promise.all([
+      readActiveMemoriesFromRoot(root.memoryRoot),
+      readPendingMemoriesFromRoot(root.memoryRoot)
+    ]);
+    for (const memory of active) {
+      this.insertMemory(root, memory);
+    }
+    for (const memory of pending) {
+      this.insertMemory(root, memory);
+    }
+    this.rebuildFts();
+    return diagnostics;
+  }
+  async queryActive(input) {
+    await this.initialize();
+    const structuredRows = this.queryStructuredRows({
+      status: "active",
+      currentProjectId: input.currentProjectId,
+      route: input.route
+    });
+    const ftsMatches = this.queryFtsIds(input.query, "active");
+    return selectWithinBudget(
+      structuredRows.map((row) => ({
+        memory: row.payload,
+        score: scoreRow(row, input.query, ftsMatches),
+        portability: row.portability,
+        homeProjectId: row.homeProjectId
+      })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareIndexedItems),
+      input.maxItems,
+      input.maxTokens
+    );
+  }
+  async queryPending(input) {
+    await this.initialize();
+    const structuredRows = this.queryStructuredRows({
+      status: "pending",
+      currentProjectId: input.currentProjectId,
+      route: "pending"
+    });
+    const ftsMatches = this.queryFtsIds(input.query, "pending");
+    return selectWithinBudget(
+      structuredRows.map((row) => ({
+        memory: row.payload,
+        score: scoreRow(row, input.query, ftsMatches),
+        portability: row.portability,
+        homeProjectId: row.homeProjectId,
+        provisional: true
+      })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareIndexedItems),
+      input.maxItems,
+      input.maxTokens
+    );
+  }
+  diagnostics() {
+    return this.currentDiagnostics;
+  }
+  close() {
+    if (this.db !== void 0) {
+      this.db.close();
+      this.db = void 0;
+    }
+  }
+  async openDatabase() {
+    if (this.db !== void 0) {
+      return this.db;
+    }
+    await mkdir4(dirname2(this.dbPath), { recursive: true });
+    this.db = new this.DatabaseSync(this.dbPath);
+    return this.db;
+  }
+  requireDatabase() {
+    if (this.db === void 0) {
+      throw new Error("Memory index database is not initialized.");
+    }
+    return this.db;
+  }
+  ensureFtsTable(db) {
+    try {
+      db.exec(`
+        create virtual table if not exists memories_fts
+        using fts5(content, normalized_key, tags, tokenize='trigram', content='memories', content_rowid='rowid');
+      `);
+      return "trigram";
+    } catch {
+      db.exec("drop table if exists memories_fts;");
+      db.exec(`
+        create virtual table if not exists memories_fts
+        using fts5(content, normalized_key, tags, tokenize='unicode61', content='memories', content_rowid='rowid');
+      `);
+      return "unicode61";
+    }
+  }
+  insertMemory(root, memory) {
+    const db = this.requireDatabase();
+    const portability = deriveMemoryPortability(memory);
+    const homeProjectId = root.scope === "global" ? null : root.projectId;
+    const tags = memory.tags.join(" ");
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    db.prepare(`
+      insert into memories (
+        id,
+        memory_root,
+        scope,
+        domain,
+        type,
+        strength,
+        status,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags,
+        tags_json,
+        scores_json,
+        source,
+        profile_visibility,
+        payload_json,
+        first_seen_at,
+        last_seen_at,
+        created_at,
+        updated_at,
+        expires_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set
+        memory_root = excluded.memory_root,
+        scope = excluded.scope,
+        domain = excluded.domain,
+        type = excluded.type,
+        strength = excluded.strength,
+        status = excluded.status,
+        home_project_id = excluded.home_project_id,
+        portability = excluded.portability,
+        content = excluded.content,
+        normalized_key = excluded.normalized_key,
+        tags = excluded.tags,
+        tags_json = excluded.tags_json,
+        scores_json = excluded.scores_json,
+        source = excluded.source,
+        profile_visibility = excluded.profile_visibility,
+        payload_json = excluded.payload_json,
+        first_seen_at = excluded.first_seen_at,
+        last_seen_at = excluded.last_seen_at,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        expires_at = excluded.expires_at
+    `).run(
+      memory.id,
+      root.memoryRoot,
+      memory.scope,
+      memory.domain,
+      memory.type,
+      memory.strength,
+      memory.status,
+      homeProjectId,
+      portability,
+      memory.content,
+      memory.normalizedKey,
+      tags,
+      JSON.stringify(memory.tags),
+      JSON.stringify(memory.scores),
+      memory.source,
+      memory.profileVisibility ?? null,
+      JSON.stringify(memory),
+      "firstSeenAt" in memory ? memory.firstSeenAt : memory.createdAt,
+      "lastSeenAt" in memory ? memory.lastSeenAt : memory.updatedAt,
+      "createdAt" in memory ? memory.createdAt : memory.firstSeenAt,
+      "updatedAt" in memory ? memory.updatedAt : now,
+      memory.expiresAt ?? null
+    );
+    for (const [index, evidence] of memory.evidence.entries()) {
+      db.prepare(`
+        insert into memory_evidence (
+          id,
+          memory_id,
+          source_kind,
+          project_id,
+          session_id,
+          run_id,
+          evidence_group_id,
+          quote_hash,
+          summary,
+          created_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        `${memory.id}:${index}`,
+        memory.id,
+        evidence.sourceKind ?? memory.source,
+        homeProjectId,
+        evidence.sessionId ?? null,
+        evidence.runId ?? null,
+        evidence.evidenceGroupId ?? null,
+        evidence.quoteHash ?? null,
+        evidence.summary ?? null,
+        now
+      );
+    }
+  }
+  rebuildFts() {
+    this.requireDatabase().prepare("insert into memories_fts(memories_fts) values ('rebuild')").run();
+  }
+  queryStructuredRows(input) {
+    const db = this.requireDatabase();
+    const conditions = ["status = ?"];
+    const values = [input.status];
+    if (input.route === "global") {
+      conditions.push("scope = 'global'", "portability = 'global'");
+    } else if (input.route === "project") {
+      conditions.push("home_project_id = ?", "portability = 'local_only'");
+      values.push(input.currentProjectId);
+    } else {
+      conditions.push("(scope = 'global' or home_project_id = ?)");
+      values.push(input.currentProjectId);
+    }
+    const rows = db.prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        payload_json
+      from memories
+      where ${conditions.join(" and ")}
+    `).all(...values);
+    return rows.map(rowFromRecord);
+  }
+  queryFtsIds(query, status) {
+    if (query.trim() === "") {
+      return /* @__PURE__ */ new Set();
+    }
+    const expression = ftsExpression(query);
+    if (expression === "") {
+      return /* @__PURE__ */ new Set();
+    }
+    try {
+      const rows = this.requireDatabase().prepare(`
+        select m.id
+        from memories_fts
+        join memories m on m.rowid = memories_fts.rowid
+        where memories_fts match ? and m.status = ?
+      `).all(expression, status);
+      return new Set(rows.map((row) => typeof row.id === "string" ? row.id : "").filter(Boolean));
+    } catch {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+};
+function rowFromRecord(row) {
+  const payload = JSON.parse(readString(row.payload_json, "payload_json"));
+  return {
+    id: readString(row.id, "id"),
+    status: readString(row.status, "status"),
+    scope: readString(row.scope, "scope"),
+    domain: readString(row.domain, "domain"),
+    type: readString(row.type, "type"),
+    strength: readString(row.strength, "strength"),
+    homeProjectId: row.home_project_id === null ? null : readString(row.home_project_id, "home_project_id"),
+    portability: readString(row.portability, "portability"),
+    content: readString(row.content, "content"),
+    normalizedKey: readString(row.normalized_key, "normalized_key"),
+    tags: JSON.parse(readString(row.tags_json, "tags_json")),
+    scores: JSON.parse(readString(row.scores_json, "scores_json")),
+    payload
+  };
+}
+function readString(value, field) {
+  if (typeof value !== "string") {
+    throw new Error(`Memory index row field is not a string: ${field}`);
+  }
+  return value;
+}
+function scoreRow(row, query, ftsMatches) {
+  const tokens = tokenize(query);
+  const relevance = tokens.length === 0 ? 0.2 : relevanceScore(row, tokens);
+  const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0;
+  const safety = typeof row.scores.safety === "number" ? row.scores.safety : 0.8;
+  const usefulness = typeof row.scores.usefulness === "number" ? row.scores.usefulness : 0.7;
+  const evidence = typeof row.scores.evidenceStrength === "number" ? row.scores.evidenceStrength : 0.7;
+  const sensitivity = typeof row.scores.sensitivity === "number" ? row.scores.sensitivity : 0.2;
+  return relevance * 0.45 + usefulness * 0.2 + evidence * 0.15 + safety * 0.1 + ftsBoost - sensitivity * 0.1;
+}
+function relevanceScore(row, queryTokens) {
+  const haystack = tokenize([
+    row.content,
+    row.normalizedKey,
+    row.domain,
+    row.type,
+    row.strength,
+    row.portability,
+    ...row.tags
+  ].join(" "));
+  const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
+  return matches.length / queryTokens.length;
+}
+function compareIndexedItems(left, right) {
+  const scoreDiff = right.score - left.score;
+  if (scoreDiff !== 0) return scoreDiff;
+  return left.memory.id.localeCompare(right.memory.id);
+}
+function selectWithinBudget(items, maxItems, maxTokens) {
+  const selected = [];
+  let tokenCount = 0;
+  for (const item of items) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    const itemTokens = estimateTokens(item.memory.content);
+    if (itemTokens > maxTokens) {
+      continue;
+    }
+    if (tokenCount + itemTokens > maxTokens) {
+      break;
+    }
+    selected.push(item);
+    tokenCount += itemTokens;
+  }
+  return selected;
+}
+function ftsExpression(text) {
+  return tokenize(text).map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
+}
+function tokenize(text) {
+  return text.toLowerCase().match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) ?? [];
+}
+
+// src/codex/project-id.ts
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { realpath as realpath4 } from "node:fs/promises";
+import { basename, resolve as resolve3 } from "node:path";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+async function identifyCodexProject(cwd) {
+  const resolvedCwd = await realpath4(resolve3(cwd));
+  const gitRootRaw = await tryGit(["rev-parse", "--show-toplevel"], resolvedCwd);
+  const gitRoot = gitRootRaw?.trim();
+  const root = gitRoot ?? resolvedCwd;
+  const remoteRaw = await tryGit(["config", "--get", "remote.origin.url"], root);
+  const remote = remoteRaw?.trim();
+  const basis = remote && remote.length > 0 ? remote : root;
+  return {
+    projectId: sha256Short(basis),
+    cwd: resolvedCwd,
+    gitRoot,
+    gitRemoteHash: remote && remote.length > 0 ? sha256Short(remote) : void 0,
+    displayName: basename(root) || "unknown-project"
+  };
+}
+function renderModelVisibleProjectIdentity(identity) {
+  return {
+    projectId: identity.projectId,
+    displayName: identity.displayName,
+    gitRootExists: identity.gitRoot !== void 0
+  };
+}
+async function tryGit(args, cwd) {
+  try {
+    const result = await execFileAsync("git", args, { cwd });
+    const text = result.stdout.trim();
+    return text === "" ? void 0 : text;
+  } catch {
+    return void 0;
+  }
+}
+function sha256Short(value) {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+// src/codex/codex-memory-index.ts
+function codexMemoryDbPath() {
+  return join6(codexGlobalRoot(), "memory.db");
+}
+async function codexMemoryIndexRoots(projectId) {
+  const roots = [];
+  const globalRoot = await getReadableCodexGlobalMemoryRoot();
+  if (globalRoot !== null) {
+    roots.push({ memoryRoot: globalRoot, projectId: null, scope: "global" });
+  }
+  const projectRoot = await getReadableCodexProjectMemoryRoot(projectId);
+  if (projectRoot !== null) {
+    roots.push({ memoryRoot: projectRoot, projectId, scope: "project" });
+  }
+  return roots;
+}
+async function rebuildCodexMemoryIndex(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const roots = await codexMemoryIndexRoots(project.projectId);
+  const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
+  try {
+    const diagnostics = await adapter.rebuildFromRoots({ roots });
+    return { dbPath: codexMemoryDbPath(), diagnostics, syncedRoots: roots.length };
+  } finally {
+    adapter.close();
+  }
+}
+async function readCodexMemoryIndexDiagnostics() {
+  const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
+  try {
+    return adapter.diagnostics();
+  } finally {
+    adapter.close();
+  }
+}
+async function syncCurrentCodexMemoryIndex(input) {
+  try {
+    await rebuildCodexMemoryIndex(input);
+  } catch {
+  }
+}
+
 // src/codex/codex-hook-install.ts
-import { mkdir as mkdir5, readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
+import { mkdir as mkdir6, readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname3, join as join6 } from "node:path";
+import { dirname as dirname4, join as join7 } from "node:path";
 
 // src/codex/stable-shim.ts
-import { access, chmod, mkdir as mkdir4, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname2, resolve as resolve3 } from "node:path";
+import { access, chmod, mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname3, resolve as resolve4 } from "node:path";
 function codexStableBinRoot() {
-  return resolve3(codexGlobalRoot(), "bin");
+  return resolve4(codexGlobalRoot(), "bin");
 }
 function codexStableExecutablePath() {
-  return resolve3(codexStableBinRoot(), "cyrene-continuity");
+  return resolve4(codexStableBinRoot(), "cyrene-continuity");
 }
 async function assertRuntimeExists(runtimePath) {
   try {
@@ -10410,7 +10997,7 @@ async function assertRuntimeExists(runtimePath) {
 async function writeCodexStableShim(runtimePath) {
   await assertRuntimeExists(runtimePath);
   const shimPath = codexStableExecutablePath();
-  await mkdir4(dirname2(shimPath), { recursive: true });
+  await mkdir5(dirname3(shimPath), { recursive: true });
   await writeFile2(shimPath, formatStableShim(runtimePath), "utf8");
   await chmod(shimPath, 493);
   return shimPath;
@@ -10454,7 +11041,7 @@ async function formatCodexStopHookInstall(input) {
 async function installCodexStopHook(input) {
   const hooksPath = input.hooksPath ?? defaultHooksPath();
   const config2 = mergeStopHookConfig(await readHooksConfig(hooksPath));
-  await mkdir5(dirname3(hooksPath), { recursive: true });
+  await mkdir6(dirname4(hooksPath), { recursive: true });
   await writeFile3(hooksPath, `${JSON.stringify(config2, null, 2)}
 `, "utf8");
   return [
@@ -10522,7 +11109,7 @@ async function isCodexStopHookConfigured(input = {}) {
   );
 }
 function defaultHooksPath() {
-  return join6(homedir3(), ".codex", "hooks.json");
+  return join7(homedir3(), ".codex", "hooks.json");
 }
 async function readHooksConfig(hooksPath) {
   try {
@@ -10541,7 +11128,7 @@ function isRecord(value) {
 // src/codex/memory-dream-state.ts
 import { randomUUID } from "node:crypto";
 import { lstat as lstat5, readFile as readFile4, rename as rename2, writeFile as writeFile4 } from "node:fs/promises";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var DREAM_STATE_FILE = "dream-state.json";
 async function readCodexMemoryDreamState(memoryRoot) {
   let stats;
@@ -10560,7 +11147,7 @@ async function readCodexMemoryDreamState(memoryRoot) {
     throw new Error(`Refusing to read dream state from non-directory memory root: ${memoryRoot}`);
   }
   try {
-    const parsed = JSON.parse(await readFile4(join7(memoryRoot, DREAM_STATE_FILE), "utf8"));
+    const parsed = JSON.parse(await readFile4(join8(memoryRoot, DREAM_STATE_FILE), "utf8"));
     return {
       dreamDue: parsed.dreamDue === true,
       ...typeof parsed.lastDreamAt === "string" ? { lastDreamAt: parsed.lastDreamAt } : {},
@@ -10577,7 +11164,7 @@ async function readCodexMemoryDreamState(memoryRoot) {
 }
 async function writeCodexMemoryDreamState(memoryRoot, state) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join7(root, DREAM_STATE_FILE);
+  const targetPath = join8(root, DREAM_STATE_FILE);
   const tempPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile4(tempPath, `${JSON.stringify(state, null, 2)}
 `, "utf8");
@@ -10604,60 +11191,17 @@ function isFileErrorCode5(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
-// src/codex/project-id.ts
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { realpath as realpath4 } from "node:fs/promises";
-import { basename, resolve as resolve4 } from "node:path";
-import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-async function identifyCodexProject(cwd) {
-  const resolvedCwd = await realpath4(resolve4(cwd));
-  const gitRootRaw = await tryGit(["rev-parse", "--show-toplevel"], resolvedCwd);
-  const gitRoot = gitRootRaw?.trim();
-  const root = gitRoot ?? resolvedCwd;
-  const remoteRaw = await tryGit(["config", "--get", "remote.origin.url"], root);
-  const remote = remoteRaw?.trim();
-  const basis = remote && remote.length > 0 ? remote : root;
-  return {
-    projectId: sha256Short(basis),
-    cwd: resolvedCwd,
-    gitRoot,
-    gitRemoteHash: remote && remote.length > 0 ? sha256Short(remote) : void 0,
-    displayName: basename(root) || "unknown-project"
-  };
-}
-function renderModelVisibleProjectIdentity(identity) {
-  return {
-    projectId: identity.projectId,
-    displayName: identity.displayName,
-    gitRootExists: identity.gitRoot !== void 0
-  };
-}
-async function tryGit(args, cwd) {
-  try {
-    const result = await execFileAsync("git", args, { cwd });
-    const text = result.stdout.trim();
-    return text === "" ? void 0 : text;
-  } catch {
-    return void 0;
-  }
-}
-function sha256Short(value) {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
-
 // src/codex/runtime-paths.ts
-import { basename as basename2, dirname as dirname4, resolve as resolve5 } from "node:path";
+import { basename as basename2, dirname as dirname5, resolve as resolve5 } from "node:path";
 var PLUGIN_RUNTIME_FILE = "cyrene-continuity.mjs";
 function isPluginRuntimeEntryPath(runtimeEntryPath) {
   const entryPath = resolve5(runtimeEntryPath);
-  return basename2(entryPath) === PLUGIN_RUNTIME_FILE && basename2(dirname4(entryPath)) === "runtime";
+  return basename2(entryPath) === PLUGIN_RUNTIME_FILE && basename2(dirname5(entryPath)) === "runtime";
 }
 function resolvePluginRoot(runtimeEntryPath) {
   const entryPath = resolve5(runtimeEntryPath);
   if (isPluginRuntimeEntryPath(entryPath)) {
-    return dirname4(dirname4(entryPath));
+    return dirname5(dirname5(entryPath));
   }
   return resolve5(requireDevRepoRoot(entryPath), "plugin");
 }
@@ -10673,12 +11217,12 @@ function resolveDevRepoRoot(runtimeEntryPath) {
   if (isPluginRuntimeEntryPath(entryPath)) {
     return null;
   }
-  const entryDir = dirname4(entryPath);
+  const entryDir = dirname5(entryPath);
   if (basename2(entryDir) === "src") {
-    return dirname4(entryDir);
+    return dirname5(entryDir);
   }
-  if (basename2(entryDir) === "codex" && basename2(dirname4(entryDir)) === "src") {
-    return dirname4(dirname4(entryDir));
+  if (basename2(entryDir) === "codex" && basename2(dirname5(entryDir)) === "src") {
+    return dirname5(dirname5(entryDir));
   }
   return resolve5(entryDir, "..", "..");
 }
@@ -10695,7 +11239,7 @@ var CURRENT_CYRENE_MCP_CONFIG_TABLE = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE = "[mcp_servers.cyrene]";
 async function formatCodexDoctor(input) {
   const runtimeEntryPath = input.runtimeEntryPath ?? fileURLToPath(import.meta.url);
-  const configPath = input.configPath ?? join8(homedir4(), ".codex", "config.toml");
+  const configPath = input.configPath ?? join9(homedir4(), ".codex", "config.toml");
   const configText = await readOptional(configPath);
   const cyreneMcpConfig = readCyreneManualMcpConfig(configText);
   const cyreneConfigured = cyreneMcpConfig !== void 0;
@@ -10707,13 +11251,14 @@ async function formatCodexDoctor(input) {
   const mcpCommandAction = mcpCommandFreshness === "stale or external" && !pluginBridgeInstalled ? `  action: rerun ${installCommand} and update ${CURRENT_CYRENE_MCP_CONFIG_TABLE} from its printed config` : void 0;
   const manualMcpConflictAction = pluginBridgeInstalled && cyreneConfigured ? `  action: disable or remove manual Cyrene MCP config (${cyreneMcpConfig.table}) after validating the installed plugin MCP server` : void 0;
   const agentmemoryEnabled = hasEnabledMcpServer(configText, "agentmemory");
-  const skillPath = join8(homedir4(), ".agents", "skills", "cyrene-continuity", "SKILL.md");
+  const skillPath = join9(homedir4(), ".agents", "skills", "cyrene-continuity", "SKILL.md");
   const skillExists = await pathExists(skillPath);
   const cyreneSkillReady = skillExists || pluginBridgeInstalled && pluginState.skillDeclared;
   const stopHookConfigured = await isCodexStopHookConfigured();
   const identity = await identifyCodexProject(input.cwd);
   const config2 = createDefaultConfig(input.cwd);
   const memoryState = await readDoctorMemoryState(identity.projectId);
+  const memoryIndex = await readCodexMemoryIndexDiagnostics();
   const actions = [
     cyreneConfigured || pluginBridgeInstalled ? void 0 : `  action: run ${installCommand} to install the Cyrene bridge`,
     mcpCommandAction,
@@ -10761,6 +11306,10 @@ async function formatCodexDoctor(input) {
     `  global pending: ${memoryState.globalPendingCount}`,
     `  project profile: ${memoryState.projectProfilePresent ? "present" : "missing"}`,
     `  project pending: ${memoryState.projectPendingCount}`,
+    `  memory index: ${memoryIndex.available ? "available" : "unavailable"}`,
+    `  memory db: ${codexMemoryDbPath()}`,
+    memoryIndex.ftsTokenizer === void 0 ? void 0 : `  memory fts: ${memoryIndex.ftsTokenizer}`,
+    memoryIndex.reason === void 0 ? void 0 : `  memory index reason: ${memoryIndex.reason}`,
     `  dream due: ${memoryState.dreamDue ? "yes" : "no"}`,
     `  last dream: ${memoryState.lastDreamAt ?? "never"}`,
     `  auto promote: ${config2.memoryAutoPromoteEnabled ? "enabled" : "disabled"}`
@@ -10801,7 +11350,7 @@ function readCyreneManualMcpConfig(configText) {
 }
 async function readDoctorPluginState(runtimeEntryPath) {
   const root = resolvePluginRoot(runtimeEntryPath);
-  const manifestPath = join8(root, ".codex-plugin", "plugin.json");
+  const manifestPath = join9(root, ".codex-plugin", "plugin.json");
   const manifestText = await readOptional(manifestPath);
   const manifest = parseJsonObject(manifestText);
   return {
@@ -11043,14 +11592,14 @@ import { createHash as createHash3, randomUUID as randomUUID5 } from "node:crypt
 
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
-import { mkdir as mkdir7, rm as rm2 } from "node:fs/promises";
-import { join as join11 } from "node:path";
+import { mkdir as mkdir8, rm as rm2 } from "node:fs/promises";
+import { join as join12 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 // src/memory/memory-exporter.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { lstat as lstat6, open, readdir as readdir2, readFile as readFile6, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
-import { dirname as dirname5, isAbsolute as isAbsolute3, join as join9, relative as relative3 } from "node:path";
+import { dirname as dirname6, isAbsolute as isAbsolute3, join as join10, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
 import { createHash as createHash2 } from "node:crypto";
@@ -11435,8 +11984,8 @@ async function writeMemoryProjections(root, memories) {
 }
 async function writeSafeGeneratedFile(root, parentDir, filename, content) {
   await assertSafeGeneratedFileTarget(root, parentDir, filename);
-  const targetPath = join9(parentDir, filename);
-  const tempPath = join9(parentDir, `.${filename}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
+  const targetPath = join10(parentDir, filename);
+  const tempPath = join10(parentDir, `.${filename}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
   const file = await open(tempPath, "wx");
   try {
     await file.writeFile(content, "utf8");
@@ -11465,7 +12014,7 @@ async function assertSafeGeneratedFileTarget(root, parentDir, filename) {
   if (!isPathInside3(root, parentRealPath)) {
     throw new Error(`Refusing to use memory projection path outside memory root: ${parentDir}`);
   }
-  const targetPath = join9(parentRealPath, filename);
+  const targetPath = join10(parentRealPath, filename);
   let stats;
   try {
     stats = await lstat6(targetPath);
@@ -11501,9 +12050,9 @@ async function removeLegacyGeneratedProjectionFiles(root) {
   await removeEmptyLegacyProjectionsDirectory(root);
 }
 async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
-  const parent = dirname5(legacyFile);
+  const parent = dirname6(legacyFile);
   if (parent !== ".") {
-    const parentPath = join9(root, parent);
+    const parentPath = join10(root, parent);
     let parentStats;
     try {
       parentStats = await lstat6(parentPath);
@@ -11515,7 +12064,7 @@ async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
       return;
     }
   }
-  const targetPath = join9(root, legacyFile);
+  const targetPath = join10(root, legacyFile);
   let stats;
   try {
     stats = await lstat6(targetPath);
@@ -11543,7 +12092,7 @@ async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
   });
 }
 async function removeEmptyLegacyProjectionsDirectory(root) {
-  const projectionsDir = join9(root, "projections");
+  const projectionsDir = join10(root, "projections");
   let stats;
   try {
     stats = await lstat6(projectionsDir);
@@ -11717,8 +12266,8 @@ function formatModelProfile(entries) {
 }
 
 // src/memory/memory-snapshot.ts
-import { lstat as lstat7, mkdir as mkdir6, readFile as readFile7, readdir as readdir3, writeFile as writeFile5 } from "node:fs/promises";
-import { isAbsolute as isAbsolute4, join as join10, relative as relative4 } from "node:path";
+import { lstat as lstat7, mkdir as mkdir7, readFile as readFile7, readdir as readdir3, writeFile as writeFile5 } from "node:fs/promises";
+import { isAbsolute as isAbsolute4, join as join11, relative as relative4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 async function createMemorySnapshotFromRoot(memoryRoot, reason) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
@@ -11752,8 +12301,8 @@ async function assertMemorySnapshotTargetSafeFromRoot(memoryRoot) {
   return root;
 }
 async function ensureSnapshotDir(memoryRoot) {
-  const dir = join10(memoryRoot, "snapshots");
-  await mkdir6(dir).catch((error2) => {
+  const dir = join11(memoryRoot, "snapshots");
+  await mkdir7(dir).catch((error2) => {
     if (!isFileErrorCode7(error2, "EEXIST")) {
       throw error2;
     }
@@ -11774,7 +12323,7 @@ function snapshotFilePath(dir, id) {
   if (!/^memory-[A-Za-z0-9_.-]+$/.test(id)) {
     throw new Error(`Invalid memory snapshot id: ${id}`);
   }
-  return join10(dir, `${id}.json`);
+  return join11(dir, `${id}.json`);
 }
 function summarizeSnapshot(snapshot) {
   return {
@@ -11861,13 +12410,13 @@ async function runMemoryMaintenanceFromRootLocked(input) {
 }
 async function withMemoryMaintenanceLockFromRoot(memoryRoot, task, options = {}) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const lockDir = join11(root, MAINTENANCE_LOCK_DIR);
+  const lockDir = join12(root, MAINTENANCE_LOCK_DIR);
   const startedAt = Date.now();
   const timeoutMs = options.timeoutMs ?? memoryMaintenanceLockTimeoutMs();
   const pollMs = options.pollMs ?? MAINTENANCE_LOCK_POLL_MS;
   while (true) {
     try {
-      await mkdir7(lockDir);
+      await mkdir8(lockDir);
       break;
     } catch (error2) {
       if (!isFileErrorCode8(error2, "EEXIST")) {
@@ -12282,6 +12831,7 @@ async function promoteCodexPendingMemory(input) {
       now,
       reason: "after manual memory promotion"
     });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
     return {
       project,
       memoryRoot: lockedMemoryRoot,
@@ -12357,6 +12907,7 @@ async function rejectCodexPendingMemory(input) {
       reason: input.reason ?? "Rejected by Codex pending memory review",
       candidateId: lockedCandidate.id
     });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
     return {
       project,
       memoryRoot: lockedMemoryRoot,
@@ -12506,6 +13057,7 @@ async function proposeCodexMemoryCandidate(input) {
       reason,
       candidateId: merged.id
     });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
       result: { action: "pending", candidateId: merged.id, reason, review: summarizePendingMemory(merged) },
@@ -12616,11 +13168,11 @@ function redactReviewText(input) {
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile2 } from "node:fs/promises";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 var REVIEW_SUMMARIES_FILE = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  await appendFile2(join12(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record2)}
+  await appendFile2(join13(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record2)}
 `, "utf8");
 }
 
@@ -13121,9 +13673,9 @@ function asString2(value) {
 }
 
 // src/codex/codex-install.ts
-import { lstat as lstat8, mkdir as mkdir8, rm as rm3, symlink, writeFile as writeFile6 } from "node:fs/promises";
+import { lstat as lstat8, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile6 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname6, join as join13, resolve as resolve6 } from "node:path";
+import { dirname as dirname7, join as join14, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -13135,13 +13687,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join13(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join14(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
-  await mkdir8(dirname6(skillTarget), { recursive: true });
+  await mkdir9(dirname7(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
-  await mkdir8(stateRoot, { recursive: true });
-  await writeFile6(join13(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await mkdir9(stateRoot, { recursive: true });
+  await writeFile6(join14(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -13193,8 +13745,8 @@ async function removeExistingSkillSymlink(path) {
 
 // src/codex/memory-dream.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
-import { lstat as lstat9, mkdir as mkdir9, readFile as readFile9, rm as rm4, writeFile as writeFile7 } from "node:fs/promises";
-import { join as join14 } from "node:path";
+import { lstat as lstat9, mkdir as mkdir10, readFile as readFile9, rm as rm4, writeFile as writeFile7 } from "node:fs/promises";
+import { join as join15 } from "node:path";
 var DREAM_LOCK_DIR = "dream.lock";
 var DREAM_LOCKS_DIR = ".locks";
 var MAX_PENDING_EVIDENCE2 = 10;
@@ -13571,12 +14123,12 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join14(locksDir, DREAM_LOCK_DIR);
+  const lockDir = join15(locksDir, DREAM_LOCK_DIR);
   const token = randomUUID8();
   while (true) {
     try {
-      await mkdir9(lockDir);
-      await writeFile7(join14(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await mkdir10(lockDir);
+      await writeFile7(join15(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
@@ -13592,8 +14144,8 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join14(memoryRoot, DREAM_LOCKS_DIR);
-  await mkdir9(locksDir).catch((error2) => {
+  const locksDir = join15(memoryRoot, DREAM_LOCKS_DIR);
+  await mkdir10(locksDir).catch((error2) => {
     if (!isFileErrorCode9(error2, "EEXIST")) {
       throw error2;
     }
@@ -13618,7 +14170,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile9(join14(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile9(join15(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -13700,6 +14252,11 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
+  if (command === "memory" && input.args[1] === "db" && input.args[2] === "rebuild") {
+    process.stdout.write(`${JSON.stringify(await rebuildCodexMemoryIndex({ cwd: input.cwd }), null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "profile") {
     const profile = await getCodexMemoryProfile({ cwd: input.cwd });
     process.stdout.write(profile.content === "" ? "" : `${profile.content}
@@ -13711,7 +14268,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory maintenance|memory profile>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -27999,13 +28556,6 @@ function shouldChallenge(input) {
   );
 }
 
-// src/token-counter.ts
-function estimateTokens(text) {
-  const trimmed = text.trim();
-  if (trimmed === "") return 0;
-  return Math.ceil(trimmed.length / 4);
-}
-
 // src/memory/memory-retriever.ts
 function memoryRetrievalBudgetForTask(task) {
   if (task === "coding" || task === "debugging") return { maxItems: 12, maxTokens: 2e3 };
@@ -28016,7 +28566,7 @@ function memoryRetrievalBudgetForTask(task) {
 async function retrieveMemories(input) {
   const memories = await readInputMemories(input);
   const task = input.task ?? "conversation";
-  const queryTokens = tokenize(input.query);
+  const queryTokens = tokenize2(input.query);
   const filtered = memories.filter((memory) => isEligible(memory, input, task));
   const scored = filtered.map((memory) => ({ memory, score: scoreMemory(memory, queryTokens) })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareRetrievedMemories);
   const selected = [];
@@ -28090,13 +28640,13 @@ function defaultDomainsForTask(task) {
   return ["project", "personal", "relationship", "affective", "procedural", "system"];
 }
 function scoreMemory(memory, queryTokens) {
-  const relevance = queryTokens.length === 0 ? 0.2 : relevanceScore(memory, queryTokens);
+  const relevance = queryTokens.length === 0 ? 0.2 : relevanceScore2(memory, queryTokens);
   const recency = memory.lastUsedAt === void 0 ? 0.5 : 1;
   const sensitivityPenalty = memory.scores.sensitivity > 0.3 ? memory.scores.sensitivity * (memory.domain === "affective" ? 0.35 : 0.2) : 0;
   return relevance * 0.35 + memory.scores.usefulness * 0.25 + memory.scores.evidenceStrength * 0.2 + memory.scores.safety * 0.1 + recency * 0.1 - sensitivityPenalty;
 }
-function relevanceScore(memory, queryTokens) {
-  const haystack = tokenize([
+function relevanceScore2(memory, queryTokens) {
+  const haystack = tokenize2([
     memory.content,
     memory.normalizedKey,
     memory.domain,
@@ -28126,7 +28676,7 @@ function domainPriority(domain) {
   if (domain === "relationship") return 4;
   return 5;
 }
-function tokenize(text) {
+function tokenize2(text) {
   return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 
@@ -28139,21 +28689,27 @@ async function getCodexContinuityContext(input) {
   const projectMemoryRoot = codexProjectMemoryRoot(project.projectId);
   const budget = memoryRetrievalBudgetForTask(task);
   await markProjectDreamDueIfOverdue(project.projectId, config2);
-  const [memories, pendingReview, globalProfile, projectProfile] = await Promise.all([
-    retrieveMemories({
-      cwd: input.cwd,
-      userCyreneDir: config2.userCyreneDir,
-      memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-      extraMemories: await readLegacyGlobalCodexMemories(project.projectId),
-      query: input.userMessage,
-      task,
-      maxItems: budget.maxItems,
-      maxTokens: budget.maxTokens
-    }),
+  const legacyRetrievalInput = {
+    cwd: input.cwd,
+    userCyreneDir: config2.userCyreneDir,
+    memoryRoots: [globalMemoryRoot, projectMemoryRoot],
+    extraMemories: await readLegacyGlobalCodexMemories(project.projectId),
+    query: input.userMessage,
+    task,
+    maxItems: budget.maxItems,
+    maxTokens: budget.maxTokens
+  };
+  const [pendingReview, globalProfile, projectProfile] = await Promise.all([
     getCodexPendingReviewNotice({ cwd: input.cwd }),
     readGlobalCodexProfileIfExists(),
     readProjectCodexProfileIfExists(project.projectId)
   ]);
+  const routedMemory = await retrieveRoutedMemory({
+    projectId: project.projectId,
+    query: input.userMessage,
+    fallback: legacyRetrievalInput
+  });
+  const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join("\n\n");
   const snapshot = await buildContinuitySnapshot({
     config: {
@@ -28162,7 +28718,7 @@ async function getCodexContinuityContext(input) {
     },
     userMessage: input.userMessage,
     task,
-    memories: memories.map(({ memory }) => memory),
+    memories: activeMemory.map((item) => item.memory),
     generatedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
   return {
@@ -28171,13 +28727,37 @@ async function getCodexContinuityContext(input) {
       displayName: project.displayName
     },
     memory: {
-      items: memories.map(({ memory }) => ({
+      items: activeMemory.map(({ memory }) => ({
         id: memory.id,
         domain: memory.domain,
         type: memory.type,
         strength: memory.strength,
         content: memory.content
       }))
+    },
+    globalMemory: routedMemory.globalMemory.map(toRoutedMemoryDigestItem),
+    projectMemory: routedMemory.projectMemory.map(toRoutedMemoryDigestItem),
+    pendingHypotheses: routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem),
+    similarProjectHints: [],
+    responseStrategy: {
+      tone: snapshot.strategy.tone,
+      verbosity: snapshot.strategy.verbosity,
+      challengePolicy: snapshot.strategy.challenge,
+      avoid: [
+        "claimed sentience",
+        "psychological diagnosis",
+        "romantic attachment",
+        "emotional manipulation"
+      ],
+      rationale: snapshot.strategy.rationale
+    },
+    reviewReminders: formatReviewReminders(pendingReview),
+    diagnostics: {
+      memoryIndex: {
+        available: routedMemory.diagnostics.available,
+        reason: routedMemory.diagnostics.reason,
+        ftsTokenizer: routedMemory.diagnostics.ftsTokenizer
+      }
     },
     profile: {
       global: globalProfile,
@@ -28201,6 +28781,93 @@ async function getCodexContinuityContext(input) {
       reason: snapshot.dissent.reason
     }
   };
+}
+async function retrieveRoutedMemory(input) {
+  const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
+  try {
+    const roots = await codexMemoryIndexRoots(input.projectId);
+    const diagnostics = await adapter.rebuildFromRoots({ roots });
+    if (!diagnostics.available) {
+      return fallbackRoutedMemory(input.fallback, diagnostics);
+    }
+    const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
+      adapter.queryActive({
+        currentProjectId: input.projectId,
+        query: input.query,
+        route: "global",
+        maxItems: 8,
+        maxTokens: 500
+      }),
+      adapter.queryActive({
+        currentProjectId: input.projectId,
+        query: input.query,
+        route: "project",
+        maxItems: 12,
+        maxTokens: 900
+      }),
+      adapter.queryPending({
+        currentProjectId: input.projectId,
+        query: input.query,
+        maxItems: 6,
+        maxTokens: 400
+      })
+    ]);
+    return { globalMemory, projectMemory, pendingHypotheses, diagnostics };
+  } catch (error2) {
+    return fallbackRoutedMemory(input.fallback, {
+      available: false,
+      dbPath: codexMemoryDbPath(),
+      reason: error2 instanceof Error ? error2.message : String(error2)
+    });
+  } finally {
+    adapter.close();
+  }
+}
+async function fallbackRoutedMemory(input, diagnostics) {
+  const memories = await retrieveMemories(input);
+  return {
+    globalMemory: memories.filter(({ memory }) => memory.scope === "global"),
+    projectMemory: memories.filter(({ memory }) => memory.scope !== "global"),
+    pendingHypotheses: [],
+    diagnostics
+  };
+}
+function toRoutedMemoryDigestItem(item) {
+  return {
+    id: item.memory.id,
+    domain: item.memory.domain,
+    type: item.memory.type,
+    strength: item.memory.strength,
+    scope: item.memory.scope,
+    portability: "portability" in item ? item.portability : item.memory.scope === "global" ? "global" : "local_only",
+    status: item.memory.status,
+    content: item.memory.content,
+    score: item.score
+  };
+}
+function toPendingHypothesisDigestItem(item) {
+  return {
+    id: item.memory.id,
+    domain: item.memory.domain,
+    type: item.memory.type,
+    strength: item.memory.strength,
+    scope: item.memory.scope,
+    portability: item.portability,
+    status: item.memory.status,
+    content: item.memory.content,
+    provisional: true,
+    score: item.score
+  };
+}
+function formatReviewReminders(pendingReview) {
+  if (pendingReview.newestCandidateId === void 0 || pendingReview.newestPreview === void 0) {
+    return [];
+  }
+  return [{
+    kind: "pending_review",
+    candidateId: pendingReview.newestCandidateId,
+    content: pendingReview.newestPreview
+  }];
 }
 async function markProjectDreamDueIfOverdue(projectId, config2) {
   if (!config2.memoryDreamCatchUpEnabled) {

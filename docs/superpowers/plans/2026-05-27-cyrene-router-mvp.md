@@ -902,7 +902,7 @@ git commit -m "feat: sync memory index after writes"
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-05-27-cyrene-router-mvp.md`
 
-- [ ] **Step 1: Update README data and commands**
+- [x] **Step 1: Update README data and commands**
 
 Modify `README.md`:
 
@@ -924,7 +924,7 @@ Explain in one concise paragraph:
 `memory.db` is the runtime SQLite/FTS retrieval index. JSONL files remain the audit/recovery source of truth, and generated Markdown profiles remain review/debug projections.
 ```
 
-- [ ] **Step 2: Run targeted test suite**
+- [x] **Step 2: Run targeted test suite**
 
 Run:
 
@@ -934,7 +934,7 @@ npx vitest run tests/memory-index.test.ts tests/codex-continuity-context.test.ts
 
 Expected: all targeted tests pass.
 
-- [ ] **Step 3: Run full verification**
+- [x] **Step 3: Run full verification**
 
 Run:
 
@@ -952,11 +952,11 @@ Expected:
 - `npm run build:plugin` exits 0.
 - Plugin validator exits 0.
 
-- [ ] **Step 4: Update plan checkboxes**
+- [x] **Step 4: Update plan checkboxes**
 
 Update this plan file’s checkboxes for tasks that were actually completed. Do not mark a task complete unless its verification command ran and passed.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 Run:
 
@@ -969,15 +969,15 @@ git commit -m "docs: document cyrene router mvp runtime index"
 
 ## Final Acceptance Checklist
 
-- [ ] `memory.db` initializes under `~/.cyrene/codex/memory.db`.
-- [ ] SQLite/FTS sync reads existing global and current project JSONL roots.
-- [ ] `globalMemory` contains only active global memory.
-- [ ] `projectMemory` contains only active current-project local memory.
-- [ ] Other-project `local_only` memory does not appear in current project digest.
-- [ ] `pendingHypotheses` contains pending candidates with `provisional: true`.
-- [ ] Pending candidates never appear in `memory.items` or `MODEL_PROFILE.md`.
-- [ ] `similarProjectHints` returns `[]`.
-- [ ] `responseStrategy` is a policy hint and does not override Codex personality.
-- [ ] SQLite unavailable/failure path falls back to JSONL retrieval.
-- [ ] Existing MCP tool names and schemas remain compatible.
-- [ ] `npm test`, `npm run typecheck`, `npm run build:plugin`, and plugin validator pass.
+- [x] `memory.db` initializes under `~/.cyrene/codex/memory.db`.
+- [x] SQLite/FTS sync reads existing global and current project JSONL roots.
+- [x] `globalMemory` contains only active global memory.
+- [x] `projectMemory` contains only active current-project local memory.
+- [x] Other-project `local_only` memory does not appear in current project digest.
+- [x] `pendingHypotheses` contains pending candidates with `provisional: true`.
+- [x] Pending candidates never appear in `memory.items` or `MODEL_PROFILE.md`.
+- [x] `similarProjectHints` returns `[]`.
+- [x] `responseStrategy` is a policy hint and does not override Codex personality.
+- [x] SQLite unavailable/failure path falls back to JSONL retrieval.
+- [x] Existing MCP tool names and schemas remain compatible.
+- [x] `npm test`, `npm run typecheck`, `npm run build:plugin`, and plugin validator pass.

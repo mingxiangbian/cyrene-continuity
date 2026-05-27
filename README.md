@@ -66,6 +66,7 @@ npm run dev -- codex install --dev
 npm run dev -- codex install --plugin
 npm run dev -- codex install-hook --stop
 npm run dev -- codex hook stop
+npm run dev -- codex memory db rebuild
 npm run dev -- codex memory dream --stage deep
 npm run dev -- codex memory maintenance
 npm run dev -- codex memory profile
@@ -86,9 +87,12 @@ This repo reads and writes existing local data under:
 ```txt
 ~/.cyrene/codex/global/memory/
 ~/.cyrene/codex/projects/<projectId>/memory/
+~/.cyrene/codex/memory.db
 ```
 
-It does not migrate or copy user memory data during install.
+It does not migrate or copy user memory data during install. `memory.db` is the
+runtime SQLite/FTS retrieval index. JSONL files remain the audit/recovery source
+of truth, and generated Markdown profiles remain review/debug projections.
 
 ## Review Policy
 
