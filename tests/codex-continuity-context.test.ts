@@ -300,6 +300,85 @@ describe('Codex continuity context', () => {
     )
   })
 
+  it('filters expired and non-memory session records from routed active memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-router-eligibility-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-router-eligibility-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(
+      join(projectMemoryRoot, 'index.jsonl'),
+      [
+        createMemory({
+          id: 'project-router-valid',
+          content: 'Project router valid memory remains visible.',
+          normalizedKey: 'project-router-valid'
+        }),
+        createMemory({
+          id: 'project-router-expired-session',
+          strength: 'session',
+          scope: 'session',
+          content: 'Expired session router memory must not enter coding digest.',
+          normalizedKey: 'expired-session-router-memory',
+          expiresAt: '2000-01-01T00:00:00.000Z'
+        })
+      ].map((memory) => JSON.stringify(memory)).join('\n') + '\n'
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'router memory',
+      task: 'coding'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).toEqual(['project-router-valid'])
+    expect(context.memory.items.map((item) => item.id)).not.toContain('project-router-expired-session')
+  })
+
+  it('applies routed active eligibility before SQLite result budgeting', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-router-budget-eligibility-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-router-budget-eligibility-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const expired = Array.from({ length: 12 }, (_, index) => createMemory({
+      id: `project-router-expired-session-${index}`,
+      strength: 'session',
+      scope: 'session',
+      content: `Router budget expired session memory ${index} must not consume SQLite selection slots.`,
+      normalizedKey: `router-budget-expired-session-${index}`,
+      expiresAt: '2000-01-01T00:00:00.000Z'
+    }))
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(
+      join(projectMemoryRoot, 'index.jsonl'),
+      [
+        ...expired,
+        createMemory({
+          id: 'project-router-budget-valid',
+          content: 'Router budget valid memory should remain visible.',
+          normalizedKey: 'router-budget-valid',
+          scores: {
+            evidenceStrength: 0.1,
+            stability: 0.1,
+            usefulness: 0.1,
+            safety: 0.1,
+            sensitivity: 0.9
+          }
+        })
+      ].map((memory) => JSON.stringify(memory)).join('\n') + '\n'
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'router budget memory',
+      task: 'coding'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).toEqual(['project-router-budget-valid'])
+  })
+
   it('returns pending hypotheses as provisional without mixing them into active memory', async () => {
     const home = await createTempDir('cyrene-codex-continuity-router-pending-home-')
     process.env.HOME = home
@@ -328,6 +407,38 @@ describe('Codex continuity context', () => {
     })
     expect(context.memory.items).toEqual([])
     expect(context.profile.content).not.toContain('Pending router candidate can guide clarification only.')
+  })
+
+  it('returns pending hypotheses from JSONL fallback when SQLite is unavailable', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-router-fallback-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-router-fallback-repo-')
+    const identity = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const pending = createPendingMemory()
+    await mkdir(memoryRoot, { recursive: true })
+    await mkdir(join(home, '.cyrene', 'codex', 'memory.db'), { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), JSON.stringify({
+      ...pending,
+      content: 'Fallback pending router candidate remains visible.',
+      normalizedKey: 'fallback-pending-router-candidate'
+    }) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'fallback pending router candidate',
+      task: 'memory'
+    })
+
+    expect(context.diagnostics?.memoryIndex?.available).toBe(false)
+    expect(context.pendingHypotheses).toEqual([
+      expect.objectContaining({
+        id: pending.id,
+        provisional: true,
+        status: 'pending'
+      })
+    ])
+    expect(context.memory.items).toEqual([])
   })
 })
 

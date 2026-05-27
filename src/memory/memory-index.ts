@@ -2,6 +2,8 @@ import { mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { estimateTokens } from '../token-counter.js'
+import { isMemoryEligibleForRetrieval } from './memory-retriever.js'
+import type { RetrieveMemoriesInput } from './memory-retriever.js'
 import {
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot
@@ -29,6 +31,7 @@ export interface MemoryIndexActiveQuery {
   currentProjectId: string
   query: string
   route: 'global' | 'project'
+  task?: NonNullable<RetrieveMemoriesInput['task']>
   maxItems: number
   maxTokens: number
 }
@@ -290,8 +293,23 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       route: input.route
     })
     const ftsMatches = this.queryFtsIds(input.query, 'active')
+    const task = input.task
+    const eligibleRows = task === undefined
+      ? structuredRows
+      : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+        row.payload as CyreneMemory,
+        {
+          cwd: '',
+          userCyreneDir: '',
+          query: input.query,
+          task,
+          maxItems: input.maxItems,
+          maxTokens: input.maxTokens
+        },
+        task
+      ))
     return selectWithinBudget(
-      structuredRows
+      eligibleRows
         .map((row) => ({
           memory: row.payload as CyreneMemory,
           score: scoreRow(row, input.query, ftsMatches),

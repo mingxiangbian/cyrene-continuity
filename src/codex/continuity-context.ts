@@ -3,11 +3,16 @@ import type { PrincipledDissentPolicy } from '../affect/types.js'
 import { createDefaultConfig } from '../config.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
 import type { IndexedActiveMemory, IndexedPendingMemory, MemoryIndexDiagnostics } from '../memory/memory-index.js'
-import { openMemoryIndexAdapter } from '../memory/memory-index.js'
-import { memoryRetrievalBudgetForTask, retrieveMemories } from '../memory/memory-retriever.js'
+import { deriveMemoryPortability, openMemoryIndexAdapter } from '../memory/memory-index.js'
+import {
+  isMemoryEligibleForRetrieval,
+  memoryRetrievalBudgetForTask,
+  retrieveMemories
+} from '../memory/memory-retriever.js'
 import type { RetrievedMemory, RetrieveMemoriesInput } from '../memory/memory-retriever.js'
-import { readActiveMemoriesFromRoot } from '../memory/memory-store.js'
-import type { CyreneMemory } from '../memory/types.js'
+import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot } from '../memory/memory-store.js'
+import type { CyreneMemory, PendingMemory } from '../memory/types.js'
+import { estimateTokens } from '../token-counter.js'
 import { codexMemoryDbPath, codexMemoryIndexRoots } from './codex-memory-index.js'
 import {
   codexGlobalMemoryRoot,
@@ -230,13 +235,14 @@ async function retrieveRoutedMemory(input: {
     const roots = await codexMemoryIndexRoots(input.projectId)
     const diagnostics = await adapter.rebuildFromRoots({ roots })
     if (!diagnostics.available) {
-      return fallbackRoutedMemory(input.fallback, diagnostics)
+      return fallbackRoutedMemory(input.fallback, diagnostics, input.projectId)
     }
     const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
         query: input.query,
         route: 'global',
+        task: input.fallback.task,
         maxItems: 8,
         maxTokens: 500
       }),
@@ -244,6 +250,7 @@ async function retrieveRoutedMemory(input: {
         currentProjectId: input.projectId,
         query: input.query,
         route: 'project',
+        task: input.fallback.task,
         maxItems: 12,
         maxTokens: 900
       }),
@@ -254,13 +261,23 @@ async function retrieveRoutedMemory(input: {
         maxTokens: 400
       })
     ])
-    return { globalMemory, projectMemory, pendingHypotheses, diagnostics }
+    const task = input.fallback.task ?? 'conversation'
+    return {
+      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
+      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
+      pendingHypotheses,
+      diagnostics
+    }
   } catch (error) {
-    return fallbackRoutedMemory(input.fallback, {
-      available: false,
-      dbPath: codexMemoryDbPath(),
-      reason: error instanceof Error ? error.message : String(error)
-    })
+    return fallbackRoutedMemory(
+      input.fallback,
+      {
+        available: false,
+        dbPath: codexMemoryDbPath(),
+        reason: error instanceof Error ? error.message : String(error)
+      },
+      input.projectId
+    )
   } finally {
     adapter.close()
   }
@@ -268,15 +285,91 @@ async function retrieveRoutedMemory(input: {
 
 async function fallbackRoutedMemory(
   input: RetrieveMemoriesInput,
-  diagnostics: MemoryIndexDiagnostics
+  diagnostics: MemoryIndexDiagnostics,
+  projectId: string
 ): Promise<RoutedMemoryResult> {
   const memories = await retrieveMemories(input)
   return {
     globalMemory: memories.filter(({ memory }) => memory.scope === 'global'),
     projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
-    pendingHypotheses: [],
+    pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
     diagnostics
   }
+}
+
+async function readFallbackPendingHypotheses(input: RetrieveMemoriesInput, projectId: string): Promise<IndexedPendingMemory[]> {
+  const roots = input.memoryRoots ?? (input.memoryRoot === undefined ? undefined : [input.memoryRoot])
+  if (roots === undefined) {
+    return []
+  }
+  const pending = (await Promise.all(roots.map((root) => readPendingMemoriesFromRoot(root)))).flat()
+  return selectPendingWithinBudget(
+    pending
+      .map((memory) => ({
+        memory,
+        score: scorePendingMemory(memory, input.query),
+        portability: deriveMemoryPortability(memory),
+        homeProjectId: memory.scope === 'global' ? null : projectId,
+        provisional: true as const
+      }))
+      .filter((item) => input.query.trim() === '' || item.score > 0)
+      .sort(comparePendingHypotheses),
+    6,
+    400
+  )
+}
+
+function scorePendingMemory(memory: PendingMemory, query: string): number {
+  const tokens = tokenize(query)
+  if (tokens.length === 0) {
+    return 0.2
+  }
+  const haystack = tokenize([
+    memory.content,
+    memory.normalizedKey,
+    memory.domain,
+    memory.type,
+    memory.strength,
+    ...memory.tags
+  ].join(' '))
+  const matches = tokens.filter((token) => haystack.some((candidate) => candidate.includes(token)))
+  return matches.length / tokens.length
+}
+
+function comparePendingHypotheses(left: IndexedPendingMemory, right: IndexedPendingMemory): number {
+  const scoreDiff = right.score - left.score
+  if (scoreDiff !== 0) {
+    return scoreDiff
+  }
+  return left.memory.id.localeCompare(right.memory.id)
+}
+
+function selectPendingWithinBudget(items: IndexedPendingMemory[], maxItems: number, maxTokens: number): IndexedPendingMemory[] {
+  const selected: IndexedPendingMemory[] = []
+  let tokenCount = 0
+  for (const item of items) {
+    if (selected.length >= maxItems) {
+      break
+    }
+    const itemTokens = estimateTokens(item.memory.content)
+    if (itemTokens > maxTokens) {
+      continue
+    }
+    if (tokenCount + itemTokens > maxTokens) {
+      break
+    }
+    selected.push(item)
+    tokenCount += itemTokens
+  }
+  return selected
+}
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
 }
 
 function toRoutedMemoryDigestItem(item: IndexedActiveMemory | RetrievedMemory): RoutedMemoryDigestItem {

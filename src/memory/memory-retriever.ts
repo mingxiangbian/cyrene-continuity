@@ -39,7 +39,7 @@ export async function retrieveMemories(input: RetrieveMemoriesInput): Promise<Re
   const memories = await readInputMemories(input)
   const task = input.task ?? 'conversation'
   const queryTokens = tokenize(input.query)
-  const filtered = memories.filter((memory) => isEligible(memory, input, task))
+  const filtered = memories.filter((memory) => isMemoryEligibleForRetrieval(memory, input, task))
   const scored = filtered
     .map((memory) => ({ memory, score: scoreMemory(memory, queryTokens) }))
     .filter((item) => input.query.trim() === '' || item.score > 0)
@@ -84,7 +84,7 @@ export function formatMemoryContext(memories: RetrievedMemory[]): string {
   return ['## Relevant Memory', ...memories.map(({ memory }) => `- ${memory.content}`)].join('\n')
 }
 
-function isEligible(
+export function isMemoryEligibleForRetrieval(
   memory: CyreneMemory,
   input: RetrieveMemoriesInput,
   task: NonNullable<RetrieveMemoriesInput['task']>

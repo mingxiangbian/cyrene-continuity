@@ -10401,6 +10401,130 @@ function estimateTokens(text) {
   return Math.ceil(trimmed.length / 4);
 }
 
+// src/memory/memory-retriever.ts
+function memoryRetrievalBudgetForTask(task) {
+  if (task === "coding" || task === "debugging") return { maxItems: 12, maxTokens: 2e3 };
+  if (task === "planning") return { maxItems: 16, maxTokens: 3e3 };
+  if (task === "memory") return { maxItems: 24, maxTokens: 4e3 };
+  return { maxItems: 10, maxTokens: 1500 };
+}
+async function retrieveMemories(input) {
+  const memories = await readInputMemories(input);
+  const task = input.task ?? "conversation";
+  const queryTokens = tokenize(input.query);
+  const filtered = memories.filter((memory) => isMemoryEligibleForRetrieval(memory, input, task));
+  const scored = filtered.map((memory) => ({ memory, score: scoreMemory(memory, queryTokens) })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareRetrievedMemories);
+  const selected = [];
+  let tokenCount = 0;
+  for (const item of scored) {
+    if (selected.length >= input.maxItems) {
+      break;
+    }
+    const itemTokens = estimateTokens(item.memory.content);
+    if (selected.length > 0 && tokenCount + itemTokens > input.maxTokens) {
+      break;
+    }
+    selected.push(item);
+    tokenCount += itemTokens;
+  }
+  return selected;
+}
+async function readInputMemories(input) {
+  const roots = input.memoryRoots ?? (input.memoryRoot === void 0 ? void 0 : [input.memoryRoot]);
+  const memories = roots === void 0 ? await readActiveMemories(input.cwd) : (await Promise.all(roots.map((root) => readActiveMemoriesFromRoot(root)))).flat();
+  return dedupeMemories([...input.extraMemories ?? [], ...memories]);
+}
+function dedupeMemories(memories) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const memory of memories) {
+    byKey.set(memory.normalizedKey || memory.id, memory);
+  }
+  return [...byKey.values()];
+}
+function isMemoryEligibleForRetrieval(memory, input, task) {
+  if (memory.status !== "active") {
+    return false;
+  }
+  if (input.domains !== void 0 && !input.domains.includes(memory.domain)) {
+    return false;
+  }
+  if (input.types !== void 0 && !input.types.includes(memory.type)) {
+    return false;
+  }
+  if (input.strengths !== void 0 && !input.strengths.includes(memory.strength)) {
+    return false;
+  }
+  if (input.scopes !== void 0 && !input.scopes.includes(memory.scope)) {
+    return false;
+  }
+  if (memory.expiresAt !== void 0 && memory.expiresAt <= (/* @__PURE__ */ new Date()).toISOString()) {
+    return false;
+  }
+  const defaultDomains = defaultDomainsForTask(task);
+  if (!defaultDomains.includes(memory.domain)) {
+    return false;
+  }
+  if (task === "conversation" && (memory.scores.safety < 0.8 || memory.scores.sensitivity > 0.6)) {
+    return false;
+  }
+  if (memory.strength === "session" && task !== "memory") {
+    return false;
+  }
+  return true;
+}
+function defaultDomainsForTask(task) {
+  if (task === "coding" || task === "debugging") {
+    return ["project", "procedural", "system"];
+  }
+  if (task === "planning") {
+    return ["project", "procedural", "personal", "relationship"];
+  }
+  if (task === "conversation") {
+    return ["personal", "relationship", "affective", "procedural"];
+  }
+  return ["project", "personal", "relationship", "affective", "procedural", "system"];
+}
+function scoreMemory(memory, queryTokens) {
+  const relevance = queryTokens.length === 0 ? 0.2 : relevanceScore(memory, queryTokens);
+  const recency = memory.lastUsedAt === void 0 ? 0.5 : 1;
+  const sensitivityPenalty = memory.scores.sensitivity > 0.3 ? memory.scores.sensitivity * (memory.domain === "affective" ? 0.35 : 0.2) : 0;
+  return relevance * 0.35 + memory.scores.usefulness * 0.25 + memory.scores.evidenceStrength * 0.2 + memory.scores.safety * 0.1 + recency * 0.1 - sensitivityPenalty;
+}
+function relevanceScore(memory, queryTokens) {
+  const haystack = tokenize([
+    memory.content,
+    memory.normalizedKey,
+    memory.domain,
+    memory.type,
+    memory.strength,
+    ...memory.tags
+  ].join(" "));
+  const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
+  return matches.length / queryTokens.length;
+}
+function compareRetrievedMemories(left, right) {
+  const scoreDiff = right.score - left.score;
+  if (scoreDiff !== 0) {
+    return scoreDiff;
+  }
+  const domainDiff = domainPriority(left.memory.domain) - domainPriority(right.memory.domain);
+  if (domainDiff !== 0) {
+    return domainDiff;
+  }
+  return left.memory.id.localeCompare(right.memory.id);
+}
+function domainPriority(domain) {
+  if (domain === "procedural") return 0;
+  if (domain === "project") return 1;
+  if (domain === "system") return 2;
+  if (domain === "personal") return 3;
+  if (domain === "relationship") return 4;
+  return 5;
+}
+function tokenize(text) {
+  return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
+}
+
 // src/memory/memory-index.ts
 async function openMemoryIndexAdapter(input) {
   if (input.forceUnavailableReason !== void 0) {
@@ -10576,8 +10700,21 @@ var SqliteMemoryIndexAdapter = class {
       route: input.route
     });
     const ftsMatches = this.queryFtsIds(input.query, "active");
+    const task = input.task;
+    const eligibleRows = task === void 0 ? structuredRows : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+      row.payload,
+      {
+        cwd: "",
+        userCyreneDir: "",
+        query: input.query,
+        task,
+        maxItems: input.maxItems,
+        maxTokens: input.maxTokens
+      },
+      task
+    ));
     return selectWithinBudget(
-      structuredRows.map((row) => ({
+      eligibleRows.map((row) => ({
         memory: row.payload,
         score: scoreRow(row, input.query, ftsMatches),
         portability: row.portability,
@@ -10835,8 +10972,8 @@ function readString(value, field) {
   return value;
 }
 function scoreRow(row, query, ftsMatches) {
-  const tokens = tokenize(query);
-  const relevance = tokens.length === 0 ? 0.2 : relevanceScore(row, tokens);
+  const tokens = tokenize2(query);
+  const relevance = tokens.length === 0 ? 0.2 : relevanceScore2(row, tokens);
   const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0;
   const safety = typeof row.scores.safety === "number" ? row.scores.safety : 0.8;
   const usefulness = typeof row.scores.usefulness === "number" ? row.scores.usefulness : 0.7;
@@ -10844,8 +10981,8 @@ function scoreRow(row, query, ftsMatches) {
   const sensitivity = typeof row.scores.sensitivity === "number" ? row.scores.sensitivity : 0.2;
   return relevance * 0.45 + usefulness * 0.2 + evidence * 0.15 + safety * 0.1 + ftsBoost - sensitivity * 0.1;
 }
-function relevanceScore(row, queryTokens) {
-  const haystack = tokenize([
+function relevanceScore2(row, queryTokens) {
+  const haystack = tokenize2([
     row.content,
     row.normalizedKey,
     row.domain,
@@ -10882,9 +11019,9 @@ function selectWithinBudget(items, maxItems, maxTokens) {
   return selected;
 }
 function ftsExpression(text) {
-  return tokenize(text).map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
+  return tokenize2(text).map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
 }
-function tokenize(text) {
+function tokenize2(text) {
   return text.toLowerCase().match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) ?? [];
 }
 
@@ -28556,130 +28693,6 @@ function shouldChallenge(input) {
   );
 }
 
-// src/memory/memory-retriever.ts
-function memoryRetrievalBudgetForTask(task) {
-  if (task === "coding" || task === "debugging") return { maxItems: 12, maxTokens: 2e3 };
-  if (task === "planning") return { maxItems: 16, maxTokens: 3e3 };
-  if (task === "memory") return { maxItems: 24, maxTokens: 4e3 };
-  return { maxItems: 10, maxTokens: 1500 };
-}
-async function retrieveMemories(input) {
-  const memories = await readInputMemories(input);
-  const task = input.task ?? "conversation";
-  const queryTokens = tokenize2(input.query);
-  const filtered = memories.filter((memory) => isEligible(memory, input, task));
-  const scored = filtered.map((memory) => ({ memory, score: scoreMemory(memory, queryTokens) })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareRetrievedMemories);
-  const selected = [];
-  let tokenCount = 0;
-  for (const item of scored) {
-    if (selected.length >= input.maxItems) {
-      break;
-    }
-    const itemTokens = estimateTokens(item.memory.content);
-    if (selected.length > 0 && tokenCount + itemTokens > input.maxTokens) {
-      break;
-    }
-    selected.push(item);
-    tokenCount += itemTokens;
-  }
-  return selected;
-}
-async function readInputMemories(input) {
-  const roots = input.memoryRoots ?? (input.memoryRoot === void 0 ? void 0 : [input.memoryRoot]);
-  const memories = roots === void 0 ? await readActiveMemories(input.cwd) : (await Promise.all(roots.map((root) => readActiveMemoriesFromRoot(root)))).flat();
-  return dedupeMemories([...input.extraMemories ?? [], ...memories]);
-}
-function dedupeMemories(memories) {
-  const byKey = /* @__PURE__ */ new Map();
-  for (const memory of memories) {
-    byKey.set(memory.normalizedKey || memory.id, memory);
-  }
-  return [...byKey.values()];
-}
-function isEligible(memory, input, task) {
-  if (memory.status !== "active") {
-    return false;
-  }
-  if (input.domains !== void 0 && !input.domains.includes(memory.domain)) {
-    return false;
-  }
-  if (input.types !== void 0 && !input.types.includes(memory.type)) {
-    return false;
-  }
-  if (input.strengths !== void 0 && !input.strengths.includes(memory.strength)) {
-    return false;
-  }
-  if (input.scopes !== void 0 && !input.scopes.includes(memory.scope)) {
-    return false;
-  }
-  if (memory.expiresAt !== void 0 && memory.expiresAt <= (/* @__PURE__ */ new Date()).toISOString()) {
-    return false;
-  }
-  const defaultDomains = defaultDomainsForTask(task);
-  if (!defaultDomains.includes(memory.domain)) {
-    return false;
-  }
-  if (task === "conversation" && (memory.scores.safety < 0.8 || memory.scores.sensitivity > 0.6)) {
-    return false;
-  }
-  if (memory.strength === "session" && task !== "memory") {
-    return false;
-  }
-  return true;
-}
-function defaultDomainsForTask(task) {
-  if (task === "coding" || task === "debugging") {
-    return ["project", "procedural", "system"];
-  }
-  if (task === "planning") {
-    return ["project", "procedural", "personal", "relationship"];
-  }
-  if (task === "conversation") {
-    return ["personal", "relationship", "affective", "procedural"];
-  }
-  return ["project", "personal", "relationship", "affective", "procedural", "system"];
-}
-function scoreMemory(memory, queryTokens) {
-  const relevance = queryTokens.length === 0 ? 0.2 : relevanceScore2(memory, queryTokens);
-  const recency = memory.lastUsedAt === void 0 ? 0.5 : 1;
-  const sensitivityPenalty = memory.scores.sensitivity > 0.3 ? memory.scores.sensitivity * (memory.domain === "affective" ? 0.35 : 0.2) : 0;
-  return relevance * 0.35 + memory.scores.usefulness * 0.25 + memory.scores.evidenceStrength * 0.2 + memory.scores.safety * 0.1 + recency * 0.1 - sensitivityPenalty;
-}
-function relevanceScore2(memory, queryTokens) {
-  const haystack = tokenize2([
-    memory.content,
-    memory.normalizedKey,
-    memory.domain,
-    memory.type,
-    memory.strength,
-    ...memory.tags
-  ].join(" "));
-  const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches.length / queryTokens.length;
-}
-function compareRetrievedMemories(left, right) {
-  const scoreDiff = right.score - left.score;
-  if (scoreDiff !== 0) {
-    return scoreDiff;
-  }
-  const domainDiff = domainPriority(left.memory.domain) - domainPriority(right.memory.domain);
-  if (domainDiff !== 0) {
-    return domainDiff;
-  }
-  return left.memory.id.localeCompare(right.memory.id);
-}
-function domainPriority(domain) {
-  if (domain === "procedural") return 0;
-  if (domain === "project") return 1;
-  if (domain === "system") return 2;
-  if (domain === "personal") return 3;
-  if (domain === "relationship") return 4;
-  return 5;
-}
-function tokenize2(text) {
-  return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
-}
-
 // src/codex/continuity-context.ts
 async function getCodexContinuityContext(input) {
   const project = await identifyCodexProject(input.cwd);
@@ -28788,13 +28801,14 @@ async function retrieveRoutedMemory(input) {
     const roots = await codexMemoryIndexRoots(input.projectId);
     const diagnostics = await adapter.rebuildFromRoots({ roots });
     if (!diagnostics.available) {
-      return fallbackRoutedMemory(input.fallback, diagnostics);
+      return fallbackRoutedMemory(input.fallback, diagnostics, input.projectId);
     }
     const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
         query: input.query,
         route: "global",
+        task: input.fallback.task,
         maxItems: 8,
         maxTokens: 500
       }),
@@ -28802,6 +28816,7 @@ async function retrieveRoutedMemory(input) {
         currentProjectId: input.projectId,
         query: input.query,
         route: "project",
+        task: input.fallback.task,
         maxItems: 12,
         maxTokens: 900
       }),
@@ -28812,25 +28827,98 @@ async function retrieveRoutedMemory(input) {
         maxTokens: 400
       })
     ]);
-    return { globalMemory, projectMemory, pendingHypotheses, diagnostics };
+    const task = input.fallback.task ?? "conversation";
+    return {
+      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
+      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, task)),
+      pendingHypotheses,
+      diagnostics
+    };
   } catch (error2) {
-    return fallbackRoutedMemory(input.fallback, {
-      available: false,
-      dbPath: codexMemoryDbPath(),
-      reason: error2 instanceof Error ? error2.message : String(error2)
-    });
+    return fallbackRoutedMemory(
+      input.fallback,
+      {
+        available: false,
+        dbPath: codexMemoryDbPath(),
+        reason: error2 instanceof Error ? error2.message : String(error2)
+      },
+      input.projectId
+    );
   } finally {
     adapter.close();
   }
 }
-async function fallbackRoutedMemory(input, diagnostics) {
+async function fallbackRoutedMemory(input, diagnostics, projectId) {
   const memories = await retrieveMemories(input);
   return {
     globalMemory: memories.filter(({ memory }) => memory.scope === "global"),
     projectMemory: memories.filter(({ memory }) => memory.scope !== "global"),
-    pendingHypotheses: [],
+    pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
     diagnostics
   };
+}
+async function readFallbackPendingHypotheses(input, projectId) {
+  const roots = input.memoryRoots ?? (input.memoryRoot === void 0 ? void 0 : [input.memoryRoot]);
+  if (roots === void 0) {
+    return [];
+  }
+  const pending = (await Promise.all(roots.map((root) => readPendingMemoriesFromRoot(root)))).flat();
+  return selectPendingWithinBudget(
+    pending.map((memory) => ({
+      memory,
+      score: scorePendingMemory(memory, input.query),
+      portability: deriveMemoryPortability(memory),
+      homeProjectId: memory.scope === "global" ? null : projectId,
+      provisional: true
+    })).filter((item) => input.query.trim() === "" || item.score > 0).sort(comparePendingHypotheses),
+    6,
+    400
+  );
+}
+function scorePendingMemory(memory, query) {
+  const tokens = tokenize3(query);
+  if (tokens.length === 0) {
+    return 0.2;
+  }
+  const haystack = tokenize3([
+    memory.content,
+    memory.normalizedKey,
+    memory.domain,
+    memory.type,
+    memory.strength,
+    ...memory.tags
+  ].join(" "));
+  const matches = tokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
+  return matches.length / tokens.length;
+}
+function comparePendingHypotheses(left, right) {
+  const scoreDiff = right.score - left.score;
+  if (scoreDiff !== 0) {
+    return scoreDiff;
+  }
+  return left.memory.id.localeCompare(right.memory.id);
+}
+function selectPendingWithinBudget(items, maxItems, maxTokens) {
+  const selected = [];
+  let tokenCount = 0;
+  for (const item of items) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    const itemTokens = estimateTokens(item.memory.content);
+    if (itemTokens > maxTokens) {
+      continue;
+    }
+    if (tokenCount + itemTokens > maxTokens) {
+      break;
+    }
+    selected.push(item);
+    tokenCount += itemTokens;
+  }
+  return selected;
+}
+function tokenize3(text) {
+  return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 function toRoutedMemoryDigestItem(item) {
   return {
