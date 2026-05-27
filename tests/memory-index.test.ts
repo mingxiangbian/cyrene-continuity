@@ -106,9 +106,25 @@ describe('memory SQLite index', () => {
         domain: 'procedural',
         content: 'Global router guidance applies everywhere.',
         normalizedKey: 'global-router-guidance'
+      }),
+      activeMemory({
+        id: 'global-2',
+        scope: 'global',
+        domain: 'procedural',
+        portability: 'local_only',
+        content: 'Global local-only router guidance must not enter the global route.',
+        normalizedKey: 'global-local-only-router-guidance'
       })
     ])
-    await writeJsonLines(join(projectRoot, 'index.jsonl'), [activeMemory({ id: 'project-a-1' })])
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({ id: 'project-a-1' }),
+      activeMemory({
+        id: 'project-a-2',
+        portability: 'project_family',
+        content: 'Project-family router memory waits for a later phase.',
+        normalizedKey: 'project-family-router-later'
+      })
+    ])
     await writeJsonLines(join(otherProjectRoot, 'index.jsonl'), [
       activeMemory({
         id: 'project-b-1',
@@ -150,10 +166,90 @@ describe('memory SQLite index', () => {
     expect(global.map((item) => item.memory.id)).toEqual(['global-1'])
     expect(global[0]?.portability).toBe('global')
     expect(project.map((item) => item.memory.id)).toEqual(['project-a-1'])
+    expect(project.map((item) => item.memory.id)).not.toContain('project-a-2')
     expect(project.map((item) => item.memory.id)).not.toContain('project-b-1')
     expect(project[0]?.portability).toBe('local_only')
     expect(pending.map((item) => item.memory.id)).toEqual(['pending-1'])
     expect(pending[0]?.provisional).toBe(true)
+  })
+
+  it('returns global and current project pending hypotheses without portability filtering', async () => {
+    const root = await createTempDir('cyrene-memory-index-pending-')
+    const globalRoot = join(root, 'global', 'memory')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    const otherProjectRoot = join(root, 'projects', 'project-b', 'memory')
+    await mkdir(globalRoot, { recursive: true })
+    await mkdir(projectRoot, { recursive: true })
+    await mkdir(otherProjectRoot, { recursive: true })
+    await writeJsonLines(join(globalRoot, 'pending.jsonl'), [
+      pendingMemory({
+        id: 'global-pending-1',
+        scope: 'global',
+        portability: 'local_only',
+        content: 'Global pending router candidate remains provisional.',
+        normalizedKey: 'global-pending-router-candidate'
+      })
+    ])
+    await writeJsonLines(join(projectRoot, 'pending.jsonl'), [
+      pendingMemory({
+        id: 'project-pending-1',
+        portability: 'project_family',
+        content: 'Project pending router family candidate remains provisional.',
+        normalizedKey: 'project-pending-router-family-candidate'
+      })
+    ])
+    await writeJsonLines(join(otherProjectRoot, 'pending.jsonl'), [
+      pendingMemory({
+        id: 'other-project-pending-1',
+        content: 'Other project pending router candidate must not leak.',
+        normalizedKey: 'other-project-pending-router-candidate'
+      })
+    ])
+
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [
+        { memoryRoot: globalRoot, projectId: null, scope: 'global' },
+        { memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' },
+        { memoryRoot: otherProjectRoot, projectId: 'project-b', scope: 'project' }
+      ]
+    })
+
+    const pending = await adapter.queryPending({
+      currentProjectId: 'project-a',
+      query: 'pending router candidate',
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(pending.map((item) => item.memory.id)).toEqual(['global-pending-1', 'project-pending-1'])
+    expect(pending.every((item) => item.provisional)).toBe(true)
+  })
+
+  it('enforces maxTokens before selecting the first result', async () => {
+    const root = await createTempDir('cyrene-memory-index-budget-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'project-a-long',
+        content: 'Router '.repeat(40),
+        normalizedKey: 'router-long-budget'
+      })
+    ])
+
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    await expect(adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'router',
+      route: 'project',
+      maxItems: 10,
+      maxTokens: 1
+    })).resolves.toEqual([])
   })
 
   it('keeps FTS scoring available across query initialization', async () => {

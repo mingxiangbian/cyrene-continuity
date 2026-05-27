@@ -111,11 +111,24 @@ export async function openMemoryIndexAdapter(input: OpenMemoryIndexAdapterInput)
   }
 
   try {
-    const require = createRequire(import.meta.url)
-    const sqlite = require('node:sqlite') as { DatabaseSync: new (path: string) => DatabaseLike }
-    return new SqliteMemoryIndexAdapter(input.dbPath, sqlite.DatabaseSync as new (path: string) => DatabaseLike)
+    return new SqliteMemoryIndexAdapter(input.dbPath, await loadSqliteDatabaseSync())
   } catch (error) {
     return new UnavailableMemoryIndexAdapter(input.dbPath, error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function loadSqliteDatabaseSync(): Promise<new (path: string) => DatabaseLike> {
+  try {
+    const sqlite = await import('node:sqlite') as unknown as { DatabaseSync: new (path: string) => DatabaseLike }
+    return sqlite.DatabaseSync
+  } catch (importError) {
+    try {
+      const require = createRequire(import.meta.url)
+      const sqlite = require('node:sqlite') as { DatabaseSync: new (path: string) => DatabaseLike }
+      return sqlite.DatabaseSync
+    } catch {
+      throw importError
+    }
   }
 }
 
@@ -487,7 +500,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       conditions.push('home_project_id = ?', "portability = 'local_only'")
       values.push(input.currentProjectId)
     } else {
-      conditions.push("((scope = 'global' and portability = 'global') or home_project_id = ?)")
+      conditions.push("(scope = 'global' or home_project_id = ?)")
       values.push(input.currentProjectId)
     }
     const rows = db.prepare(`
@@ -598,7 +611,10 @@ function selectWithinBudget<T extends { memory: { content: string } }>(items: T[
       break
     }
     const itemTokens = estimateTokens(item.memory.content)
-    if (selected.length > 0 && tokenCount + itemTokens > maxTokens) {
+    if (itemTokens > maxTokens) {
+      continue
+    }
+    if (tokenCount + itemTokens > maxTokens) {
       break
     }
     selected.push(item)
