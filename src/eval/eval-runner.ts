@@ -115,7 +115,7 @@ function containsAbsolutePath(content: string): boolean {
 }
 
 function containsRawRemote(content: string): boolean {
-  return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|https:\/\/[A-Za-z0-9.-]+\/[^\s`'")]+(?:\.git)?\b)/.test(content)
+  return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|(?:https?|git|ssh):\/\/(?:git@)?[A-Za-z0-9.-]+\/[^\s`'")]+(?:\.git)?\b)/.test(content)
 }
 
 function containsSecretLikeValue(content: string): boolean {

@@ -133,4 +133,21 @@ describe('similar hints eval gate', () => {
       { memoryId: 'gitlab-https-no-suffix', reason: 'content contains raw remote' }
     ]))
   })
+
+  it('reports raw remotes using ssh git and http protocols', () => {
+    const result = runSimilarHintsEvalGate([
+      candidate({ id: 'ssh-url', content: 'Clone ssh://git@github.com/org/private.git.' }),
+      candidate({ id: 'git-url', content: 'Clone git://github.com/org/private.git.' }),
+      candidate({ id: 'http-url', content: 'Clone http://github.com/org/private.git.' })
+    ])
+    const boundary = result.results.find((check) => check.name === 'similar_hint_boundary_eval')
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(boundary?.findings).toEqual(expect.arrayContaining([
+      { memoryId: 'ssh-url', reason: 'content contains raw remote' },
+      { memoryId: 'git-url', reason: 'content contains raw remote' },
+      { memoryId: 'http-url', reason: 'content contains raw remote' }
+    ]))
+  })
 })
