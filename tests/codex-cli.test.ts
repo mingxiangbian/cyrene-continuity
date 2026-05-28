@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { reviewHashForSimilarHintMemory } from '../src/codex/similar-hints-review.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
@@ -47,7 +48,7 @@ function currentRepoMcpConfigLines(): string[] {
   ]
 }
 
-function createPending(): PendingMemory {
+function createPending(overrides: Partial<PendingMemory> = {}): PendingMemory {
   return {
     id: 'cli-pending-1',
     domain: 'procedural',
@@ -73,7 +74,8 @@ function createPending(): PendingMemory {
     firstSeenAt: '2026-05-25T00:00:00.000Z',
     lastSeenAt: '2026-05-25T01:00:00.000Z',
     expiresAt: '2026-06-24T00:00:00.000Z',
-    tags: ['cli']
+    tags: ['cli'],
+    ...overrides
   }
 }
 
@@ -100,6 +102,15 @@ function createActive(): CyreneMemory {
     updatedAt: '2026-05-25T00:00:00.000Z',
     tags: ['cli']
   }
+}
+
+async function seedCliPending(cwd: string, pending: PendingMemory | PendingMemory[]): Promise<string> {
+  const identity = await identifyCodexProject(cwd)
+  const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+  const values = Array.isArray(pending) ? pending : [pending]
+  await mkdir(memoryRoot, { recursive: true })
+  await writeFile(join(memoryRoot, 'pending.jsonl'), values.map((item) => JSON.stringify(item)).join('\n') + '\n', 'utf8')
+  return memoryRoot
 }
 
 describe('cyrene-continuity codex CLI', () => {
@@ -970,6 +981,124 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('mcp command freshness: current repo')
     expect(result.stdout).toContain('global pending: 0')
     expect(result.stdout).toContain('project pending: 1')
+  })
+
+  it('memory review lists pending candidates with review metadata', async () => {
+    const home = await createTempDir('cyrene-codex-cli-review-home-')
+    const repo = await createTempDir('cyrene-codex-cli-review-project-')
+    process.env.HOME = home
+    const candidate = createPending()
+    await seedCliPending(repo, candidate)
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'review'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('Cyrene Pending Memory Review')
+    expect(result.stdout).toContain('id: cli-pending-1')
+    expect(result.stdout).toContain('recommendation: promote')
+    expect(result.stdout).toContain('candidate kind: workflow_rule')
+    expect(result.stdout).toContain('evidence count: 2')
+    expect(result.stdout).toContain(`review hash: ${reviewHashForPendingMemory(candidate)}`)
+    expect(result.stdout).toContain(
+      `suggested action: cyrene-continuity codex memory approve cli-pending-1 --review-hash ${reviewHashForPendingMemory(candidate)}`
+    )
+  })
+
+  it('memory approve/reject/edit/defer route through hash-checked review functions', async () => {
+    const home = await createTempDir('cyrene-codex-cli-review-actions-home-')
+    const repo = await createTempDir('cyrene-codex-cli-review-actions-project-')
+    process.env.HOME = home
+    const editCandidate = createPending({ id: 'cli-edit-1', normalizedKey: 'cli-edit-1' })
+    const deferCandidate = createPending({ id: 'cli-defer-1', normalizedKey: 'cli-defer-1' })
+    const rejectCandidate = createPending({ id: 'cli-reject-1', normalizedKey: 'cli-reject-1' })
+    const approveCandidate = createPending({ id: 'cli-approve-1', normalizedKey: 'cli-approve-1' })
+    const memoryRoot = await seedCliPending(repo, [editCandidate, deferCandidate, rejectCandidate, approveCandidate])
+
+    const edit = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'edit',
+        'cli-edit-1',
+        '--review-hash',
+        reviewHashForPendingMemory(editCandidate),
+        '--content',
+        'Edited CLI pending memory.'
+      ],
+      { env: cliEnv(home) }
+    )
+    expect(JSON.parse(edit.stdout).result.action).toBe('edit')
+
+    const defer = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'defer',
+        'cli-defer-1',
+        '--review-hash',
+        reviewHashForPendingMemory(deferCandidate),
+        '--days',
+        '14'
+      ],
+      { env: cliEnv(home) }
+    )
+    expect(JSON.parse(defer.stdout).result.action).toBe('defer')
+
+    const reject = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'reject',
+        'cli-reject-1',
+        '--review-hash',
+        reviewHashForPendingMemory(rejectCandidate)
+      ],
+      { env: cliEnv(home) }
+    )
+    expect(JSON.parse(reject.stdout).result.action).toBe('reject')
+
+    const approve = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'approve',
+        'cli-approve-1',
+        '--review-hash',
+        reviewHashForPendingMemory(approveCandidate)
+      ],
+      { env: cliEnv(home) }
+    )
+    expect(JSON.parse(approve.stdout).result.action).toBe('promote')
+
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('Edited CLI pending memory.')
+    expect(pending).toContain('cli-defer-1')
+    expect(pending).not.toContain('cli-reject-1')
+    expect(pending).not.toContain('cli-approve-1')
   })
 
   it('runs memory dream apply from the CLI without promoting unapproved pending memory', async () => {

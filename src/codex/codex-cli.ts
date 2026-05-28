@@ -4,6 +4,13 @@ import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-i
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
 import { rebuildCodexMemoryIndex } from './codex-memory-index.js'
+import {
+  formatCodexMemoryReview,
+  runCodexMemoryApprove,
+  runCodexMemoryDefer,
+  runCodexMemoryEdit,
+  runCodexMemoryReject
+} from './codex-memory-review-cli.js'
 import { formatCodexMemoryStatus } from './codex-memory-status.js'
 import { readDreamReport } from './dream-artifacts.js'
 import {
@@ -77,6 +84,57 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
+  if (command === 'memory' && input.args[1] === 'review') {
+    process.stdout.write(await formatCodexMemoryReview({
+      cwd: input.cwd,
+      limit: parseOptionalPositiveInteger(input.args, '--limit')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'approve') {
+    process.stdout.write(await runCodexMemoryApprove({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, 'pending memory id'),
+      reviewHash: parseRequiredOption(input.args, '--review-hash', 'pending review hash'),
+      reason: parseOptionalOption(input.args, '--reason')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'reject') {
+    process.stdout.write(await runCodexMemoryReject({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, 'pending memory id'),
+      reviewHash: parseRequiredOption(input.args, '--review-hash', 'pending review hash'),
+      reason: parseOptionalOption(input.args, '--reason')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'edit') {
+    process.stdout.write(await runCodexMemoryEdit({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, 'pending memory id'),
+      reviewHash: parseRequiredOption(input.args, '--review-hash', 'pending review hash'),
+      content: parseRequiredOption(input.args, '--content', 'pending memory content'),
+      normalizedKey: parseOptionalOption(input.args, '--normalized-key'),
+      reason: parseOptionalOption(input.args, '--reason')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'defer') {
+    process.stdout.write(await runCodexMemoryDefer({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, 'pending memory id'),
+      reviewHash: parseRequiredOption(input.args, '--review-hash', 'pending review hash'),
+      days: parseOptionalPositiveInteger(input.args, '--days'),
+      reason: parseOptionalOption(input.args, '--reason')
+    }))
+    return
+  }
+
   if (command === 'memory' && input.args[1] === 'status') {
     process.stdout.write(await formatCodexMemoryStatus({ cwd: input.cwd }))
     return
@@ -133,7 +191,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash>|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -203,6 +261,14 @@ function parseProfileReflectionSource(args: string[]): 'daily-interview' {
   throw new Error(`Invalid profile reflection source: ${value}`)
 }
 
+function parseRequiredPositional(args: string[], index: number, label: string): string {
+  const value = args[index]
+  if (value === undefined || value === '' || value.startsWith('--')) {
+    throw new Error(`Invalid ${label}: missing value`)
+  }
+  return value
+}
+
 function parseRequiredOption(args: string[], option: string, label: string): string {
   const index = args.indexOf(option)
   const inline = args.find((arg) => arg.startsWith(`${option}=`))
@@ -224,4 +290,16 @@ function parseOptionalOption(args: string[], option: string): string | undefined
     throw new Error(`Invalid ${option}: missing value`)
   }
   return value
+}
+
+function parseOptionalPositiveInteger(args: string[], option: string): number | undefined {
+  const value = parseOptionalOption(args, option)
+  if (value === undefined) {
+    return undefined
+  }
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${option}: expected positive integer`)
+  }
+  return parsed
 }
