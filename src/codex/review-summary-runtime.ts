@@ -92,7 +92,8 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
       const result = await proposeCodexMemoryCandidate({
         cwd: input.cwd,
         candidate: safeCandidate,
-        now: input.now
+        now: input.now,
+        recordRejectedCandidate: false
       })
       if (result.result.action === 'pending') {
         candidateIds.push(result.result.candidateId)

@@ -73,6 +73,7 @@ export async function proposeCodexMemoryCandidate(input: {
   cwd: string
   candidate: CodexMemoryCandidateInput
   now?: string
+  recordRejectedCandidate?: boolean
 }): Promise<CodexMemoryProposeResult> {
   const now = input.now ?? new Date().toISOString()
   const project = await identifyCodexProject(input.cwd)
@@ -95,14 +96,16 @@ export async function proposeCodexMemoryCandidate(input: {
     })
 
     if (decision.action === 'reject') {
-      await appendTombstoneFromRoot(lockedMemoryRoot, decision.tombstone)
-      await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID(),
-        action: 'reject',
-        at: now,
-        reason: decision.reason,
-        candidateId: decision.tombstone.id
-      })
+      if (input.recordRejectedCandidate !== false) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, decision.tombstone)
+        await appendMemoryEventFromRoot(lockedMemoryRoot, {
+          id: randomUUID(),
+          action: 'reject',
+          at: now,
+          reason: decision.reason,
+          candidateId: decision.tombstone.id
+        })
+      }
       return {
         project: { projectId: project.projectId, displayName: project.displayName },
         result: { action: 'reject', reason: decision.reason },

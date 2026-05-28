@@ -275,7 +275,8 @@ async function proposeExplicitMemoryCandidate(
         }
       ],
       tags: ['codex-hook', 'explicit-memory']
-    }
+    },
+    recordRejectedCandidate: false
   })
 }
 

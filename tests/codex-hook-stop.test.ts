@@ -27,6 +27,10 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir
 }
 
+async function expectMemoryFileMissing(memoryRoot: string, fileName: string): Promise<void> {
+  await expect(readFile(join(memoryRoot, fileName), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+}
+
 function createPending(id: string): PendingMemory {
   return {
     id,
@@ -233,6 +237,54 @@ describe('Codex Stop hook runtime', () => {
     )
 
     expect(result.action).toBe('summary')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
+      'User asked to remember a sensitive self-description.'
+    )
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'index.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'tombstones.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'events.jsonl')
+  })
+
+  it('does not write tombstones or active memory when summary candidate is rejected by validator', async () => {
+    const home = await createTempDir('cyrene-codex-stop-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '普通协作总结。' }) + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, transcript_path: transcript, session_id: 's1', turn_id: 't-reject' },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({
+            summary: 'Summary contains a rejected candidate.',
+            candidates: [
+              {
+                domain: 'affective',
+                type: 'affective_pattern',
+                content: 'The user is emotionally dependent and unstable.',
+                evidence: [{ summary: 'Unsafe diagnostic claim.' }]
+              }
+            ]
+          }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('summary')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
+      'Summary contains a rejected candidate.'
+    )
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'index.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'tombstones.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'events.jsonl')
   })
 
   it('still proposes explicit durable memory when review summary model fails', async () => {
