@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { buildDreamProposalForRoot } from '../src/codex/dream-proposal.js'
 import { runCodexMemoryDream, testOnlyDreamLock } from '../src/codex/memory-dream.js'
 import { readCodexMemoryDreamState } from '../src/codex/memory-dream-state.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
@@ -261,6 +262,58 @@ describe('Codex memory dream runtime', () => {
         })
       })
     )
+  })
+
+  it('builds a promote proposal for repeated independent procedural memory without writing active memory', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const candidate = createPending({
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+
+    const proposal = await buildDreamProposalForRoot({ memoryRoot, now: '2026-05-26T00:00:00.000Z' })
+
+    expect(proposal.summary).toMatchObject({ promote: 1, reject: 0, expire: 0, keepPending: 0 })
+    expect(proposal.proposedChanges[0]).toMatchObject({
+      action: 'promote',
+      candidateId: candidate.id,
+      normalizedKey: candidate.normalizedKey,
+      distinctEvidenceCount: 2
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
+  it('builds an expired rejection proposal without writing tombstones', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const candidate = createPending({
+      seenCount: 2,
+      expiresAt: '2026-05-25T00:00:00.000Z',
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+
+    const proposal = await buildDreamProposalForRoot({ memoryRoot, now: '2026-05-26T00:00:00.000Z' })
+
+    expect(proposal.summary).toMatchObject({ promote: 0, reject: 1, expire: 1, keepPending: 0 })
+    expect(proposal.proposedChanges[0]).toMatchObject({
+      action: 'reject',
+      candidateId: candidate.id,
+      normalizedKey: candidate.normalizedKey,
+      tombstoneReason: 'expired'
+    })
+    await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('deep promotes repeated independent procedural memory and writes model profile', async () => {

@@ -55,7 +55,7 @@
 - Test: `tests/codex-cli.test.ts`
 - Test: `tests/mcp-server.test.ts`
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 Add tests that assert:
 
@@ -73,7 +73,7 @@ await runCli(['codex', 'memory', 'dream', '--stage', 'deep-apply'])
 
 Expected: `--stage deep` fails; the two new stages initially fail because implementation is missing.
 
-- [ ] **Step 2: Write failing MCP schema test**
+- [x] **Step 2: Write failing MCP schema test**
 
 Update `tests/mcp-server.test.ts` to assert tool source/schema includes:
 
@@ -82,7 +82,7 @@ expect(source).toContain("z.enum(['light', 'rem', 'deep-preview', 'deep-apply'])
 expect(source).not.toContain("z.enum(['light', 'rem', 'deep'])")
 ```
 
-- [ ] **Step 3: Implement stage type and parser**
+- [x] **Step 3: Implement stage type and parser**
 
 Change:
 
@@ -104,7 +104,7 @@ const stage = input.stage ?? 'deep-preview'
 
 Update `parseDreamStage()` to accept only `light`, `rem`, `deep-preview`, `deep-apply`; special-case `deep` with the migration guidance message.
 
-- [ ] **Step 4: Update MCP schema and description**
+- [x] **Step 4: Update MCP schema and description**
 
 In `src/mcp/tools/memory-dream.ts`:
 
@@ -114,7 +114,7 @@ stage: z.enum(['light', 'rem', 'deep-preview', 'deep-apply']).optional()
 
 Use the matching TypeScript input union.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -124,7 +124,7 @@ npm test -- tests/codex-cli.test.ts tests/mcp-server.test.ts
 
 Expected: focused tests pass, with existing deep tests still failing until Task 3 migration updates them.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/codex/memory-dream.ts src/codex/codex-cli.ts src/mcp/tools/memory-dream.ts src/mcp/mcp-server.ts tests/codex-cli.test.ts tests/mcp-server.test.ts
@@ -138,7 +138,7 @@ git commit -m "feat: require explicit dream preview or apply stages"
 - Modify: `src/codex/memory-dream.ts`
 - Test: `tests/codex-memory-dream.test.ts`
 
-- [ ] **Step 1: Write failing proposal tests**
+- [x] **Step 1: Write failing proposal tests**
 
 Add tests for:
 
@@ -161,11 +161,11 @@ expect(proposal.proposedChanges[0]).toMatchObject({
 })
 ```
 
-- [ ] **Step 2: Create proposal types**
+- [x] **Step 2: Create proposal types**
 
 Create `DreamProposal`, `DreamRootProposal`, `DreamProposedChange`, `DreamLogicalDiff`, `DreamEvalGateResult` interfaces in `src/codex/dream-proposal.ts`.
 
-- [ ] **Step 3: Extract decision calculation**
+- [x] **Step 3: Extract decision calculation**
 
 Move the non-mutating loop from `runDeepDreamRootLocked()` into:
 
@@ -178,11 +178,11 @@ export async function buildDreamProposalForRoot(input: {
 
 It must read active/pending/tombstones and compute promote/reject/keep without writing files.
 
-- [ ] **Step 4: Preserve old activation semantics**
+- [x] **Step 4: Preserve old activation semantics**
 
 For promotable candidates, proposal uses `validateMemoryCandidate()`, `evaluatePendingPromotion()`, and `activateCandidate()` exactly as old deep did. It records generated active memory in a private apply plan, but public JSON omits raw evidence quotes.
 
-- [ ] **Step 5: Run focused test**
+- [x] **Step 5: Run focused test**
 
 ```bash
 npm test -- tests/codex-memory-dream.test.ts
@@ -190,7 +190,7 @@ npm test -- tests/codex-memory-dream.test.ts
 
 Expected: proposal tests pass; old deep tests still need Task 4 migration.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/codex/dream-proposal.ts src/codex/memory-dream.ts tests/codex-memory-dream.test.ts
@@ -738,4 +738,3 @@ Dispatch final reviewer for spec compliance and code quality. Fix findings befor
 - [ ] **Step 6: Finish branch**
 
 Use `superpowers:verification-before-completion`, then `superpowers:finishing-a-development-branch` for merge/push choice.
-
