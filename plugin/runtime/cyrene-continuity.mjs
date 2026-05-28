@@ -13509,6 +13509,10 @@ function profileEntry(memory) {
   return [{ memory, visibility, content, section: profileSection(memory, visibility) }];
 }
 function profileSection(memory, visibility) {
+  const taggedSection = profileSectionFromTags(memory.tags);
+  if (taggedSection !== null) {
+    return taggedSection;
+  }
   if (visibility === "always") {
     return "Always Apply";
   }
@@ -13522,6 +13526,21 @@ function profileSection(memory, visibility) {
     return "Interaction Preferences";
   }
   return "Restricted Notes";
+}
+function profileSectionFromTags(tags) {
+  for (const tag of tags) {
+    if (!tag.startsWith("profile-section:")) {
+      continue;
+    }
+    const section = tag.slice("profile-section:".length);
+    if (isModelProfileSection(section)) {
+      return section;
+    }
+  }
+  return null;
+}
+function isModelProfileSection(section) {
+  return MODEL_PROFILE_SECTIONS.includes(section);
 }
 function profileSafeContent(memory) {
   if (isDiagnosticAffectiveContent(memory.content)) {
@@ -16868,6 +16887,7 @@ import { createHash as createHash7, randomUUID as randomUUID11 } from "node:cryp
 import { lstat as lstat14, readFile as readFile13, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join20 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
+var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
   const payload = {
     id: candidate.id,
@@ -16893,6 +16913,7 @@ async function runCodexProfileReflection(input) {
   const nextCandidates = upsertProfileCandidates(existing, reflected);
   if (reflected.length > 0 || existing.length > 0) {
     await writeProfileCandidatesFromRoot(memoryRoot, nextCandidates);
+    await writePendingProfilePatchFromRoot(memoryRoot, nextCandidates);
   }
   return {
     project: { projectId: project.projectId, displayName: project.displayName },
@@ -16977,19 +16998,22 @@ async function applyCodexProfileCandidate(input) {
     }
     const before = await readModelProfileFromRootIfExists(lockedRoot) ?? "";
     const active = await readActiveMemoriesFromRoot(lockedRoot);
-    const memory = activeMemoryFromProfileCandidate(lockedCandidate, now);
+    const memory = activeMemoryFromProfileCandidate(lockedCandidate, now, lockedHash);
     await writeActiveMemoriesFromRoot(lockedRoot, upsertActiveMemory2(active, memory));
+    const updatedCandidates = lockedCandidates.map((item) => item.id === lockedCandidate.id ? { ...item, status: "applied", appliedAt: now, appliedMemoryId: memory.id } : item);
     await writeProfileCandidatesFromRoot(
       lockedRoot,
-      lockedCandidates.map((item) => item.id === lockedCandidate.id ? { ...item, status: "applied", appliedAt: now, appliedMemoryId: memory.id } : item)
+      updatedCandidates
     );
+    await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
       id: randomUUID11(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
       memoryId: memory.id,
-      candidateId: lockedCandidate.id
+      candidateId: lockedCandidate.id,
+      details: profileApprovalDetails(lockedCandidate, lockedHash)
     });
     await renderMemoryProjectionsFromRoot(lockedRoot);
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
@@ -17001,7 +17025,7 @@ async function applyCodexProfileCandidate(input) {
         action: "apply",
         candidateId: lockedCandidate.id,
         reviewHash: lockedHash,
-        diff: { before, after, addedMemoryId: memory.id }
+        diff: profileDiffForApply(lockedCandidate, before, after, memory.id)
       }
     };
   });
@@ -17042,11 +17066,12 @@ function profileSection2(memory, visibility) {
 function summarizeProfileCandidate(candidate) {
   return { ...candidate, reviewHash: reviewHashForProfileCandidate(candidate) };
 }
-function activeMemoryFromProfileCandidate(candidate, now) {
+function activeMemoryFromProfileCandidate(candidate, now, reviewHash) {
+  const classification = profileMemoryClassification(candidate.proposedSection);
   return {
     id: `profile-memory-${candidate.id}`,
-    domain: profileMemoryDomain(candidate.proposedSection),
-    type: "procedural_rule",
+    domain: classification.domain,
+    type: classification.type,
     strength: "hard",
     scope: candidate.scope,
     status: "active",
@@ -17055,7 +17080,10 @@ function activeMemoryFromProfileCandidate(candidate, now) {
     evidence: [{
       runId: candidate.id,
       sourceKind: "tool_trace",
-      summary: candidate.evidenceSummary
+      summary: candidate.evidenceSummary,
+      traceRefs: candidate.sourceMemoryIds,
+      taskHash: reviewHash,
+      evidenceGroupId: candidate.proposedSection
     }],
     source: "tool_trace",
     scores: {
@@ -17069,20 +17097,62 @@ function activeMemoryFromProfileCandidate(candidate, now) {
     updatedAt: now,
     userConfirmed: true,
     profileVisibility: "always",
-    tags: ["profile-candidate"]
+    tags: ["profile-candidate", `profile-section:${candidate.proposedSection}`]
   };
 }
-function profileMemoryDomain(section) {
-  if (section === "Project Context") {
-    return "project";
+function profileMemoryClassification(section) {
+  switch (section) {
+    case "Project Context":
+      return { domain: "project", type: "project_fact" };
+    case "Interaction Preferences":
+      return { domain: "personal", type: "interaction_style" };
+    case "Response Policy":
+      return { domain: "procedural", type: "procedural_rule" };
+    case "Always Apply":
+      return { domain: "system", type: "system_policy" };
+    case "Restricted Notes":
+      return { domain: "system", type: "reference" };
   }
-  if (section === "Interaction Preferences") {
-    return "personal";
+}
+function profileApprovalDetails(candidate, reviewHash) {
+  return {
+    reviewHash,
+    sourceMemoryIds: candidate.sourceMemoryIds,
+    evidenceSummary: candidate.evidenceSummary,
+    proposedSection: candidate.proposedSection
+  };
+}
+function profileDiffForApply(candidate, before, after, addedMemoryId) {
+  const beforeLines = profileDiffLines(before);
+  const afterLines = profileDiffLines(after);
+  return {
+    candidateId: candidate.id,
+    section: candidate.proposedSection,
+    before,
+    after,
+    addedLines: subtractLines(afterLines, beforeLines),
+    removedLines: subtractLines(beforeLines, afterLines),
+    addedMemoryId
+  };
+}
+function profileDiffLines(content) {
+  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+function subtractLines(left, right) {
+  const remaining = /* @__PURE__ */ new Map();
+  for (const line of right) {
+    remaining.set(line, (remaining.get(line) ?? 0) + 1);
   }
-  if (section === "Response Policy") {
-    return "procedural";
+  const result2 = [];
+  for (const line of left) {
+    const count = remaining.get(line) ?? 0;
+    if (count > 0) {
+      remaining.set(line, count - 1);
+    } else {
+      result2.push(line);
+    }
   }
-  return "procedural";
+  return result2;
 }
 function evaluateProfileApplyGate(candidate) {
   if (isUnsafeProfileCandidate(candidate)) {
@@ -17133,21 +17203,60 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join20(root, PROFILE_CANDIDATES_FILE2);
-  await assertSafeProfileCandidateTarget(targetPath);
+  await assertSafeProfileFileTarget(targetPath, "profile candidate");
   const tempPath = `${targetPath}.${process.pid}.${randomUUID11()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile9(tempPath, content === "" ? "" : `${content}
 `, "utf8");
   await rename5(tempPath, targetPath);
 }
-async function assertSafeProfileCandidateTarget(targetPath) {
+async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
+  const root = await ensureWritableMemoryRootPath(memoryRoot);
+  const targetPath = join20(root, MODEL_PROFILE_PENDING_FILE);
+  await assertSafeProfileFileTarget(targetPath, "pending profile patch");
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID11()}.tmp`;
+  await writeFile9(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
+  await rename5(tempPath, targetPath);
+}
+function formatPendingProfilePatch(candidates) {
+  const pending = candidates.filter((candidate) => candidate.status === "pending");
+  const lines = [
+    "<!-- Generated by Cyrene Continuity. Review before applying. -->",
+    "",
+    "# Cyrene Model Profile Pending Patch",
+    ""
+  ];
+  if (pending.length === 0) {
+    lines.push("No pending profile candidates.", "");
+    return lines.join("\n");
+  }
+  for (const candidate of pending) {
+    lines.push(`## ${candidate.id}`);
+    lines.push("");
+    lines.push(`- Section: ${candidate.proposedSection}`);
+    lines.push(`- Review hash: ${candidate.reviewHash}`);
+    lines.push(`- Scope: ${candidate.scope}`);
+    lines.push(`- Source memory ids: ${candidate.sourceMemoryIds.join(", ") || "none"}`);
+    lines.push(`- Evidence: ${candidate.evidenceSummary || "none"}`);
+    lines.push(`- Rationale: ${candidate.rationale}`);
+    lines.push("");
+    lines.push(candidate.content);
+    lines.push("");
+    lines.push("Apply:");
+    lines.push("");
+    lines.push(`cyrene-continuity codex profile apply --candidate ${candidate.id} --review-hash ${candidate.reviewHash}`);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+async function assertSafeProfileFileTarget(targetPath, label) {
   try {
     const stats = await lstat14(targetPath);
     if (stats.isSymbolicLink()) {
-      throw new Error(`Refusing to use profile candidate symlink: ${targetPath}`);
+      throw new Error(`Refusing to use ${label} symlink: ${targetPath}`);
     }
     if (!stats.isFile()) {
-      throw new Error(`Refusing to use non-file profile candidate path: ${targetPath}`);
+      throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`);
     }
   } catch (error2) {
     if (isFileErrorCode12(error2, "ENOENT")) {

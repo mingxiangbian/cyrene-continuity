@@ -64,6 +64,7 @@ npm test -- tests/profile-candidates.test.ts
 **文件：**
 
 - 修改：`src/codex/profile-candidates.ts`
+- 修改：`src/memory/memory-exporter.ts`
 
 实现：
 
@@ -71,6 +72,7 @@ npm test -- tests/profile-candidates.test.ts
 - active memory evidence 保留 source memory ids、evidence summary、review hash 和 candidate section。
 - approval event 的 `details` 写入同一组 review metadata。
 - `ProfileDiff` 扩展 `candidateId`、`section`、`addedLines`、`removedLines`，并由 apply 前后 stable profile 内容计算。
+- stable profile renderer 尊重 profile apply 写入的 `profile-section:*` tag，避免 approved profile memory 被强制渲染到错误 section。
 
 **验证：**
 
@@ -93,6 +95,6 @@ git diff --check
 提交：
 
 ```bash
-git add docs/superpowers/plans/2026-05-28-cyrene-v3-pr8-profile-patch-review.md tests/profile-candidates.test.ts src/codex/profile-candidates.ts
+git add docs/superpowers/plans/2026-05-28-cyrene-v3-pr8-profile-patch-review.md tests/profile-candidates.test.ts src/codex/profile-candidates.ts src/memory/memory-exporter.ts
 git commit -m "feat: add profile patch review flow"
 ```

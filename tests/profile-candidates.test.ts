@@ -105,6 +105,12 @@ describe('Codex profile candidates', () => {
     })
     const stored = parseJsonLines<ProfileCandidate>(await readFile(join(memoryRoot, 'profile_candidates.jsonl'), 'utf8'))
     expect(stored[0]).toMatchObject({ id: result.candidates[0]?.id, status: 'pending' })
+    const pending = await readFile(join(memoryRoot, 'MODEL_PROFILE.pending.md'), 'utf8')
+    expect(pending).toContain(result.candidates[0]?.id)
+    expect(pending).toContain('Always Apply')
+    expect(pending).toContain(result.candidates[0]?.reviewHash)
+    expect(pending).toContain('active-1')
+    expect(pending).toContain('User asked for Chinese specs and plans.')
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -175,12 +181,106 @@ describe('Codex profile candidates', () => {
       action: 'apply',
       candidateId: candidate?.id,
       diff: {
+        candidateId: candidate?.id,
+        section: 'Always Apply',
         before: '',
-        after: expect.stringContaining('Use Chinese for Cyrene specs and plans.')
+        after: expect.stringContaining('Use Chinese for Cyrene specs and plans.'),
+        addedLines: expect.arrayContaining([expect.stringContaining('Use Chinese for Cyrene specs and plans.')]),
+        removedLines: []
       }
     })
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('Use Chinese for Cyrene specs and plans.')
     const stored = parseJsonLines<ProfileCandidate>(await readFile(join(memoryRoot, 'profile_candidates.jsonl'), 'utf8'))
     expect(stored[0]).toMatchObject({ status: 'applied', appliedMemoryId: expect.any(String) })
+    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    expect(active.find((item) => item.id === stored[0]?.appliedMemoryId)).toMatchObject({
+      domain: 'system',
+      type: 'system_policy',
+      evidence: [expect.objectContaining({
+        runId: candidate?.id,
+        summary: candidate?.evidenceSummary,
+        traceRefs: expect.arrayContaining(['active-1']),
+        taskHash: candidate?.reviewHash,
+        evidenceGroupId: 'Always Apply'
+      })]
+    })
+    const events = parseJsonLines<{ action: string; details?: Record<string, unknown> }>(
+      await readFile(join(memoryRoot, 'events.jsonl'), 'utf8')
+    )
+    expect(events).toContainEqual(expect.objectContaining({
+      action: 'promote',
+      details: expect.objectContaining({
+        reviewHash: candidate?.reviewHash,
+        sourceMemoryIds: ['active-1'],
+        evidenceSummary: candidate?.evidenceSummary,
+        proposedSection: 'Always Apply'
+      })
+    }))
+  })
+
+  it('apply maps profile candidate sections to active memory domain and type', async () => {
+    const home = await createTempDir('cyrene-profile-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-profile-project-')
+    const memoryRoot = await seedProjectActive(cwd, [])
+    const candidates = [
+      createProfileCandidate({
+        id: 'profile-project',
+        proposedSection: 'Project Context',
+        content: 'Use the local SQLite cache for symbol lookup.',
+        sourceMemoryIds: ['source-project']
+      }),
+      createProfileCandidate({
+        id: 'profile-interaction',
+        proposedSection: 'Interaction Preferences',
+        content: 'Prefer direct status updates.',
+        sourceMemoryIds: ['source-interaction']
+      }),
+      createProfileCandidate({
+        id: 'profile-response',
+        proposedSection: 'Response Policy',
+        content: 'Mention verification commands in final responses.',
+        sourceMemoryIds: ['source-response']
+      }),
+      createProfileCandidate({
+        id: 'profile-always',
+        proposedSection: 'Always Apply',
+        content: 'Never commit without explicit user approval.',
+        sourceMemoryIds: ['source-always']
+      })
+    ]
+    await writeFile(join(memoryRoot, 'profile_candidates.jsonl'), candidates.map((candidate) => JSON.stringify(candidate)).join('\n') + '\n')
+
+    for (const candidate of candidates) {
+      await applyCodexProfileCandidate({
+        cwd,
+        candidateId: candidate.id,
+        reviewHash: reviewHashForProfileCandidate(candidate),
+        now: '2026-05-26T00:00:01.000Z'
+      })
+    }
+
+    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    expect(active.find((item) => item.id === 'profile-memory-profile-project')).toMatchObject({
+      domain: 'project',
+      type: 'project_fact'
+    })
+    expect(active.find((item) => item.id === 'profile-memory-profile-interaction')).toMatchObject({
+      domain: 'personal',
+      type: 'interaction_style'
+    })
+    expect(active.find((item) => item.id === 'profile-memory-profile-response')).toMatchObject({
+      domain: 'procedural',
+      type: 'procedural_rule'
+    })
+    expect(active.find((item) => item.id === 'profile-memory-profile-always')).toMatchObject({
+      domain: 'system',
+      type: 'system_policy'
+    })
+    const stableProfile = await readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')
+    expect(stableProfile).toMatch(/## Project Context[\s\S]*Use the local SQLite cache for symbol lookup\./)
+    expect(stableProfile).toMatch(/## Interaction Preferences[\s\S]*Prefer direct status updates\./)
+    expect(stableProfile).toMatch(/## Response Policy[\s\S]*Mention verification commands in final responses\./)
+    expect(stableProfile).toMatch(/## Always Apply[\s\S]*Never commit without explicit user approval\./)
   })
 })

@@ -251,6 +251,10 @@ function profileEntry(memory: CyreneMemory): ProfileEntry[] {
 }
 
 function profileSection(memory: CyreneMemory, visibility: 'always' | 'safe_summary'): ModelProfileSection {
+  const taggedSection = profileSectionFromTags(memory.tags)
+  if (taggedSection !== null) {
+    return taggedSection
+  }
   if (visibility === 'always') {
     return 'Always Apply'
   }
@@ -264,6 +268,23 @@ function profileSection(memory: CyreneMemory, visibility: 'always' | 'safe_summa
     return 'Interaction Preferences'
   }
   return 'Restricted Notes'
+}
+
+function profileSectionFromTags(tags: string[]): ModelProfileSection | null {
+  for (const tag of tags) {
+    if (!tag.startsWith('profile-section:')) {
+      continue
+    }
+    const section = tag.slice('profile-section:'.length)
+    if (isModelProfileSection(section)) {
+      return section
+    }
+  }
+  return null
+}
+
+function isModelProfileSection(section: string): section is ModelProfileSection {
+  return MODEL_PROFILE_SECTIONS.includes(section as ModelProfileSection)
 }
 
 function profileSafeContent(memory: CyreneMemory): string | null {

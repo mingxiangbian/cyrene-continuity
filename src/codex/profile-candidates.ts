@@ -20,6 +20,7 @@ import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { identifyCodexProject } from './project-id.js'
 
 const PROFILE_CANDIDATES_FILE = 'profile_candidates.jsonl'
+const MODEL_PROFILE_PENDING_FILE = 'MODEL_PROFILE.pending.md'
 
 export type ProfileCandidateStatus = 'pending' | 'applied' | 'rejected'
 export type ProfileCandidateSection =
@@ -49,8 +50,12 @@ export interface ProfileCandidateSummary extends ProfileCandidate {
 }
 
 export interface ProfileDiff {
+  candidateId: string
+  section: ProfileCandidateSection
   before: string
   after: string
+  addedLines: string[]
+  removedLines: string[]
   addedMemoryId?: string
 }
 
@@ -125,6 +130,7 @@ export async function runCodexProfileReflection(input: {
 
   if (reflected.length > 0 || existing.length > 0) {
     await writeProfileCandidatesFromRoot(memoryRoot, nextCandidates)
+    await writePendingProfilePatchFromRoot(memoryRoot, nextCandidates)
   }
 
   return {
@@ -221,21 +227,24 @@ export async function applyCodexProfileCandidate(input: {
 
     const before = await readModelProfileFromRootIfExists(lockedRoot) ?? ''
     const active = await readActiveMemoriesFromRoot(lockedRoot)
-    const memory = activeMemoryFromProfileCandidate(lockedCandidate, now)
+    const memory = activeMemoryFromProfileCandidate(lockedCandidate, now, lockedHash)
     await writeActiveMemoriesFromRoot(lockedRoot, upsertActiveMemory(active, memory))
+    const updatedCandidates: ProfileCandidate[] = lockedCandidates.map((item) => item.id === lockedCandidate.id
+      ? { ...item, status: 'applied', appliedAt: now, appliedMemoryId: memory.id }
+      : item)
     await writeProfileCandidatesFromRoot(
       lockedRoot,
-      lockedCandidates.map((item) => item.id === lockedCandidate.id
-        ? { ...item, status: 'applied', appliedAt: now, appliedMemoryId: memory.id }
-        : item)
+      updatedCandidates
     )
+    await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates)
     await appendMemoryEventFromRoot(lockedRoot, {
       id: randomUUID(),
       action: 'promote',
       at: now,
       reason: 'Approved by Codex profile candidate review',
       memoryId: memory.id,
-      candidateId: lockedCandidate.id
+      candidateId: lockedCandidate.id,
+      details: profileApprovalDetails(lockedCandidate, lockedHash)
     })
     await renderMemoryProjectionsFromRoot(lockedRoot)
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
@@ -248,7 +257,7 @@ export async function applyCodexProfileCandidate(input: {
         action: 'apply',
         candidateId: lockedCandidate.id,
         reviewHash: lockedHash,
-        diff: { before, after, addedMemoryId: memory.id }
+        diff: profileDiffForApply(lockedCandidate, before, after, memory.id)
       }
     }
   })
@@ -293,11 +302,12 @@ function summarizeProfileCandidate(candidate: ProfileCandidate): ProfileCandidat
   return { ...candidate, reviewHash: reviewHashForProfileCandidate(candidate) }
 }
 
-function activeMemoryFromProfileCandidate(candidate: ProfileCandidate, now: string): CyreneMemory {
+function activeMemoryFromProfileCandidate(candidate: ProfileCandidate, now: string, reviewHash: string): CyreneMemory {
+  const classification = profileMemoryClassification(candidate.proposedSection)
   return {
     id: `profile-memory-${candidate.id}`,
-    domain: profileMemoryDomain(candidate.proposedSection),
-    type: 'procedural_rule',
+    domain: classification.domain,
+    type: classification.type,
     strength: 'hard',
     scope: candidate.scope,
     status: 'active',
@@ -306,7 +316,10 @@ function activeMemoryFromProfileCandidate(candidate: ProfileCandidate, now: stri
     evidence: [{
       runId: candidate.id,
       sourceKind: 'tool_trace',
-      summary: candidate.evidenceSummary
+      summary: candidate.evidenceSummary,
+      traceRefs: candidate.sourceMemoryIds,
+      taskHash: reviewHash,
+      evidenceGroupId: candidate.proposedSection
     }],
     source: 'tool_trace',
     scores: {
@@ -320,21 +333,72 @@ function activeMemoryFromProfileCandidate(candidate: ProfileCandidate, now: stri
     updatedAt: now,
     userConfirmed: true,
     profileVisibility: 'always',
-    tags: ['profile-candidate']
+    tags: ['profile-candidate', `profile-section:${candidate.proposedSection}`]
   }
 }
 
-function profileMemoryDomain(section: ProfileCandidateSection): CyreneMemory['domain'] {
-  if (section === 'Project Context') {
-    return 'project'
+function profileMemoryClassification(section: ProfileCandidateSection): Pick<CyreneMemory, 'domain' | 'type'> {
+  switch (section) {
+    case 'Project Context':
+      return { domain: 'project', type: 'project_fact' }
+    case 'Interaction Preferences':
+      return { domain: 'personal', type: 'interaction_style' }
+    case 'Response Policy':
+      return { domain: 'procedural', type: 'procedural_rule' }
+    case 'Always Apply':
+      return { domain: 'system', type: 'system_policy' }
+    case 'Restricted Notes':
+      return { domain: 'system', type: 'reference' }
   }
-  if (section === 'Interaction Preferences') {
-    return 'personal'
+}
+
+function profileApprovalDetails(candidate: ProfileCandidate, reviewHash: string): Record<string, unknown> {
+  return {
+    reviewHash,
+    sourceMemoryIds: candidate.sourceMemoryIds,
+    evidenceSummary: candidate.evidenceSummary,
+    proposedSection: candidate.proposedSection
   }
-  if (section === 'Response Policy') {
-    return 'procedural'
+}
+
+function profileDiffForApply(
+  candidate: ProfileCandidate,
+  before: string,
+  after: string,
+  addedMemoryId: string
+): ProfileDiff {
+  const beforeLines = profileDiffLines(before)
+  const afterLines = profileDiffLines(after)
+  return {
+    candidateId: candidate.id,
+    section: candidate.proposedSection,
+    before,
+    after,
+    addedLines: subtractLines(afterLines, beforeLines),
+    removedLines: subtractLines(beforeLines, afterLines),
+    addedMemoryId
   }
-  return 'procedural'
+}
+
+function profileDiffLines(content: string): string[] {
+  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+}
+
+function subtractLines(left: string[], right: string[]): string[] {
+  const remaining = new Map<string, number>()
+  for (const line of right) {
+    remaining.set(line, (remaining.get(line) ?? 0) + 1)
+  }
+  const result: string[] = []
+  for (const line of left) {
+    const count = remaining.get(line) ?? 0
+    if (count > 0) {
+      remaining.set(line, count - 1)
+    } else {
+      result.push(line)
+    }
+  }
+  return result
 }
 
 function evaluateProfileApplyGate(candidate: ProfileCandidate): {
@@ -399,21 +463,65 @@ async function readProfileCandidatesFromRoot(memoryRoot: string): Promise<Profil
 async function writeProfileCandidatesFromRoot(memoryRoot: string, candidates: ProfileCandidate[]): Promise<void> {
   const root = await ensureWritableMemoryRootPath(memoryRoot)
   const targetPath = join(root, PROFILE_CANDIDATES_FILE)
-  await assertSafeProfileCandidateTarget(targetPath)
+  await assertSafeProfileFileTarget(targetPath, 'profile candidate')
   const tempPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join('\n')
   await writeFile(tempPath, content === '' ? '' : `${content}\n`, 'utf8')
   await rename(tempPath, targetPath)
 }
 
-async function assertSafeProfileCandidateTarget(targetPath: string): Promise<void> {
+async function writePendingProfilePatchFromRoot(memoryRoot: string, candidates: ProfileCandidate[]): Promise<void> {
+  const root = await ensureWritableMemoryRootPath(memoryRoot)
+  const targetPath = join(root, MODEL_PROFILE_PENDING_FILE)
+  await assertSafeProfileFileTarget(targetPath, 'pending profile patch')
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`
+  await writeFile(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), 'utf8')
+  await rename(tempPath, targetPath)
+}
+
+function formatPendingProfilePatch(candidates: ProfileCandidateSummary[]): string {
+  const pending = candidates.filter((candidate) => candidate.status === 'pending')
+  const lines = [
+    '<!-- Generated by Cyrene Continuity. Review before applying. -->',
+    '',
+    '# Cyrene Model Profile Pending Patch',
+    ''
+  ]
+
+  if (pending.length === 0) {
+    lines.push('No pending profile candidates.', '')
+    return lines.join('\n')
+  }
+
+  for (const candidate of pending) {
+    lines.push(`## ${candidate.id}`)
+    lines.push('')
+    lines.push(`- Section: ${candidate.proposedSection}`)
+    lines.push(`- Review hash: ${candidate.reviewHash}`)
+    lines.push(`- Scope: ${candidate.scope}`)
+    lines.push(`- Source memory ids: ${candidate.sourceMemoryIds.join(', ') || 'none'}`)
+    lines.push(`- Evidence: ${candidate.evidenceSummary || 'none'}`)
+    lines.push(`- Rationale: ${candidate.rationale}`)
+    lines.push('')
+    lines.push(candidate.content)
+    lines.push('')
+    lines.push('Apply:')
+    lines.push('')
+    lines.push(`cyrene-continuity codex profile apply --candidate ${candidate.id} --review-hash ${candidate.reviewHash}`)
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
+async function assertSafeProfileFileTarget(targetPath: string, label: string): Promise<void> {
   try {
     const stats = await lstat(targetPath)
     if (stats.isSymbolicLink()) {
-      throw new Error(`Refusing to use profile candidate symlink: ${targetPath}`)
+      throw new Error(`Refusing to use ${label} symlink: ${targetPath}`)
     }
     if (!stats.isFile()) {
-      throw new Error(`Refusing to use non-file profile candidate path: ${targetPath}`)
+      throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`)
     }
   } catch (error) {
     if (isFileErrorCode(error, 'ENOENT')) {
