@@ -4,6 +4,7 @@ import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-i
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
 import { rebuildCodexMemoryIndex } from './codex-memory-index.js'
+import { formatCodexMemoryStatus } from './codex-memory-status.js'
 import { readDreamReport } from './dream-artifacts.js'
 import {
   getCodexMemoryProfile,
@@ -76,6 +77,11 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
+  if (command === 'memory' && input.args[1] === 'status') {
+    process.stdout.write(await formatCodexMemoryStatus({ cwd: input.cwd }))
+    return
+  }
+
   if (command === 'memory' && input.args[1] === 'db' && input.args[2] === 'rebuild') {
     process.stdout.write(`${JSON.stringify(await rebuildCodexMemoryIndex({ cwd: input.cwd }), null, 2)}\n`)
     return
@@ -127,7 +133,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 

@@ -690,6 +690,87 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain(join(home, '.cyrene', 'codex', 'memory.db'))
   })
 
+  it('prints read-only memory pipeline status from the CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-repo-')
+    const identity = await identifyCodexProject(repo)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(globalMemoryRoot, { recursive: true })
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(globalMemoryRoot, 'pending.jsonl'), `${JSON.stringify({
+      ...createPending(),
+      id: 'global-status-pending',
+      scope: 'global' as const,
+      normalizedKey: 'global-status-pending'
+    })}\n`)
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('Cyrene Memory Status')
+    expect(result.stdout).toContain(`projectId: ${identity.projectId}`)
+    expect(result.stdout).toContain('node:')
+    expect(result.stdout).toContain('sqlite index:')
+    expect(result.stdout).toContain('fallback mode:')
+    expect(result.stdout).toContain('stop hook:')
+    expect(result.stdout).toContain('global pending: 1')
+    expect(result.stdout).toContain('project active: 1')
+  })
+
+  it('reports SQLite unavailable fallback in memory status without mutating the index', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-fallback-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-fallback-repo-')
+    await mkdir(join(home, '.cyrene', 'codex', 'memory.db'), { recursive: true })
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('sqlite index: unavailable')
+    expect(result.stdout).toContain('fallback mode: jsonl')
+    expect(result.stdout).toContain('similar-project retrieval: degraded')
+    await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'), 'utf8')).rejects.toMatchObject({ code: 'EISDIR' })
+  })
+
+  it('reports stale index in memory status and doctor without rebuilding it', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-stale-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-stale-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+
+    const status = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+    const doctor = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'doctor'],
+      { env: cliEnv(home) }
+    )
+
+    expect(status.stderr).toBe('')
+    expect(status.stdout).toContain('index freshness: stale')
+    expect(status.stdout).toContain('action: run cyrene-continuity codex memory db rebuild')
+    expect(doctor.stdout).toContain('memory fallback mode:')
+    expect(doctor.stdout).toContain('memory index freshness: stale')
+    await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('doctor reports pending counts and current repo MCP command freshness', async () => {
     const home = await createTempDir('cyrene-codex-cli-doctor-pending-home-')
     process.env.HOME = home

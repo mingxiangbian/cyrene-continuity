@@ -14,7 +14,7 @@ import {
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
-import { codexMemoryDbPath, readCodexMemoryIndexDiagnostics } from './codex-memory-index.js'
+import { readCodexMemoryStatus } from './codex-memory-status.js'
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
@@ -50,7 +50,8 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
   const config = createDefaultConfig(input.cwd)
   const memoryState = await readDoctorMemoryState(identity.projectId)
   const migrationState = await readDoctorMigrationState()
-  const memoryIndex = await readCodexMemoryIndexDiagnostics()
+  const memoryStatus = await readCodexMemoryStatus({ cwd: input.cwd })
+  const memoryIndex = memoryStatus.index
   const actions = [
     cyreneConfigured || pluginBridgeInstalled ? undefined : `  action: run ${installCommand} to install the Cyrene bridge`,
     mcpCommandAction,
@@ -109,9 +110,15 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  project pending: ${memoryState.projectPendingCount}`,
     `  profile candidates: ${memoryState.profileCandidates}`,
     `  memory index: ${memoryIndex.available ? 'available' : 'unavailable'}`,
-    `  memory db: ${codexMemoryDbPath()}`,
+    `  memory db: ${memoryIndex.dbPath}`,
     memoryIndex.ftsTokenizer === undefined ? undefined : `  memory fts: ${memoryIndex.ftsTokenizer}`,
     memoryIndex.reason === undefined ? undefined : `  memory index reason: ${memoryIndex.reason}`,
+    `  memory fallback mode: ${memoryIndex.fallbackMode}`,
+    `  memory index freshness: ${memoryIndex.freshness}`,
+    memoryIndex.lastSyncAt === undefined ? undefined : `  memory index last sync: ${memoryIndex.lastSyncAt}`,
+    memoryIndex.sourceLatestAt === undefined ? undefined : `  memory index source latest: ${memoryIndex.sourceLatestAt}`,
+    memoryIndex.staleReason === undefined ? undefined : `  memory index stale reason: ${memoryIndex.staleReason}`,
+    `  similar-project retrieval: ${memoryStatus.similarProjectRetrieval}`,
     `  dream due: ${memoryState.dreamDue ? 'yes' : 'no'}`,
     `  last dream: ${memoryState.lastDreamAt ?? 'never'}`,
     `  promotion recommendations: ${config.memoryRecommendPromotionEnabled ? 'enabled' : 'disabled'}`,
