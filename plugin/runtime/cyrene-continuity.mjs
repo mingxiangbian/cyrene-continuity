@@ -12236,6 +12236,8 @@ async function formatCodexDoctor(input) {
     `  session summaries: ${memoryStatus.stopHook.sessionSummaries}`,
     `  last stop hook run: ${memoryStatus.stopHook.lastRunAt === void 0 ? "never" : `${memoryStatus.stopHook.lastRunAt} (${memoryStatus.stopHook.lastRunStatus ?? "unknown"})`}`,
     memoryStatus.stopHook.reason === void 0 ? void 0 : `  stop hook reason: ${memoryStatus.stopHook.reason}`,
+    `  dream state: ${memoryStatus.dream.state}`,
+    memoryStatus.dream.reason === void 0 ? void 0 : `  dream state reason: ${memoryStatus.dream.reason}`,
     `  dream due: ${memoryState.dreamDue ? "yes" : "no"}`,
     `  last dream: ${memoryState.lastDreamAt ?? "never"}`,
     `  promotion recommendations: ${config2.memoryRecommendPromotionEnabled ? "enabled" : "disabled"}`,
@@ -12259,7 +12261,7 @@ async function readDoctorMemoryState(projectId) {
     profilePresent(projectRoot),
     readPendingMemoriesFromRoot(projectRoot),
     readProfileCandidatesStatus(projectRoot),
-    readCodexMemoryDreamState(projectRoot)
+    readDoctorDreamState(projectRoot)
   ]);
   return {
     globalProfilePresent,
@@ -12270,6 +12272,13 @@ async function readDoctorMemoryState(projectId) {
     dreamDue: dreamState?.dreamDue === true,
     lastDreamAt: dreamState?.lastDreamAt
   };
+}
+async function readDoctorDreamState(memoryRoot) {
+  try {
+    return await readCodexMemoryDreamState(memoryRoot);
+  } catch {
+    return { dreamDue: false };
+  }
 }
 async function readProfileCandidatesStatus(memoryRoot) {
   try {

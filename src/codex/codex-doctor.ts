@@ -124,6 +124,8 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  session summaries: ${memoryStatus.stopHook.sessionSummaries}`,
     `  last stop hook run: ${memoryStatus.stopHook.lastRunAt === undefined ? 'never' : `${memoryStatus.stopHook.lastRunAt} (${memoryStatus.stopHook.lastRunStatus ?? 'unknown'})`}`,
     memoryStatus.stopHook.reason === undefined ? undefined : `  stop hook reason: ${memoryStatus.stopHook.reason}`,
+    `  dream state: ${memoryStatus.dream.state}`,
+    memoryStatus.dream.reason === undefined ? undefined : `  dream state reason: ${memoryStatus.dream.reason}`,
     `  dream due: ${memoryState.dreamDue ? 'yes' : 'no'}`,
     `  last dream: ${memoryState.lastDreamAt ?? 'never'}`,
     `  promotion recommendations: ${config.memoryRecommendPromotionEnabled ? 'enabled' : 'disabled'}`,
@@ -160,7 +162,7 @@ async function readDoctorMemoryState(projectId: string): Promise<DoctorMemorySta
     profilePresent(projectRoot),
     readPendingMemoriesFromRoot(projectRoot),
     readProfileCandidatesStatus(projectRoot),
-    readCodexMemoryDreamState(projectRoot)
+    readDoctorDreamState(projectRoot)
   ])
   return {
     globalProfilePresent,
@@ -174,6 +176,14 @@ async function readDoctorMemoryState(projectId: string): Promise<DoctorMemorySta
 }
 
 type DoctorProfileCandidatesStatus = 'ok' | 'missing' | 'unreadable'
+
+async function readDoctorDreamState(memoryRoot: string) {
+  try {
+    return await readCodexMemoryDreamState(memoryRoot)
+  } catch {
+    return { dreamDue: false }
+  }
+}
 
 async function readProfileCandidatesStatus(memoryRoot: string): Promise<DoctorProfileCandidatesStatus> {
   try {

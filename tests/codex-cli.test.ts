@@ -868,6 +868,26 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('dream state reason:')
   })
 
+  it('reports unreadable dream state without failing doctor', async () => {
+    const home = await createTempDir('cyrene-codex-cli-doctor-dream-state-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-doctor-dream-state-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'dream-state.json'), '{not json')
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'doctor'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('dream state: unreadable')
+    expect(result.stdout).toContain('dream state reason:')
+  })
+
   it('doctor reports pending counts and current repo MCP command freshness', async () => {
     const home = await createTempDir('cyrene-codex-cli-doctor-pending-home-')
     process.env.HOME = home
