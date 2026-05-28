@@ -316,6 +316,48 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('deep-preview writes review artifacts without mutating memory source files or dream state', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const candidate = createPending({
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-preview', now: '2026-05-26T00:00:00.000Z' })
+
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
+      stage: 'deep-preview',
+      promoted: 1,
+      rejected: 0,
+      keptPending: 0
+    })
+    await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain(candidate.normalizedKey)
+    const proposed = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'proposed_changes.json'), 'utf8')) as {
+      root: { proposedChanges: Array<{ action: string; candidateId: string }> }
+    }
+    expect(proposed.root.proposedChanges[0]).toMatchObject({ action: 'promote', candidateId: candidate.id })
+    const diff = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'diff.json'), 'utf8')) as {
+      addActiveMemoryIds: string[]
+      removePendingCandidateIds: string[]
+    }
+    expect(diff.addActiveMemoryIds).toEqual([candidate.id])
+    expect(diff.removePendingCandidateIds).toEqual([candidate.id])
+    const evalResults = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'eval_results.json'), 'utf8')) as { passed: boolean }
+    expect(evalResults.passed).toBe(true)
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'dream-state.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
   it('deep promotes repeated independent procedural memory and writes model profile', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)

@@ -748,8 +748,35 @@ describe('cyrene-continuity codex CLI', () => {
 
     expect(result.stderr).toBe('')
     const parsed = JSON.parse(result.stdout) as { roots: Array<{ stage: string; promoted: number; keptPending: number }> }
-    expect(parsed.roots.some((root) => root.stage === 'deep-preview' && root.promoted === 0 && root.keptPending === 1)).toBe(true)
+    expect(parsed.roots.some((root) => root.stage === 'deep-preview' && root.promoted === 1 && root.keptPending === 0)).toBe(true)
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain('cli-dream-promotes-pending')
+  })
+
+  it('prints the latest project dream report from the CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-dream-report-home-')
+    process.env.HOME = home
+    const identity = await identifyCodexProject(process.cwd())
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending())}\n`)
+
+    await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep-preview'],
+      { env: cliEnv(home) }
+    )
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', 'report', '--root', 'project'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('Cyrene Dream Preview')
+    expect(result.stdout).toContain(memoryRoot)
+    expect(result.stdout).toContain('cli-dream-promotes-pending')
   })
 
   it('runs memory maintenance from the CLI without promoting pending memory', async () => {

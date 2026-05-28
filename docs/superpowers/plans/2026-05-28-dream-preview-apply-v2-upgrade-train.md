@@ -206,7 +206,7 @@ git commit -m "feat: build read-only dream proposals"
 - Test: `tests/codex-memory-dream.test.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write failing preview artifact test**
+- [x] **Step 1: Write failing preview artifact test**
 
 Assert `deep-preview` creates:
 
@@ -227,7 +227,7 @@ MODEL_PROFILE.md
 dream-state.json
 ```
 
-- [ ] **Step 2: Implement artifact writer**
+- [x] **Step 2: Implement artifact writer**
 
 Create:
 
@@ -240,7 +240,7 @@ export async function writeDreamPreviewArtifacts(input: {
 
 Use `ensureWritableMemoryRootPath()`, create `dream-preview`, and write atomic JSON/Markdown files.
 
-- [ ] **Step 3: Implement report reader**
+- [x] **Step 3: Implement report reader**
 
 Create:
 
@@ -251,7 +251,7 @@ export async function readDreamReport(input: {
 }): Promise<{ memoryRoot: string; report: string }>
 ```
 
-- [ ] **Step 4: Wire `deep-preview` and `memory dream report`**
+- [x] **Step 4: Wire `deep-preview` and `memory dream report`**
 
 `runCodexMemoryDream({ stage: 'deep-preview' })` writes artifacts and returns counts. CLI command:
 
@@ -261,13 +261,13 @@ cyrene-continuity codex memory dream report --root project
 
 prints `DREAM_REPORT.md`.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 ```bash
 npm test -- tests/codex-memory-dream.test.ts tests/codex-cli.test.ts
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/codex/dream-artifacts.ts src/codex/memory-dream.ts src/codex/codex-cli.ts tests/codex-memory-dream.test.ts tests/codex-cli.test.ts

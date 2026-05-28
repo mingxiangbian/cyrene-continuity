@@ -14819,10 +14819,258 @@ async function removeExistingSkillSymlink(path) {
   }
 }
 
-// src/codex/memory-dream.ts
+// src/codex/dream-artifacts.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
-import { lstat as lstat9, mkdir as mkdir10, readFile as readFile10, rm as rm4, writeFile as writeFile7 } from "node:fs/promises";
+import { lstat as lstat9, mkdir as mkdir10, readFile as readFile10, realpath as realpath6, rename as rename4, writeFile as writeFile7 } from "node:fs/promises";
 import { join as join16 } from "node:path";
+var DREAM_PREVIEW_DIR = "dream-preview";
+var DREAM_REPORT_FILE = "DREAM_REPORT.md";
+async function writeDreamPreviewArtifacts(input) {
+  const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
+  const previewDir = await ensurePreviewDir(memoryRoot);
+  const proposalId = randomUUID8();
+  const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+  const paths = {
+    reportPath: join16(previewDir, DREAM_REPORT_FILE),
+    proposedChangesPath: join16(previewDir, "proposed_changes.json"),
+    diffPath: join16(previewDir, "diff.json"),
+    evalResultsPath: join16(previewDir, "eval_results.json")
+  };
+  await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
+  await writeJsonAtomic(paths.proposedChangesPath, {
+    proposalId,
+    createdAt,
+    root: {
+      memoryRoot: input.proposal.memoryRoot,
+      proposedChanges: input.proposal.proposedChanges,
+      summary: input.proposal.summary,
+      evalGate: input.proposal.evalGate
+    }
+  });
+  await writeJsonAtomic(paths.diffPath, input.proposal.diff);
+  await writeJsonAtomic(paths.evalResultsPath, input.proposal.evalGate);
+  return paths;
+}
+async function readDreamReport(input) {
+  const memoryRoot = input.root === "global" ? await getReadableCodexGlobalMemoryRoot() : await getReadableProjectMemoryRoot(input.cwd);
+  if (memoryRoot === null) {
+    throw new Error(`No readable ${input.root} memory root exists`);
+  }
+  const reportPath = join16(memoryRoot, DREAM_PREVIEW_DIR, DREAM_REPORT_FILE);
+  try {
+    return { memoryRoot, report: await readFile10(reportPath, "utf8") };
+  } catch (error2) {
+    if (isFileErrorCode9(error2, "ENOENT")) {
+      throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
+    }
+    throw error2;
+  }
+}
+async function getReadableProjectMemoryRoot(cwd) {
+  const project = await identifyCodexProject(cwd);
+  return getReadableCodexProjectMemoryRoot(project.projectId);
+}
+function renderDreamReport(input) {
+  const lines = [
+    "# Cyrene Dream Preview",
+    "",
+    `- proposalId: ${input.proposalId}`,
+    `- createdAt: ${input.createdAt}`,
+    `- memoryRoot: ${input.proposal.memoryRoot}`,
+    `- promote: ${input.proposal.summary.promote}`,
+    `- reject: ${input.proposal.summary.reject}`,
+    `- expire: ${input.proposal.summary.expire}`,
+    `- keepPending: ${input.proposal.summary.keepPending}`,
+    `- evalGate: ${input.proposal.evalGate.passed ? "passed" : "failed"}`,
+    "",
+    "## Proposed Changes",
+    ""
+  ];
+  if (input.proposal.proposedChanges.length === 0) {
+    lines.push("- none");
+  } else {
+    for (const change of input.proposal.proposedChanges) {
+      if (change.action === "promote") {
+        lines.push(`- promote ${change.normalizedKey} (${change.candidateId}) -> ${change.memoryId}: ${change.reason}`);
+      } else if (change.action === "reject") {
+        lines.push(`- reject ${change.normalizedKey} (${change.candidateId}) as ${change.tombstoneReason}: ${change.reason}`);
+      } else {
+        lines.push(`- keep_pending ${change.normalizedKey} (${change.candidateId}): ${change.reason}`);
+      }
+    }
+  }
+  lines.push("", "## Apply", "", "Run `cyrene-continuity codex memory dream --stage deep-apply` to apply gated changes.");
+  return `${lines.join("\n")}
+`;
+}
+async function ensurePreviewDir(memoryRoot) {
+  const previewDir = join16(memoryRoot, DREAM_PREVIEW_DIR);
+  await mkdir10(previewDir, { recursive: true });
+  const stats = await lstat9(previewDir);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Refusing to use non-directory dream preview path: ${previewDir}`);
+  }
+  return realpath6(previewDir);
+}
+async function writeJsonAtomic(filePath, value) {
+  await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}
+`);
+}
+async function writeTextAtomic(filePath, content) {
+  const tempPath = `${filePath}.${process.pid}.${randomUUID8()}.tmp`;
+  await writeFile7(tempPath, content, "utf8");
+  await rename4(tempPath, filePath);
+}
+function isFileErrorCode9(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
+// src/codex/memory-dream.ts
+import { randomUUID as randomUUID9 } from "node:crypto";
+import { lstat as lstat10, mkdir as mkdir11, readFile as readFile11, rm as rm4, writeFile as writeFile8 } from "node:fs/promises";
+import { join as join17 } from "node:path";
+
+// src/codex/dream-proposal.ts
+async function buildDreamProposalForRoot(input) {
+  const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
+  let active = await readActiveMemoriesFromRoot(memoryRoot);
+  const tombstones = await readTombstonesFromRoot(memoryRoot);
+  const pending = await readPendingMemoriesFromRoot(memoryRoot);
+  const proposedChanges = [];
+  const applyPlan = [];
+  const diff = {
+    addActiveMemoryIds: [],
+    removePendingCandidateIds: [],
+    addTombstoneIds: [],
+    keepPendingCandidateIds: []
+  };
+  const summary = {
+    promote: 0,
+    reject: 0,
+    expire: 0,
+    keepPending: 0,
+    maintenanceWouldRun: true
+  };
+  for (const candidate of pending) {
+    if (candidate.expiresAt <= input.now) {
+      const tombstone = tombstoneForExpiredPending(candidate, input.now);
+      proposedChanges.push({
+        action: "reject",
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: "Memory candidate expired before dream promotion",
+        tombstoneReason: "expired"
+      });
+      applyPlan.push({
+        action: "reject",
+        candidateId: candidate.id,
+        tombstone,
+        reason: "Memory candidate expired before dream promotion"
+      });
+      diff.removePendingCandidateIds.push(candidate.id);
+      diff.addTombstoneIds.push(tombstone.id);
+      summary.reject += 1;
+      summary.expire += 1;
+      continue;
+    }
+    const decision = validateMemoryCandidate({ candidate, existingMemories: active, tombstones, now: input.now });
+    if (decision.action === "reject") {
+      proposedChanges.push({
+        action: "reject",
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: decision.reason,
+        tombstoneReason: decision.tombstone.reason
+      });
+      applyPlan.push({
+        action: "reject",
+        candidateId: candidate.id,
+        tombstone: decision.tombstone,
+        reason: decision.reason
+      });
+      diff.removePendingCandidateIds.push(candidate.id);
+      diff.addTombstoneIds.push(decision.tombstone.id);
+      summary.reject += 1;
+      continue;
+    }
+    const evaluation = evaluatePendingPromotion(candidate, input.now);
+    if (!evaluation.promotable) {
+      proposedChanges.push({
+        action: "keep_pending",
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: evaluation.reason,
+        distinctEvidenceCount: evaluation.distinctEvidenceCount
+      });
+      applyPlan.push({ action: "keep_pending", candidate, reason: evaluation.reason });
+      diff.keepPendingCandidateIds.push(candidate.id);
+      summary.keepPending += 1;
+      continue;
+    }
+    const memory = decision.action === "auto_write" ? decision.memory : decision.action === "pending" ? activateCandidate(decision.candidate, input.now) : void 0;
+    if (memory === void 0) {
+      proposedChanges.push({
+        action: "keep_pending",
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: decision.reason,
+        distinctEvidenceCount: evaluation.distinctEvidenceCount
+      });
+      applyPlan.push({ action: "keep_pending", candidate, reason: decision.reason });
+      diff.keepPendingCandidateIds.push(candidate.id);
+      summary.keepPending += 1;
+      continue;
+    }
+    active = upsertActiveMemory2(active, memory);
+    proposedChanges.push({
+      action: "promote",
+      candidateId: candidate.id,
+      memoryId: memory.id,
+      normalizedKey: candidate.normalizedKey,
+      reason: evaluation.reason,
+      distinctEvidenceCount: evaluation.distinctEvidenceCount
+    });
+    applyPlan.push({ action: "promote", candidateId: candidate.id, memory });
+    diff.addActiveMemoryIds.push(memory.id);
+    diff.removePendingCandidateIds.push(candidate.id);
+    summary.promote += 1;
+  }
+  return {
+    memoryRoot,
+    proposedChanges,
+    applyPlan,
+    diff,
+    summary,
+    evalGate: { passed: true, failedChecks: [] }
+  };
+}
+function tombstoneForExpiredPending(candidate, now) {
+  return {
+    id: `tombstone-${candidate.id}`,
+    normalizedKey: candidate.normalizedKey,
+    domain: candidate.domain,
+    type: candidate.type,
+    strength: candidate.strength,
+    scope: candidate.scope,
+    reason: "expired",
+    createdAt: now,
+    evidence: candidate.evidence
+  };
+}
+function upsertActiveMemory2(active, memory) {
+  const index = active.findIndex((entry) => entry.id === memory.id || entry.normalizedKey === memory.normalizedKey);
+  if (index === -1) {
+    return [...active, memory];
+  }
+  const next = [...active];
+  next[index] = memory;
+  return next;
+}
+
+// src/codex/memory-dream.ts
 var DREAM_LOCK_DIR = "dream.lock";
 var DREAM_LOCKS_DIR = ".locks";
 var MAX_PENDING_EVIDENCE2 = 10;
@@ -14839,7 +15087,7 @@ async function runCodexMemoryDream(input) {
     } else if (stage === "rem") {
       results.push(await runRemDreamRoot(memoryRoot, stage, now, config2.memoryDreamIntervalHours));
     } else if (stage === "deep-preview") {
-      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage));
+      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage, now));
     } else {
       results.push(await runDeepDreamRoot(memoryRoot, now, config2));
     }
@@ -14920,7 +15168,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours) {
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID8(),
+      id: randomUUID9(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -14944,7 +15192,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours) {
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID8(),
+        id: randomUUID9(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -14968,15 +15216,16 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours) {
     };
   });
 }
-async function runDeepPreviewDreamRoot(memoryRoot, stage) {
+async function runDeepPreviewDreamRoot(memoryRoot, stage, now) {
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
-  const root = await ensureWritableMemoryRootPath(memoryRoot);
+  const proposal = await buildDreamProposalForRoot({ memoryRoot, now });
+  await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal });
   return {
-    memoryRoot: root,
+    memoryRoot: proposal.memoryRoot,
     stage,
-    promoted: 0,
-    rejected: 0,
-    keptPending: (await readPendingMemoriesFromRoot(root)).length
+    promoted: proposal.summary.promote,
+    rejected: proposal.summary.reject,
+    keptPending: proposal.summary.keepPending
   };
 }
 async function runDeepDreamRoot(memoryRoot, now, config2) {
@@ -15020,9 +15269,9 @@ async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours) {
   let mutated = false;
   for (const candidate of pending) {
     if (candidate.expiresAt <= now) {
-      newTombstones.push(tombstoneForExpiredPending(candidate, now));
+      newTombstones.push(tombstoneForExpiredPending2(candidate, now));
       events.push({
-        id: randomUUID8(),
+        id: randomUUID9(),
         action: "reject",
         at: now,
         reason: "Memory candidate expired before dream promotion",
@@ -15036,7 +15285,7 @@ async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours) {
     if (decision.action === "reject") {
       newTombstones.push(decision.tombstone);
       events.push({
-        id: randomUUID8(),
+        id: randomUUID9(),
         action: "reject",
         at: now,
         reason: decision.reason,
@@ -15056,9 +15305,9 @@ async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours) {
       nextPending.push(candidate);
       continue;
     }
-    active = upsertActiveMemory2(active, memory);
+    active = upsertActiveMemory3(active, memory);
     events.push({
-      id: randomUUID8(),
+      id: randomUUID9(),
       action: "promote",
       at: now,
       reason: evaluation.reason,
@@ -15150,7 +15399,7 @@ function proposedActionForPending(candidate, reason) {
 function shouldRejectWithoutMoreEvidence(reason) {
   return /diagnostic affective claim|missing auditable evidence/i.test(reason);
 }
-function tombstoneForExpiredPending(candidate, now) {
+function tombstoneForExpiredPending2(candidate, now) {
   return {
     id: `tombstone-${candidate.id}`,
     normalizedKey: candidate.normalizedKey,
@@ -15163,7 +15412,7 @@ function tombstoneForExpiredPending(candidate, now) {
     evidence: candidate.evidence
   };
 }
-function upsertActiveMemory2(active, memory) {
+function upsertActiveMemory3(active, memory) {
   const index = active.findIndex((entry) => entry.id === memory.id || entry.normalizedKey === memory.normalizedKey);
   if (index === -1) {
     return [...active, memory];
@@ -15212,16 +15461,16 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join16(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID8();
+  const lockDir = join17(locksDir, DREAM_LOCK_DIR);
+  const token = randomUUID9();
   while (true) {
     try {
-      await mkdir10(lockDir);
-      await writeFile7(join16(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await mkdir11(lockDir);
+      await writeFile8(join17(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
-      if (!isFileErrorCode9(error2, "EEXIST")) {
+      if (!isFileErrorCode10(error2, "EEXIST")) {
         throw error2;
       }
       const owner = await readDreamLockOwner(lockDir);
@@ -15233,13 +15482,13 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join16(memoryRoot, DREAM_LOCKS_DIR);
-  await mkdir10(locksDir).catch((error2) => {
-    if (!isFileErrorCode9(error2, "EEXIST")) {
+  const locksDir = join17(memoryRoot, DREAM_LOCKS_DIR);
+  await mkdir11(locksDir).catch((error2) => {
+    if (!isFileErrorCode10(error2, "EEXIST")) {
       throw error2;
     }
   });
-  const stats = await lstat9(locksDir);
+  const stats = await lstat10(locksDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream locks path: ${locksDir}`);
   }
@@ -15248,9 +15497,9 @@ async function ensureDreamLocksDir(memoryRoot) {
 async function readDreamLockOwner(lockDir) {
   let stats;
   try {
-    stats = await lstat9(lockDir);
+    stats = await lstat10(lockDir);
   } catch (error2) {
-    if (isFileErrorCode9(error2, "ENOENT")) {
+    if (isFileErrorCode10(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -15259,7 +15508,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile10(join16(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile11(join17(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -15269,7 +15518,7 @@ async function readDreamLockOwner(lockDir) {
       ...typeof parsed.token === "string" ? { token: parsed.token } : {}
     };
   } catch (error2) {
-    if (isFileErrorCode9(error2, "ENOENT")) {
+    if (isFileErrorCode10(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -15301,7 +15550,7 @@ async function releaseDreamLock(lock) {
     await rm4(lock.lockDir, { recursive: true, force: true });
   }
 }
-function isFileErrorCode9(error2, code) {
+function isFileErrorCode10(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -15339,6 +15588,11 @@ async function handleCodexCommand(input) {
     return;
   }
   if (command === "memory" && input.args[1] === "dream") {
+    if (input.args[2] === "report") {
+      const report = await readDreamReport({ cwd: input.cwd, root: parseDreamReportRoot(input.args) });
+      process.stdout.write(report.report);
+      return;
+    }
     process.stdout.write(`${JSON.stringify(await runCodexMemoryDream({
       cwd: input.cwd,
       stage: parseDreamStage(input.args)
@@ -15362,7 +15616,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory db rebuild|memory maintenance|memory profile>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -15404,6 +15658,21 @@ function parseDreamStage(args) {
     throw new Error("Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.");
   }
   throw new Error(`Invalid memory dream stage: ${value}`);
+}
+function parseDreamReportRoot(args) {
+  const index = args.indexOf("--root");
+  const inline = args.find((arg) => arg.startsWith("--root="));
+  const value = index >= 0 ? args[index + 1] : inline?.slice("--root=".length);
+  if (value === void 0) {
+    return "project";
+  }
+  if (value === "" || value.startsWith("--")) {
+    throw new Error("Invalid memory dream report root: missing value");
+  }
+  if (value === "global" || value === "project") {
+    return value;
+  }
+  throw new Error(`Invalid memory dream report root: ${value}`);
 }
 
 // node_modules/zod/v3/external.js

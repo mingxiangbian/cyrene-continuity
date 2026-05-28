@@ -4,6 +4,7 @@ import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-i
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
 import { rebuildCodexMemoryIndex } from './codex-memory-index.js'
+import { readDreamReport } from './dream-artifacts.js'
 import {
   getCodexMemoryProfile,
   runCodexMemoryDream,
@@ -55,6 +56,11 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
   }
 
   if (command === 'memory' && input.args[1] === 'dream') {
+    if (input.args[2] === 'report') {
+      const report = await readDreamReport({ cwd: input.cwd, root: parseDreamReportRoot(input.args) })
+      process.stdout.write(report.report)
+      return
+    }
     process.stdout.write(`${JSON.stringify(await runCodexMemoryDream({
       cwd: input.cwd,
       stage: parseDreamStage(input.args)
@@ -78,7 +84,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory db rebuild|memory maintenance|memory profile>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile>')
   process.exit(1)
 }
 
@@ -122,4 +128,20 @@ function parseDreamStage(args: string[]): CodexMemoryDreamStage | undefined {
     throw new Error('Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.')
   }
   throw new Error(`Invalid memory dream stage: ${value}`)
+}
+
+function parseDreamReportRoot(args: string[]): 'global' | 'project' {
+  const index = args.indexOf('--root')
+  const inline = args.find((arg) => arg.startsWith('--root='))
+  const value = index >= 0 ? args[index + 1] : inline?.slice('--root='.length)
+  if (value === undefined) {
+    return 'project'
+  }
+  if (value === '' || value.startsWith('--')) {
+    throw new Error('Invalid memory dream report root: missing value')
+  }
+  if (value === 'global' || value === 'project') {
+    return value
+  }
+  throw new Error(`Invalid memory dream report root: ${value}`)
 }

@@ -32,6 +32,8 @@ import {
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
+import { writeDreamPreviewArtifacts } from './dream-artifacts.js'
+import { buildDreamProposalForRoot } from './dream-proposal.js'
 import {
   nextDreamDueAt,
   readCodexMemoryDreamState,
@@ -90,7 +92,7 @@ export async function runCodexMemoryDream(input: {
     } else if (stage === 'rem') {
       results.push(await runRemDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours))
     } else if (stage === 'deep-preview') {
-      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage))
+      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage, now))
     } else {
       results.push(await runDeepDreamRoot(memoryRoot, now, config))
     }
@@ -244,16 +246,18 @@ async function runRemDreamRoot(
 
 async function runDeepPreviewDreamRoot(
   memoryRoot: string,
-  stage: CodexMemoryDreamStage
+  stage: CodexMemoryDreamStage,
+  now: string
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
-  const root = await ensureWritableMemoryRootPath(memoryRoot)
+  const proposal = await buildDreamProposalForRoot({ memoryRoot, now })
+  await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal })
   return {
-    memoryRoot: root,
+    memoryRoot: proposal.memoryRoot,
     stage,
-    promoted: 0,
-    rejected: 0,
-    keptPending: (await readPendingMemoriesFromRoot(root)).length
+    promoted: proposal.summary.promote,
+    rejected: proposal.summary.reject,
+    keptPending: proposal.summary.keepPending
   }
 }
 
