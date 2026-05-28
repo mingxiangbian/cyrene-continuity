@@ -358,6 +358,39 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
+  it('deep-preview records eval gate failures without rejecting diagnostic affective pending memory', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const candidate = createPending({
+      id: 'pending-affective',
+      domain: 'affective',
+      type: 'affective_pattern',
+      strength: 'soft',
+      scope: 'session',
+      content: 'The user is unstable and emotionally dependent.',
+      normalizedKey: 'diagnostic-affective-claim',
+      seenCount: 3,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' },
+        { runId: 'run-3', evidenceGroupId: 'group-3', summary: 'Third.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+
+    await runCodexMemoryDream({ cwd, stage: 'deep-preview', now: '2026-05-26T00:00:00.000Z' })
+
+    const evalResults = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'eval_results.json'), 'utf8')) as {
+      passed: boolean
+      failedChecks: string[]
+    }
+    expect(evalResults.passed).toBe(false)
+    expect(evalResults.failedChecks).toContain('affective_boundary_eval')
+    await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
   it('deep promotes repeated independent procedural memory and writes model profile', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)

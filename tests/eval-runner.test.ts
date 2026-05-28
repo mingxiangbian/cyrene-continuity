@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { runSimilarHintsEvalGate, type SimilarHintEvalCandidate } from '../src/eval/eval-runner.js'
+import {
+  runDreamApplyEvalGate,
+  runSimilarHintsEvalGate,
+  type SimilarHintEvalCandidate
+} from '../src/eval/eval-runner.js'
+import type { PendingMemory } from '../src/memory/types.js'
 
 function candidate(overrides: Partial<SimilarHintEvalCandidate> = {}): SimilarHintEvalCandidate {
   return {
@@ -12,6 +17,42 @@ function candidate(overrides: Partial<SimilarHintEvalCandidate> = {}): SimilarHi
     content: 'MCP plugin projects should rebuild generated runtime explicitly.',
     transferable: true,
     notCurrentProjectFact: true,
+    ...overrides
+  }
+}
+
+function pending(overrides: Partial<PendingMemory> = {}): PendingMemory {
+  return {
+    id: 'pending-1',
+    domain: 'procedural',
+    type: 'procedural_rule',
+    strength: 'hard',
+    scope: 'project',
+    status: 'pending',
+    content: 'Use Chinese for Cyrene specs and plans.',
+    normalizedKey: 'cyrene-spec-plan-language',
+    evidence: [
+      {
+        runId: 'run-1',
+        sessionId: 'session-1',
+        evidenceGroupId: 'group-1',
+        sourceKind: 'user_explicit',
+        summary: 'User asked for Chinese specs and plans.'
+      }
+    ],
+    source: 'user_explicit',
+    scores: {
+      evidenceStrength: 0.95,
+      stability: 0.9,
+      usefulness: 0.9,
+      safety: 0.95,
+      sensitivity: 0.1
+    },
+    seenCount: 2,
+    firstSeenAt: '2026-05-25T00:00:00.000Z',
+    lastSeenAt: '2026-05-25T00:00:00.000Z',
+    expiresAt: '2026-06-24T00:00:00.000Z',
+    tags: ['codex'],
     ...overrides
   }
 }
@@ -149,5 +190,84 @@ describe('similar hints eval gate', () => {
       { memoryId: 'git-url', reason: 'content contains raw remote' },
       { memoryId: 'http-url', reason: 'content contains raw remote' }
     ]))
+  })
+})
+
+describe('dream apply eval gate', () => {
+  it('fails pending_usage_eval for assistant-observed promotion', () => {
+    const candidate = pending({
+      source: 'assistant_observed',
+      evidence: [
+        {
+          runId: 'run-1',
+          evidenceGroupId: 'group-1',
+          sourceKind: 'assistant_observed',
+          summary: 'Assistant observed a possible preference.'
+        }
+      ]
+    })
+
+    const result = runDreamApplyEvalGate({
+      pending: [candidate],
+      proposedChanges: [{
+        action: 'promote',
+        candidateId: candidate.id,
+        memoryId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: 'test promote',
+        distinctEvidenceCount: 1
+      }]
+    })
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('pending_usage_eval')
+    expect(JSON.stringify(result.results)).toContain('assistant_observed')
+  })
+
+  it('fails profile_pollution_eval when profile preview includes pending-only content', () => {
+    const candidate = pending({ content: 'Pending-only preference must not enter MODEL_PROFILE.md.' })
+
+    const result = runDreamApplyEvalGate({
+      pending: [candidate],
+      proposedChanges: [{
+        action: 'keep_pending',
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: 'needs more evidence',
+        distinctEvidenceCount: 1
+      }],
+      profilePreview: '# Cyrene Model Profile\n\nPending-only preference must not enter MODEL_PROFILE.md.\n'
+    })
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('profile_pollution_eval')
+    expect(JSON.stringify(result.results)).toContain('pending-only content')
+  })
+
+  it('fails affective_boundary_eval for diagnostic affective claims', () => {
+    const candidate = pending({
+      id: 'pending-affective',
+      domain: 'affective',
+      type: 'affective_pattern',
+      strength: 'soft',
+      scope: 'session',
+      content: 'The user is unstable and emotionally dependent.',
+      normalizedKey: 'diagnostic-affective-claim'
+    })
+
+    const result = runDreamApplyEvalGate({
+      pending: [candidate],
+      proposedChanges: [{
+        action: 'reject',
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: 'Affective memory cannot contain diagnostic claims',
+        tombstoneReason: 'rejected'
+      }]
+    })
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('affective_boundary_eval')
+    expect(JSON.stringify(result.results)).toContain('diagnostic affective claim')
   })
 })

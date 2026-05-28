@@ -5,6 +5,11 @@ import {
   readTombstonesFromRoot
 } from '../memory/memory-store.js'
 import {
+  runDreamApplyEvalGate,
+  type EvalCheckName,
+  type EvalResult
+} from '../eval/eval-runner.js'
+import {
   activateCandidate,
   evaluatePendingPromotion,
   validateMemoryCandidate
@@ -13,7 +18,8 @@ import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../memory/typ
 
 export interface DreamEvalGateResult {
   passed: boolean
-  failedChecks: string[]
+  failedChecks: EvalCheckName[]
+  results: EvalResult[]
 }
 
 export interface DreamProposalSummary {
@@ -199,13 +205,15 @@ export async function buildDreamProposalForRoot(input: {
     summary.promote += 1
   }
 
+  const evalGate = runDreamApplyEvalGate({ proposedChanges, pending })
+
   return {
     memoryRoot,
     proposedChanges,
     applyPlan,
     diff,
     summary,
-    evalGate: { passed: true, failedChecks: [] }
+    evalGate
   }
 }
 

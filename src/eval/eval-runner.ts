@@ -1,8 +1,12 @@
-import type { MemoryDomain, MemoryPortability, MemoryScope } from '../memory/types.js'
+import type { DreamProposedChange } from '../codex/dream-proposal.js'
+import type { MemoryDomain, MemoryPortability, MemoryScope, PendingMemory } from '../memory/types.js'
 
 export type EvalCheckName =
   | 'cross_project_leak_eval'
   | 'similar_hint_boundary_eval'
+  | 'pending_usage_eval'
+  | 'profile_pollution_eval'
+  | 'affective_boundary_eval'
 
 export interface EvalFinding {
   memoryId?: string
@@ -38,6 +42,27 @@ export function runSimilarHintsEvalGate(candidates: SimilarHintEvalCandidate[]):
   const results = [
     runCrossProjectLeakEval(candidates),
     runSimilarHintBoundaryEval(candidates)
+  ]
+  const failedChecks = results
+    .filter((result) => !result.passed && result.severity === 'error')
+    .map((result) => result.name)
+
+  return {
+    passed: failedChecks.length === 0,
+    failedChecks,
+    results
+  }
+}
+
+export function runDreamApplyEvalGate(input: {
+  proposedChanges: DreamProposedChange[]
+  pending: PendingMemory[]
+  profilePreview?: string
+}): EvalGateResult {
+  const results = [
+    runPendingUsageEval(input.proposedChanges, input.pending),
+    runProfilePollutionEval(input.proposedChanges, input.pending, input.profilePreview),
+    runAffectiveBoundaryEval(input.proposedChanges, input.pending)
   ]
   const failedChecks = results
     .filter((result) => !result.passed && result.severity === 'error')
@@ -94,6 +119,69 @@ function runSimilarHintBoundaryEval(candidates: SimilarHintEvalCandidate[]): Eva
   return result('similar_hint_boundary_eval', findings)
 }
 
+function runPendingUsageEval(proposedChanges: DreamProposedChange[], pending: PendingMemory[]): EvalResult {
+  const findings: EvalFinding[] = []
+
+  for (const change of proposedChanges) {
+    if (change.action !== 'promote') {
+      continue
+    }
+    const candidate = pending.find((item) => item.id === change.candidateId)
+    if (candidate === undefined) {
+      findings.push({ memoryId: change.memoryId, reason: `promoted candidate is missing from pending set: ${change.candidateId}` })
+      continue
+    }
+    if (candidate.source === 'assistant_observed' || candidate.evidence.some((entry) => entry.sourceKind === 'assistant_observed')) {
+      findings.push({ memoryId: change.memoryId, reason: 'assistant_observed pending candidate cannot be promoted by dream apply' })
+    }
+    if (candidate.evidence.length === 0) {
+      findings.push({ memoryId: change.memoryId, reason: 'promoted pending candidate has no auditable evidence' })
+    }
+  }
+
+  return result('pending_usage_eval', findings)
+}
+
+function runProfilePollutionEval(
+  proposedChanges: DreamProposedChange[],
+  pending: PendingMemory[],
+  profilePreview?: string
+): EvalResult {
+  const findings: EvalFinding[] = []
+  if (profilePreview === undefined || profilePreview === '') {
+    return result('profile_pollution_eval', findings)
+  }
+
+  const promotedCandidateIds = new Set(
+    proposedChanges
+      .filter((change) => change.action === 'promote')
+      .map((change) => change.candidateId)
+  )
+  for (const candidate of pending) {
+    if (!promotedCandidateIds.has(candidate.id) && profilePreview.includes(candidate.content)) {
+      findings.push({ memoryId: candidate.id, reason: 'profile preview contains pending-only content' })
+    }
+  }
+
+  return result('profile_pollution_eval', findings)
+}
+
+function runAffectiveBoundaryEval(proposedChanges: DreamProposedChange[], pending: PendingMemory[]): EvalResult {
+  const findings: EvalFinding[] = []
+  const changedCandidateIds = new Set(proposedChanges.map((change) => change.candidateId))
+
+  for (const candidate of pending) {
+    if (!changedCandidateIds.has(candidate.id)) {
+      continue
+    }
+    if ((candidate.domain === 'affective' || candidate.domain === 'relationship') && containsDiagnosticAffectiveClaim(candidate.content)) {
+      findings.push({ memoryId: candidate.id, reason: 'diagnostic affective claim cannot be applied by dream' })
+    }
+  }
+
+  return result('affective_boundary_eval', findings)
+}
+
 function result(name: EvalCheckName, findings: EvalFinding[]): EvalResult {
   return {
     name,
@@ -120,4 +208,8 @@ function containsRawRemote(content: string): boolean {
 
 function containsSecretLikeValue(content: string): boolean {
   return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)(?:\s*[=:]\s*|\s+)[a-fA-F0-9]{64})\b/.test(content)
+}
+
+function containsDiagnosticAffectiveClaim(content: string): boolean {
+  return /\b(?:unstable|emotionally dependent|dependent|narciss(?:ist|istic)?|borderline|trauma bonded|attachment disorder|diagnos(?:e|is|tic))\b/i.test(content)
 }

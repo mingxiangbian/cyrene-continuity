@@ -282,7 +282,7 @@ git commit -m "feat: write dream preview artifacts"
 - Test: `tests/eval-runner.test.ts`
 - Test: `tests/codex-memory-dream.test.ts`
 
-- [ ] **Step 1: Write failing eval tests**
+- [x] **Step 1: Write failing eval tests**
 
 Add cases for:
 
@@ -292,7 +292,7 @@ profile_pollution_eval rejects pending profile content
 affective_boundary_eval rejects diagnostic affective claim
 ```
 
-- [ ] **Step 2: Extend check names**
+- [x] **Step 2: Extend check names**
 
 Extend `EvalCheckName` with:
 
@@ -302,7 +302,7 @@ Extend `EvalCheckName` with:
 | 'affective_boundary_eval'
 ```
 
-- [ ] **Step 3: Add dream candidate gate**
+- [x] **Step 3: Add dream candidate gate**
 
 Implement:
 
@@ -316,17 +316,17 @@ export function runDreamApplyEvalGate(input: {
 
 This function is deterministic and fail-closed on error severity.
 
-- [ ] **Step 4: Preserve similar hint API**
+- [x] **Step 4: Preserve similar hint API**
 
 Keep `runSimilarHintsEvalGate(candidates)` behavior and tests unchanged except for expanded `EvalCheckName` type.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 ```bash
 npm test -- tests/eval-runner.test.ts tests/codex-memory-dream.test.ts
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/eval/eval-runner.ts src/codex/dream-proposal.ts tests/eval-runner.test.ts tests/codex-memory-dream.test.ts
