@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import {
+  deferCodexPendingMemory,
+  editCodexPendingMemory,
   getCodexPendingMemory,
   listCodexPendingMemories,
   promoteCodexPendingMemory,
@@ -21,6 +23,23 @@ export const memoryReviewDecisionInputSchema = {
   cwd: z.string().optional(),
   id: z.string(),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  reason: z.string().optional()
+}
+
+export const memoryReviewEditInputSchema = {
+  cwd: z.string().optional(),
+  id: z.string(),
+  reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  content: z.string().min(1),
+  normalizedKey: z.string().optional(),
+  reason: z.string().optional()
+}
+
+export const memoryReviewDeferInputSchema = {
+  cwd: z.string().optional(),
+  id: z.string(),
+  reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  days: z.number().int().positive().optional(),
   reason: z.string().optional()
 }
 
@@ -61,6 +80,35 @@ export async function handleMemoryReject(
     cwd: input.cwd ?? fallbackCwd,
     id: input.id,
     reviewHash: input.reviewHash,
+    reason: input.reason
+  })
+  return jsonText(result)
+}
+
+export async function handleMemoryEdit(
+  input: { cwd?: string; id: string; reviewHash: string; content: string; normalizedKey?: string; reason?: string },
+  fallbackCwd: string
+) {
+  const result = await editCodexPendingMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    reviewHash: input.reviewHash,
+    content: input.content,
+    normalizedKey: input.normalizedKey,
+    reason: input.reason
+  })
+  return jsonText(result)
+}
+
+export async function handleMemoryDefer(
+  input: { cwd?: string; id: string; reviewHash: string; days?: number; reason?: string },
+  fallbackCwd: string
+) {
+  const result = await deferCodexPendingMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    reviewHash: input.reviewHash,
+    days: input.days,
     reason: input.reason
   })
   return jsonText(result)

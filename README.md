@@ -30,6 +30,10 @@ The plugin MCP server exposes:
   approval and review-hash validation.
 - `cyrene_memory_reject`: reject a pending candidate only after explicit user
   rejection and review-hash validation.
+- `cyrene_memory_edit`: edit a pending candidate after review-hash validation;
+  the edited candidate remains pending.
+- `cyrene_memory_defer`: defer a pending candidate after review-hash validation;
+  this never promotes active memory.
 - `cyrene_memory_dream_run`: run light, REM, deep-preview, or gated deep-apply
   memory maintenance. Dream can recommend promotions for review, but it does
   not promote unapproved pending memory.
@@ -70,6 +74,11 @@ npm run dev -- codex install-hook --stop
 npm run dev -- codex hook stop
 npm run dev -- codex eval run --check similar-hints
 npm run dev -- codex memory status
+npm run dev -- codex memory review
+npm run dev -- codex memory approve <candidateId> --review-hash <hash>
+npm run dev -- codex memory reject <candidateId> --review-hash <hash>
+npm run dev -- codex memory edit <candidateId> --review-hash <hash> --content <text>
+npm run dev -- codex memory defer <candidateId> --review-hash <hash> --days 7
 npm run dev -- codex memory db rebuild
 npm run dev -- codex memory dream --stage deep-preview
 npm run dev -- codex memory dream report --root project
@@ -136,4 +145,6 @@ of truth, and generated Markdown profiles remain review/debug projections.
 
 ## Review Policy
 
-Pending memory candidates are not active memory. Promotion requires explicit user approval and a matching review hash.
+Pending memory candidates are not active memory. Promotion requires explicit
+user approval and a matching review hash. `codex memory review` shows the
+candidate metadata needed for approval, rejection, edit, or deferral.

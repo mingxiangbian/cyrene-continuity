@@ -9,13 +9,17 @@ import {
 } from './tools/memory-dream.js'
 import { handleMemoryPropose, memoryProposeInputSchema } from './tools/memory-propose.js'
 import {
+  handleMemoryDefer,
+  handleMemoryEdit,
   handleMemoryPendingGet,
   handleMemoryPendingList,
   handleMemoryPromote,
   handleMemoryReject,
   memoryPendingGetInputSchema,
   memoryPendingListInputSchema,
-  memoryReviewDecisionInputSchema
+  memoryReviewDecisionInputSchema,
+  memoryReviewDeferInputSchema,
+  memoryReviewEditInputSchema
 } from './tools/memory-review.js'
 import { handleProjectIdentify, projectIdentifyInputSchema } from './tools/project-identify.js'
 
@@ -88,6 +92,26 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
       inputSchema: memoryReviewDecisionInputSchema
     },
     async (input) => handleMemoryReject(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_edit',
+    {
+      description:
+        'Edit a pending Cyrene memory candidate only after hash-checked Codex review; the edited candidate stays pending.',
+      inputSchema: memoryReviewEditInputSchema
+    },
+    async (input) => handleMemoryEdit(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_defer',
+    {
+      description:
+        'Defer a pending Cyrene memory candidate only after hash-checked Codex review; this never promotes active memory.',
+      inputSchema: memoryReviewDeferInputSchema
+    },
+    async (input) => handleMemoryDefer(input, options.cwd)
   )
 
   server.registerTool(

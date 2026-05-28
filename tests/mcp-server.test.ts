@@ -8,6 +8,8 @@ import { jsonText } from '../src/mcp/mcp-json.js'
 import { createCyreneMcpServer } from '../src/mcp/mcp-server.js'
 import { handleMemoryPropose } from '../src/mcp/tools/memory-propose.js'
 import {
+  handleMemoryDefer,
+  handleMemoryEdit,
   handleMemoryPendingGet,
   handleMemoryPendingList,
   handleMemoryPromote,
@@ -107,8 +109,32 @@ describe('Cyrene MCP server', () => {
     const getJson = JSON.parse((await handleMemoryPendingGet({ cwd, id: candidateId }, process.cwd())).content[0]?.text ?? '{}')
     expect(getJson.result.action).toBe('get')
 
+    const editJson = JSON.parse(
+      (await handleMemoryEdit(
+        {
+          cwd,
+          id: candidateId,
+          reviewHash,
+          content: 'Pending memory review edit tools are exposed through MCP.',
+          reason: 'Covered by MCP edit test.'
+        },
+        process.cwd()
+      )).content[0]?.text ?? '{}'
+    )
+    expect(editJson.result.action).toBe('edit')
+    const editedReviewHash = editJson.result.reviewHash
+
+    const deferJson = JSON.parse(
+      (await handleMemoryDefer(
+        { cwd, id: candidateId, reviewHash: editedReviewHash, days: 14, reason: 'Covered by MCP defer test.' },
+        process.cwd()
+      )).content[0]?.text ?? '{}'
+    )
+    expect(deferJson.result.action).toBe('defer')
+    const deferredReviewHash = deferJson.result.reviewHash
+
     const rejectJson = JSON.parse(
-      (await handleMemoryReject({ cwd, id: candidateId, reviewHash, reason: 'Covered by MCP test.' }, process.cwd()))
+      (await handleMemoryReject({ cwd, id: candidateId, reviewHash: deferredReviewHash, reason: 'Covered by MCP test.' }, process.cwd()))
         .content[0]?.text ?? '{}'
     )
     expect(rejectJson.result.action).toBe('reject')
@@ -211,6 +237,8 @@ describe('Cyrene MCP server', () => {
       expect(names).toContain('cyrene_memory_pending_get')
       expect(names).toContain('cyrene_memory_promote')
       expect(names).toContain('cyrene_memory_reject')
+      expect(names).toContain('cyrene_memory_edit')
+      expect(names).toContain('cyrene_memory_defer')
       expect(names).toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
     } finally {
@@ -235,6 +263,8 @@ describe('Cyrene MCP server', () => {
       const names = result.tools.map((tool) => tool.name)
       expect(names).toContain('cyrene_continuity_get')
       expect(names).toContain('cyrene_memory_pending_list')
+      expect(names).toContain('cyrene_memory_edit')
+      expect(names).toContain('cyrene_memory_defer')
       expect(names).toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
     } finally {
@@ -252,6 +282,8 @@ describe('Cyrene MCP server', () => {
     expect(source).toContain('cyrene_memory_pending_get')
     expect(source).toContain('cyrene_memory_promote')
     expect(source).toContain('cyrene_memory_reject')
+    expect(source).toContain('cyrene_memory_edit')
+    expect(source).toContain('cyrene_memory_defer')
     expect(source).toContain('cyrene_memory_profile_get')
     expect(source).toContain('cyrene_memory_dream_run')
     expect(source).toContain('Dream Deep')

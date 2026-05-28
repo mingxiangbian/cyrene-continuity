@@ -13868,13 +13868,21 @@ function reviewHashForPendingMemory(candidate) {
   };
   return createHash3("sha256").update(JSON.stringify(payload)).digest("hex");
 }
-function summarizePendingMemory(candidate) {
+function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).toISOString()) {
+  const reviewHash = reviewHashForPendingMemory(candidate);
+  const recommendation = deriveRecommendation(candidate, now);
   return {
     id: candidate.id,
     domain: candidate.domain,
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
+    candidateKind: deriveCandidateKind(candidate),
+    recommendation,
+    suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
+    risk: deriveRisk(candidate),
+    sensitivity: candidate.scores.sensitivity,
+    evidenceCount: candidate.evidence.length,
     content: candidate.content,
     normalizedKey: candidate.normalizedKey,
     source: candidate.source,
@@ -13882,10 +13890,56 @@ function summarizePendingMemory(candidate) {
     firstSeenAt: candidate.firstSeenAt,
     lastSeenAt: candidate.lastSeenAt,
     expiresAt: candidate.expiresAt,
-    reviewHash: reviewHashForPendingMemory(candidate),
+    reviewHash,
     evidenceSummary: candidate.evidence.map((entry) => entry.summary ?? entry.quote ?? entry.runId ?? "").filter((text) => text.trim() !== ""),
     scores: candidate.scores
   };
+}
+function deriveRecommendation(candidate, now) {
+  if (candidate.expiresAt <= now) {
+    return "reject";
+  }
+  const promotion = evaluatePendingPromotion(candidate, now);
+  return promotion.promotable ? "promote" : "defer";
+}
+function deriveCandidateKind(candidate) {
+  const tagKind = candidate.tags.find(
+    (tag) => tag === "project_fact" || tag === "project_decision" || tag === "user_instruction" || tag === "workflow_rule" || tag === "known_pitfall" || tag === "rejected_approach" || tag === "open_question"
+  );
+  if (tagKind !== void 0) {
+    return tagKind;
+  }
+  if (candidate.type === "project_fact") {
+    return "project_fact";
+  }
+  if (candidate.type === "procedural_rule" || candidate.type === "system_policy") {
+    return "workflow_rule";
+  }
+  if (candidate.type === "user_preference" || candidate.type === "interaction_style" || candidate.type === "relationship_boundary" || candidate.type === "affective_pattern") {
+    return "user_instruction";
+  }
+  if (candidate.type === "episode") {
+    return "project_fact";
+  }
+  return "project_fact";
+}
+function deriveRisk(candidate) {
+  if (candidate.scores.safety < 0.65 || candidate.scores.sensitivity > 0.6) {
+    return "high";
+  }
+  if (candidate.scores.safety < 0.8 || candidate.scores.sensitivity > 0.45) {
+    return "medium";
+  }
+  return "low";
+}
+function suggestedReviewAction(candidateId, reviewHash, recommendation) {
+  if (recommendation === "promote") {
+    return `cyrene-continuity codex memory approve ${candidateId} --review-hash ${reviewHash}`;
+  }
+  if (recommendation === "reject") {
+    return `cyrene-continuity codex memory reject ${candidateId} --review-hash ${reviewHash}`;
+  }
+  return `cyrene-continuity codex memory defer ${candidateId} --review-hash ${reviewHash}`;
 }
 async function listCodexPendingMemories(input) {
   const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd);
@@ -14135,6 +14189,176 @@ async function rejectCodexPendingMemory(input) {
     };
   });
 }
+async function editCodexPendingMemory(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id);
+  if (candidate === void 0) {
+    return {
+      project,
+      memoryRoot,
+      result: {
+        action: "not_found",
+        candidateId: input.id,
+        reason: "Pending memory candidate not found"
+      }
+    };
+  }
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
+  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
+    const lockedCandidate = lockedPending.find((memoryCandidate) => memoryCandidate.id === candidate.id);
+    if (lockedCandidate === void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "not_found",
+          candidateId: candidate.id,
+          reason: "Pending memory candidate not found"
+        }
+      };
+    }
+    const latestReviewHash = reviewHashForPendingMemory(lockedCandidate);
+    if (latestReviewHash !== input.reviewHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          candidateId: candidate.id,
+          reason: "Pending memory candidate changed since review",
+          latest: summarizePendingMemory(lockedCandidate)
+        }
+      };
+    }
+    const editedCandidate = {
+      ...lockedCandidate,
+      content: input.content,
+      normalizedKey: input.normalizedKey ?? lockedCandidate.normalizedKey,
+      lastSeenAt: now
+    };
+    const [lockedActive, lockedTombstones] = await Promise.all([
+      readActiveMemoriesFromRoot(lockedMemoryRoot),
+      readTombstonesFromRoot(lockedMemoryRoot)
+    ]);
+    const decision = validateMemoryCandidate({
+      candidate: editedCandidate,
+      existingMemories: lockedActive,
+      tombstones: lockedTombstones,
+      now
+    });
+    if (decision.action === "reject") {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "rejected_by_validator",
+          candidateId: candidate.id,
+          reason: decision.reason,
+          tombstone: decision.tombstone
+        }
+      };
+    }
+    const validatedCandidate = decision.action === "pending" ? decision.candidate : editedCandidate;
+    const nextPending = lockedPending.map(
+      (memoryCandidate) => memoryCandidate.id === candidate.id ? validatedCandidate : memoryCandidate
+    );
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID5(),
+      action: "pending",
+      at: now,
+      reason: input.reason ?? "Edited by Codex pending memory review",
+      candidateId: validatedCandidate.id,
+      details: { reviewAction: "edit" }
+    });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "edit",
+        candidateId: validatedCandidate.id,
+        candidate: validatedCandidate,
+        reviewHash: reviewHashForPendingMemory(validatedCandidate)
+      }
+    };
+  });
+}
+async function deferCodexPendingMemory(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const days = input.days ?? 7;
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id);
+  if (candidate === void 0) {
+    return {
+      project,
+      memoryRoot,
+      result: {
+        action: "not_found",
+        candidateId: input.id,
+        reason: "Pending memory candidate not found"
+      }
+    };
+  }
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
+  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
+    const lockedCandidate = lockedPending.find((memoryCandidate) => memoryCandidate.id === candidate.id);
+    if (lockedCandidate === void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "not_found",
+          candidateId: candidate.id,
+          reason: "Pending memory candidate not found"
+        }
+      };
+    }
+    const latestReviewHash = reviewHashForPendingMemory(lockedCandidate);
+    if (latestReviewHash !== input.reviewHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          candidateId: candidate.id,
+          reason: "Pending memory candidate changed since review",
+          latest: summarizePendingMemory(lockedCandidate)
+        }
+      };
+    }
+    const deferredCandidate = {
+      ...lockedCandidate,
+      promoteAfter: addDays(now, days)
+    };
+    const nextPending = lockedPending.map(
+      (memoryCandidate) => memoryCandidate.id === candidate.id ? deferredCandidate : memoryCandidate
+    );
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID5(),
+      action: "pending",
+      at: now,
+      reason: input.reason ?? "Deferred by Codex pending memory review",
+      candidateId: deferredCandidate.id,
+      details: { reviewAction: "defer", days }
+    });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "defer",
+        candidateId: deferredCandidate.id,
+        candidate: deferredCandidate,
+        reviewHash: reviewHashForPendingMemory(deferredCandidate)
+      }
+    };
+  });
+}
 async function getCodexPendingReviewNotice(input) {
   const { readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd);
   const pending = sortPendingNewestFirst2((await Promise.all(readableRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat());
@@ -14217,6 +14441,11 @@ function uniqueInOrder(values) {
 }
 function previewContent(content) {
   return content.length <= 160 ? content : `${content.slice(0, 157)}...`;
+}
+function addDays(iso, days) {
+  const date3 = new Date(iso);
+  date3.setUTCDate(date3.getUTCDate() + days);
+  return date3.toISOString();
 }
 
 // src/codex/project-fingerprint.ts
@@ -14873,7 +15102,7 @@ function toPendingMemory(input, now) {
     seenCount: 1,
     firstSeenAt: now,
     lastSeenAt: now,
-    expiresAt: addDays(now, 30),
+    expiresAt: addDays2(now, 30),
     userConfirmed: input.userConfirmed,
     tags: input.tags ?? []
   };
@@ -14882,7 +15111,7 @@ function normalizeKey(value) {
   const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
   return slug.length > 0 ? slug : createHash5("sha256").update(value).digest("hex").slice(0, 16);
 }
-function addDays(iso, days) {
+function addDays2(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
@@ -15527,6 +15756,57 @@ async function removeExistingSkillSymlink(path) {
     }
     throw error2;
   }
+}
+
+// src/codex/codex-memory-review-cli.ts
+async function formatCodexMemoryReview(input) {
+  const result2 = await listCodexPendingMemories(input);
+  const lines = [
+    "Cyrene Pending Memory Review",
+    `project: ${result2.project.displayName} (${result2.project.projectId})`,
+    `memory root: ${result2.memoryRoot}`,
+    `pending: ${result2.pending.length}/${result2.total}`,
+    ""
+  ];
+  if (result2.pending.length === 0) {
+    lines.push("No pending memory candidates.");
+    return `${lines.join("\n")}
+`;
+  }
+  for (const item of result2.pending) {
+    lines.push(
+      `- id: ${item.id}`,
+      `  recommendation: ${item.recommendation}`,
+      `  type: ${item.type}`,
+      `  scope: ${item.scope}`,
+      `  domain: ${item.domain}`,
+      `  candidate kind: ${item.candidateKind}`,
+      `  content: ${item.content}`,
+      `  evidence count: ${item.evidenceCount}`,
+      `  risk: ${item.risk}`,
+      `  sensitivity: ${item.sensitivity}`,
+      `  review hash: ${item.reviewHash}`,
+      `  suggested action: ${item.suggestedAction}`
+    );
+  }
+  return `${lines.join("\n")}
+`;
+}
+async function runCodexMemoryApprove(input) {
+  return `${JSON.stringify(await promoteCodexPendingMemory(input), null, 2)}
+`;
+}
+async function runCodexMemoryReject(input) {
+  return `${JSON.stringify(await rejectCodexPendingMemory(input), null, 2)}
+`;
+}
+async function runCodexMemoryEdit(input) {
+  return `${JSON.stringify(await editCodexPendingMemory(input), null, 2)}
+`;
+}
+async function runCodexMemoryDefer(input) {
+  return `${JSON.stringify(await deferCodexPendingMemory(input), null, 2)}
+`;
 }
 
 // src/codex/dream-artifacts.ts
@@ -16812,6 +17092,52 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
+  if (command === "memory" && input.args[1] === "review") {
+    process.stdout.write(await formatCodexMemoryReview({
+      cwd: input.cwd,
+      limit: parseOptionalPositiveInteger(input.args, "--limit")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "approve") {
+    process.stdout.write(await runCodexMemoryApprove({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, "pending memory id"),
+      reviewHash: parseRequiredOption(input.args, "--review-hash", "pending review hash"),
+      reason: parseOptionalOption(input.args, "--reason")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "reject") {
+    process.stdout.write(await runCodexMemoryReject({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, "pending memory id"),
+      reviewHash: parseRequiredOption(input.args, "--review-hash", "pending review hash"),
+      reason: parseOptionalOption(input.args, "--reason")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "edit") {
+    process.stdout.write(await runCodexMemoryEdit({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, "pending memory id"),
+      reviewHash: parseRequiredOption(input.args, "--review-hash", "pending review hash"),
+      content: parseRequiredOption(input.args, "--content", "pending memory content"),
+      normalizedKey: parseOptionalOption(input.args, "--normalized-key"),
+      reason: parseOptionalOption(input.args, "--reason")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "defer") {
+    process.stdout.write(await runCodexMemoryDefer({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 2, "pending memory id"),
+      reviewHash: parseRequiredOption(input.args, "--review-hash", "pending review hash"),
+      days: parseOptionalPositiveInteger(input.args, "--days"),
+      reason: parseOptionalOption(input.args, "--reason")
+    }));
+    return;
+  }
   if (command === "memory" && input.args[1] === "status") {
     process.stdout.write(await formatCodexMemoryStatus({ cwd: input.cwd }));
     return;
@@ -16867,7 +17193,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash>|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -16932,6 +17258,13 @@ function parseProfileReflectionSource(args) {
   }
   throw new Error(`Invalid profile reflection source: ${value}`);
 }
+function parseRequiredPositional(args, index, label) {
+  const value = args[index];
+  if (value === void 0 || value === "" || value.startsWith("--")) {
+    throw new Error(`Invalid ${label}: missing value`);
+  }
+  return value;
+}
 function parseRequiredOption(args, option, label) {
   const index = args.indexOf(option);
   const inline = args.find((arg) => arg.startsWith(`${option}=`));
@@ -16952,6 +17285,17 @@ function parseOptionalOption(args, option) {
     throw new Error(`Invalid ${option}: missing value`);
   }
   return value;
+}
+function parseOptionalPositiveInteger(args, option) {
+  const value = parseOptionalOption(args, option);
+  if (value === void 0) {
+    return void 0;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${option}: expected positive integer`);
+  }
+  return parsed;
 }
 
 // node_modules/zod/v3/external.js
@@ -31284,6 +31628,21 @@ var memoryReviewDecisionInputSchema = {
   reviewHash: external_exports.string().regex(/^[a-f0-9]{64}$/),
   reason: external_exports.string().optional()
 };
+var memoryReviewEditInputSchema = {
+  cwd: external_exports.string().optional(),
+  id: external_exports.string(),
+  reviewHash: external_exports.string().regex(/^[a-f0-9]{64}$/),
+  content: external_exports.string().min(1),
+  normalizedKey: external_exports.string().optional(),
+  reason: external_exports.string().optional()
+};
+var memoryReviewDeferInputSchema = {
+  cwd: external_exports.string().optional(),
+  id: external_exports.string(),
+  reviewHash: external_exports.string().regex(/^[a-f0-9]{64}$/),
+  days: external_exports.number().int().positive().optional(),
+  reason: external_exports.string().optional()
+};
 async function handleMemoryPendingList(input, fallbackCwd) {
   const result2 = await listCodexPendingMemories({
     cwd: input.cwd ?? fallbackCwd,
@@ -31312,6 +31671,27 @@ async function handleMemoryReject(input, fallbackCwd) {
     cwd: input.cwd ?? fallbackCwd,
     id: input.id,
     reviewHash: input.reviewHash,
+    reason: input.reason
+  });
+  return jsonText(result2);
+}
+async function handleMemoryEdit(input, fallbackCwd) {
+  const result2 = await editCodexPendingMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    reviewHash: input.reviewHash,
+    content: input.content,
+    normalizedKey: input.normalizedKey,
+    reason: input.reason
+  });
+  return jsonText(result2);
+}
+async function handleMemoryDefer(input, fallbackCwd) {
+  const result2 = await deferCodexPendingMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    reviewHash: input.reviewHash,
+    days: input.days,
     reason: input.reason
   });
   return jsonText(result2);
@@ -31387,6 +31767,22 @@ function createCyreneMcpServer(options) {
       inputSchema: memoryReviewDecisionInputSchema
     },
     async (input) => handleMemoryReject(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_edit",
+    {
+      description: "Edit a pending Cyrene memory candidate only after hash-checked Codex review; the edited candidate stays pending.",
+      inputSchema: memoryReviewEditInputSchema
+    },
+    async (input) => handleMemoryEdit(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_defer",
+    {
+      description: "Defer a pending Cyrene memory candidate only after hash-checked Codex review; this never promotes active memory.",
+      inputSchema: memoryReviewDeferInputSchema
+    },
+    async (input) => handleMemoryDefer(input, options.cwd)
   );
   server.registerTool(
     "cyrene_memory_dream_run",
