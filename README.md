@@ -69,6 +69,7 @@ npm run dev -- codex install --plugin
 npm run dev -- codex install-hook --stop
 npm run dev -- codex hook stop
 npm run dev -- codex eval run --check similar-hints
+npm run dev -- codex memory status
 npm run dev -- codex memory db rebuild
 npm run dev -- codex memory dream --stage deep-preview
 npm run dev -- codex memory dream report --root project

@@ -3407,11 +3407,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants);
+          this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -3428,10 +3428,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants);
+        this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -3492,8 +3492,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants) {
-        this.code = optimizeExpr(this.code, names, constants);
+      optimizeNames(names, constants2) {
+        this.code = optimizeExpr(this.code, names, constants2);
         return this;
       }
       get names() {
@@ -3522,12 +3522,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants))
+          if (n.optimizeNames(names, constants2))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -3580,12 +3580,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        if (!(super.optimizeNames(names, constants) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        if (!(super.optimizeNames(names, constants2) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants);
+        this.condition = optimizeExpr(this.condition, names, constants2);
         return this;
       }
       get names() {
@@ -3608,10 +3608,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants);
+        this.iteration = optimizeExpr(this.iteration, names, constants2);
         return this;
       }
       get names() {
@@ -3647,10 +3647,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants);
+        this.iterable = optimizeExpr(this.iterable, names, constants2);
         return this;
       }
       get names() {
@@ -3692,11 +3692,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a, _b;
-        super.optimizeNames(names, constants);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants);
+        super.optimizeNames(names, constants2);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
         return this;
       }
       get names() {
@@ -3997,7 +3997,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants) {
+    function optimizeExpr(expr, names, constants2) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -4012,14 +4012,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants[n.str];
+        const c = constants2[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -9907,9 +9907,9 @@ var {
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/codex/codex-doctor.ts
-import { access as access2, readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
+import { access as access3, readFile as readFile6, readdir as readdir2 } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/config.ts
@@ -10456,6 +10456,11 @@ function isPathInside2(parent, child) {
 function isFileErrorCode4(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
+
+// src/codex/codex-memory-status.ts
+import { constants } from "node:fs";
+import { access as access2, lstat as lstat6, readFile as readFile5, stat } from "node:fs/promises";
+import { join as join9 } from "node:path";
 
 // src/codex/codex-memory-index.ts
 import { basename as basename2, dirname as dirname3, join as join6 } from "node:path";
@@ -11713,6 +11718,278 @@ function isFileErrorCode5(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/codex-memory-status.ts
+var INDEXED_SOURCE_FILES = ["index.jsonl", "pending.jsonl"];
+var PROFILE_CANDIDATES_FILE = "profile_candidates.jsonl";
+async function readCodexMemoryStatus(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const globalRoot = codexGlobalMemoryRoot();
+  const projectRoot = codexProjectMemoryRoot(project.projectId);
+  const [globalStatus, projectStatus, globalCounts, projectCounts, diagnostics, stopHookConfigured, dreamState] = await Promise.all([
+    readRootStatus(globalRoot),
+    readRootStatus(projectRoot),
+    readRootCounts(globalRoot),
+    readRootCounts(projectRoot),
+    readStatusIndexDiagnostics(),
+    isCodexStopHookConfigured(),
+    readCodexMemoryDreamState(projectRoot)
+  ]);
+  const index = await readIndexStatus(diagnostics, [globalRoot, projectRoot]);
+  return {
+    nodeVersion: process.versions.node,
+    project: {
+      projectId: project.projectId,
+      displayName: project.displayName,
+      cwd: project.cwd,
+      gitRoot: project.gitRoot,
+      gitRemoteHash: project.gitRemoteHash
+    },
+    roots: {
+      global: { ...globalStatus, counts: globalCounts },
+      project: { ...projectStatus, counts: projectCounts }
+    },
+    index,
+    similarProjectRetrieval: index.available && index.freshness !== "stale" ? "ready" : "degraded",
+    stopHookConfigured,
+    dream: {
+      due: dreamState?.dreamDue === true,
+      lastDreamAt: dreamState?.lastDreamAt
+    }
+  };
+}
+async function formatCodexMemoryStatus(input) {
+  const status = await readCodexMemoryStatus(input);
+  return [
+    "Cyrene Memory Status",
+    "",
+    "runtime:",
+    `  node: ${status.nodeVersion}`,
+    "",
+    "project:",
+    `  projectId: ${status.project.projectId}`,
+    `  displayName: ${status.project.displayName}`,
+    `  cwd: ${status.project.cwd}`,
+    `  git root: ${status.project.gitRoot ?? "none"}`,
+    `  remote hash: ${status.project.gitRemoteHash ?? "none"}`,
+    "",
+    "roots:",
+    `  global root: ${status.roots.global.path}`,
+    `  global root health: ${formatRootHealth(status.roots.global)}`,
+    `  project root: ${status.roots.project.path}`,
+    `  project root health: ${formatRootHealth(status.roots.project)}`,
+    "",
+    "memory:",
+    `  global active: ${status.roots.global.counts.active}`,
+    `  global pending: ${status.roots.global.counts.pending}`,
+    `  global tombstones: ${status.roots.global.counts.tombstones}`,
+    `  global profile candidates: ${status.roots.global.counts.profileCandidates}`,
+    `  project active: ${status.roots.project.counts.active}`,
+    `  project pending: ${status.roots.project.counts.pending}`,
+    `  project tombstones: ${status.roots.project.counts.tombstones}`,
+    `  project profile candidates: ${status.roots.project.counts.profileCandidates}`,
+    status.roots.global.counts.reason === void 0 ? void 0 : `  global counts reason: ${status.roots.global.counts.reason}`,
+    status.roots.project.counts.reason === void 0 ? void 0 : `  project counts reason: ${status.roots.project.counts.reason}`,
+    "",
+    "index:",
+    `  sqlite index: ${status.index.available ? "available" : "unavailable"}`,
+    `  memory db: ${status.index.dbPath}`,
+    status.index.ftsTokenizer === void 0 ? void 0 : `  memory fts: ${status.index.ftsTokenizer}`,
+    status.index.reason === void 0 ? void 0 : `  sqlite reason: ${status.index.reason}`,
+    `  fallback mode: ${status.index.fallbackMode}`,
+    `  index freshness: ${status.index.freshness}`,
+    status.index.lastSyncAt === void 0 ? void 0 : `  last sync: ${status.index.lastSyncAt}`,
+    status.index.sourceLatestAt === void 0 ? void 0 : `  source latest: ${status.index.sourceLatestAt}`,
+    status.index.staleReason === void 0 ? void 0 : `  stale reason: ${status.index.staleReason}`,
+    `  similar-project retrieval: ${status.similarProjectRetrieval}`,
+    status.index.freshness === "stale" ? "  action: run cyrene-continuity codex memory db rebuild" : void 0,
+    "",
+    "hooks:",
+    `  stop hook: ${status.stopHookConfigured ? "configured" : "missing"}`,
+    "",
+    "dream:",
+    `  dream due: ${status.dream.due ? "yes" : "no"}`,
+    `  last dream: ${status.dream.lastDreamAt ?? "never"}`
+  ].filter((line) => line !== void 0 && line !== "").join("\n") + "\n";
+}
+async function readStatusIndexDiagnostics() {
+  const diagnostics = await readCodexMemoryIndexDiagnostics();
+  const dbPathProblem = await readDbPathProblem(diagnostics.dbPath);
+  if (dbPathProblem === void 0) {
+    return diagnostics;
+  }
+  return {
+    ...diagnostics,
+    available: false,
+    reason: dbPathProblem
+  };
+}
+async function readIndexStatus(diagnostics, memoryRoots) {
+  const dbPath = diagnostics.dbPath;
+  const fallbackMode = diagnostics.available ? "sqlite" : "jsonl";
+  const dbMtime = await readMtime(dbPath);
+  const sourceMtime = await readLatestIndexedSourceMtime(memoryRoots);
+  const base = {
+    available: diagnostics.available,
+    dbPath,
+    ftsTokenizer: diagnostics.ftsTokenizer,
+    reason: diagnostics.reason,
+    fallbackMode,
+    lastSyncAt: dbMtime?.toISOString(),
+    sourceLatestAt: sourceMtime?.mtime.toISOString()
+  };
+  if (!diagnostics.available) {
+    return { ...base, freshness: "unavailable" };
+  }
+  if (sourceMtime === void 0) {
+    return { ...base, freshness: "empty" };
+  }
+  if (dbMtime === void 0) {
+    return {
+      ...base,
+      freshness: "stale",
+      staleReason: `memory db is missing while indexed source exists: ${sourceMtime.path}`
+    };
+  }
+  if (sourceMtime.mtime.getTime() > dbMtime.getTime() + 1e3) {
+    return {
+      ...base,
+      freshness: "stale",
+      staleReason: `indexed source is newer than memory db: ${sourceMtime.path}`
+    };
+  }
+  return { ...base, freshness: "fresh" };
+}
+async function readRootStatus(root) {
+  try {
+    const stats = await lstat6(root);
+    if (stats.isSymbolicLink()) {
+      return { path: root, health: "unsafe", reason: "memory root is a symlink" };
+    }
+    if (!stats.isDirectory()) {
+      return { path: root, health: "unsafe", reason: "memory root is not a directory" };
+    }
+    const [readable, writable] = await Promise.all([
+      canAccess(root, constants.R_OK),
+      canAccess(root, constants.W_OK)
+    ]);
+    if (readable && writable) {
+      return { path: root, health: "readable-writable" };
+    }
+    if (readable) {
+      return { path: root, health: "readable-readonly" };
+    }
+    return { path: root, health: "unreadable", reason: "memory root is not readable" };
+  } catch (error2) {
+    if (isErrorCode(error2, "ENOENT")) {
+      return { path: root, health: "missing" };
+    }
+    return { path: root, health: "unreadable", reason: errorMessage(error2) };
+  }
+}
+async function readRootCounts(root) {
+  try {
+    const [active, pending, tombstones, profileCandidates] = await Promise.all([
+      readActiveMemoriesFromRoot(root),
+      readPendingMemoriesFromRoot(root),
+      readTombstonesFromRoot(root),
+      readPendingProfileCandidateCount(root)
+    ]);
+    return {
+      active: active.length,
+      pending: pending.length,
+      tombstones: tombstones.length,
+      profileCandidates
+    };
+  } catch (error2) {
+    return {
+      active: 0,
+      pending: 0,
+      tombstones: 0,
+      profileCandidates: 0,
+      reason: errorMessage(error2)
+    };
+  }
+}
+async function readPendingProfileCandidateCount(root) {
+  let text;
+  try {
+    text = await readFile5(join9(root, PROFILE_CANDIDATES_FILE), "utf8");
+  } catch (error2) {
+    if (isErrorCode(error2, "ENOENT")) {
+      return 0;
+    }
+    throw error2;
+  }
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).filter((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return parsed.status === "pending";
+    } catch {
+      return false;
+    }
+  }).length;
+}
+async function readDbPathProblem(dbPath) {
+  try {
+    const stats = await lstat6(dbPath);
+    if (stats.isDirectory()) {
+      return `memory db path is a directory: ${dbPath}`;
+    }
+    if (!stats.isFile()) {
+      return `memory db path is not a file: ${dbPath}`;
+    }
+    return void 0;
+  } catch (error2) {
+    if (isErrorCode(error2, "ENOENT")) {
+      return void 0;
+    }
+    return errorMessage(error2);
+  }
+}
+async function readLatestIndexedSourceMtime(memoryRoots) {
+  let latest;
+  for (const root of memoryRoots) {
+    for (const file of INDEXED_SOURCE_FILES) {
+      const filePath = join9(root, file);
+      const mtime = await readMtime(filePath);
+      if (mtime === void 0) {
+        continue;
+      }
+      if (latest === void 0 || mtime > latest.mtime) {
+        latest = { path: filePath, mtime };
+      }
+    }
+  }
+  return latest;
+}
+async function readMtime(path) {
+  try {
+    return (await stat(path)).mtime;
+  } catch (error2) {
+    if (isErrorCode(error2, "ENOENT") || isErrorCode(error2, "ENOTDIR")) {
+      return void 0;
+    }
+    throw error2;
+  }
+}
+async function canAccess(path, mode) {
+  try {
+    await access2(path, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function formatRootHealth(root) {
+  return root.reason === void 0 ? root.health : `${root.health} (${root.reason})`;
+}
+function isErrorCode(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+function errorMessage(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+
 // src/codex/runtime-paths.ts
 import { basename as basename3, dirname as dirname6, resolve as resolve5 } from "node:path";
 var PLUGIN_RUNTIME_FILE = "cyrene-continuity.mjs";
@@ -11761,7 +12038,7 @@ var CURRENT_CYRENE_MCP_CONFIG_TABLE = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE = "[mcp_servers.cyrene]";
 async function formatCodexDoctor(input) {
   const runtimeEntryPath = input.runtimeEntryPath ?? fileURLToPath(import.meta.url);
-  const configPath = input.configPath ?? join9(homedir4(), ".codex", "config.toml");
+  const configPath = input.configPath ?? join10(homedir4(), ".codex", "config.toml");
   const configText = await readOptional(configPath);
   const cyreneMcpConfig = readCyreneManualMcpConfig(configText);
   const cyreneConfigured = cyreneMcpConfig !== void 0;
@@ -11773,7 +12050,7 @@ async function formatCodexDoctor(input) {
   const mcpCommandAction = mcpCommandFreshness === "stale or external" && !pluginBridgeInstalled ? `  action: rerun ${installCommand} and update ${CURRENT_CYRENE_MCP_CONFIG_TABLE} from its printed config` : void 0;
   const manualMcpConflictAction = pluginBridgeInstalled && cyreneConfigured ? `  action: disable or remove manual Cyrene MCP config (${cyreneMcpConfig.table}) after validating the installed plugin MCP server` : void 0;
   const agentmemoryEnabled = hasEnabledMcpServer(configText, "agentmemory");
-  const skillPath = join9(homedir4(), ".agents", "skills", "cyrene-continuity", "SKILL.md");
+  const skillPath = join10(homedir4(), ".agents", "skills", "cyrene-continuity", "SKILL.md");
   const skillExists = await pathExists(skillPath);
   const cyreneSkillReady = skillExists || pluginBridgeInstalled && pluginState.skillDeclared;
   const stopHookConfigured = await isCodexStopHookConfigured();
@@ -11781,7 +12058,8 @@ async function formatCodexDoctor(input) {
   const config2 = createDefaultConfig(input.cwd);
   const memoryState = await readDoctorMemoryState(identity.projectId);
   const migrationState = await readDoctorMigrationState();
-  const memoryIndex = await readCodexMemoryIndexDiagnostics();
+  const memoryStatus = await readCodexMemoryStatus({ cwd: input.cwd });
+  const memoryIndex = memoryStatus.index;
   const actions = [
     cyreneConfigured || pluginBridgeInstalled ? void 0 : `  action: run ${installCommand} to install the Cyrene bridge`,
     mcpCommandAction,
@@ -11837,9 +12115,15 @@ async function formatCodexDoctor(input) {
     `  project pending: ${memoryState.projectPendingCount}`,
     `  profile candidates: ${memoryState.profileCandidates}`,
     `  memory index: ${memoryIndex.available ? "available" : "unavailable"}`,
-    `  memory db: ${codexMemoryDbPath()}`,
+    `  memory db: ${memoryIndex.dbPath}`,
     memoryIndex.ftsTokenizer === void 0 ? void 0 : `  memory fts: ${memoryIndex.ftsTokenizer}`,
     memoryIndex.reason === void 0 ? void 0 : `  memory index reason: ${memoryIndex.reason}`,
+    `  memory fallback mode: ${memoryIndex.fallbackMode}`,
+    `  memory index freshness: ${memoryIndex.freshness}`,
+    memoryIndex.lastSyncAt === void 0 ? void 0 : `  memory index last sync: ${memoryIndex.lastSyncAt}`,
+    memoryIndex.sourceLatestAt === void 0 ? void 0 : `  memory index source latest: ${memoryIndex.sourceLatestAt}`,
+    memoryIndex.staleReason === void 0 ? void 0 : `  memory index stale reason: ${memoryIndex.staleReason}`,
+    `  similar-project retrieval: ${memoryStatus.similarProjectRetrieval}`,
     `  dream due: ${memoryState.dreamDue ? "yes" : "no"}`,
     `  last dream: ${memoryState.lastDreamAt ?? "never"}`,
     `  promotion recommendations: ${config2.memoryRecommendPromotionEnabled ? "enabled" : "disabled"}`,
@@ -11877,10 +12161,10 @@ async function readDoctorMemoryState(projectId) {
 }
 async function readProfileCandidatesStatus(memoryRoot) {
   try {
-    await readFile5(join9(memoryRoot, "profile_candidates.jsonl"), "utf8");
+    await readFile6(join10(memoryRoot, "profile_candidates.jsonl"), "utf8");
     return "ok";
   } catch (error2) {
-    return isErrorCode(error2, "ENOENT") ? "missing" : "unreadable";
+    return isErrorCode2(error2, "ENOENT") ? "missing" : "unreadable";
   }
 }
 async function profilePresent(memoryRoot) {
@@ -11900,7 +12184,7 @@ async function readDoctorMigrationState() {
   };
 }
 async function readAutomationDreamStageStatus() {
-  const automationsRoot = join9(homedir4(), ".codex", "automations");
+  const automationsRoot = join10(homedir4(), ".codex", "automations");
   let entries;
   try {
     entries = await readdir2(automationsRoot, { withFileTypes: true });
@@ -11910,7 +12194,7 @@ async function readAutomationDreamStageStatus() {
   let migrated = false;
   let sawAutomation = false;
   for (const entry of entries) {
-    const automationPath = entry.isDirectory() ? join9(automationsRoot, entry.name, "automation.toml") : join9(automationsRoot, entry.name);
+    const automationPath = entry.isDirectory() ? join10(automationsRoot, entry.name, "automation.toml") : join10(automationsRoot, entry.name);
     const text = await readOptional(automationPath);
     if (text === "") {
       continue;
@@ -11933,10 +12217,10 @@ async function readAutomationDreamStageStatus() {
 }
 async function readStableShimStageStatus() {
   try {
-    const text = await readFile5(codexStableExecutablePath(), "utf8");
+    const text = await readFile6(codexStableExecutablePath(), "utf8");
     return text.trim() === "" ? "failed" : "ok";
   } catch (error2) {
-    return isErrorCode(error2, "ENOENT") ? "missing" : "failed";
+    return isErrorCode2(error2, "ENOENT") ? "missing" : "failed";
   }
 }
 function readEmbeddingProviderStatus() {
@@ -11969,7 +12253,7 @@ function readCyreneManualMcpConfig(configText) {
 }
 async function readDoctorPluginState(runtimeEntryPath) {
   const root = resolvePluginRoot(runtimeEntryPath);
-  const manifestPath = join9(root, ".codex-plugin", "plugin.json");
+  const manifestPath = join10(root, ".codex-plugin", "plugin.json");
   const manifestText = await readOptional(manifestPath);
   const manifest = parseJsonObject(manifestText);
   return {
@@ -12135,7 +12419,7 @@ function stripTomlInlineComment(value) {
 }
 async function readOptional(path) {
   try {
-    return await readFile5(path, "utf8");
+    return await readFile6(path, "utf8");
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return "";
@@ -12145,13 +12429,13 @@ async function readOptional(path) {
 }
 async function pathExists(path) {
   try {
-    await access2(path);
+    await access3(path);
     return true;
   } catch {
     return false;
   }
 }
-function isErrorCode(error2, code) {
+function isErrorCode2(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -12375,13 +12659,13 @@ import { createHash as createHash3, randomUUID as randomUUID5 } from "node:crypt
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { mkdir as mkdir8, rm as rm2 } from "node:fs/promises";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 // src/memory/memory-exporter.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { lstat as lstat6, open, readdir as readdir3, readFile as readFile6, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
-import { dirname as dirname7, isAbsolute as isAbsolute3, join as join10, relative as relative3 } from "node:path";
+import { lstat as lstat7, open, readdir as readdir3, readFile as readFile7, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
+import { dirname as dirname7, isAbsolute as isAbsolute3, join as join11, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
 import { createHash as createHash2 } from "node:crypto";
@@ -12770,8 +13054,8 @@ async function writeMemoryProjections(root, memories) {
 }
 async function writeSafeGeneratedFile(root, parentDir, filename, content) {
   await assertSafeGeneratedFileTarget(root, parentDir, filename);
-  const targetPath = join10(parentDir, filename);
-  const tempPath = join10(parentDir, `.${filename}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
+  const targetPath = join11(parentDir, filename);
+  const tempPath = join11(parentDir, `.${filename}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
   const file = await open(tempPath, "wx");
   try {
     await file.writeFile(content, "utf8");
@@ -12789,7 +13073,7 @@ async function writeSafeGeneratedFile(root, parentDir, filename, content) {
   }
 }
 async function assertSafeGeneratedFileTarget(root, parentDir, filename) {
-  const parentStats = await lstat6(parentDir);
+  const parentStats = await lstat7(parentDir);
   if (parentStats.isSymbolicLink()) {
     throw new Error(`Refusing to use memory projection symlink: ${parentDir}`);
   }
@@ -12800,10 +13084,10 @@ async function assertSafeGeneratedFileTarget(root, parentDir, filename) {
   if (!isPathInside3(root, parentRealPath)) {
     throw new Error(`Refusing to use memory projection path outside memory root: ${parentDir}`);
   }
-  const targetPath = join10(parentRealPath, filename);
+  const targetPath = join11(parentRealPath, filename);
   let stats;
   try {
-    stats = await lstat6(targetPath);
+    stats = await lstat7(targetPath);
   } catch (error2) {
     if (isFileErrorCode6(error2, "ENOENT")) {
       return;
@@ -12841,10 +13125,10 @@ async function removeLegacyGeneratedProjectionFiles(root) {
 async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
   const parent = dirname7(legacyFile);
   if (parent !== ".") {
-    const parentPath = join10(root, parent);
+    const parentPath = join11(root, parent);
     let parentStats;
     try {
-      parentStats = await lstat6(parentPath);
+      parentStats = await lstat7(parentPath);
     } catch (error2) {
       if (isFileErrorCode6(error2, "ENOENT")) return;
       throw error2;
@@ -12853,10 +13137,10 @@ async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
       return;
     }
   }
-  const targetPath = join10(root, legacyFile);
+  const targetPath = join11(root, legacyFile);
   let stats;
   try {
-    stats = await lstat6(targetPath);
+    stats = await lstat7(targetPath);
   } catch (error2) {
     if (isFileErrorCode6(error2, "ENOENT")) return;
     throw error2;
@@ -12866,7 +13150,7 @@ async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
   }
   let content;
   try {
-    content = await readFile6(targetPath, "utf8");
+    content = await readFile7(targetPath, "utf8");
   } catch (error2) {
     if (isFileErrorCode6(error2, "ENOENT")) return;
     throw error2;
@@ -12881,10 +13165,10 @@ async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
   });
 }
 async function removeEmptyLegacyProjectionsDirectory(root) {
-  const projectionsDir = join10(root, "projections");
+  const projectionsDir = join11(root, "projections");
   let stats;
   try {
-    stats = await lstat6(projectionsDir);
+    stats = await lstat7(projectionsDir);
   } catch (error2) {
     if (isFileErrorCode6(error2, "ENOENT")) return;
     throw error2;
@@ -13055,8 +13339,8 @@ function formatModelProfile(entries) {
 }
 
 // src/memory/memory-snapshot.ts
-import { lstat as lstat7, mkdir as mkdir7, readFile as readFile7, readdir as readdir4, writeFile as writeFile5 } from "node:fs/promises";
-import { isAbsolute as isAbsolute4, join as join11, relative as relative4 } from "node:path";
+import { lstat as lstat8, mkdir as mkdir7, readFile as readFile8, readdir as readdir4, writeFile as writeFile5 } from "node:fs/promises";
+import { isAbsolute as isAbsolute4, join as join12, relative as relative4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 async function createMemorySnapshotFromRoot(memoryRoot, reason) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
@@ -13090,7 +13374,7 @@ async function assertMemorySnapshotTargetSafeFromRoot(memoryRoot) {
   return root;
 }
 async function ensureSnapshotDir(memoryRoot) {
-  const dir = join11(memoryRoot, "snapshots");
+  const dir = join12(memoryRoot, "snapshots");
   await mkdir7(dir).catch((error2) => {
     if (!isFileErrorCode7(error2, "EEXIST")) {
       throw error2;
@@ -13099,7 +13383,7 @@ async function ensureSnapshotDir(memoryRoot) {
   return getSnapshotDir(dir, memoryRoot);
 }
 async function getSnapshotDir(dir, memoryRoot) {
-  const stats = await lstat7(dir);
+  const stats = await lstat8(dir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory snapshots path: ${dir}`);
   }
@@ -13112,7 +13396,7 @@ function snapshotFilePath(dir, id) {
   if (!/^memory-[A-Za-z0-9_.-]+$/.test(id)) {
     throw new Error(`Invalid memory snapshot id: ${id}`);
   }
-  return join11(dir, `${id}.json`);
+  return join12(dir, `${id}.json`);
 }
 function summarizeSnapshot(snapshot) {
   return {
@@ -13203,7 +13487,7 @@ async function runMemoryMaintenanceFromRootLocked(input) {
 }
 async function withMemoryMaintenanceLockFromRoot(memoryRoot, task, options = {}) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const lockDir = join12(root, MAINTENANCE_LOCK_DIR);
+  const lockDir = join13(root, MAINTENANCE_LOCK_DIR);
   const startedAt = Date.now();
   const timeoutMs = options.timeoutMs ?? memoryMaintenanceLockTimeoutMs();
   const pollMs = options.pollMs ?? MAINTENANCE_LOCK_POLL_MS;
@@ -13816,8 +14100,8 @@ function previewContent(content) {
 
 // src/codex/project-fingerprint.ts
 import { createHash as createHash4 } from "node:crypto";
-import { readdir as readdir5, readFile as readFile8, stat } from "node:fs/promises";
-import { join as join13 } from "node:path";
+import { readdir as readdir5, readFile as readFile9, stat as stat2 } from "node:fs/promises";
+import { join as join14 } from "node:path";
 async function buildCodexProjectFingerprint(input) {
   const root = input.project.gitRoot ?? input.cwd;
   const packageJson = await readPackageJson(root);
@@ -13845,7 +14129,7 @@ async function buildCodexProjectFingerprint(input) {
 }
 async function readPackageJson(cwd) {
   try {
-    return JSON.parse(await readFile8(join13(cwd, "package.json"), "utf8"));
+    return JSON.parse(await readFile9(join14(cwd, "package.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -13854,10 +14138,10 @@ function readObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 async function detectPackageManager(cwd) {
-  if (await exists(join13(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (await exists(join13(cwd, "yarn.lock"))) return "yarn";
-  if (await exists(join13(cwd, "bun.lockb")) || await exists(join13(cwd, "bun.lock"))) return "bun";
-  if (await exists(join13(cwd, "package-lock.json"))) return "npm";
+  if (await exists(join14(cwd, "pnpm-lock.yaml"))) return "pnpm";
+  if (await exists(join14(cwd, "yarn.lock"))) return "yarn";
+  if (await exists(join14(cwd, "bun.lockb")) || await exists(join14(cwd, "bun.lock"))) return "bun";
+  if (await exists(join14(cwd, "package-lock.json"))) return "npm";
   return "unknown";
 }
 async function safeReaddir(cwd) {
@@ -13904,7 +14188,7 @@ function detectDomainTags(rootEntries, frameworks, dependencyNames, languages) {
 }
 async function exists(path) {
   try {
-    await stat(path);
+    await stat2(path);
     return true;
   } catch {
     return false;
@@ -14332,7 +14616,7 @@ async function runCodexSimilarHintsEval(input) {
 }
 
 // src/codex/codex-hook-stop.ts
-import { readFile as readFile9 } from "node:fs/promises";
+import { readFile as readFile10 } from "node:fs/promises";
 
 // src/llm-client.ts
 async function callModel(input) {
@@ -14549,11 +14833,11 @@ function redactReviewText(input) {
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile2 } from "node:fs/promises";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var REVIEW_SUMMARIES_FILE = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  await appendFile2(join14(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record2)}
+  await appendFile2(join15(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record2)}
 `, "utf8");
 }
 
@@ -15041,7 +15325,7 @@ function extractRecentExplicitMemoryInstructionFromMessages(messages) {
 }
 async function readTranscriptText(transcriptPath) {
   try {
-    return await readFile9(transcriptPath, "utf8");
+    return await readFile10(transcriptPath, "utf8");
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return void 0;
@@ -15054,9 +15338,9 @@ function asString2(value) {
 }
 
 // src/codex/codex-install.ts
-import { lstat as lstat8, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile6 } from "node:fs/promises";
+import { lstat as lstat9, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile6 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname8, join as join15, resolve as resolve6 } from "node:path";
+import { dirname as dirname8, join as join16, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -15068,13 +15352,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join15(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join16(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
   await mkdir9(dirname8(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
   await mkdir9(stateRoot, { recursive: true });
-  await writeFile6(join15(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await writeFile6(join16(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -15111,7 +15395,7 @@ async function installCodexPluginBridge(input) {
 }
 async function removeExistingSkillSymlink(path) {
   try {
-    const stats = await lstat8(path);
+    const stats = await lstat9(path);
     if (!stats.isSymbolicLink()) {
       throw new Error(`Refusing to replace existing non-symlink skill path: ${path}`);
     }
@@ -15126,8 +15410,8 @@ async function removeExistingSkillSymlink(path) {
 
 // src/codex/dream-artifacts.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
-import { lstat as lstat9, mkdir as mkdir10, readFile as readFile10, realpath as realpath6, rename as rename4, writeFile as writeFile7 } from "node:fs/promises";
-import { join as join16 } from "node:path";
+import { lstat as lstat10, mkdir as mkdir10, readFile as readFile11, realpath as realpath6, rename as rename4, writeFile as writeFile7 } from "node:fs/promises";
+import { join as join17 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
 var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
@@ -15136,10 +15420,10 @@ async function writeDreamPreviewArtifacts(input) {
   const proposalId = randomUUID8();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
-    reportPath: join16(previewDir, DREAM_REPORT_FILE),
-    proposedChangesPath: join16(previewDir, "proposed_changes.json"),
-    diffPath: join16(previewDir, "diff.json"),
-    evalResultsPath: join16(previewDir, "eval_results.json")
+    reportPath: join17(previewDir, DREAM_REPORT_FILE),
+    proposedChangesPath: join17(previewDir, "proposed_changes.json"),
+    diffPath: join17(previewDir, "diff.json"),
+    evalResultsPath: join17(previewDir, "eval_results.json")
   };
   await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
   await writeJsonAtomic(paths.proposedChangesPath, {
@@ -15161,9 +15445,9 @@ async function readDreamReport(input) {
   if (memoryRoot === null) {
     throw new Error(`No readable ${input.root} memory root exists`);
   }
-  const reportPath = join16(memoryRoot, DREAM_PREVIEW_DIR, DREAM_REPORT_FILE);
+  const reportPath = join17(memoryRoot, DREAM_PREVIEW_DIR, DREAM_REPORT_FILE);
   try {
-    return { memoryRoot, report: await readFile10(reportPath, "utf8") };
+    return { memoryRoot, report: await readFile11(reportPath, "utf8") };
   } catch (error2) {
     if (isFileErrorCode9(error2, "ENOENT")) {
       throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
@@ -15216,9 +15500,9 @@ function renderDreamReport(input) {
 `;
 }
 async function ensurePreviewDir(memoryRoot) {
-  const previewDir = join16(memoryRoot, DREAM_PREVIEW_DIR);
+  const previewDir = join17(memoryRoot, DREAM_PREVIEW_DIR);
   await mkdir10(previewDir, { recursive: true });
-  const stats = await lstat9(previewDir);
+  const stats = await lstat10(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
   }
@@ -15242,11 +15526,11 @@ function isFileErrorCode9(error2, code) {
 
 // src/codex/memory-dream.ts
 import { randomUUID as randomUUID9 } from "node:crypto";
-import { lstat as lstat11, mkdir as mkdir11, readFile as readFile11, rm as rm4, writeFile as writeFile8 } from "node:fs/promises";
-import { join as join17 } from "node:path";
+import { lstat as lstat12, mkdir as mkdir11, readFile as readFile12, rm as rm4, writeFile as writeFile8 } from "node:fs/promises";
+import { join as join18 } from "node:path";
 
 // src/codex/dream-proposal.ts
-import { lstat as lstat10, realpath as realpath7 } from "node:fs/promises";
+import { lstat as lstat11, realpath as realpath7 } from "node:fs/promises";
 async function buildDreamProposalForRoot(input) {
   const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot);
   const active = await readActiveMemoriesFromRoot(memoryRoot);
@@ -15381,7 +15665,7 @@ async function buildDreamProposalForRoot(input) {
 }
 async function resolveReadableMemoryRootPath(memoryRoot) {
   try {
-    const stats = await lstat10(memoryRoot);
+    const stats = await lstat11(memoryRoot);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use memory symlink: ${memoryRoot}`);
     }
@@ -15784,12 +16068,12 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join17(locksDir, DREAM_LOCK_DIR);
+  const lockDir = join18(locksDir, DREAM_LOCK_DIR);
   const token = randomUUID9();
   while (true) {
     try {
       await mkdir11(lockDir);
-      await writeFile8(join17(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await writeFile8(join18(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
@@ -15805,13 +16089,13 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join17(memoryRoot, DREAM_LOCKS_DIR);
+  const locksDir = join18(memoryRoot, DREAM_LOCKS_DIR);
   await mkdir11(locksDir).catch((error2) => {
     if (!isFileErrorCode11(error2, "EEXIST")) {
       throw error2;
     }
   });
-  const stats = await lstat11(locksDir);
+  const stats = await lstat12(locksDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream locks path: ${locksDir}`);
   }
@@ -15820,7 +16104,7 @@ async function ensureDreamLocksDir(memoryRoot) {
 async function readDreamLockOwner(lockDir) {
   let stats;
   try {
-    stats = await lstat11(lockDir);
+    stats = await lstat12(lockDir);
   } catch (error2) {
     if (isFileErrorCode11(error2, "ENOENT")) {
       return void 0;
@@ -15831,7 +16115,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile11(join17(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile12(join18(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -15879,9 +16163,9 @@ function isFileErrorCode11(error2, code) {
 
 // src/codex/profile-candidates.ts
 import { createHash as createHash7, randomUUID as randomUUID10 } from "node:crypto";
-import { lstat as lstat12, readFile as readFile12, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
-import { join as join18 } from "node:path";
-var PROFILE_CANDIDATES_FILE = "profile_candidates.jsonl";
+import { lstat as lstat13, readFile as readFile13, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join19 } from "node:path";
+var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 function reviewHashForProfileCandidate(candidate) {
   const payload = {
     id: candidate.id,
@@ -16135,7 +16419,7 @@ function upsertActiveMemory2(active, memory) {
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   try {
-    const content = await readFile12(join18(root, PROFILE_CANDIDATES_FILE), "utf8");
+    const content = await readFile13(join19(root, PROFILE_CANDIDATES_FILE2), "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
     if (isFileErrorCode12(error2, "ENOENT")) {
@@ -16146,7 +16430,7 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join18(root, PROFILE_CANDIDATES_FILE);
+  const targetPath = join19(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileCandidateTarget(targetPath);
   const tempPath = `${targetPath}.${process.pid}.${randomUUID10()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
@@ -16156,7 +16440,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
 }
 async function assertSafeProfileCandidateTarget(targetPath) {
   try {
-    const stats = await lstat12(targetPath);
+    const stats = await lstat13(targetPath);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use profile candidate symlink: ${targetPath}`);
     }
@@ -16407,6 +16691,10 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
+  if (command === "memory" && input.args[1] === "status") {
+    process.stdout.write(await formatCodexMemoryStatus({ cwd: input.cwd }));
+    return;
+  }
   if (command === "memory" && input.args[1] === "db" && input.args[2] === "rebuild") {
     process.stdout.write(`${JSON.stringify(await rebuildCodexMemoryIndex({ cwd: input.cwd }), null, 2)}
 `);
@@ -16458,7 +16746,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -17036,15 +17324,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage = "";
+  let errorMessage2 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
+    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage
+    message: errorMessage2
   };
 };
 var EMPTY_PATH = [];
@@ -26866,19 +27154,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage, refs) {
+function addErrorMessage(res, key, errorMessage2, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage) {
+  if (errorMessage2) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage
+      [key]: errorMessage2
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage2, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage, refs);
+  addErrorMessage(res, key, errorMessage2, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -28189,8 +28477,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage = message;
-                    const error2 = new McpError(errorMessage.error.code, errorMessage.error.message, errorMessage.error.data);
+                    const errorMessage2 = message;
+                    const error2 = new McpError(errorMessage2.error.code, errorMessage2.error.message, errorMessage2.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -29490,23 +29778,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
+          const errorMessage2 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage2}`);
         }
         const { params } = validatedRequest.data;
         const result2 = await Promise.resolve(handler(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result2);
           if (!taskValidationResult.success) {
-            const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
+            const errorMessage2 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage2}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result2);
         if (!validationResult.success) {
-          const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage}`);
+          const errorMessage2 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage2}`);
         }
         return validationResult.data;
       };
@@ -30000,12 +30288,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage) {
+  createToolError(errorMessage2) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage
+          text: errorMessage2
         }
       ],
       isError: true
@@ -30023,8 +30311,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage2}`);
     }
     return parseResult.data;
   }
@@ -30048,8 +30336,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result2.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage2}`);
     }
   }
   /**
@@ -30261,8 +30549,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage}`);
+          const errorMessage2 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage2}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
