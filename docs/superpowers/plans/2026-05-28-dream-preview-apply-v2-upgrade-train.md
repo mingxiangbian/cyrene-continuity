@@ -549,7 +549,7 @@ git commit -m "feat: add similar hint review tooling"
 - Test: `tests/memory-index.test.ts`
 - Test: `tests/codex-continuity-context.test.ts`
 
-- [ ] **Step 1: Write embedding tests**
+- [x] **Step 1: Write embedding tests**
 
 Tests cover:
 
@@ -561,15 +561,15 @@ provider failure falls back to FTS results with fallbackReason
 redaction guard rejects paths/remotes/secrets before provider call
 ```
 
-- [ ] **Step 2: Add provider interface**
+- [x] **Step 2: Add provider interface**
 
 Create `EmbeddingProvider`, `EmbeddingDiagnostics`, `NullEmbeddingProvider`, and `createEmbeddingProviderFromEnv()`.
 
-- [ ] **Step 3: Add SQLite schema**
+- [x] **Step 3: Add SQLite schema**
 
 In memory index initialize migration, add `memory_embeddings` and `project_embeddings` tables exactly as spec.
 
-- [ ] **Step 4: Add no-provider diagnostics**
+- [x] **Step 4: Add no-provider diagnostics**
 
 Expose:
 
@@ -585,17 +585,17 @@ embedding?: {
 
 through continuity diagnostics without changing retrieval results when disabled.
 
-- [ ] **Step 5: Wire safe rerank hook**
+- [x] **Step 5: Wire safe rerank hook**
 
 Only rerank candidates already returned by structured filters. Do not send raw evidence or unsafe content to provider.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 ```bash
 npm test -- tests/memory-index.test.ts tests/codex-continuity-context.test.ts
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/memory/embedding-provider.ts src/memory/memory-index.ts src/codex/continuity-context.ts tests/memory-index.test.ts tests/codex-continuity-context.test.ts

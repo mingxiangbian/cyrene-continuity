@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -6,6 +7,7 @@ import {
   openMemoryIndexAdapter,
   type MemoryIndexRoot
 } from '../src/memory/memory-index.js'
+import { assertEmbeddingSafeText } from '../src/memory/embedding-provider.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -89,6 +91,62 @@ describe('memory SQLite index', () => {
     expect(diagnostics.dbPath).toBe(join(root, 'memory.db'))
     expect(['trigram', 'unicode61']).toContain(diagnostics.ftsTokenizer)
     expect(await readFile(join(root, 'memory.db'))).toBeInstanceOf(Buffer)
+  })
+
+  it('creates embedding cache tables and reports disabled diagnostics by default', async () => {
+    const root = await createTempDir('cyrene-memory-index-embedding-schema-')
+    const dbPath = join(root, 'memory.db')
+    const adapter = await openMemoryIndexAdapter({ dbPath })
+
+    const diagnostics = await adapter.initialize()
+    const require = createRequire(import.meta.url)
+    const sqlite = require('node:sqlite') as { DatabaseSync: new (path: string) => { prepare(sql: string): { all(): Array<{ name: string }> }; close(): void } }
+    const db = new sqlite.DatabaseSync(dbPath)
+    const rows = db.prepare("select name from sqlite_master where type = 'table' and name like '%_embeddings' order by name").all()
+    db.close()
+
+    expect(rows.map((row) => row.name)).toEqual(['memory_embeddings', 'project_embeddings'])
+    expect(diagnostics.embedding).toMatchObject({ enabled: false, cacheHits: 0, cacheMisses: 0 })
+  })
+
+  it('falls back to structured results when an enabled embedding provider fails', async () => {
+    const previous = process.env.CYRENE_EMBEDDING_PROVIDER
+    process.env.CYRENE_EMBEDDING_PROVIDER = 'fail'
+    try {
+      const root = await createTempDir('cyrene-memory-index-embedding-fallback-')
+      const projectRoot = join(root, 'projects', 'project-a', 'memory')
+      await mkdir(projectRoot, { recursive: true })
+      await writeJsonLines(join(projectRoot, 'index.jsonl'), [activeMemory({ id: 'project-a-1' })])
+      const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+      await adapter.rebuildFromRoots({ roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }] })
+
+      const results = await adapter.queryActive({
+        currentProjectId: 'project-a',
+        query: 'sqlite router',
+        route: 'project',
+        maxItems: 10,
+        maxTokens: 2_000
+      })
+
+      expect(results.map((item) => item.memory.id)).toEqual(['project-a-1'])
+      expect(adapter.diagnostics().embedding).toMatchObject({
+        enabled: true,
+        provider: 'fail',
+        fallbackReason: expect.stringContaining('failed')
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CYRENE_EMBEDDING_PROVIDER
+      } else {
+        process.env.CYRENE_EMBEDDING_PROVIDER = previous
+      }
+    }
+  })
+
+  it('rejects unsafe embedding payloads before provider calls', () => {
+    expect(() => assertEmbeddingSafeText('Use /Users/phoenix/private/config.json.')).toThrow(/unsafe embedding text/)
+    expect(() => assertEmbeddingSafeText('Clone git@github.com:secret/private.git.')).toThrow(/unsafe embedding text/)
+    expect(() => assertEmbeddingSafeText('Token sk-123456789012345678901234567890123456789012345678.')).toThrow(/unsafe embedding text/)
   })
 
   it('syncs active global, active project, and pending records with portability filters', async () => {

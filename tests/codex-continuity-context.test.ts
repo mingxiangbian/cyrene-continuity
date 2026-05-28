@@ -62,6 +62,7 @@ describe('Codex continuity context', () => {
     expect(context.profile.project).toBe('# Project Profile\n\nProject profile guidance.')
     expect(context.profile.content).toBe('# Project Profile\n\nProject profile guidance.')
     expect(JSON.stringify(context)).not.toContain('git@github.com')
+    expect(context.diagnostics?.embedding).toMatchObject({ enabled: false, cacheHits: 0, cacheMisses: 0 })
   })
 
   it('returns global and project model profile content', async () => {

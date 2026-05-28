@@ -2,6 +2,15 @@ import { mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { estimateTokens } from '../token-counter.js'
+import {
+  assertEmbeddingSafeText,
+  createEmbeddingProviderFromEnv,
+  embeddingDiagnostics,
+  recordEmbeddingCacheMisses,
+  recordEmbeddingFallback,
+  type EmbeddingDiagnostics,
+  type EmbeddingProvider
+} from './embedding-provider.js'
 import { isMemoryEligibleForRetrieval } from './memory-retriever.js'
 import type { RetrieveMemoriesInput } from './memory-retriever.js'
 import {
@@ -21,6 +30,7 @@ export interface MemoryIndexDiagnostics {
   dbPath: string
   ftsTokenizer?: 'trigram' | 'unicode61'
   reason?: string
+  embedding?: EmbeddingDiagnostics
 }
 
 export interface MemoryIndexRebuildInput {
@@ -236,7 +246,8 @@ class UnavailableMemoryIndexAdapter implements MemoryIndexAdapter {
     return {
       available: false,
       dbPath: this.dbPath,
-      reason: this.reason
+      reason: this.reason,
+      embedding: { enabled: false, cacheHits: 0, cacheMisses: 0 }
     }
   }
 
@@ -247,9 +258,10 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
   private db: DatabaseLike | undefined
   private currentDiagnostics: MemoryIndexDiagnostics
   private initialized = false
+  private readonly embeddingProvider: EmbeddingProvider = createEmbeddingProviderFromEnv()
 
   constructor(private readonly dbPath: string, private readonly DatabaseSync: new (path: string) => DatabaseLike) {
-    this.currentDiagnostics = { available: true, dbPath }
+    this.currentDiagnostics = { available: true, dbPath, embedding: embeddingDiagnostics(this.embeddingProvider) }
   }
 
   async initialize(): Promise<MemoryIndexDiagnostics> {
@@ -310,13 +322,30 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         summary text,
         created_at text not null
       );
+
+      create table if not exists memory_embeddings (
+        memory_id text primary key,
+        provider text not null,
+        content_hash text not null,
+        vector_json text not null,
+        updated_at text not null
+      );
+
+      create table if not exists project_embeddings (
+        project_id text primary key,
+        provider text not null,
+        content_hash text not null,
+        vector_json text not null,
+        updated_at text not null
+      );
     `)
     this.ensureProjectColumns(db)
     if (!this.initialized) {
       this.currentDiagnostics = {
         available: true,
         dbPath: this.dbPath,
-        ftsTokenizer: this.ensureFtsTable(db)
+        ftsTokenizer: this.ensureFtsTable(db),
+        embedding: embeddingDiagnostics(this.embeddingProvider)
       }
       this.initialized = true
     }
@@ -492,16 +521,17 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         },
         task
       ))
+    const items = eligibleRows
+      .map((row) => ({
+        memory: row.payload as CyreneMemory,
+        score: scoreRow(row, input.query, ftsMatches),
+        portability: row.portability,
+        homeProjectId: row.homeProjectId
+      }))
+      .filter((item) => input.query.trim() === '' || item.score > 0)
+      .sort(compareIndexedItems)
     return selectWithinBudget(
-      eligibleRows
-        .map((row) => ({
-          memory: row.payload as CyreneMemory,
-          score: scoreRow(row, input.query, ftsMatches),
-          portability: row.portability,
-          homeProjectId: row.homeProjectId
-        }))
-        .filter((item) => input.query.trim() === '' || item.score > 0)
-        .sort(compareIndexedItems),
+      await this.rerankWithEmbeddings(items, input.query),
       input.maxItems,
       input.maxTokens
     )
@@ -569,9 +599,12 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       })
     }
     return selectWithinBudget(
-      items
-        .filter((item) => input.query.trim() === '' || item.score > 0)
-        .sort(compareIndexedItems),
+      await this.rerankWithEmbeddings(
+        items
+          .filter((item) => input.query.trim() === '' || item.score > 0)
+          .sort(compareIndexedItems),
+        input.query
+      ),
       input.maxItems,
       input.maxTokens
     )
@@ -638,6 +671,36 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
           throw error
         }
       }
+    }
+  }
+
+  private async rerankWithEmbeddings<T extends { memory: CyreneMemory | PendingMemory; score: number }>(
+    items: T[],
+    query: string
+  ): Promise<T[]> {
+    if (!this.embeddingProvider.diagnostics.enabled || items.length === 0) {
+      return items
+    }
+    try {
+      assertEmbeddingSafeText(query)
+      for (const item of items) {
+        assertEmbeddingSafeText(item.memory.content)
+      }
+      recordEmbeddingCacheMisses(this.embeddingProvider, items.length + 1)
+      await this.embeddingProvider.embedTexts([query, ...items.map((item) => item.memory.content)])
+      this.refreshEmbeddingDiagnostics()
+      return items
+    } catch (error) {
+      recordEmbeddingFallback(this.embeddingProvider, error instanceof Error ? error.message : String(error))
+      this.refreshEmbeddingDiagnostics()
+      return items
+    }
+  }
+
+  private refreshEmbeddingDiagnostics(): void {
+    this.currentDiagnostics = {
+      ...this.currentDiagnostics,
+      embedding: embeddingDiagnostics(this.embeddingProvider)
     }
   }
 

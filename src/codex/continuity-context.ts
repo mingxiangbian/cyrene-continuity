@@ -124,6 +124,7 @@ export interface CodexContinuityContext {
     }
     projectSimilarity?: ProjectSimilarityDiagnostics
     evalGate?: EvalGateDiagnostics
+    embedding?: NonNullable<MemoryIndexDiagnostics['embedding']>
   }
   profile: {
     global?: string
@@ -229,7 +230,8 @@ export async function getCodexContinuityContext(input: {
         ftsTokenizer: routedMemory.diagnostics.ftsTokenizer
       },
       projectSimilarity: routedMemory.projectSimilarityDiagnostics,
-      evalGate: routedMemory.evalGateDiagnostics
+      evalGate: routedMemory.evalGateDiagnostics,
+      ...(routedMemory.diagnostics.embedding === undefined ? {} : { embedding: routedMemory.diagnostics.embedding })
     },
     profile: {
       global: globalProfile,
