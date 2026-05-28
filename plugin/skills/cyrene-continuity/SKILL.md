@@ -26,7 +26,7 @@ Use this skill when the task benefits from Cyrene's long-term project memory, re
 15. Pending memory candidates are not active continuity memory. Do not use pending content as factual context until promoted.
 16. When multiple pending candidates exist, show at most three at a time unless the user asks for more.
 17. Do not invent user preferences from assistant suggestions or silence.
-18. Repeated independent evidence may auto-promote only after the scheduled `Dream Deep` pass; do not treat a new pending candidate as active before then.
+18. `Dream Deep` may recommend repeated independent evidence for review, but it must not activate memory without explicit approval and review hash.
 19. Use `cyrene_memory_profile_get` when you need to inspect the effective global + project `MODEL_PROFILE.md` context.
 20. Use `cyrene_memory_dream_run` only for explicit maintenance or verification tasks; running it is not a substitute for asking approve/reject on visible pending review candidates.
 

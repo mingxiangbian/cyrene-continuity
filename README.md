@@ -31,7 +31,8 @@ The plugin MCP server exposes:
 - `cyrene_memory_reject`: reject a pending candidate only after explicit user
   rejection and review-hash validation.
 - `cyrene_memory_dream_run`: run light, REM, deep-preview, or gated deep-apply
-  memory maintenance.
+  memory maintenance. Dream can recommend promotions for review, but it does
+  not promote unapproved pending memory.
 - `cyrene_memory_profile_get`: read the effective global and project
   `MODEL_PROFILE.md` context.
 
@@ -82,8 +83,16 @@ npm run dev -- codex similar-hints mark-transferable --memory-id <memoryId> --re
 
 `deep-preview` is the default safe dream stage. It writes review artifacts under
 `dream-preview/` and does not promote, reject, or tombstone memory. `deep-apply`
-recomputes the proposal, runs the deterministic eval gate, and only mutates
-memory when the gate passes.
+recomputes the proposal, runs the deterministic eval gate, may reject or expire
+gated unsafe pending memory, and writes recommendation artifacts. It does not
+promote unapproved pending memory; use pending review tools with explicit user
+approval and review-hash validation for active promotion.
+
+`CYRENE_MEMORY_RECOMMEND_PROMOTION=0` disables Dream promotion
+recommendations while preserving pending candidates. The older
+`CYRENE_MEMORY_AUTO_PROMOTE` variable is deprecated and read only as
+recommendation-generation compatibility; it no longer enables unapproved active
+promotion.
 
 Profile reflection writes reviewable candidates to `profile_candidates.jsonl`;
 applying a candidate requires the matching review hash and regenerates

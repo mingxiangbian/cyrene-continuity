@@ -189,7 +189,8 @@ describe('Cyrene MCP server', () => {
 
     expect(source).toContain("z.enum(['light', 'rem', 'deep-preview', 'deep-apply'])")
     expect(source).not.toContain("z.enum(['light', 'rem', 'deep'])")
-    expect(serverSource).toContain('Use deep-preview for read-only proposed changes and deep-apply for gated mutation')
+    expect(serverSource).toContain('deep-apply can reject or expire gated unsafe pending memory')
+    expect(serverSource).toContain('never promotes unapproved pending memory')
   })
 
   it('exposes Codex pending review tools through a fresh MCP server', async () => {
@@ -254,6 +255,8 @@ describe('Cyrene MCP server', () => {
     expect(source).toContain('cyrene_memory_profile_get')
     expect(source).toContain('cyrene_memory_dream_run')
     expect(source).toContain('Dream Deep')
+    expect(source).toContain('recommend repeated independent evidence for review')
+    expect(source).not.toContain(['auto', 'promote'].join('-'))
     expect(source).toContain('show pending candidates as review candidates')
     expect(source).toContain('Do not wait for the user to ask to review them')
     expect(source).toContain('Only present candidates that are confirmed by pending list/get')

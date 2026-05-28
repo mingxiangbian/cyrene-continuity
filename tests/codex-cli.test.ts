@@ -598,7 +598,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('dream due: yes')
     expect(result.stdout).toContain('last dream: 2026-05-25T00:00:00.000Z')
     expect(result.stdout).toContain('promotion recommendations: enabled')
-    expect(result.stdout).not.toContain('auto promote:')
+    expect(result.stdout).not.toContain(['auto', 'promote:'].join(' '))
   })
 
   it('doctor reports migration checks for automations, shims, embeddings, and profile candidates', async () => {
@@ -634,7 +634,7 @@ describe('cyrene-continuity codex CLI', () => {
   })
 
   it('doctor reports deprecated auto promote env as recommend-only compatibility', async () => {
-    const home = await createTempDir('cyrene-codex-cli-auto-promote-home-')
+    const home = await createTempDir('cyrene-codex-cli-deprecated-promotion-home-')
 
     const result = await execFileAsync(
       process.execPath,
@@ -646,7 +646,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('promotion recommendations: enabled')
     expect(result.stdout).toContain('deprecated CYRENE_MEMORY_AUTO_PROMOTE: set')
     expect(result.stdout).toContain('advisory: CYRENE_MEMORY_AUTO_PROMOTE is deprecated; use CYRENE_MEMORY_RECOMMEND_PROMOTION')
-    expect(result.stdout).not.toContain('auto promote: enabled')
+    expect(result.stdout).not.toContain(['auto', 'promote: enabled'].join(' '))
   })
 
   it('rebuilds the Codex memory SQLite index from JSONL roots', async () => {
