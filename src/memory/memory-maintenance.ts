@@ -386,8 +386,9 @@ function boundPendingToBudget(
   maxItems: number,
   preserveCandidateIds: string[]
 ): PendingMemory[] {
+  const limit = Math.max(maxItems, 0)
   const sorted = sortPendingNewestFirst(pending)
-  if (preserveCandidateIds.length === 0) return sorted.slice(0, maxItems)
+  if (preserveCandidateIds.length === 0) return sorted.slice(0, limit)
 
   const preserve = new Set(preserveCandidateIds)
   const preserved: PendingMemory[] = []
@@ -400,7 +401,8 @@ function boundPendingToBudget(
     }
   }
 
-  return [...preserved, ...unreserved.slice(0, Math.max(maxItems - preserved.length, 0))]
+  const preservedWithinBudget = preserved.slice(0, limit)
+  return [...preservedWithinBudget, ...unreserved.slice(0, Math.max(limit - preservedWithinBudget.length, 0))]
 }
 
 function truncateWithSuffix(value: string, maxChars: number): string {

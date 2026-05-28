@@ -273,6 +273,29 @@ describe('root memory maintenance', () => {
     expect(result.pendingCount).toBe(2)
   })
 
+  it('preserves requested pending candidates without exceeding the pending budget', async () => {
+    const memoryRoot = await createMemoryRoot()
+    await seedMemoryRoot({
+      memoryRoot,
+      pending: [
+        createPending({ id: 'older-preserved', lastSeenAt: '2026-05-25T00:00:00.000Z' }),
+        createPending({ id: 'newer-preserved', lastSeenAt: '2026-05-25T02:00:00.000Z' }),
+        createPending({ id: 'unreserved', lastSeenAt: '2026-05-25T03:00:00.000Z' })
+      ]
+    })
+
+    const result = await runMemoryMaintenanceFromRoot({
+      memoryRoot,
+      budget: createBudget({ pendingMaxItems: 1 }),
+      now: '2026-05-26T00:00:00.000Z',
+      preservePendingCandidateIds: ['older-preserved', 'newer-preserved']
+    })
+
+    const pending = await readJsonLines<PendingMemory>(join(memoryRoot, 'pending.jsonl'))
+    expect(pending.map((candidate) => candidate.id)).toEqual(['newer-preserved'])
+    expect(result.pendingCount).toBe(1)
+  })
+
   it('renders MODEL_PROFILE.md after maintenance', async () => {
     const memoryRoot = await createMemoryRoot()
     await seedMemoryRoot({

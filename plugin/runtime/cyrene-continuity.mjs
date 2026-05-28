@@ -13385,8 +13385,9 @@ function sortPendingNewestFirst(pending) {
   });
 }
 function boundPendingToBudget(pending, maxItems, preserveCandidateIds) {
+  const limit = Math.max(maxItems, 0);
   const sorted = sortPendingNewestFirst(pending);
-  if (preserveCandidateIds.length === 0) return sorted.slice(0, maxItems);
+  if (preserveCandidateIds.length === 0) return sorted.slice(0, limit);
   const preserve = new Set(preserveCandidateIds);
   const preserved = [];
   const unreserved = [];
@@ -13397,7 +13398,8 @@ function boundPendingToBudget(pending, maxItems, preserveCandidateIds) {
       unreserved.push(candidate);
     }
   }
-  return [...preserved, ...unreserved.slice(0, Math.max(maxItems - preserved.length, 0))];
+  const preservedWithinBudget = preserved.slice(0, limit);
+  return [...preservedWithinBudget, ...unreserved.slice(0, Math.max(limit - preservedWithinBudget.length, 0))];
 }
 function truncateWithSuffix(value, maxChars) {
   if (value.length <= maxChars) return value;
@@ -15646,6 +15648,7 @@ async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours, re
   };
 }
 async function applyDreamProposal(memoryRoot, proposal, now) {
+  const pending = await readPendingMemoriesFromRoot(memoryRoot);
   const nextPending = [];
   const events = [];
   const newTombstones = [];
@@ -15670,6 +15673,12 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     }
   }
   if (mutated) {
+    const retainedIds = new Set(nextPending.map((candidate) => candidate.id));
+    for (const candidate of pending) {
+      if (!retainedIds.has(candidate.id) && !proposal.diff.removePendingCandidateIds.includes(candidate.id)) {
+        nextPending.push(candidate);
+      }
+    }
     await writePendingMemoriesFromRoot(memoryRoot, nextPending);
     for (const tombstone of newTombstones) {
       await appendTombstoneFromRoot(memoryRoot, tombstone);

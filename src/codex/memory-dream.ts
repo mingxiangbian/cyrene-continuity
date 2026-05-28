@@ -354,6 +354,7 @@ async function applyDreamProposal(
   proposal: DreamRootProposal,
   now: string
 ): Promise<{ promoted: number; rejected: number }> {
+  const pending = await readPendingMemoriesFromRoot(memoryRoot)
   const nextPending: PendingMemory[] = []
   const events: MemoryEvent[] = []
   const newTombstones: MemoryTombstone[] = []
@@ -380,6 +381,12 @@ async function applyDreamProposal(
   }
 
   if (mutated) {
+    const retainedIds = new Set(nextPending.map((candidate) => candidate.id))
+    for (const candidate of pending) {
+      if (!retainedIds.has(candidate.id) && !proposal.diff.removePendingCandidateIds.includes(candidate.id)) {
+        nextPending.push(candidate)
+      }
+    }
     await writePendingMemoriesFromRoot(memoryRoot, nextPending)
     for (const tombstone of newTombstones) {
       await appendTombstoneFromRoot(memoryRoot, tombstone)
@@ -612,4 +619,8 @@ function isFileErrorCode(error: unknown, code: string): boolean {
 export const testOnlyDreamLock = {
   acquire: tryAcquireDreamLock,
   release: releaseDreamLock
+}
+
+export const testOnlyDreamRuntime = {
+  applyProposal: applyDreamProposal
 }

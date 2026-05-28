@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { buildDreamProposalForRoot } from '../src/codex/dream-proposal.js'
-import { runCodexMemoryDream, testOnlyDreamLock } from '../src/codex/memory-dream.js'
+import { runCodexMemoryDream, testOnlyDreamLock, testOnlyDreamRuntime } from '../src/codex/memory-dream.js'
 import { readCodexMemoryDreamState } from '../src/codex/memory-dream-state.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
@@ -648,6 +648,52 @@ describe('Codex memory dream runtime', () => {
     expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'rejected' })
+  })
+
+  it('dream apply retains current pending candidates missing from a stale reject proposal', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const rejected = createPending({
+      id: 'reject-pending',
+      content: 'Low safety pending memory should be rejected.',
+      normalizedKey: 'reject-pending-memory',
+      seenCount: 2,
+      scores: {
+        evidenceStrength: 0.95,
+        stability: 0.9,
+        usefulness: 0.9,
+        safety: 0.55,
+        sensitivity: 0.1
+      },
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const kept = createPending({
+      id: 'kept-pending',
+      content: 'Insufficient evidence pending memory should remain.',
+      normalizedKey: 'kept-pending-memory'
+    })
+    const addedAfterProposal = createPending({
+      id: 'added-after-proposal',
+      content: 'Pending memory added after proposal should remain.',
+      normalizedKey: 'added-after-proposal-memory'
+    })
+    const memoryRoot = await seedProjectPending(cwd, [rejected, kept])
+    const proposal = await buildDreamProposalForRoot({ memoryRoot, now: '2026-05-26T00:00:00.000Z' })
+    await writeFile(
+      join(memoryRoot, 'pending.jsonl'),
+      [rejected, kept, addedAfterProposal].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
+
+    await testOnlyDreamRuntime.applyProposal(memoryRoot, proposal, '2026-05-26T00:00:00.000Z')
+
+    const pendingText = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pendingText).not.toContain(rejected.content)
+    expect(pendingText).toContain(kept.content)
+    expect(pendingText).toContain(addedAfterProposal.content)
   })
 
   it('deep-apply expires stale pending candidates instead of promoting them', async () => {
