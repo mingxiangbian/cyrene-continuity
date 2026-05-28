@@ -694,6 +694,40 @@ describe('Codex continuity context', () => {
       reason: 'no_similar_projects_selected'
     })
   })
+
+  it('does not leak project-local memory from another projectId into current continuity context', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-wrong-project-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-current-project-')
+    const otherRepo = await createTempDir('cyrene-other-project-')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    const currentRoot = codexProjectMemoryRoot(current.projectId)
+    const otherRoot = codexProjectMemoryRoot(other.projectId)
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(otherRoot, { recursive: true })
+    await writeFile(join(currentRoot, 'index.jsonl'), `${JSON.stringify(createMemory({
+      id: 'current-memory',
+      content: 'Current project memory.',
+      normalizedKey: 'current-project-memory'
+    }))}\n`)
+    await writeFile(join(otherRoot, 'index.jsonl'), `${JSON.stringify(createMemory({
+      id: 'other-memory',
+      content: 'Other project local memory must not leak.',
+      normalizedKey: 'other-project-local-memory'
+    }))}\n`)
+
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'Current project memory.',
+      task: 'coding'
+    })
+
+    expect(JSON.stringify(context.projectMemory)).toContain('Current project memory.')
+    expect(JSON.stringify(context.projectMemory)).not.toContain('Other project local memory must not leak.')
+    expect(JSON.stringify(context.globalMemory)).not.toContain('Other project local memory must not leak.')
+    expect(JSON.stringify(context.memory.items)).not.toContain('Other project local memory must not leak.')
+  })
 })
 
 function createMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
