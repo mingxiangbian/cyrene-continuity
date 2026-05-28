@@ -16,6 +16,11 @@ memory maintenance commands.
 - Optional Codex Stop hook that records review-safe continuity summaries and
   pending memory candidates.
 
+The optional Codex Stop hook writes review-safe session summaries and may
+propose pending candidates. It is fail-open for Codex sessions, records failed
+summary runs in `review-summaries.jsonl`, and never promotes, rejects, or
+updates active memory/profile files from hook execution.
+
 ## MCP Tools
 
 The plugin MCP server exposes:

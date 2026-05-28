@@ -287,6 +287,79 @@ describe('Codex Stop hook runtime', () => {
     await expectMemoryFileMissing(memoryRoot, 'events.jsonl')
   })
 
+  it('writes review summary and pending candidate without mutating active memory or profile', async () => {
+    const home = await createTempDir('cyrene-codex-stop-pipeline-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-pipeline-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify({
+      id: 'active-1',
+      domain: 'project',
+      type: 'project_fact',
+      strength: 'hard',
+      scope: 'project',
+      status: 'active',
+      content: 'Existing active memory must remain unchanged.',
+      normalizedKey: 'existing-active-memory',
+      evidence: [{ runId: 'active-run', summary: 'Existing active seed.' }],
+      source: 'file',
+      scores: { evidenceStrength: 0.9, stability: 0.9, usefulness: 0.8, safety: 0.95, sensitivity: 0.1 },
+      createdAt: '2026-05-28T00:00:00.000Z',
+      updatedAt: '2026-05-28T00:00:00.000Z',
+      tags: ['seed']
+    })}\n`)
+    await writeFile(join(memoryRoot, 'MODEL_PROFILE.md'), '# Existing Profile\n')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, [
+      JSON.stringify({ role: 'user', content: '这个项目的 memory 审批要用 review hash。' }),
+      JSON.stringify({ role: 'assistant', content: '确认。' })
+    ].join('\n') + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, transcript_path: transcript, session_id: 's-pipeline', turn_id: 't-pipeline' },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({
+            summary: '用户要求项目 memory 审批使用 review hash。',
+            candidates: [
+              {
+                domain: 'procedural',
+                type: 'procedural_rule',
+                strength: 'hard',
+                scope: 'project',
+                source: 'user_explicit',
+                content: '项目 memory 审批必须使用 review hash。',
+                evidence: [{ summary: '用户要求项目 memory 审批使用 review hash。' }]
+              }
+            ]
+          }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('pending')
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
+      '用户要求项目 memory 审批使用 review hash。'
+    )
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
+      '项目 memory 审批必须使用 review hash。'
+    )
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(
+      'Existing active memory must remain unchanged.'
+    )
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.not.toContain(
+      '项目 memory 审批必须使用 review hash。'
+    )
+    await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toBe('# Existing Profile\n')
+    await expectMemoryFileMissing(memoryRoot, 'tombstones.jsonl')
+    await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).resolves.toContain('"action":"pending"')
+    await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).resolves.not.toContain('"action":"promote"')
+    await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).resolves.not.toContain('"action":"reject"')
+  })
+
   it('still proposes explicit durable memory when review summary model fails', async () => {
     const home = await createTempDir('cyrene-codex-stop-home-')
     vi.stubEnv('HOME', home)
