@@ -16076,6 +16076,293 @@ async function removeExistingSkillSymlink(path) {
   }
 }
 
+// src/codex/codex-memory-dashboard.ts
+import { readFile as readFile11 } from "node:fs/promises";
+import { homedir as homedir6 } from "node:os";
+import { join as join18 } from "node:path";
+var REVIEW_SUMMARIES_FILE3 = "review-summaries.jsonl";
+var STOP_HOOK_STALE_MS = 24 * 60 * 60 * 1e3;
+async function formatCodexMemoryDashboard(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const status = await readCodexMemoryStatus({ cwd: input.cwd });
+  const globalRoot = status.roots.global.path;
+  const projectRoot = status.roots.project.path;
+  const [projectActive, pending, tombstones, reviewSummaries, dreamState, projectProfile, configText] = await Promise.all([
+    readActiveMemoriesFromRoot(projectRoot),
+    readDashboardPendingMemories([globalRoot, projectRoot]),
+    readTombstonesFromRoot(projectRoot),
+    readReviewSummaries(projectRoot),
+    readDashboardDreamState(projectRoot),
+    readModelProfileFromRootIfExists(projectRoot),
+    readOptional2(input.configPath ?? join18(homedir6(), ".codex", "config.toml"))
+  ]);
+  const pendingSummaries = pending.map((candidate) => summarizePendingMemory(candidate, now));
+  const warnings = buildDashboardWarnings({
+    status,
+    configText,
+    projectProfilePresent: projectProfile !== void 0,
+    now
+  });
+  return [
+    "Cyrene Memory Dashboard",
+    "",
+    "project:",
+    `  projectId: ${status.project.projectId}`,
+    `  displayName: ${status.project.displayName}`,
+    "",
+    "counts:",
+    `  active memories: ${status.roots.global.counts.active + status.roots.project.counts.active}`,
+    `  pending memories: ${status.roots.global.counts.pending + status.roots.project.counts.pending}`,
+    `  rejected/tombstoned: ${status.roots.global.counts.tombstones + status.roots.project.counts.tombstones}`,
+    `  profile candidates: ${status.roots.global.counts.profileCandidates + status.roots.project.counts.profileCandidates}`,
+    "",
+    ...formatTopActiveMemories(projectActive),
+    "",
+    ...formatPendingReview(pendingSummaries),
+    "",
+    ...formatReviewSummaries(reviewSummaries),
+    "",
+    "dream:",
+    `  last dream: ${dreamState.lastDreamAt ?? "never"}`,
+    `  next dream due: ${dreamState.nextDreamDueAt ?? "unknown"}`,
+    `  dream due: ${dreamState.dreamDue ? "yes" : "no"}`,
+    dreamState.lastDreamStatus === void 0 ? void 0 : `  last dream status: ${dreamState.lastDreamStatus}`,
+    dreamState.lastDreamError === void 0 ? void 0 : `  last dream error: ${dreamState.lastDreamError}`,
+    "",
+    ...formatTombstones(tombstones),
+    "",
+    ...formatWarnings(warnings)
+  ].filter((line) => line !== void 0).join("\n") + "\n";
+}
+async function readDashboardPendingMemories(roots) {
+  return (await Promise.all(uniqueStrings2(roots).map((root) => readPendingMemoriesFromRoot(root)))).flat();
+}
+async function readReviewSummaries(root) {
+  const content = await readOptional2(join18(root, REVIEW_SUMMARIES_FILE3));
+  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      if (typeof parsed.createdAt !== "string" || typeof parsed.summary !== "string" || parsed.status !== "ok" && parsed.status !== "failed") {
+        return [];
+      }
+      return [{
+        id: typeof parsed.id === "string" ? parsed.id : parsed.createdAt,
+        runId: typeof parsed.runId === "string" ? parsed.runId : "",
+        createdAt: parsed.createdAt,
+        status: parsed.status,
+        summary: parsed.summary,
+        redaction: isReviewSummaryRedaction(parsed.redaction) ? parsed.redaction : { input: {}, output: {} },
+        candidateIds: Array.isArray(parsed.candidateIds) ? parsed.candidateIds.filter((item) => typeof item === "string") : [],
+        failureReason: typeof parsed.failureReason === "string" ? parsed.failureReason : void 0
+      }];
+    } catch {
+      return [];
+    }
+  }).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+function isReviewSummaryRedaction(value) {
+  return typeof value === "object" && value !== null && "input" in value && "output" in value && typeof value.input === "object" && value.input !== null && typeof value.output === "object" && value.output !== null;
+}
+async function readDashboardDreamState(root) {
+  try {
+    return await readCodexMemoryDreamState(root);
+  } catch (error2) {
+    return { dreamDue: false, lastDreamStatus: "failed", lastDreamError: errorMessage3(error2) };
+  }
+}
+function formatTopActiveMemories(memories) {
+  const lines = ["top active project memories:"];
+  const top = [...memories].sort(compareActiveMemory).slice(0, 5);
+  if (top.length === 0) {
+    lines.push("- none");
+    return lines;
+  }
+  for (const memory of top) {
+    lines.push(`- ${memory.id} [${memory.domain}/${memory.type}] usefulness=${formatScore(memory.scores.usefulness)} ${truncate(memory.content)}`);
+  }
+  return lines;
+}
+function formatPendingReview(pending) {
+  const lines = ["pending review:"];
+  const top = [...pending].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt)).slice(0, 5);
+  if (top.length === 0) {
+    lines.push("- none");
+    return lines;
+  }
+  for (const item of top) {
+    lines.push(`- ${item.id} recommendation=${item.recommendation} risk=${item.risk} reviewHash=${item.reviewHash}`);
+    lines.push(`  ${truncate(item.content)}`);
+  }
+  return lines;
+}
+function formatReviewSummaries(summaries) {
+  const lines = ["review summaries:"];
+  const top = summaries.slice(0, 3);
+  if (top.length === 0) {
+    lines.push("- none");
+    return lines;
+  }
+  for (const summary of top) {
+    lines.push(`- ${summary.createdAt} (${summary.status}) candidates=${summary.candidateIds.join(", ") || "none"}`);
+    lines.push(`  ${truncate(summary.summary)}`);
+  }
+  return lines;
+}
+function formatTombstones(tombstones) {
+  const lines = ["rejected/tombstoned summaries:"];
+  const top = [...tombstones].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 5);
+  if (top.length === 0) {
+    lines.push("- none");
+    return lines;
+  }
+  for (const tombstone of top) {
+    lines.push(`- ${tombstone.id} reason=${tombstone.reason} normalizedKey=${tombstone.normalizedKey}`);
+  }
+  return lines;
+}
+function formatWarnings(warnings) {
+  const lines = ["warnings:"];
+  if (warnings.length === 0) {
+    lines.push("- none");
+    return lines;
+  }
+  for (const warning of warnings) {
+    lines.push(`- ${warning.label}: ${warning.reason}`);
+  }
+  return lines;
+}
+function buildDashboardWarnings(input) {
+  const warnings = [];
+  const lastRunAt = input.status.stopHook.lastRunAt;
+  if (lastRunAt === void 0 || isOlderThan(lastRunAt, input.now, STOP_HOOK_STALE_MS)) {
+    warnings.push({
+      label: "Stop Hook stale",
+      reason: lastRunAt === void 0 ? "no review summary run found" : `last run at ${lastRunAt}`
+    });
+  }
+  if (!input.projectProfilePresent) {
+    warnings.push({ label: "profile missing", reason: "project MODEL_PROFILE.md is missing" });
+  }
+  if (input.status.index.freshness === "stale" || input.status.index.freshness === "unavailable") {
+    warnings.push({
+      label: "SQLite stale",
+      reason: input.status.index.staleReason ?? input.status.index.reason ?? `index freshness is ${input.status.index.freshness}`
+    });
+  }
+  if (input.status.project.knownProjectRootCount > 1 && input.status.project.idDiagnostic !== "current project root only") {
+    warnings.push({ label: "projectId split", reason: input.status.project.idDiagnostic });
+  }
+  if (hasEnabledMcpServer2(input.configText, "cyrene") || hasEnabledMcpServer2(input.configText, '"cyrene-continuity"')) {
+    warnings.push({ label: "Codex memory enabled", reason: "cyrene-continuity MCP is enabled in Codex config" });
+  }
+  if (hasEnabledMcpServer2(input.configText, "agentmemory")) {
+    warnings.push({ label: "agentmemory enabled", reason: "disable agentmemory before validating Cyrene as authoritative memory" });
+  }
+  return warnings;
+}
+function compareActiveMemory(left, right) {
+  return right.scores.usefulness - left.scores.usefulness || right.scores.evidenceStrength - left.scores.evidenceStrength || right.scores.safety - left.scores.safety || right.updatedAt.localeCompare(left.updatedAt);
+}
+function isOlderThan(value, now, maxAgeMs) {
+  const valueTime = Date.parse(value);
+  const nowTime = Date.parse(now);
+  return Number.isFinite(valueTime) && Number.isFinite(nowTime) && nowTime - valueTime > maxAgeMs;
+}
+function hasEnabledMcpServer2(configText, name) {
+  const block = readTomlBlock2(configText, `[mcp_servers.${name}]`);
+  if (block === void 0) {
+    return false;
+  }
+  return readTomlBooleanValue2(block, "enabled") !== false;
+}
+function readTomlBooleanValue2(block, key) {
+  const value = readTomlAssignmentValue2(block, key);
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return void 0;
+}
+function readTomlAssignmentValue2(block, key) {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const value = block.match(new RegExp(`^\\s*${escapedKey}\\s*=\\s*(.+?)\\s*$`, "m"))?.[1];
+  return value === void 0 ? void 0 : stripTomlInlineComment2(value).trim();
+}
+function readTomlBlock2(configText, heading) {
+  const lines = configText.split(/\r?\n/);
+  const start = lines.findIndex((line) => stripTomlInlineComment2(line).trim() === heading);
+  if (start < 0) {
+    return void 0;
+  }
+  const body = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\s*\[/.test(stripTomlInlineComment2(lines[index] ?? ""))) {
+      break;
+    }
+    body.push(lines[index] ?? "");
+  }
+  return body.join("\n");
+}
+function stripTomlInlineComment2(value) {
+  let quote;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote === '"') {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        quote = void 0;
+      }
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") {
+        quote = void 0;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "#") {
+      return value.slice(0, index);
+    }
+  }
+  return value;
+}
+async function readOptional2(path) {
+  try {
+    return await readFile11(path, "utf8");
+  } catch (error2) {
+    if (isErrorCode4(error2, "ENOENT")) {
+      return "";
+    }
+    throw error2;
+  }
+}
+function uniqueStrings2(values) {
+  return Array.from(new Set(values));
+}
+function truncate(value, maxLength = 160) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}...`;
+}
+function formatScore(value) {
+  return value.toFixed(2);
+}
+function isErrorCode4(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+function errorMessage3(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+
 // src/codex/codex-memory-review-cli.ts
 async function formatCodexMemoryReview(input) {
   const result2 = await listCodexPendingMemories(input);
@@ -16129,8 +16416,8 @@ async function runCodexMemoryDefer(input) {
 
 // src/codex/dream-artifacts.ts
 import { randomUUID as randomUUID9 } from "node:crypto";
-import { lstat as lstat11, mkdir as mkdir10, readFile as readFile11, realpath as realpath6, rename as rename4, writeFile as writeFile7 } from "node:fs/promises";
-import { join as join18 } from "node:path";
+import { lstat as lstat11, mkdir as mkdir10, readFile as readFile12, realpath as realpath6, rename as rename4, writeFile as writeFile7 } from "node:fs/promises";
+import { join as join19 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
 var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
@@ -16139,10 +16426,10 @@ async function writeDreamPreviewArtifacts(input) {
   const proposalId = randomUUID9();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
-    reportPath: join18(previewDir, DREAM_REPORT_FILE),
-    proposedChangesPath: join18(previewDir, "proposed_changes.json"),
-    diffPath: join18(previewDir, "diff.json"),
-    evalResultsPath: join18(previewDir, "eval_results.json")
+    reportPath: join19(previewDir, DREAM_REPORT_FILE),
+    proposedChangesPath: join19(previewDir, "proposed_changes.json"),
+    diffPath: join19(previewDir, "diff.json"),
+    evalResultsPath: join19(previewDir, "eval_results.json")
   };
   await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
   await writeJsonAtomic(paths.proposedChangesPath, {
@@ -16164,9 +16451,9 @@ async function readDreamReport(input) {
   if (memoryRoot === null) {
     throw new Error(`No readable ${input.root} memory root exists`);
   }
-  const reportPath = join18(memoryRoot, DREAM_PREVIEW_DIR, DREAM_REPORT_FILE);
+  const reportPath = join19(memoryRoot, DREAM_PREVIEW_DIR, DREAM_REPORT_FILE);
   try {
-    return { memoryRoot, report: await readFile11(reportPath, "utf8") };
+    return { memoryRoot, report: await readFile12(reportPath, "utf8") };
   } catch (error2) {
     if (isFileErrorCode9(error2, "ENOENT")) {
       throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
@@ -16219,7 +16506,7 @@ function renderDreamReport(input) {
 `;
 }
 async function ensurePreviewDir(memoryRoot) {
-  const previewDir = join18(memoryRoot, DREAM_PREVIEW_DIR);
+  const previewDir = join19(memoryRoot, DREAM_PREVIEW_DIR);
   await mkdir10(previewDir, { recursive: true });
   const stats = await lstat11(previewDir);
   if (stats.isSymbolicLink()) {
@@ -16245,8 +16532,8 @@ function isFileErrorCode9(error2, code) {
 
 // src/codex/memory-dream.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
-import { lstat as lstat13, mkdir as mkdir11, readFile as readFile12, rm as rm4, writeFile as writeFile8 } from "node:fs/promises";
-import { join as join19 } from "node:path";
+import { lstat as lstat13, mkdir as mkdir11, readFile as readFile13, rm as rm4, writeFile as writeFile8 } from "node:fs/promises";
+import { join as join20 } from "node:path";
 
 // src/codex/dream-proposal.ts
 import { lstat as lstat12, realpath as realpath7 } from "node:fs/promises";
@@ -16789,12 +17076,12 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join19(locksDir, DREAM_LOCK_DIR);
+  const lockDir = join20(locksDir, DREAM_LOCK_DIR);
   const token = randomUUID10();
   while (true) {
     try {
       await mkdir11(lockDir);
-      await writeFile8(join19(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await writeFile8(join20(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
@@ -16810,7 +17097,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join19(memoryRoot, DREAM_LOCKS_DIR);
+  const locksDir = join20(memoryRoot, DREAM_LOCKS_DIR);
   await mkdir11(locksDir).catch((error2) => {
     if (!isFileErrorCode11(error2, "EEXIST")) {
       throw error2;
@@ -16836,7 +17123,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile12(join19(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile13(join20(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -16884,8 +17171,8 @@ function isFileErrorCode11(error2, code) {
 
 // src/codex/profile-candidates.ts
 import { createHash as createHash7, randomUUID as randomUUID11 } from "node:crypto";
-import { lstat as lstat14, readFile as readFile13, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
-import { join as join20 } from "node:path";
+import { lstat as lstat14, readFile as readFile14, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join21 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -17191,7 +17478,7 @@ function upsertActiveMemory2(active, memory) {
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   try {
-    const content = await readFile13(join20(root, PROFILE_CANDIDATES_FILE2), "utf8");
+    const content = await readFile14(join21(root, PROFILE_CANDIDATES_FILE2), "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
     if (isFileErrorCode12(error2, "ENOENT")) {
@@ -17202,7 +17489,7 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join20(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join21(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
   const tempPath = `${targetPath}.${process.pid}.${randomUUID11()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
@@ -17212,7 +17499,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join20(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join21(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
   const tempPath = `${targetPath}.${process.pid}.${randomUUID11()}.tmp`;
   await writeFile9(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
@@ -17270,8 +17557,8 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/project-registry.ts
-import { mkdir as mkdir12, readFile as readFile14, writeFile as writeFile10 } from "node:fs/promises";
-import { basename as basename5, dirname as dirname10, join as join21 } from "node:path";
+import { mkdir as mkdir12, readFile as readFile15, writeFile as writeFile10 } from "node:fs/promises";
+import { basename as basename5, dirname as dirname10, join as join22 } from "node:path";
 var PROJECT_METADATA_FILE = "project.json";
 var MERGE_JSONL_FILES = [
   "index.jsonl",
@@ -17315,7 +17602,7 @@ async function mergeCodexProjects(input) {
   const toProjectRoot = dirname10(toMemoryRoot);
   const mergedFiles = [];
   for (const fileName of MERGE_JSONL_FILES) {
-    const merged = await mergeJsonlFile(join21(fromMemoryRoot, fileName), join21(toMemoryRoot, fileName));
+    const merged = await mergeJsonlFile(join22(fromMemoryRoot, fileName), join22(toMemoryRoot, fileName));
     if (merged) {
       mergedFiles.push(fileName);
     }
@@ -17340,7 +17627,7 @@ async function mergeCodexProjects(input) {
 }
 async function registryEntryFromRoot(root) {
   const projectId = basename5(root);
-  const memoryRoot = join21(root, "memory");
+  const memoryRoot = join22(root, "memory");
   const metadata = await readProjectMetadata(root);
   const [active, pending, tombstones] = await Promise.all([
     readActiveMemoriesFromRoot(memoryRoot),
@@ -17398,7 +17685,7 @@ function jsonLineKey(line) {
 }
 async function readJsonLinesIfExists(path) {
   try {
-    return (await readFile14(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    return (await readFile15(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   } catch (error2) {
     if (isFileErrorCode13(error2, "ENOENT")) {
       return [];
@@ -17408,7 +17695,7 @@ async function readJsonLinesIfExists(path) {
 }
 async function readProjectMetadata(projectRoot) {
   try {
-    const parsed = JSON.parse(await readFile14(join21(projectRoot, PROJECT_METADATA_FILE), "utf8"));
+    const parsed = JSON.parse(await readFile15(join22(projectRoot, PROJECT_METADATA_FILE), "utf8"));
     if (!isRecord4(parsed)) {
       return {};
     }
@@ -17428,7 +17715,7 @@ async function readProjectMetadata(projectRoot) {
 }
 async function writeProjectMetadata(projectRoot, metadata) {
   await mkdir12(projectRoot, { recursive: true });
-  await writeFile10(join21(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
+  await writeFile10(join22(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
 `, "utf8");
 }
 function validateProjectId(value) {
@@ -17802,6 +18089,10 @@ async function handleCodexCommand(input) {
     }));
     return;
   }
+  if (command === "memory" && input.args[1] === "dashboard") {
+    process.stdout.write(await formatCodexMemoryDashboard({ cwd: input.cwd }));
+    return;
+  }
   if (command === "memory" && input.args[1] === "approve") {
     process.stdout.write(await runCodexMemoryApprove({
       cwd: input.cwd,
@@ -17897,7 +18188,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -18509,15 +18800,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage3 = "";
+  let errorMessage4 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage3 = map(fullIssue, { data, defaultError: errorMessage3 }).message;
+    errorMessage4 = map(fullIssue, { data, defaultError: errorMessage4 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage3
+    message: errorMessage4
   };
 };
 var EMPTY_PATH = [];
@@ -28339,19 +28630,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage3, refs) {
+function addErrorMessage(res, key, errorMessage4, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage3) {
+  if (errorMessage4) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage3
+      [key]: errorMessage4
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage3, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage4, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage3, refs);
+  addErrorMessage(res, key, errorMessage4, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -29662,8 +29953,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage3 = message;
-                    const error2 = new McpError(errorMessage3.error.code, errorMessage3.error.message, errorMessage3.error.data);
+                    const errorMessage4 = message;
+                    const error2 = new McpError(errorMessage4.error.code, errorMessage4.error.message, errorMessage4.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -30963,23 +31254,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage3 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage3}`);
+          const errorMessage4 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage4}`);
         }
         const { params } = validatedRequest.data;
         const result2 = await Promise.resolve(handler(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result2);
           if (!taskValidationResult.success) {
-            const errorMessage3 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage3}`);
+            const errorMessage4 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage4}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result2);
         if (!validationResult.success) {
-          const errorMessage3 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage3}`);
+          const errorMessage4 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage4}`);
         }
         return validationResult.data;
       };
@@ -31473,12 +31764,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage3) {
+  createToolError(errorMessage4) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage3
+          text: errorMessage4
         }
       ],
       isError: true
@@ -31496,8 +31787,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage3 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage3}`);
+      const errorMessage4 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage4}`);
     }
     return parseResult.data;
   }
@@ -31521,8 +31812,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result2.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage3 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage3}`);
+      const errorMessage4 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage4}`);
     }
   }
   /**
@@ -31734,8 +32025,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage3 = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage3}`);
+          const errorMessage4 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage4}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;

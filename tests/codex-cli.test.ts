@@ -860,6 +860,95 @@ describe('cyrene-continuity codex CLI', () => {
     expect(doctor.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (ok)')
   })
 
+  it('prints a memory dashboard with review, dream, top memory, and warnings', async () => {
+    const home = await createTempDir('cyrene-codex-cli-dashboard-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-dashboard-repo-')
+    const identity = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await mkdir(join(home, '.codex'), { recursive: true })
+    await mkdir(codexProjectMemoryRoot('legacy-project-id'), { recursive: true })
+    await writeFile(join(home, '.codex', 'config.toml'), [
+      '[mcp_servers."cyrene-continuity"]',
+      ...currentRepoMcpConfigLines(),
+      'enabled = true',
+      '',
+      '[mcp_servers.agentmemory]',
+      'command = "npx"',
+      'args = ["-y", "@agentmemory/mcp"]',
+      'enabled = true'
+    ].join('\n'))
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({
+      id: 'dashboard-active-1',
+      content: 'Dashboard should surface the strongest project memory.',
+      scores: {
+        evidenceStrength: 0.95,
+        stability: 0.9,
+        usefulness: 0.99,
+        safety: 0.95,
+        sensitivity: 0.1
+      }
+    }))}\n`)
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+      id: 'dashboard-pending-1',
+      content: 'Dashboard should show pending review.',
+      lastSeenAt: '2026-05-28T00:00:00.000Z'
+    }))}\n`)
+    await writeFile(join(memoryRoot, 'tombstones.jsonl'), `${JSON.stringify({
+      id: 'dashboard-tombstone-1',
+      memoryId: 'dashboard-rejected-1',
+      normalizedKey: 'dashboard-rejected',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      scope: 'project',
+      reason: 'rejected',
+      createdAt: '2026-05-28T00:00:00.000Z'
+    })}\n`)
+    await writeFile(join(memoryRoot, 'review-summaries.jsonl'), `${JSON.stringify({
+      id: 'dashboard-summary-1',
+      runId: 'session:turn',
+      createdAt: '2000-01-01T00:00:00.000Z',
+      status: 'ok',
+      summary: 'Dashboard review summary.',
+      redaction: { input: {}, output: {} },
+      candidateIds: ['dashboard-pending-1']
+    })}\n`)
+    await writeFile(join(memoryRoot, 'dream-state.json'), `${JSON.stringify({
+      dreamDue: true,
+      lastDreamAt: '2026-05-27T00:00:00.000Z',
+      nextDreamDueAt: '2026-05-28T00:00:00.000Z',
+      lastDreamStatus: 'success'
+    })}\n`)
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'dashboard'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('Cyrene Memory Dashboard')
+    expect(result.stdout).toContain('active memories: 1')
+    expect(result.stdout).toContain('pending memories: 1')
+    expect(result.stdout).toContain('rejected/tombstoned: 1')
+    expect(result.stdout).toContain('top active project memories:')
+    expect(result.stdout).toContain('Dashboard should surface the strongest project memory.')
+    expect(result.stdout).toContain('pending review:')
+    expect(result.stdout).toContain('dashboard-pending-1')
+    expect(result.stdout).toContain('review summaries:')
+    expect(result.stdout).toContain('Dashboard review summary.')
+    expect(result.stdout).toContain('last dream: 2026-05-27T00:00:00.000Z')
+    expect(result.stdout).toContain('next dream due: 2026-05-28T00:00:00.000Z')
+    expect(result.stdout).toContain('warnings:')
+    expect(result.stdout).toContain('Stop Hook stale')
+    expect(result.stdout).toContain('profile missing')
+    expect(result.stdout).toContain('SQLite stale')
+    expect(result.stdout).toContain('projectId split')
+    expect(result.stdout).toContain('Codex memory enabled')
+    expect(result.stdout).toContain('agentmemory enabled')
+  })
+
   it('project status and list expose split diagnostics and aliases', async () => {
     const home = await createTempDir('cyrene-codex-cli-project-home-')
     process.env.HOME = home
