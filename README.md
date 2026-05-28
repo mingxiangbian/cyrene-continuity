@@ -30,7 +30,8 @@ The plugin MCP server exposes:
   approval and review-hash validation.
 - `cyrene_memory_reject`: reject a pending candidate only after explicit user
   rejection and review-hash validation.
-- `cyrene_memory_dream_run`: run light, REM, or deep memory maintenance.
+- `cyrene_memory_dream_run`: run light, REM, deep-preview, or gated deep-apply
+  memory maintenance.
 - `cyrene_memory_profile_get`: read the effective global and project
   `MODEL_PROFILE.md` context.
 
@@ -68,10 +69,30 @@ npm run dev -- codex install-hook --stop
 npm run dev -- codex hook stop
 npm run dev -- codex eval run --check similar-hints
 npm run dev -- codex memory db rebuild
-npm run dev -- codex memory dream --stage deep
+npm run dev -- codex memory dream --stage deep-preview
+npm run dev -- codex memory dream report --root project
+npm run dev -- codex memory dream --stage deep-apply
 npm run dev -- codex memory maintenance
 npm run dev -- codex memory profile
+npm run dev -- codex profile reflect --source daily-interview
+npm run dev -- codex profile apply --candidate <candidateId> --review-hash <hash>
+npm run dev -- codex similar-hints explain --source-project-id <projectId>
+npm run dev -- codex similar-hints mark-transferable --memory-id <memoryId> --review-hash <hash>
 ```
+
+`deep-preview` is the default safe dream stage. It writes review artifacts under
+`dream-preview/` and does not promote, reject, or tombstone memory. `deep-apply`
+recomputes the proposal, runs the deterministic eval gate, and only mutates
+memory when the gate passes.
+
+Profile reflection writes reviewable candidates to `profile_candidates.jsonl`;
+applying a candidate requires the matching review hash and regenerates
+`MODEL_PROFILE.md` from structured memory. Similar-project memory must be
+explicitly marked transferable before it can appear in cross-project hints.
+
+Embedding retrieval is disabled by default. Set `CYRENE_EMBEDDING_PROVIDER` only
+when a safe provider is configured; unsafe content or provider failures fall
+back to structured FTS retrieval with diagnostics.
 
 ## Similar-Project Hints
 

@@ -9907,7 +9907,7 @@ var {
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/codex/codex-doctor.ts
-import { access as access2, readFile as readFile5 } from "node:fs/promises";
+import { access as access2, readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
 import { join as join9 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10000,6 +10000,66 @@ function envValue(dotEnv, name) {
 function optionalEnvValue(dotEnv, name) {
   const value = envValue(dotEnv, name);
   return value?.trim() === "" ? void 0 : value;
+}
+
+// src/memory/embedding-provider.ts
+var NullEmbeddingProvider = class {
+  diagnostics = { enabled: false, cacheHits: 0, cacheMisses: 0 };
+  async embedTexts(texts) {
+    return texts.map(() => []);
+  }
+};
+var FailingEmbeddingProvider = class {
+  diagnostics = {
+    enabled: true,
+    provider: "fail",
+    cacheHits: 0,
+    cacheMisses: 0
+  };
+  async embedTexts(_texts) {
+    throw new Error("configured embedding provider failed");
+  }
+};
+function createEmbeddingProviderFromEnv(env = process.env) {
+  const provider = env.CYRENE_EMBEDDING_PROVIDER?.trim();
+  if (provider === void 0 || provider === "" || provider === "off" || provider === "disabled") {
+    return new NullEmbeddingProvider();
+  }
+  if (provider === "fail") {
+    return new FailingEmbeddingProvider();
+  }
+  return new NullEmbeddingProvider();
+}
+function assertEmbeddingSafeText(text) {
+  if (containsAbsolutePath(text) || containsRawRemote(text) || containsSecretLikeValue(text)) {
+    throw new Error("unsafe embedding text contains path, remote, or secret-like content");
+  }
+}
+function embeddingDiagnostics(provider) {
+  return { ...provider.diagnostics };
+}
+function recordEmbeddingFallback(provider, reason) {
+  provider.diagnostics = {
+    ...provider.diagnostics,
+    fallbackReason: reason
+  };
+}
+function recordEmbeddingCacheMisses(provider, count) {
+  provider.diagnostics = {
+    ...provider.diagnostics,
+    cacheMisses: provider.diagnostics.cacheMisses + count
+  };
+}
+function containsAbsolutePath(content) {
+  const unixPath = /(^|[\s`'"([{<:=,;])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-][^\s`'")\]}>]*/;
+  const windowsPath = /(^|[\s`'"([{<:=,;])[A-Za-z]:\\(?:[^\\\s`'")\]}>]+\\)+[^\\\s`'")\]}>]+/;
+  return unixPath.test(content) || windowsPath.test(content);
+}
+function containsRawRemote(content) {
+  return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|(?:https?|git|ssh):\/\/(?:git@)?[A-Za-z0-9.-]+\/[^\s`'")]+(?:\.git)?\b)/.test(content);
+}
+function containsSecretLikeValue(content) {
+  return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)(?:\s*[=:]\s*|\s+)[a-fA-F0-9]{64})\b/.test(content);
 }
 
 // src/memory/model-profile.ts
@@ -10602,7 +10662,8 @@ var UnavailableMemoryIndexAdapter = class {
     return {
       available: false,
       dbPath: this.dbPath,
-      reason: this.reason
+      reason: this.reason,
+      embedding: { enabled: false, cacheHits: 0, cacheMisses: 0 }
     };
   }
   close() {
@@ -10612,13 +10673,14 @@ var SqliteMemoryIndexAdapter = class {
   constructor(dbPath, DatabaseSync) {
     this.dbPath = dbPath;
     this.DatabaseSync = DatabaseSync;
-    this.currentDiagnostics = { available: true, dbPath };
+    this.currentDiagnostics = { available: true, dbPath, embedding: embeddingDiagnostics(this.embeddingProvider) };
   }
   dbPath;
   DatabaseSync;
   db;
   currentDiagnostics;
   initialized = false;
+  embeddingProvider = createEmbeddingProviderFromEnv();
   async initialize() {
     const db = await this.openDatabase();
     db.exec(`
@@ -10677,13 +10739,30 @@ var SqliteMemoryIndexAdapter = class {
         summary text,
         created_at text not null
       );
+
+      create table if not exists memory_embeddings (
+        memory_id text primary key,
+        provider text not null,
+        content_hash text not null,
+        vector_json text not null,
+        updated_at text not null
+      );
+
+      create table if not exists project_embeddings (
+        project_id text primary key,
+        provider text not null,
+        content_hash text not null,
+        vector_json text not null,
+        updated_at text not null
+      );
     `);
     this.ensureProjectColumns(db);
     if (!this.initialized) {
       this.currentDiagnostics = {
         available: true,
         dbPath: this.dbPath,
-        ftsTokenizer: this.ensureFtsTable(db)
+        ftsTokenizer: this.ensureFtsTable(db),
+        embedding: embeddingDiagnostics(this.embeddingProvider)
       };
       this.initialized = true;
     }
@@ -10847,13 +10926,14 @@ var SqliteMemoryIndexAdapter = class {
       },
       task
     ));
+    const items = eligibleRows.map((row) => ({
+      memory: row.payload,
+      score: scoreRow(row, input.query, ftsMatches),
+      portability: row.portability,
+      homeProjectId: row.homeProjectId
+    })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareIndexedItems);
     return selectWithinBudget(
-      eligibleRows.map((row) => ({
-        memory: row.payload,
-        score: scoreRow(row, input.query, ftsMatches),
-        portability: row.portability,
-        homeProjectId: row.homeProjectId
-      })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareIndexedItems),
+      await this.rerankWithEmbeddings(items, input.query),
       input.maxItems,
       input.maxTokens
     );
@@ -10914,7 +10994,10 @@ var SqliteMemoryIndexAdapter = class {
       });
     }
     return selectWithinBudget(
-      items.filter((item) => input.query.trim() === "" || item.score > 0).sort(compareIndexedItems),
+      await this.rerankWithEmbeddings(
+        items.filter((item) => input.query.trim() === "" || item.score > 0).sort(compareIndexedItems),
+        input.query
+      ),
       input.maxItems,
       input.maxTokens
     );
@@ -10976,6 +11059,31 @@ var SqliteMemoryIndexAdapter = class {
         }
       }
     }
+  }
+  async rerankWithEmbeddings(items, query) {
+    if (!this.embeddingProvider.diagnostics.enabled || items.length === 0) {
+      return items;
+    }
+    try {
+      assertEmbeddingSafeText(query);
+      for (const item of items) {
+        assertEmbeddingSafeText(item.memory.content);
+      }
+      recordEmbeddingCacheMisses(this.embeddingProvider, items.length + 1);
+      await this.embeddingProvider.embedTexts([query, ...items.map((item) => item.memory.content)]);
+      this.refreshEmbeddingDiagnostics();
+      return items;
+    } catch (error2) {
+      recordEmbeddingFallback(this.embeddingProvider, error2 instanceof Error ? error2.message : String(error2));
+      this.refreshEmbeddingDiagnostics();
+      return items;
+    }
+  }
+  refreshEmbeddingDiagnostics() {
+    this.currentDiagnostics = {
+      ...this.currentDiagnostics,
+      embedding: embeddingDiagnostics(this.embeddingProvider)
+    };
   }
   insertMemory(root, memory) {
     const db = this.requireDatabase();
@@ -11668,6 +11776,7 @@ async function formatCodexDoctor(input) {
   const identity = await identifyCodexProject(input.cwd);
   const config2 = createDefaultConfig(input.cwd);
   const memoryState = await readDoctorMemoryState(identity.projectId);
+  const migrationState = await readDoctorMigrationState();
   const memoryIndex = await readCodexMemoryIndexDiagnostics();
   const actions = [
     cyreneConfigured || pluginBridgeInstalled ? void 0 : `  action: run ${installCommand} to install the Cyrene bridge`,
@@ -11703,6 +11812,12 @@ async function formatCodexDoctor(input) {
     `  runtime: ${pluginState.runtimeExists ? "present" : "missing"}`,
     `  stable shim: ${pluginState.shimExists ? "present" : "missing"}`,
     "",
+    "migration:",
+    `  automation dream stage: ${migrationState.automationDreamStage}`,
+    `  stable shim deep-preview: ${migrationState.stableShimDeepPreview}`,
+    `  stable shim deep-apply: ${migrationState.stableShimDeepApply}`,
+    `  embedding provider: ${migrationState.embeddingProvider}`,
+    "",
     "skill:",
     `  cyrene-continuity: ${skillExists ? "ok" : pluginBridgeInstalled && pluginState.skillDeclared ? "plugin" : "missing"}`,
     "",
@@ -11716,6 +11831,7 @@ async function formatCodexDoctor(input) {
     `  global pending: ${memoryState.globalPendingCount}`,
     `  project profile: ${memoryState.projectProfilePresent ? "present" : "missing"}`,
     `  project pending: ${memoryState.projectPendingCount}`,
+    `  profile candidates: ${memoryState.profileCandidates}`,
     `  memory index: ${memoryIndex.available ? "available" : "unavailable"}`,
     `  memory db: ${codexMemoryDbPath()}`,
     memoryIndex.ftsTokenizer === void 0 ? void 0 : `  memory fts: ${memoryIndex.ftsTokenizer}`,
@@ -11728,11 +11844,19 @@ async function formatCodexDoctor(input) {
 async function readDoctorMemoryState(projectId) {
   const globalRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
   const projectRoot = await getReadableCodexProjectMemoryRoot(projectId) ?? codexProjectMemoryRoot(projectId);
-  const [globalProfilePresent, globalPending, projectProfilePresent, projectPending, dreamState] = await Promise.all([
+  const [
+    globalProfilePresent,
+    globalPending,
+    projectProfilePresent,
+    projectPending,
+    profileCandidates,
+    dreamState
+  ] = await Promise.all([
     profilePresent(globalRoot),
     readPendingMemoriesFromRoot(globalRoot),
     profilePresent(projectRoot),
     readPendingMemoriesFromRoot(projectRoot),
+    readProfileCandidatesStatus(projectRoot),
     readCodexMemoryDreamState(projectRoot)
   ]);
   return {
@@ -11740,12 +11864,91 @@ async function readDoctorMemoryState(projectId) {
     globalPendingCount: globalPending.length,
     projectProfilePresent,
     projectPendingCount: projectPending.length,
+    profileCandidates,
     dreamDue: dreamState?.dreamDue === true,
     lastDreamAt: dreamState?.lastDreamAt
   };
 }
+async function readProfileCandidatesStatus(memoryRoot) {
+  try {
+    await readFile5(join9(memoryRoot, "profile_candidates.jsonl"), "utf8");
+    return "ok";
+  } catch (error2) {
+    return isErrorCode(error2, "ENOENT") ? "missing" : "unreadable";
+  }
+}
 async function profilePresent(memoryRoot) {
   return await readModelProfileFromRootIfExists(memoryRoot) !== void 0;
+}
+async function readDoctorMigrationState() {
+  const [automationDreamStage, stableShimDeepPreview, stableShimDeepApply] = await Promise.all([
+    readAutomationDreamStageStatus(),
+    readStableShimStageStatus(),
+    readStableShimStageStatus()
+  ]);
+  return {
+    automationDreamStage,
+    stableShimDeepPreview,
+    stableShimDeepApply,
+    embeddingProvider: readEmbeddingProviderStatus()
+  };
+}
+async function readAutomationDreamStageStatus() {
+  const automationsRoot = join9(homedir4(), ".codex", "automations");
+  let entries;
+  try {
+    entries = await readdir2(automationsRoot, { withFileTypes: true });
+  } catch {
+    return "unknown";
+  }
+  let migrated = false;
+  let sawAutomation = false;
+  for (const entry of entries) {
+    const automationPath = entry.isDirectory() ? join9(automationsRoot, entry.name, "automation.toml") : join9(automationsRoot, entry.name);
+    const text = await readOptional(automationPath);
+    if (text === "") {
+      continue;
+    }
+    sawAutomation = true;
+    if (readTomlStringValue(text, "status") === "PAUSED") {
+      continue;
+    }
+    if (containsLegacyDreamDeepStage(text)) {
+      return "needs migration";
+    }
+    if (containsCurrentDreamDeepStage(text)) {
+      migrated = true;
+    }
+  }
+  if (!sawAutomation) {
+    return "unknown";
+  }
+  return migrated ? "migrated" : "unknown";
+}
+async function readStableShimStageStatus() {
+  try {
+    const text = await readFile5(codexStableExecutablePath(), "utf8");
+    return text.trim() === "" ? "failed" : "ok";
+  } catch (error2) {
+    return isErrorCode(error2, "ENOENT") ? "missing" : "failed";
+  }
+}
+function readEmbeddingProviderStatus() {
+  const configuredProvider = process.env.CYRENE_EMBEDDING_PROVIDER?.trim();
+  if (configuredProvider === void 0 || configuredProvider === "" || configuredProvider === "off" || configuredProvider === "disabled") {
+    return "disabled";
+  }
+  const diagnostics = createEmbeddingProviderFromEnv().diagnostics;
+  if (!diagnostics.enabled || diagnostics.provider === "fail") {
+    return "misconfigured";
+  }
+  return "enabled";
+}
+function containsLegacyDreamDeepStage(text) {
+  return /--stage(?:=|\s+)deep(?=$|[\s"'\\])/m.test(text);
+}
+function containsCurrentDreamDeepStage(text) {
+  return /--stage(?:=|\s+)(?:deep-preview|deep-apply)(?=$|[\s"'\\])/m.test(text);
 }
 function readCyreneManualMcpConfig(configText) {
   const current = readTomlBlock(configText, CURRENT_CYRENE_MCP_CONFIG_TABLE);
@@ -11942,6 +12145,9 @@ async function pathExists(path) {
     return false;
   }
 }
+function isErrorCode(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
 
 // src/affect/affect-runtime.ts
 async function buildContinuitySnapshot(input) {
@@ -12027,13 +12233,13 @@ function runSimilarHintBoundaryEval(candidates) {
     if (isDisallowedSimilarHintDomain(candidate.domain)) {
       findings.push({ memoryId: candidate.id, reason: `domain not allowed for similar hint: ${candidate.domain}` });
     }
-    if (containsAbsolutePath(candidate.content)) {
+    if (containsAbsolutePath2(candidate.content)) {
       findings.push({ memoryId: candidate.id, reason: "content contains absolute path" });
     }
-    if (containsRawRemote(candidate.content)) {
+    if (containsRawRemote2(candidate.content)) {
       findings.push({ memoryId: candidate.id, reason: "content contains raw remote" });
     }
-    if (containsSecretLikeValue(candidate.content)) {
+    if (containsSecretLikeValue2(candidate.content)) {
       findings.push({ memoryId: candidate.id, reason: "content contains secret-like value" });
     }
     if (!candidate.transferable || !candidate.notCurrentProjectFact) {
@@ -12101,15 +12307,15 @@ function result(name, findings) {
 function isDisallowedSimilarHintDomain(domain) {
   return domain === "personal" || domain === "relationship" || domain === "affective";
 }
-function containsAbsolutePath(content) {
+function containsAbsolutePath2(content) {
   const unixPath = /(^|[\s`'"([{<:=,;])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-][^\s`'")\]}>]*/;
   const windowsPath = /(^|[\s`'"([{<:=,;])[A-Za-z]:\\(?:[^\\\s`'")\]}>]+\\)+[^\\\s`'")\]}>]+/;
   return unixPath.test(content) || windowsPath.test(content);
 }
-function containsRawRemote(content) {
+function containsRawRemote2(content) {
   return /(git@[A-Za-z0-9.-]+:[^\s`'")]+|(?:https?|git|ssh):\/\/(?:git@)?[A-Za-z0-9.-]+\/[^\s`'")]+(?:\.git)?\b)/.test(content);
 }
-function containsSecretLikeValue(content) {
+function containsSecretLikeValue2(content) {
   return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)(?:\s*[=:]\s*|\s+)[a-fA-F0-9]{64})\b/.test(content);
 }
 function containsDiagnosticAffectiveClaim(content) {
@@ -12168,7 +12374,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 // src/memory/memory-exporter.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { lstat as lstat6, open, readdir as readdir2, readFile as readFile6, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
+import { lstat as lstat6, open, readdir as readdir3, readFile as readFile6, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
 import { dirname as dirname7, isAbsolute as isAbsolute3, join as join10, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
@@ -12675,7 +12881,7 @@ async function removeEmptyLegacyProjectionsDirectory(root) {
   }
   let entries;
   try {
-    entries = await readdir2(projectionsDir);
+    entries = await readdir3(projectionsDir);
   } catch (error2) {
     if (isFileErrorCode6(error2, "ENOENT")) return;
     throw error2;
@@ -12836,7 +13042,7 @@ function formatModelProfile(entries) {
 }
 
 // src/memory/memory-snapshot.ts
-import { lstat as lstat7, mkdir as mkdir7, readFile as readFile7, readdir as readdir3, writeFile as writeFile5 } from "node:fs/promises";
+import { lstat as lstat7, mkdir as mkdir7, readFile as readFile7, readdir as readdir4, writeFile as writeFile5 } from "node:fs/promises";
 import { isAbsolute as isAbsolute4, join as join11, relative as relative4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 async function createMemorySnapshotFromRoot(memoryRoot, reason) {
@@ -13576,7 +13782,7 @@ function previewContent(content) {
 
 // src/codex/project-fingerprint.ts
 import { createHash as createHash4 } from "node:crypto";
-import { readdir as readdir4, readFile as readFile8, stat } from "node:fs/promises";
+import { readdir as readdir5, readFile as readFile8, stat } from "node:fs/promises";
 import { join as join13 } from "node:path";
 async function buildCodexProjectFingerprint(input) {
   const root = input.project.gitRoot ?? input.cwd;
@@ -13622,7 +13828,7 @@ async function detectPackageManager(cwd) {
 }
 async function safeReaddir(cwd) {
   try {
-    return (await readdir4(cwd)).sort();
+    return (await readdir5(cwd)).sort();
   } catch {
     return [];
   }
@@ -13755,7 +13961,8 @@ async function getCodexContinuityContext(input) {
         ftsTokenizer: routedMemory.diagnostics.ftsTokenizer
       },
       projectSimilarity: routedMemory.projectSimilarityDiagnostics,
-      evalGate: routedMemory.evalGateDiagnostics
+      evalGate: routedMemory.evalGateDiagnostics,
+      ...routedMemory.diagnostics.embedding === void 0 ? {} : { embedding: routedMemory.diagnostics.embedding }
     },
     profile: {
       global: globalProfile,

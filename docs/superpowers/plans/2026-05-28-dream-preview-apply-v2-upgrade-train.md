@@ -653,29 +653,29 @@ git commit -m "feat: extend codex doctor migration checks"
 - Test: `tests/plugin-runtime.test.ts`
 - Test: `tests/mcp-server.test.ts`
 
-- [ ] **Step 1: Update README commands**
+- [x] **Step 1: Update README commands**
 
 Replace `--stage deep` with `--stage deep-apply`; add `deep-preview`, `memory dream report`, profile, similar-hints, and embedding disabled-by-default notes.
 
-- [ ] **Step 2: Build plugin runtime**
+- [x] **Step 2: Build plugin runtime**
 
 ```bash
 npm run build:plugin
 ```
 
-- [ ] **Step 3: Run plugin and MCP tests**
+- [x] **Step 3: Run plugin and MCP tests**
 
 ```bash
 npm test -- tests/plugin-runtime.test.ts tests/mcp-server.test.ts
 ```
 
-- [ ] **Step 4: Validate plugin**
+- [x] **Step 4: Validate plugin**
 
 ```bash
 python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md plugin/runtime/cyrene-continuity.mjs tests/plugin-runtime.test.ts tests/mcp-server.test.ts
