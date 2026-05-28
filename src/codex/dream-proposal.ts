@@ -59,6 +59,8 @@ export type DreamApplyOperation =
       action: 'promote'
       candidateId: string
       memory: CyreneMemory
+      reason: string
+      distinctEvidenceCount: number
     }
   | {
       action: 'reject'
@@ -199,7 +201,13 @@ export async function buildDreamProposalForRoot(input: {
       reason: evaluation.reason,
       distinctEvidenceCount: evaluation.distinctEvidenceCount
     })
-    applyPlan.push({ action: 'promote', candidateId: candidate.id, memory })
+    applyPlan.push({
+      action: 'promote',
+      candidateId: candidate.id,
+      memory,
+      reason: evaluation.reason,
+      distinctEvidenceCount: evaluation.distinctEvidenceCount
+    })
     diff.addActiveMemoryIds.push(memory.id)
     diff.removePendingCandidateIds.push(candidate.id)
     summary.promote += 1

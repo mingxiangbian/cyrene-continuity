@@ -16,15 +16,12 @@ import {
   ensureWritableMemoryRootPath,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
-  readTombstonesFromRoot,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
 import {
-  activateCandidate,
   distinctEvidenceCount,
-  evaluatePendingPromotion,
-  validateMemoryCandidate
+  evaluatePendingPromotion
 } from '../memory/memory-validator.js'
 import type { CyreneMemory, MemoryEvent, MemoryScores, MemoryTombstone, PendingMemory } from '../memory/types.js'
 import {
@@ -33,7 +30,7 @@ import {
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
 import { writeDreamPreviewArtifacts } from './dream-artifacts.js'
-import { buildDreamProposalForRoot } from './dream-proposal.js'
+import { buildDreamProposalForRoot, type DreamRootProposal } from './dream-proposal.js'
 import {
   nextDreamDueAt,
   readCodexMemoryDreamState,
@@ -302,9 +299,46 @@ async function runDeepDreamRootLocked(
   budget: MemoryMaintenanceBudget,
   intervalHours: number
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
+  const proposal = await buildDreamProposalForRoot({ memoryRoot, now })
+  if (!proposal.evalGate.passed) {
+    const reason = `Dream apply blocked by eval gate: ${proposal.evalGate.failedChecks.join(', ')}`
+    await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal })
+    await writeDreamFailed(proposal.memoryRoot, now, new Error(reason))
+    return {
+      memoryRoot: proposal.memoryRoot,
+      stage: 'deep-apply',
+      promoted: 0,
+      rejected: 0,
+      keptPending: (await readPendingMemoriesFromRoot(proposal.memoryRoot)).length,
+      skipped: reason
+    }
+  }
+
+  const applied = await applyDreamProposal(proposal.memoryRoot, proposal, now)
+  const maintenance = await runMemoryMaintenanceFromRootLocked({
+    memoryRoot: proposal.memoryRoot,
+    budget,
+    now,
+    reason: 'after codex memory dream deep-apply pass'
+  })
+
+  await writeDreamSuccess(proposal.memoryRoot, now, intervalHours)
+  return {
+    memoryRoot: proposal.memoryRoot,
+    stage: 'deep-apply',
+    promoted: applied.promoted,
+    rejected: applied.rejected,
+    keptPending: maintenance.pendingCount,
+    maintenance
+  }
+}
+
+async function applyDreamProposal(
+  memoryRoot: string,
+  proposal: DreamRootProposal,
+  now: string
+): Promise<{ promoted: number; rejected: number }> {
   let active = await readActiveMemoriesFromRoot(memoryRoot)
-  const tombstones = await readTombstonesFromRoot(memoryRoot)
-  const pending = await readPendingMemoriesFromRoot(memoryRoot)
   const nextPending: PendingMemory[] = []
   const events: MemoryEvent[] = []
   const newTombstones: MemoryTombstone[] = []
@@ -312,60 +346,34 @@ async function runDeepDreamRootLocked(
   let rejected = 0
   let mutated = false
 
-  for (const candidate of pending) {
-    if (candidate.expiresAt <= now) {
-      newTombstones.push(tombstoneForExpiredPending(candidate, now))
+  for (const operation of proposal.applyPlan) {
+    if (operation.action === 'keep_pending') {
+      nextPending.push(operation.candidate)
+      continue
+    }
+    if (operation.action === 'reject') {
+      newTombstones.push(operation.tombstone)
       events.push({
         id: randomUUID(),
         action: 'reject',
         at: now,
-        reason: 'Memory candidate expired before dream promotion',
-        candidateId: candidate.id
+        reason: operation.reason,
+        candidateId: operation.candidateId
       })
       rejected += 1
       mutated = true
       continue
     }
 
-    const decision = validateMemoryCandidate({ candidate, existingMemories: active, tombstones, now })
-    if (decision.action === 'reject') {
-      newTombstones.push(decision.tombstone)
-      events.push({
-        id: randomUUID(),
-        action: 'reject',
-        at: now,
-        reason: decision.reason,
-        candidateId: candidate.id
-      })
-      rejected += 1
-      mutated = true
-      continue
-    }
-
-    const evaluation = evaluatePendingPromotion(candidate, now)
-    if (!evaluation.promotable) {
-      nextPending.push(candidate)
-      continue
-    }
-
-    const memory = decision.action === 'auto_write'
-      ? decision.memory
-      : decision.action === 'pending'
-        ? activateCandidate(decision.candidate, now)
-        : undefined
-    if (memory === undefined) {
-      nextPending.push(candidate)
-      continue
-    }
-    active = upsertActiveMemory(active, memory)
+    active = upsertActiveMemory(active, operation.memory)
     events.push({
       id: randomUUID(),
       action: 'promote',
       at: now,
-      reason: evaluation.reason,
-      memoryId: memory.id,
-      candidateId: candidate.id,
-      details: { distinctEvidenceCount: evaluation.distinctEvidenceCount, source: 'dream' }
+      reason: operation.reason,
+      memoryId: operation.memory.id,
+      candidateId: operation.candidateId,
+      details: { distinctEvidenceCount: operation.distinctEvidenceCount, source: 'dream' }
     })
     promoted += 1
     mutated = true
@@ -381,22 +389,8 @@ async function runDeepDreamRootLocked(
       await appendMemoryEventFromRoot(memoryRoot, event)
     }
   }
-  const maintenance = await runMemoryMaintenanceFromRootLocked({
-    memoryRoot,
-    budget,
-    now,
-    reason: 'after codex memory dream deep pass'
-  })
 
-  await writeDreamSuccess(memoryRoot, now, intervalHours)
-  return {
-    memoryRoot,
-    stage: 'deep-apply',
-    promoted,
-    rejected,
-    keptPending: maintenance.pendingCount,
-    maintenance
-  }
+  return { promoted, rejected }
 }
 
 function mergePendingDuplicates(pending: PendingMemory[]): { changed: boolean; pending: PendingMemory[] } {
@@ -460,20 +454,6 @@ function proposedActionForPending(candidate: PendingMemory, reason: string): str
 
 function shouldRejectWithoutMoreEvidence(reason: string): boolean {
   return /diagnostic affective claim|missing auditable evidence/i.test(reason)
-}
-
-function tombstoneForExpiredPending(candidate: PendingMemory, now: string): MemoryTombstone {
-  return {
-    id: `tombstone-${candidate.id}`,
-    normalizedKey: candidate.normalizedKey,
-    domain: candidate.domain,
-    type: candidate.type,
-    strength: candidate.strength,
-    scope: candidate.scope,
-    reason: 'expired',
-    createdAt: now,
-    evidence: candidate.evidence
-  }
 }
 
 function upsertActiveMemory(active: CyreneMemory[], memory: CyreneMemory): CyreneMemory[] {

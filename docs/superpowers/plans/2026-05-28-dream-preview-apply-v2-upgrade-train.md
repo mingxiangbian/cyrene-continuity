@@ -341,11 +341,11 @@ git commit -m "feat: add unified dream eval gate"
 - Modify: `src/codex/dream-artifacts.ts`
 - Test: `tests/codex-memory-dream.test.ts`
 
-- [ ] **Step 1: Rewrite old deep tests**
+- [x] **Step 1: Rewrite old deep tests**
 
 Replace old `stage: 'deep'` tests with `stage: 'deep-apply'`. Add one test that `stage: 'deep'` is rejected at CLI/MCP level, not runtime direct type level.
 
-- [ ] **Step 2: Write fail-closed test**
+- [x] **Step 2: Write fail-closed test**
 
 Seed a candidate that triggers `affective_boundary_eval`; assert:
 
@@ -355,7 +355,7 @@ await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe(''
 await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
 ```
 
-- [ ] **Step 3: Implement apply from proposal**
+- [x] **Step 3: Implement apply from proposal**
 
 Replace `runDeepDreamRootLocked()` internals with:
 
@@ -370,17 +370,17 @@ if (!gate.passed) {
 await applyDreamProposal(...)
 ```
 
-- [ ] **Step 4: Preserve lock and maintenance semantics**
+- [x] **Step 4: Preserve lock and maintenance semantics**
 
 `deep-apply` keeps dream lock, maintenance lock, stale lock replacement, and maintenance/profile rendering behavior equivalent to old deep when gate passes.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 ```bash
 npm test -- tests/codex-memory-dream.test.ts
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/codex/memory-dream.ts src/codex/dream-proposal.ts src/codex/dream-artifacts.ts tests/codex-memory-dream.test.ts

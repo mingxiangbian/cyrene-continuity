@@ -391,7 +391,7 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
-  it('deep promotes repeated independent procedural memory and writes model profile', async () => {
+  it('deep-apply promotes repeated independent procedural memory and writes model profile', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -404,7 +404,7 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 1, rejected: 0 })
     const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
@@ -414,21 +414,21 @@ describe('Codex memory dream runtime', () => {
     await expect(readdir(join(memoryRoot, 'snapshots'))).resolves.toHaveLength(1)
   })
 
-  it('deep keeps insufficient evidence pending', async () => {
+  it('deep-apply keeps insufficient evidence pending', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
     const candidate = createPending()
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, keptPending: 1 })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
-  it('deep does not promote same-run duplicate evidence even with different evidence groups', async () => {
+  it('deep-apply does not promote same-run duplicate evidence even with different evidence groups', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -441,13 +441,13 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
-  it('deep keeps assistant-derived candidates pending instead of promoting them', async () => {
+  it('deep-apply keeps assistant-derived candidates pending instead of promoting them', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -461,14 +461,14 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, rejected: 0, keptPending: 1 })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
-  it('deep rejects diagnostic affective claims and writes a tombstone', async () => {
+  it('deep-apply blocks diagnostic affective claims without mutating memory source files', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -496,15 +496,26 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, rejected: 1 })
-    expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
-    const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
-    expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'rejected' })
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
+      stage: 'deep-apply',
+      promoted: 0,
+      rejected: 0,
+      keptPending: 1,
+      skipped: expect.stringContaining('eval gate')
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readCodexMemoryDreamState(memoryRoot)).resolves.toMatchObject({
+      dreamDue: true,
+      lastDreamStatus: 'failed',
+      lastDreamError: expect.stringContaining('eval gate')
+    })
   })
 
-  it('deep removes low-safety pending candidates instead of keeping them forever', async () => {
+  it('deep-apply removes low-safety pending candidates instead of keeping them forever', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -524,7 +535,7 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, rejected: 1, keptPending: 0 })
     expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
@@ -532,7 +543,7 @@ describe('Codex memory dream runtime', () => {
     expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'rejected' })
   })
 
-  it('deep expires stale pending candidates instead of promoting them', async () => {
+  it('deep-apply expires stale pending candidates instead of promoting them', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -546,7 +557,7 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, rejected: 1, keptPending: 0 })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
@@ -555,7 +566,7 @@ describe('Codex memory dream runtime', () => {
     expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'expired' })
   })
 
-  it('deep runs maintenance and renders profile even when pending does not mutate', async () => {
+  it('deep-apply runs maintenance and renders profile even when pending does not mutate', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -564,7 +575,7 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectActive(cwd, [expired])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
       promoted: 0,
@@ -577,14 +588,14 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('# Cyrene Model Profile')
   })
 
-  it('deep records failed dream state when acquiring a writable root lock errors', async () => {
+  it('deep-apply records failed dream state when acquiring a writable root lock errors', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
     const memoryRoot = await seedProjectPending(cwd, [createPending()])
     await writeFile(join(memoryRoot, '.locks'), 'not a directory')
 
-    await expect(runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })).rejects.toThrow(/dream locks path/)
+    await expect(runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })).rejects.toThrow(/dream locks path/)
 
     await expect(readCodexMemoryDreamState(memoryRoot)).resolves.toMatchObject({
       dreamDue: true,
@@ -593,7 +604,7 @@ describe('Codex memory dream runtime', () => {
     })
   })
 
-  it('deep skips a root when a non-expired dream lock exists', async () => {
+  it('deep-apply skips a root when a non-expired dream lock exists', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -608,13 +619,13 @@ describe('Codex memory dream runtime', () => {
     await mkdir(join(memoryRoot, '.locks', 'dream.lock'), { recursive: true })
     await writeFile(join(memoryRoot, '.locks', 'dream.lock', 'owner.json'), JSON.stringify({ acquiredAt: '2026-05-26T00:00:00.000Z' }))
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:01:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:01:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)?.skipped).toMatch(/dream lock/)
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('deep replaces a stale dream lock', async () => {
+  it('deep-apply replaces a stale dream lock', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -629,7 +640,7 @@ describe('Codex memory dream runtime', () => {
     await mkdir(join(memoryRoot, '.locks', 'dream.lock'), { recursive: true })
     await writeFile(join(memoryRoot, '.locks', 'dream.lock', 'owner.json'), JSON.stringify({ acquiredAt: '2026-05-25T00:00:00.000Z' }))
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 1 })
     await expect(readFile(join(memoryRoot, '.locks', 'dream.lock', 'owner.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
@@ -654,7 +665,7 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(ownerPath, 'utf8')).resolves.toContain('other-owner')
   })
 
-  it('deep promotes global-scope pending memory from the global root', async () => {
+  it('deep-apply promotes global-scope pending memory from the global root', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -669,7 +680,7 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedGlobalPending([candidate])
 
-    const result = await runCodexMemoryDream({ cwd, stage: 'deep', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 1 })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(candidate.content)
