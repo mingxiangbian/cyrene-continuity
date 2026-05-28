@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { deriveMemoryCandidateKind } from './candidate-kind.js'
 import type {
   CyreneMemory,
   MemoryDecision,
@@ -26,6 +27,10 @@ export function validateMemoryCandidate(input: ValidateMemoryCandidateInput): Me
   const tombstone = input.tombstones.find((entry) => isActiveTombstoneMatch(entry, candidate, now))
   if (tombstone !== undefined) {
     return reject(candidate, now, `Memory was previously ${tombstone.reason}`)
+  }
+
+  if (deriveMemoryCandidateKind(candidate) === 'open_question') {
+    return reject(candidate, now, 'Open question memory candidates cannot become active')
   }
 
   if (!hasValidEvidence(candidate)) {
@@ -90,6 +95,7 @@ export function validateMemoryCandidate(input: ValidateMemoryCandidateInput): Me
 }
 
 export function activateCandidate(candidate: PendingMemory, now: string): CyreneMemory {
+  const candidateKind = deriveMemoryCandidateKind(candidate)
   return {
     id: candidate.id,
     domain: candidate.domain,
@@ -106,6 +112,7 @@ export function activateCandidate(candidate: PendingMemory, now: string): Cyrene
     updatedAt: now,
     expiresAt: candidate.expiresAt,
     userConfirmed: candidate.userConfirmed,
+    candidateKind,
     tags: candidate.tags,
     ...(candidate.profileVisibility === undefined ? {} : { profileVisibility: candidate.profileVisibility }),
     ...(candidate.conflictsWith === undefined ? {} : { supersedes: candidate.conflictsWith })

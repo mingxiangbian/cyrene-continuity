@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -71,6 +71,7 @@ describe('Cyrene MCP server', () => {
         candidate: {
           domain: 'procedural',
           type: 'procedural_rule',
+          candidateKind: 'project_decision',
           content: 'Codex memory proposals stay pending.',
           evidence: [{ runId: 'mcp-run-1', summary: 'MCP test.' }]
         }
@@ -80,6 +81,7 @@ describe('Cyrene MCP server', () => {
 
     expect(result.content[0]?.type).toBe('text')
     expect(result.content[0]?.text).toContain('"action": "pending"')
+    expect(result.content[0]?.text).toContain('"candidateKind": "project_decision"')
   })
 
   it('handles pending memory review MCP actions', async () => {
@@ -184,6 +186,72 @@ describe('Cyrene MCP server', () => {
     )
     expect(rejectJson.result.action).toBe('reject')
     expect(String(rejectJson.memoryRoot)).toContain('/.cyrene/codex/global/memory')
+  })
+
+  it('handles memory promote conflict resolution over MCP', async () => {
+    const home = await createTempDir('cyrene-mcp-conflict-resolution-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-mcp-conflict-resolution-project-')
+    const normalizedKey = 'mcp-conflict-resolution-key'
+
+    const proposed = await handleMemoryPropose(
+      {
+        cwd,
+        candidate: {
+          domain: 'project',
+          type: 'project_fact',
+          strength: 'hard',
+          normalizedKey,
+          content: 'Pending MCP memory should be kept alongside an explicit conflict.',
+          evidence: [{ runId: 'mcp-conflict-run-1', summary: 'MCP conflict resolution test.' }]
+        }
+      },
+      process.cwd()
+    )
+    const proposedJson = JSON.parse(proposed.content[0]?.text ?? '{}')
+    await writeFile(
+      join(proposedJson.memoryRoot, 'index.jsonl'),
+      `${JSON.stringify({
+        id: 'mcp-active-conflict',
+        domain: 'project',
+        type: 'project_fact',
+        strength: 'hard',
+        scope: 'project',
+        status: 'active',
+        content: 'Existing MCP active memory should remain.',
+        normalizedKey,
+        evidence: [{ runId: 'mcp-active-run-1', summary: 'MCP active seed.' }],
+        source: 'user_explicit',
+        scores: {
+          evidenceStrength: 0.95,
+          stability: 0.9,
+          usefulness: 0.9,
+          safety: 0.95,
+          sensitivity: 0.1
+        },
+        createdAt: '2026-05-24T00:00:00.000Z',
+        updatedAt: '2026-05-24T00:00:00.000Z',
+        tags: []
+      })}\n`,
+      'utf8'
+    )
+
+    const promoteJson = JSON.parse(
+      (await handleMemoryPromote(
+        {
+          cwd,
+          id: proposedJson.result.candidateId,
+          reviewHash: proposedJson.result.review.reviewHash,
+          conflictResolution: 'keep_both'
+        },
+        process.cwd()
+      )).content[0]?.text ?? '{}'
+    )
+
+    expect(promoteJson.result.action).toBe('promote')
+    expect(await readFile(join(proposedJson.memoryRoot, 'index.jsonl'), 'utf8')).toContain(
+      'Pending MCP memory should be kept alongside an explicit conflict.'
+    )
   })
 
   it('handles memory dream and profile MCP tools as JSON text', async () => {

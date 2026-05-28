@@ -1211,6 +1211,85 @@ describe('cyrene-continuity codex CLI', () => {
     expect(pending).not.toContain('cli-approve-1')
   })
 
+  it('memory approve accepts explicit normalizedKey conflict resolution', async () => {
+    const home = await createTempDir('cyrene-codex-cli-conflict-resolution-home-')
+    const repo = await createTempDir('cyrene-codex-cli-conflict-resolution-project-')
+    process.env.HOME = home
+    const active = createActive({
+      id: 'cli-active-conflict',
+      normalizedKey: 'cli-conflict-resolution-key',
+      content: 'Old CLI active memory should be superseded.'
+    })
+    const candidate = createPending({
+      id: 'cli-pending-conflict',
+      normalizedKey: active.normalizedKey,
+      content: 'New CLI pending memory should supersede the old one.'
+    })
+    const memoryRoot = await seedCliPending(repo, candidate)
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(active)}\n`, 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'approve',
+        candidate.id,
+        '--review-hash',
+        reviewHashForPendingMemory(candidate),
+        '--conflict-resolution',
+        'supersede'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    const parsed = JSON.parse(result.stdout)
+    expect(parsed.result.action).toBe('promote')
+    expect(parsed.result.memory.supersedes).toEqual([active.id])
+    const index = await readFile(join(memoryRoot, 'index.jsonl'), 'utf8')
+    expect(index).toContain(candidate.content)
+    expect(index).not.toContain(active.content)
+  })
+
+  it('memory approve rejects invalid normalizedKey conflict resolution values', async () => {
+    const home = await createTempDir('cyrene-codex-cli-invalid-conflict-resolution-home-')
+    const repo = await createTempDir('cyrene-codex-cli-invalid-conflict-resolution-project-')
+    process.env.HOME = home
+    const candidate = createPending({
+      id: 'cli-invalid-conflict-resolution',
+      normalizedKey: 'cli-invalid-conflict-resolution'
+    })
+    await seedCliPending(repo, candidate)
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          'node_modules/tsx/dist/cli.mjs',
+          'src/main.ts',
+          '--cwd',
+          repo,
+          'codex',
+          'memory',
+          'approve',
+          candidate.id,
+          '--review-hash',
+          reviewHashForPendingMemory(candidate),
+          '--conflict-resolution',
+          'replace'
+        ],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('Invalid --conflict-resolution')
+    })
+  })
+
   it('runs memory dream apply from the CLI without promoting unapproved pending memory', async () => {
     const home = await createTempDir('cyrene-codex-cli-dream-home-')
     process.env.HOME = home

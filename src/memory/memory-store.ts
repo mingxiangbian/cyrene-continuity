@@ -149,6 +149,8 @@ function mergePendingMemory(existing: PendingMemory, candidate: PendingMemory): 
     expiresAt: latestIso(existing.expiresAt, candidate.expiresAt),
     promoteAfter: candidate.promoteAfter ?? existing.promoteAfter,
     evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE),
+    candidateKind: existing.candidateKind ?? candidate.candidateKind,
+    candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
     tags: Array.from(new Set([...existing.tags, ...candidate.tags])),
     conflictsWith: uniqueOptional([...(existing.conflictsWith ?? []), ...(candidate.conflictsWith ?? [])])
   }

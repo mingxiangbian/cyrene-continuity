@@ -84,6 +84,36 @@ function createPending(overrides: Partial<PendingMemory> = {}): PendingMemory {
   }
 }
 
+function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
+  return {
+    id: 'active-1',
+    domain: 'procedural',
+    type: 'procedural_rule',
+    strength: 'hard',
+    scope: 'project',
+    status: 'active',
+    content: 'Use Codex chat approval before promoting active memory.',
+    normalizedKey: 'codex-chat-approval-before-promote',
+    evidence: [{ runId: 'active-run-1', summary: 'Active memory seed.' }],
+    source: 'user_explicit',
+    scores: {
+      evidenceStrength: 0.95,
+      stability: 0.9,
+      usefulness: 0.9,
+      safety: 0.95,
+      sensitivity: 0.1
+    },
+    createdAt: '2026-05-24T00:00:00.000Z',
+    updatedAt: '2026-05-24T00:00:00.000Z',
+    tags: ['codex'],
+    ...overrides
+  }
+}
+
+async function seedActive(memoryRoot: string, active: CyreneMemory[]): Promise<void> {
+  await writeFile(join(memoryRoot, 'index.jsonl'), active.map((item) => JSON.stringify(item)).join('\n') + '\n')
+}
+
 describe('Codex pending memory review', () => {
   it('lists pending memories with review hashes and evidence summaries', async () => {
     const home = await createTempDir('cyrene-review-home-')
@@ -133,6 +163,35 @@ describe('Codex pending memory review', () => {
       sensitivity: 0.1,
       suggestedAction: `cyrene-continuity codex memory approve summary-promote --review-hash ${reviewHashForPendingMemory(candidate)}`
     })
+  })
+
+  it('uses explicit candidate kind in review metadata and review hashes', async () => {
+    const home = await createTempDir('cyrene-review-kind-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-kind-project-')
+    const candidate = createPending({
+      id: 'pending-kind-explicit',
+      tags: [],
+      candidateKind: 'project_decision'
+    })
+    await seedPending(cwd, [candidate])
+
+    const result = await listCodexPendingMemories({ cwd })
+    const sameKindLegacy = createPending({
+      tags: [],
+      candidate_kind: 'project_decision'
+    })
+    const changedKind = createPending({
+      tags: [],
+      candidateKind: 'known_pitfall'
+    })
+
+    expect(result.pending[0]?.candidateKind).toBe('project_decision')
+    expect(reviewHashForPendingMemory(sameKindLegacy)).toBe(reviewHashForPendingMemory(createPending({
+      tags: [],
+      candidateKind: 'project_decision'
+    })))
+    expect(reviewHashForPendingMemory(changedKind)).not.toBe(reviewHashForPendingMemory(sameKindLegacy))
   })
 
   it('gets a pending memory by id with full candidate and review hash', async () => {
@@ -292,6 +351,231 @@ describe('Codex pending memory review', () => {
     expect(projection).toContain(candidate.content)
     const snapshots = await readdir(join(memoryRoot, 'snapshots'))
     expect(snapshots).toHaveLength(1)
+  })
+
+  it('blocks open_question candidates from becoming active memory', async () => {
+    const home = await createTempDir('cyrene-review-open-question-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-open-question-project-')
+    const candidate = createPending({
+      id: 'pending-open-question',
+      content: 'Should this uncertain memory become active later?',
+      normalizedKey: 'uncertain-open-question',
+      tags: [],
+      candidateKind: 'open_question'
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'rejected_by_validator',
+      candidateId: candidate.id,
+      reason: 'Open question memory candidates cannot become active'
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
+  it('requires explicit resolution before promoting a normalizedKey conflict', async () => {
+    const home = await createTempDir('cyrene-review-normalized-conflict-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-normalized-conflict-project-')
+    const candidate = createPending({
+      id: 'pending-key-conflict',
+      content: 'New pending memory conflicts on normalized key.',
+      normalizedKey: 'shared-normalized-key'
+    })
+    const active = createActive({
+      id: 'active-key-conflict',
+      content: 'Existing active memory owns the normalized key.',
+      normalizedKey: candidate.normalizedKey
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+    await seedActive(memoryRoot, [active])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'normalized_key_conflict',
+      candidateId: candidate.id,
+      normalizedKey: candidate.normalizedKey,
+      conflicts: [
+        expect.objectContaining({
+          id: active.id,
+          content: active.content,
+          normalizedKey: active.normalizedKey
+        })
+      ],
+      resolutionOptions: ['supersede', 'keep_both', 'reject_new']
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(active.content)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('supersedes active normalizedKey conflicts when explicitly resolved', async () => {
+    const home = await createTempDir('cyrene-review-supersede-conflict-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-supersede-conflict-project-')
+    const candidate = createPending({
+      id: 'pending-supersede-conflict',
+      content: 'New memory replaces the conflicting active memory.',
+      normalizedKey: 'superseded-normalized-key'
+    })
+    const active = createActive({
+      id: 'active-superseded-conflict',
+      content: 'Old active memory should be superseded.',
+      normalizedKey: candidate.normalizedKey
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+    await seedActive(memoryRoot, [active])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      conflictResolution: 'supersede',
+      reason: 'User chose to supersede the old memory.',
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result.action).toBe('promote')
+    if (result.result.action !== 'promote') throw new Error('expected promote')
+    expect(result.result.memory.supersedes).toEqual([active.id])
+    const index = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    expect(index.map((memory) => memory.id)).toEqual([candidate.id])
+    const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
+    expect(tombstones).toEqual([
+      expect.objectContaining({
+        memoryId: active.id,
+        normalizedKey: active.normalizedKey,
+        reason: 'superseded',
+        replacementMemoryId: candidate.id
+      })
+    ])
+    const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'supersede',
+        candidateId: candidate.id,
+        memoryId: candidate.id,
+        details: expect.objectContaining({
+          resolution: 'supersede',
+          conflictingMemoryIds: [active.id],
+          normalizedKey: candidate.normalizedKey
+        })
+      })
+    ]))
+  })
+
+  it('keeps both active normalizedKey conflicts when explicitly resolved', async () => {
+    const home = await createTempDir('cyrene-review-keep-both-conflict-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-keep-both-conflict-project-')
+    const candidate = createPending({
+      id: 'pending-keep-both-conflict',
+      content: 'New memory should coexist with the old active memory.',
+      normalizedKey: 'keep-both-normalized-key'
+    })
+    const active = createActive({
+      id: 'active-keep-both-conflict',
+      content: 'Old active memory should remain alongside the new one.',
+      normalizedKey: candidate.normalizedKey
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+    await seedActive(memoryRoot, [active])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      conflictResolution: 'keep_both',
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result.action).toBe('promote')
+    const index = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    expect(index.map((memory) => memory.id)).toEqual([active.id, candidate.id])
+    expect(index.map((memory) => memory.normalizedKeyConflictResolution)).toEqual(['keep_both', 'keep_both'])
+    const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'audit',
+        candidateId: candidate.id,
+        details: expect.objectContaining({
+          resolution: 'keep_both',
+          conflictingMemoryIds: [active.id],
+          normalizedKey: candidate.normalizedKey
+        })
+      })
+    ]))
+  })
+
+  it('rejects the new candidate when a normalizedKey conflict is explicitly rejected', async () => {
+    const home = await createTempDir('cyrene-review-reject-new-conflict-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-reject-new-conflict-project-')
+    const candidate = createPending({
+      id: 'pending-reject-new-conflict',
+      content: 'New memory should be rejected in favor of the old active memory.',
+      normalizedKey: 'reject-new-normalized-key'
+    })
+    const active = createActive({
+      id: 'active-reject-new-conflict',
+      content: 'Old active memory should remain unchanged.',
+      normalizedKey: candidate.normalizedKey
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+    await seedActive(memoryRoot, [active])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      conflictResolution: 'reject_new',
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'reject_new',
+      candidateId: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate)
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(active.content)
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending.trim()).toBe('')
+    const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
+    expect(tombstones).toEqual([
+      expect.objectContaining({
+        memoryId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: 'rejected'
+      })
+    ])
+    const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'audit',
+        candidateId: candidate.id,
+        details: expect.objectContaining({
+          resolution: 'reject_new',
+          conflictingMemoryIds: [active.id],
+          normalizedKey: candidate.normalizedKey
+        })
+      })
+    ]))
   })
 
   it('best-effort syncs the memory index after promoting pending memory', async () => {

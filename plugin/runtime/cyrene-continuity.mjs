@@ -10219,6 +10219,8 @@ function mergePendingMemory(existing, candidate) {
     expiresAt: latestIso(existing.expiresAt, candidate.expiresAt),
     promoteAfter: candidate.promoteAfter ?? existing.promoteAfter,
     evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE),
+    candidateKind: existing.candidateKind ?? candidate.candidateKind,
+    candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
     tags: Array.from(/* @__PURE__ */ new Set([...existing.tags, ...candidate.tags])),
     conflictsWith: uniqueOptional([...existing.conflictsWith ?? [], ...candidate.conflictsWith ?? []])
   };
@@ -12921,12 +12923,56 @@ import { dirname as dirname8, isAbsolute as isAbsolute3, join as join13, relativ
 
 // src/memory/memory-validator.ts
 import { createHash as createHash3 } from "node:crypto";
+
+// src/memory/candidate-kind.ts
+var MEMORY_CANDIDATE_KINDS = [
+  "project_fact",
+  "project_decision",
+  "user_instruction",
+  "workflow_rule",
+  "known_pitfall",
+  "rejected_approach",
+  "open_question"
+];
+function isMemoryCandidateKind(value) {
+  return typeof value === "string" && MEMORY_CANDIDATE_KINDS.includes(value);
+}
+function deriveMemoryCandidateKind(candidate) {
+  if (isMemoryCandidateKind(candidate.candidateKind)) {
+    return candidate.candidateKind;
+  }
+  if (isMemoryCandidateKind(candidate.candidate_kind)) {
+    return candidate.candidate_kind;
+  }
+  const tagKind = (candidate.tags ?? []).find(isMemoryCandidateKind);
+  if (tagKind !== void 0) {
+    return tagKind;
+  }
+  if (candidate.type === "project_fact") {
+    return "project_fact";
+  }
+  if (candidate.type === "procedural_rule" || candidate.type === "system_policy") {
+    return "workflow_rule";
+  }
+  if (candidate.type === "user_preference" || candidate.type === "interaction_style" || candidate.type === "relationship_boundary" || candidate.type === "affective_pattern") {
+    return "user_instruction";
+  }
+  if (candidate.type === "episode") {
+    return "project_fact";
+  }
+  return "project_fact";
+}
+
+// src/memory/memory-validator.ts
 function validateMemoryCandidate(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const candidate = normalizeCandidate(input.candidate);
   const tombstone = input.tombstones.find((entry) => isActiveTombstoneMatch(entry, candidate, now));
   if (tombstone !== void 0) {
     return reject(candidate, now, `Memory was previously ${tombstone.reason}`);
+  }
+  if (deriveMemoryCandidateKind(candidate) === "open_question") {
+    return reject(candidate, now, "Open question memory candidates cannot become active");
   }
   if (!hasValidEvidence(candidate)) {
     return reject(candidate, now, "Memory candidate is missing auditable evidence");
@@ -12980,6 +13026,7 @@ function validateMemoryCandidate(input) {
   };
 }
 function activateCandidate(candidate, now) {
+  const candidateKind = deriveMemoryCandidateKind(candidate);
   return {
     id: candidate.id,
     domain: candidate.domain,
@@ -12996,6 +13043,7 @@ function activateCandidate(candidate, now) {
     updatedAt: now,
     expiresAt: candidate.expiresAt,
     userConfirmed: candidate.userConfirmed,
+    candidateKind,
     tags: candidate.tags,
     ...candidate.profileVisibility === void 0 ? {} : { profileVisibility: candidate.profileVisibility },
     ...candidate.conflictsWith === void 0 ? {} : { supersedes: candidate.conflictsWith }
@@ -13701,7 +13749,14 @@ async function runMemoryMaintenanceFromRootLocked(input) {
     }
     liveActive.push(memory);
   }
-  const dedupedActive = dedupeByNormalizedKey(liveActive, input.budget, now, tombstones, events);
+  const dedupedActive = dedupeByNormalizedKey(
+    liveActive,
+    input.budget,
+    now,
+    tombstones,
+    events,
+    new Set(input.preserveDuplicateNormalizedKeys ?? [])
+  );
   let trimmed = 0;
   let boundedActive = dedupedActive.map((memory) => {
     const next = trimMemory(memory, input.budget);
@@ -13769,7 +13824,7 @@ function memoryMaintenanceLockTimeoutMs() {
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : MAINTENANCE_LOCK_TIMEOUT_MS;
 }
-function dedupeByNormalizedKey(memories, budget, now, tombstones, events) {
+function dedupeByNormalizedKey(memories, budget, now, tombstones, events, preserveDuplicateKeys) {
   const groups = /* @__PURE__ */ new Map();
   for (const memory of memories) {
     const group = groups.get(memory.normalizedKey);
@@ -13786,6 +13841,11 @@ function dedupeByNormalizedKey(memories, budget, now, tombstones, events) {
       deduped.push(group[0]);
       continue;
     }
+    const normalizedKey = group[0].normalizedKey;
+    if (preserveDuplicateKeys.has(normalizedKey) || hasKeepBothConflictResolution(group)) {
+      deduped.push(...group);
+      continue;
+    }
     const winner = [...group].sort(compareDedupWinner)[0];
     const duplicates = group.filter((memory) => memory.id !== winner.id);
     removed += duplicates.length;
@@ -13799,6 +13859,9 @@ function dedupeByNormalizedKey(memories, budget, now, tombstones, events) {
     }
   }
   return Object.assign(deduped, { removed });
+}
+function hasKeepBothConflictResolution(memories) {
+  return memories.some((memory) => memory.normalizedKeyConflictResolution === "keep_both");
 }
 function compareDedupWinner(left, right) {
   const evidence = right.scores.evidenceStrength - left.scores.evidenceStrength;
@@ -13958,6 +14021,7 @@ function isFileErrorCode8(error2, code) {
 }
 
 // src/codex/memory-review.ts
+var NORMALIZED_KEY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
 function reviewHashForPendingMemory(candidate) {
   const payload = {
     id: candidate.id,
@@ -13994,6 +14058,7 @@ function reviewHashForPendingMemory(candidate) {
     promoteAfter: candidate.promoteAfter ?? null,
     expiresAt: candidate.expiresAt,
     userConfirmed: candidate.userConfirmed ?? null,
+    candidateKind: deriveMemoryCandidateKind(candidate),
     tags: candidate.tags,
     conflictsWith: candidate.conflictsWith ?? null
   };
@@ -14008,7 +14073,7 @@ function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).to
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
-    candidateKind: deriveCandidateKind(candidate),
+    candidateKind: deriveMemoryCandidateKind(candidate),
     recommendation,
     suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
     risk: deriveRisk(candidate),
@@ -14032,27 +14097,6 @@ function deriveRecommendation(candidate, now) {
   }
   const promotion = evaluatePendingPromotion(candidate, now);
   return promotion.promotable ? "promote" : "defer";
-}
-function deriveCandidateKind(candidate) {
-  const tagKind = candidate.tags.find(
-    (tag) => tag === "project_fact" || tag === "project_decision" || tag === "user_instruction" || tag === "workflow_rule" || tag === "known_pitfall" || tag === "rejected_approach" || tag === "open_question"
-  );
-  if (tagKind !== void 0) {
-    return tagKind;
-  }
-  if (candidate.type === "project_fact") {
-    return "project_fact";
-  }
-  if (candidate.type === "procedural_rule" || candidate.type === "system_policy") {
-    return "workflow_rule";
-  }
-  if (candidate.type === "user_preference" || candidate.type === "interaction_style" || candidate.type === "relationship_boundary" || candidate.type === "affective_pattern") {
-    return "user_instruction";
-  }
-  if (candidate.type === "episode") {
-    return "project_fact";
-  }
-  return "project_fact";
 }
 function deriveRisk(candidate) {
   if (candidate.scores.safety < 0.65 || candidate.scores.sensitivity > 0.6) {
@@ -14212,11 +14256,91 @@ async function promoteCodexPendingMemory(input) {
         }
       };
     }
-    const lockedMemory = memoryForPromotedDecision(lockedDecision, now);
-    const nextActive = upsertActiveMemory(lockedActive, lockedMemory);
+    const baseMemory = memoryForPromotedDecision(lockedDecision, now);
+    const normalizedKeyConflicts = findNormalizedKeyConflicts(lockedActive, baseMemory);
+    if (normalizedKeyConflicts.length > 0 && input.conflictResolution === void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: normalizedKeyConflictResult(lockedCandidate, normalizedKeyConflicts)
+      };
+    }
+    if (normalizedKeyConflicts.length > 0 && input.conflictResolution === "reject_new") {
+      const tombstone = tombstoneForRejectedCandidate(lockedCandidate, now);
+      const nextPending2 = lockedPending.filter((memoryCandidate) => memoryCandidate.id !== lockedCandidate.id);
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending2);
+      await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID5(),
+        action: "reject",
+        at: now,
+        reason: input.reason ?? "Rejected by normalizedKey conflict resolution",
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails("reject_new", lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      });
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID5(),
+        action: "audit",
+        at: now,
+        reason: "NormalizedKey conflict resolved by rejecting the new candidate",
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails("reject_new", lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      });
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "reject_new",
+          candidateId: lockedCandidate.id,
+          normalizedKey: lockedCandidate.normalizedKey,
+          conflicts: normalizedKeyConflicts.map(summarizeNormalizedKeyConflict),
+          tombstone,
+          reviewHash: lockedReviewHash
+        }
+      };
+    }
+    const supersededMemoryIds = input.conflictResolution === "supersede" ? normalizedKeyConflicts.map((memory) => memory.id) : [];
+    const promotedMemory = supersededMemoryIds.length === 0 ? baseMemory : {
+      ...baseMemory,
+      supersedes: uniqueInOrder([...baseMemory.supersedes ?? [], ...supersededMemoryIds])
+    };
+    const activeWithoutSuperseded = supersededMemoryIds.length === 0 ? lockedActive : lockedActive.filter((memory) => !supersededMemoryIds.includes(memory.id));
+    const keepBothConflictIds = new Set(
+      input.conflictResolution === "keep_both" ? normalizedKeyConflicts.map((memory) => memory.id) : []
+    );
+    const activeForWrite = keepBothConflictIds.size === 0 ? activeWithoutSuperseded : activeWithoutSuperseded.map(
+      (memory) => keepBothConflictIds.has(memory.id) ? { ...memory, normalizedKeyConflictResolution: "keep_both" } : memory
+    );
+    const lockedMemory = input.conflictResolution === "keep_both" ? { ...promotedMemory, normalizedKeyConflictResolution: "keep_both" } : promotedMemory;
+    const nextActive = input.conflictResolution === "keep_both" ? appendActiveMemory(activeForWrite, lockedMemory) : upsertActiveMemory(activeForWrite, lockedMemory);
     const nextPending = lockedPending.filter((memoryCandidate) => memoryCandidate.id !== lockedCandidate.id);
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, nextActive);
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
+    if (input.conflictResolution === "supersede") {
+      for (const conflict of normalizedKeyConflicts) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForSupersededMemory(conflict, lockedMemory, now));
+      }
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID5(),
+        action: "supersede",
+        at: now,
+        reason: input.reason ?? "NormalizedKey conflict resolved by superseding active memory",
+        memoryId: lockedMemory.id,
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails("supersede", lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      });
+    } else if (input.conflictResolution === "keep_both") {
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID5(),
+        action: "audit",
+        at: now,
+        reason: input.reason ?? "NormalizedKey conflict resolved by keeping both memories",
+        memoryId: lockedMemory.id,
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails("keep_both", lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      });
+    }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID5(),
       action: "promote",
@@ -14229,7 +14353,8 @@ async function promoteCodexPendingMemory(input) {
       memoryRoot: lockedMemoryRoot,
       budget: maintenanceBudget2,
       now,
-      reason: "after manual memory promotion"
+      reason: "after manual memory promotion",
+      preserveDuplicateNormalizedKeys: input.conflictResolution === "keep_both" ? [lockedCandidate.normalizedKey] : void 0
     });
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
     return {
@@ -14512,6 +14637,41 @@ function upsertActiveMemory(active, memory) {
   next[index] = memory;
   return next;
 }
+function appendActiveMemory(active, memory) {
+  return [...active.filter((candidate) => candidate.id !== memory.id), memory];
+}
+function findNormalizedKeyConflicts(active, memory) {
+  return active.filter((candidate) => candidate.id !== memory.id && candidate.normalizedKey === memory.normalizedKey);
+}
+function normalizedKeyConflictResult(candidate, conflicts) {
+  return {
+    action: "normalized_key_conflict",
+    candidateId: candidate.id,
+    normalizedKey: candidate.normalizedKey,
+    reason: "Active memory with the same normalizedKey requires explicit conflict resolution",
+    conflicts: conflicts.map(summarizeNormalizedKeyConflict),
+    resolutionOptions: NORMALIZED_KEY_CONFLICT_RESOLUTIONS
+  };
+}
+function summarizeNormalizedKeyConflict(memory) {
+  return {
+    id: memory.id,
+    content: memory.content,
+    normalizedKey: memory.normalizedKey,
+    domain: memory.domain,
+    type: memory.type,
+    scope: memory.scope,
+    updatedAt: memory.updatedAt
+  };
+}
+function conflictResolutionDetails(resolution, normalizedKey, conflicts) {
+  return {
+    resolution,
+    normalizedKey,
+    conflictingMemoryIds: conflicts.map((memory) => memory.id),
+    conflicts: conflicts.map(summarizeNormalizedKeyConflict)
+  };
+}
 function tombstoneForRejectedCandidate(candidate, now) {
   return {
     id: `tombstone-${candidate.id}`,
@@ -14524,6 +14684,21 @@ function tombstoneForRejectedCandidate(candidate, now) {
     reason: "rejected",
     createdAt: now,
     evidence: candidate.evidence
+  };
+}
+function tombstoneForSupersededMemory(memory, replacementMemory, now) {
+  return {
+    id: `tombstone-${memory.id}`,
+    memoryId: memory.id,
+    normalizedKey: memory.normalizedKey,
+    domain: memory.domain,
+    type: memory.type,
+    strength: memory.strength,
+    scope: memory.scope,
+    reason: "superseded",
+    createdAt: now,
+    replacementMemoryId: replacementMemory.id,
+    evidence: memory.evidence
   };
 }
 async function getProjectAndMemoryRoot(cwd) {
@@ -15168,6 +15343,12 @@ async function markDreamDueFailOpen(memoryRoot, now) {
   }
 }
 function toPendingMemory(input, now) {
+  const candidateKind = deriveMemoryCandidateKind({
+    candidateKind: input.candidateKind,
+    candidate_kind: input.candidate_kind,
+    tags: input.tags ?? [],
+    type: input.type
+  });
   return {
     id: randomUUID6(),
     domain: input.domain,
@@ -15185,6 +15366,7 @@ function toPendingMemory(input, now) {
     lastSeenAt: now,
     expiresAt: addDays2(now, 30),
     userConfirmed: input.userConfirmed,
+    candidateKind,
     tags: input.tags ?? []
   };
 }
@@ -16513,6 +16695,8 @@ function mergePendingMemory2(existing, candidate) {
     expiresAt: latestIso3(existing.expiresAt, candidate.expiresAt),
     promoteAfter: candidate.promoteAfter ?? existing.promoteAfter,
     evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE2),
+    candidateKind: existing.candidateKind ?? candidate.candidateKind,
+    candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
     tags: Array.from(/* @__PURE__ */ new Set([...existing.tags, ...candidate.tags])),
     conflictsWith: uniqueOptional3([...existing.conflictsWith ?? [], ...candidate.conflictsWith ?? []])
   };
@@ -17514,6 +17698,7 @@ async function handleCodexCommand(input) {
       cwd: input.cwd,
       id: parseRequiredPositional(input.args, 2, "pending memory id"),
       reviewHash: parseRequiredOption(input.args, "--review-hash", "pending review hash"),
+      conflictResolution: parseOptionalConflictResolution(input.args),
       reason: parseOptionalOption(input.args, "--reason")
     }));
     return;
@@ -17603,7 +17788,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash>|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -17706,6 +17891,22 @@ function parseOptionalPositiveInteger(args, option) {
     throw new Error(`Invalid ${option}: expected positive integer`);
   }
   return parsed;
+}
+function parseOptionalConflictResolution(args) {
+  const value = parseOptionalOption(args, "--conflict-resolution");
+  if (value === void 0) {
+    return void 0;
+  }
+  if (value === "supersede") {
+    return "supersede";
+  }
+  if (value === "keep-both" || value === "keep_both") {
+    return "keep_both";
+  }
+  if (value === "reject-new" || value === "reject_new") {
+    return "reject_new";
+  }
+  throw new Error(`Invalid --conflict-resolution: ${value}. Expected supersede, keep-both, or reject-new`);
 }
 
 // node_modules/zod/v3/external.js
@@ -31971,6 +32172,15 @@ async function handleMemoryProfileGet(input, fallbackCwd) {
 }
 
 // src/mcp/tools/memory-propose.ts
+var memoryCandidateKindSchema = external_exports.enum([
+  "project_fact",
+  "project_decision",
+  "user_instruction",
+  "workflow_rule",
+  "known_pitfall",
+  "rejected_approach",
+  "open_question"
+]);
 var memoryCandidateSchema = external_exports.object({
   domain: external_exports.enum(["project", "personal", "relationship", "affective", "procedural", "system"]),
   type: external_exports.enum([
@@ -31986,6 +32196,8 @@ var memoryCandidateSchema = external_exports.object({
   ]),
   strength: external_exports.enum(["hard", "soft", "session"]).optional(),
   scope: external_exports.enum(["global", "project", "session"]).optional(),
+  candidateKind: memoryCandidateKindSchema.optional(),
+  candidate_kind: memoryCandidateKindSchema.optional(),
   content: external_exports.string(),
   normalizedKey: external_exports.string().optional(),
   source: external_exports.enum(["user_explicit", "user_implicit", "assistant_observed", "tool_trace", "file", "legacy_markdown"]).optional(),
@@ -32036,6 +32248,7 @@ var memoryReviewDecisionInputSchema = {
   cwd: external_exports.string().optional(),
   id: external_exports.string(),
   reviewHash: external_exports.string().regex(/^[a-f0-9]{64}$/),
+  conflictResolution: external_exports.enum(["supersede", "keep_both", "reject_new"]).optional(),
   reason: external_exports.string().optional()
 };
 var memoryReviewEditInputSchema = {
@@ -32072,6 +32285,7 @@ async function handleMemoryPromote(input, fallbackCwd) {
     cwd: input.cwd ?? fallbackCwd,
     id: input.id,
     reviewHash: input.reviewHash,
+    conflictResolution: input.conflictResolution,
     reason: input.reason
   });
   return jsonText(result2);
@@ -32165,7 +32379,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_promote",
     {
-      description: "Use this tool to promote only after explicit user approval of a pending Cyrene memory candidate and hash-checked Codex review.",
+      description: "Use this tool to promote only after explicit user approval of a pending Cyrene memory candidate and hash-checked Codex review; normalizedKey conflicts require explicit conflictResolution.",
       inputSchema: memoryReviewDecisionInputSchema
     },
     async (input) => handleMemoryPromote(input, options.cwd)

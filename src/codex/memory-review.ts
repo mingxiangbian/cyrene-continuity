@@ -27,19 +27,30 @@ import {
   evaluatePendingPromotion,
   validateMemoryCandidate
 } from '../memory/memory-validator.js'
-import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../memory/types.js'
+import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
+import type {
+  CyreneMemory,
+  MemoryCandidateKind,
+  MemoryConflictResolution,
+  MemoryTombstone,
+  PendingMemory
+} from '../memory/types.js'
 
-export type CodexMemoryCandidateKind =
-  | 'project_fact'
-  | 'project_decision'
-  | 'user_instruction'
-  | 'workflow_rule'
-  | 'known_pitfall'
-  | 'rejected_approach'
-  | 'open_question'
+export type CodexMemoryCandidateKind = MemoryCandidateKind
+export type CodexMemoryConflictResolution = MemoryConflictResolution
 
 export type CodexPendingMemoryRecommendation = 'promote' | 'reject' | 'defer'
 export type CodexPendingMemoryRisk = 'low' | 'medium' | 'high'
+
+export interface CodexNormalizedKeyConflict {
+  id: string
+  content: string
+  normalizedKey: string
+  domain: CyreneMemory['domain']
+  type: CyreneMemory['type']
+  scope: CyreneMemory['scope']
+  updatedAt: string
+}
 
 export interface CodexPendingMemorySummary {
   id: string
@@ -111,6 +122,14 @@ export interface CodexPendingMemoryPromoteResult {
         reviewHash: string
       }
     | {
+        action: 'reject_new'
+        candidateId: string
+        normalizedKey: string
+        conflicts: CodexNormalizedKeyConflict[]
+        tombstone: MemoryTombstone
+        reviewHash: string
+      }
+    | {
         action: 'not_found'
         candidateId: string
         reason: string
@@ -120,6 +139,14 @@ export interface CodexPendingMemoryPromoteResult {
         candidateId: string
         reason: string
         latest: CodexPendingMemorySummary
+      }
+    | {
+        action: 'normalized_key_conflict'
+        candidateId: string
+        normalizedKey: string
+        reason: string
+        conflicts: CodexNormalizedKeyConflict[]
+        resolutionOptions: MemoryConflictResolution[]
       }
     | {
         action: 'rejected_by_validator'
@@ -204,6 +231,8 @@ export interface CodexPendingMemoryDeferResult {
       }
 }
 
+const NORMALIZED_KEY_CONFLICT_RESOLUTIONS: MemoryConflictResolution[] = ['supersede', 'keep_both', 'reject_new']
+
 export function reviewHashForPendingMemory(candidate: PendingMemory): string {
   const payload = {
     id: candidate.id,
@@ -240,6 +269,7 @@ export function reviewHashForPendingMemory(candidate: PendingMemory): string {
     promoteAfter: candidate.promoteAfter ?? null,
     expiresAt: candidate.expiresAt,
     userConfirmed: candidate.userConfirmed ?? null,
+    candidateKind: deriveMemoryCandidateKind(candidate),
     tags: candidate.tags,
     conflictsWith: candidate.conflictsWith ?? null
   }
@@ -255,7 +285,7 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
-    candidateKind: deriveCandidateKind(candidate),
+    candidateKind: deriveMemoryCandidateKind(candidate),
     recommendation,
     suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
     risk: deriveRisk(candidate),
@@ -282,39 +312,6 @@ function deriveRecommendation(candidate: PendingMemory, now: string): CodexPendi
   }
   const promotion = evaluatePendingPromotion(candidate, now)
   return promotion.promotable ? 'promote' : 'defer'
-}
-
-function deriveCandidateKind(candidate: PendingMemory): CodexMemoryCandidateKind {
-  const tagKind = candidate.tags.find((tag): tag is CodexMemoryCandidateKind =>
-    tag === 'project_fact' ||
-    tag === 'project_decision' ||
-    tag === 'user_instruction' ||
-    tag === 'workflow_rule' ||
-    tag === 'known_pitfall' ||
-    tag === 'rejected_approach' ||
-    tag === 'open_question'
-  )
-  if (tagKind !== undefined) {
-    return tagKind
-  }
-  if (candidate.type === 'project_fact') {
-    return 'project_fact'
-  }
-  if (candidate.type === 'procedural_rule' || candidate.type === 'system_policy') {
-    return 'workflow_rule'
-  }
-  if (
-    candidate.type === 'user_preference' ||
-    candidate.type === 'interaction_style' ||
-    candidate.type === 'relationship_boundary' ||
-    candidate.type === 'affective_pattern'
-  ) {
-    return 'user_instruction'
-  }
-  if (candidate.type === 'episode') {
-    return 'project_fact'
-  }
-  return 'project_fact'
 }
 
 function deriveRisk(candidate: PendingMemory): CodexPendingMemoryRisk {
@@ -388,6 +385,7 @@ export async function promoteCodexPendingMemory(input: {
   cwd: string
   id: string
   reviewHash: string
+  conflictResolution?: MemoryConflictResolution
   reason?: string
   now?: string
 }): Promise<CodexPendingMemoryPromoteResult> {
@@ -503,12 +501,109 @@ export async function promoteCodexPendingMemory(input: {
       }
     }
 
-    const lockedMemory = memoryForPromotedDecision(lockedDecision, now)
-    const nextActive = upsertActiveMemory(lockedActive, lockedMemory)
+    const baseMemory = memoryForPromotedDecision(lockedDecision, now)
+    const normalizedKeyConflicts = findNormalizedKeyConflicts(lockedActive, baseMemory)
+    if (normalizedKeyConflicts.length > 0 && input.conflictResolution === undefined) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: normalizedKeyConflictResult(lockedCandidate, normalizedKeyConflicts)
+      }
+    }
+
+    if (normalizedKeyConflicts.length > 0 && input.conflictResolution === 'reject_new') {
+      const tombstone = tombstoneForRejectedCandidate(lockedCandidate, now)
+      const nextPending = lockedPending.filter((memoryCandidate) => memoryCandidate.id !== lockedCandidate.id)
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending)
+      await appendTombstoneFromRoot(lockedMemoryRoot, tombstone)
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID(),
+        action: 'reject',
+        at: now,
+        reason: input.reason ?? 'Rejected by normalizedKey conflict resolution',
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails('reject_new', lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      })
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID(),
+        action: 'audit',
+        at: now,
+        reason: 'NormalizedKey conflict resolved by rejecting the new candidate',
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails('reject_new', lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      })
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'reject_new',
+          candidateId: lockedCandidate.id,
+          normalizedKey: lockedCandidate.normalizedKey,
+          conflicts: normalizedKeyConflicts.map(summarizeNormalizedKeyConflict),
+          tombstone,
+          reviewHash: lockedReviewHash
+        }
+      }
+    }
+
+    const supersededMemoryIds = input.conflictResolution === 'supersede'
+      ? normalizedKeyConflicts.map((memory) => memory.id)
+      : []
+    const promotedMemory: CyreneMemory = supersededMemoryIds.length === 0
+      ? baseMemory
+      : {
+          ...baseMemory,
+          supersedes: uniqueInOrder([...(baseMemory.supersedes ?? []), ...supersededMemoryIds])
+        }
+    const activeWithoutSuperseded = supersededMemoryIds.length === 0
+      ? lockedActive
+      : lockedActive.filter((memory) => !supersededMemoryIds.includes(memory.id))
+    const keepBothConflictIds = new Set(
+      input.conflictResolution === 'keep_both' ? normalizedKeyConflicts.map((memory) => memory.id) : []
+    )
+    const activeForWrite: CyreneMemory[] = keepBothConflictIds.size === 0
+      ? activeWithoutSuperseded
+      : activeWithoutSuperseded.map((memory) =>
+          keepBothConflictIds.has(memory.id)
+            ? { ...memory, normalizedKeyConflictResolution: 'keep_both' as const }
+            : memory
+        )
+    const lockedMemory: CyreneMemory = input.conflictResolution === 'keep_both'
+      ? { ...promotedMemory, normalizedKeyConflictResolution: 'keep_both' }
+      : promotedMemory
+    const nextActive = input.conflictResolution === 'keep_both'
+      ? appendActiveMemory(activeForWrite, lockedMemory)
+      : upsertActiveMemory(activeForWrite, lockedMemory)
     const nextPending = lockedPending.filter((memoryCandidate) => memoryCandidate.id !== lockedCandidate.id)
 
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, nextActive)
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending)
+    if (input.conflictResolution === 'supersede') {
+      for (const conflict of normalizedKeyConflicts) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForSupersededMemory(conflict, lockedMemory, now))
+      }
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID(),
+        action: 'supersede',
+        at: now,
+        reason: input.reason ?? 'NormalizedKey conflict resolved by superseding active memory',
+        memoryId: lockedMemory.id,
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails('supersede', lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      })
+    } else if (input.conflictResolution === 'keep_both') {
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID(),
+        action: 'audit',
+        at: now,
+        reason: input.reason ?? 'NormalizedKey conflict resolved by keeping both memories',
+        memoryId: lockedMemory.id,
+        candidateId: lockedCandidate.id,
+        details: conflictResolutionDetails('keep_both', lockedCandidate.normalizedKey, normalizedKeyConflicts)
+      })
+    }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID(),
       action: 'promote',
@@ -521,7 +616,8 @@ export async function promoteCodexPendingMemory(input: {
       memoryRoot: lockedMemoryRoot,
       budget: maintenanceBudget,
       now,
-      reason: 'after manual memory promotion'
+      reason: 'after manual memory promotion',
+      preserveDuplicateNormalizedKeys: input.conflictResolution === 'keep_both' ? [lockedCandidate.normalizedKey] : undefined
     })
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
@@ -854,6 +950,53 @@ function upsertActiveMemory(active: CyreneMemory[], memory: CyreneMemory): Cyren
   return next
 }
 
+function appendActiveMemory(active: CyreneMemory[], memory: CyreneMemory): CyreneMemory[] {
+  return [...active.filter((candidate) => candidate.id !== memory.id), memory]
+}
+
+function findNormalizedKeyConflicts(active: CyreneMemory[], memory: Pick<CyreneMemory, 'id' | 'normalizedKey'>): CyreneMemory[] {
+  return active.filter((candidate) => candidate.id !== memory.id && candidate.normalizedKey === memory.normalizedKey)
+}
+
+function normalizedKeyConflictResult(
+  candidate: PendingMemory,
+  conflicts: CyreneMemory[]
+): Extract<CodexPendingMemoryPromoteResult['result'], { action: 'normalized_key_conflict' }> {
+  return {
+    action: 'normalized_key_conflict',
+    candidateId: candidate.id,
+    normalizedKey: candidate.normalizedKey,
+    reason: 'Active memory with the same normalizedKey requires explicit conflict resolution',
+    conflicts: conflicts.map(summarizeNormalizedKeyConflict),
+    resolutionOptions: NORMALIZED_KEY_CONFLICT_RESOLUTIONS
+  }
+}
+
+function summarizeNormalizedKeyConflict(memory: CyreneMemory): CodexNormalizedKeyConflict {
+  return {
+    id: memory.id,
+    content: memory.content,
+    normalizedKey: memory.normalizedKey,
+    domain: memory.domain,
+    type: memory.type,
+    scope: memory.scope,
+    updatedAt: memory.updatedAt
+  }
+}
+
+function conflictResolutionDetails(
+  resolution: MemoryConflictResolution,
+  normalizedKey: string,
+  conflicts: CyreneMemory[]
+): Record<string, unknown> {
+  return {
+    resolution,
+    normalizedKey,
+    conflictingMemoryIds: conflicts.map((memory) => memory.id),
+    conflicts: conflicts.map(summarizeNormalizedKeyConflict)
+  }
+}
+
 function tombstoneForRejectedCandidate(candidate: PendingMemory, now: string): MemoryTombstone {
   return {
     id: `tombstone-${candidate.id}`,
@@ -866,6 +1009,22 @@ function tombstoneForRejectedCandidate(candidate: PendingMemory, now: string): M
     reason: 'rejected',
     createdAt: now,
     evidence: candidate.evidence
+  }
+}
+
+function tombstoneForSupersededMemory(memory: CyreneMemory, replacementMemory: CyreneMemory, now: string): MemoryTombstone {
+  return {
+    id: `tombstone-${memory.id}`,
+    memoryId: memory.id,
+    normalizedKey: memory.normalizedKey,
+    domain: memory.domain,
+    type: memory.type,
+    strength: memory.strength,
+    scope: memory.scope,
+    reason: 'superseded',
+    createdAt: now,
+    replacementMemoryId: replacementMemory.id,
+    evidence: memory.evidence
   }
 }
 

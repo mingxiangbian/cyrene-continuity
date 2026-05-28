@@ -33,6 +33,7 @@ import {
   explainSimilarHints,
   markSimilarHintTransferable
 } from './similar-hints-review.js'
+import type { MemoryConflictResolution } from '../memory/types.js'
 
 export async function handleCodexCommand(input: { cwd: string; args: string[]; runtimeEntryPath?: string }): Promise<void> {
   const command = input.args[0]
@@ -129,6 +130,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
       cwd: input.cwd,
       id: parseRequiredPositional(input.args, 2, 'pending memory id'),
       reviewHash: parseRequiredOption(input.args, '--review-hash', 'pending review hash'),
+      conflictResolution: parseOptionalConflictResolution(input.args),
       reason: parseOptionalOption(input.args, '--reason')
     }))
     return
@@ -223,7 +225,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash>|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -334,4 +336,21 @@ function parseOptionalPositiveInteger(args: string[], option: string): number | 
     throw new Error(`Invalid ${option}: expected positive integer`)
   }
   return parsed
+}
+
+function parseOptionalConflictResolution(args: string[]): MemoryConflictResolution | undefined {
+  const value = parseOptionalOption(args, '--conflict-resolution')
+  if (value === undefined) {
+    return undefined
+  }
+  if (value === 'supersede') {
+    return 'supersede'
+  }
+  if (value === 'keep-both' || value === 'keep_both') {
+    return 'keep_both'
+  }
+  if (value === 'reject-new' || value === 'reject_new') {
+    return 'reject_new'
+  }
+  throw new Error(`Invalid --conflict-resolution: ${value}. Expected supersede, keep-both, or reject-new`)
 }

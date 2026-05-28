@@ -45,6 +45,17 @@ export type MemorySource =
 
 export type MemoryProfileVisibility = 'always' | 'safe_summary' | 'retrieval_only' | 'never'
 
+export type MemoryCandidateKind =
+  | 'project_fact'
+  | 'project_decision'
+  | 'user_instruction'
+  | 'workflow_rule'
+  | 'known_pitfall'
+  | 'rejected_approach'
+  | 'open_question'
+
+export type MemoryConflictResolution = 'supersede' | 'keep_both' | 'reject_new'
+
 export interface MemoryScores {
   evidenceStrength: number
   stability: number
@@ -89,6 +100,9 @@ export interface CyreneMemory {
   }
   userConfirmed?: boolean
   profileVisibility?: MemoryProfileVisibility
+  candidateKind?: MemoryCandidateKind
+  candidate_kind?: MemoryCandidateKind
+  normalizedKeyConflictResolution?: 'keep_both'
   tags: string[]
   supersedes?: string[]
 }
@@ -113,6 +127,8 @@ export interface PendingMemory {
   expiresAt: string
   userConfirmed?: boolean
   profileVisibility?: MemoryProfileVisibility
+  candidateKind?: MemoryCandidateKind
+  candidate_kind?: MemoryCandidateKind
   tags: string[]
   conflictsWith?: string[]
 }

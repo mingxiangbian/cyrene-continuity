@@ -5,6 +5,7 @@ import {
   promoteCodexPendingMemory,
   rejectCodexPendingMemory
 } from './memory-review.js'
+import type { MemoryConflictResolution } from '../memory/types.js'
 
 export async function formatCodexMemoryReview(input: { cwd: string; limit?: number }): Promise<string> {
   const result = await listCodexPendingMemories(input)
@@ -43,6 +44,7 @@ export async function runCodexMemoryApprove(input: {
   cwd: string
   id: string
   reviewHash: string
+  conflictResolution?: MemoryConflictResolution
   reason?: string
 }): Promise<string> {
   return `${JSON.stringify(await promoteCodexPendingMemory(input), null, 2)}\n`

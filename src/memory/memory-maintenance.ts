@@ -52,6 +52,7 @@ export async function runMemoryMaintenanceFromRoot(input: {
   now?: string
   reason?: string
   preservePendingCandidateIds?: string[]
+  preserveDuplicateNormalizedKeys?: string[]
 }): Promise<MemoryMaintenanceResult> {
   return withMemoryMaintenanceLockFromRoot(input.memoryRoot, (memoryRoot) =>
     runMemoryMaintenanceFromRootLocked({ ...input, memoryRoot })
@@ -70,6 +71,7 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
   now?: string
   reason?: string
   preservePendingCandidateIds?: string[]
+  preserveDuplicateNormalizedKeys?: string[]
 }): Promise<MemoryMaintenanceResult> {
   const now = input.now ?? new Date().toISOString()
   const snapshot = await createMemorySnapshotFromRoot(
@@ -96,7 +98,14 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
     liveActive.push(memory)
   }
 
-  const dedupedActive = dedupeByNormalizedKey(liveActive, input.budget, now, tombstones, events)
+  const dedupedActive = dedupeByNormalizedKey(
+    liveActive,
+    input.budget,
+    now,
+    tombstones,
+    events,
+    new Set(input.preserveDuplicateNormalizedKeys ?? [])
+  )
   let trimmed = 0
   let boundedActive = dedupedActive.map((memory) => {
     const next = trimMemory(memory, input.budget)
@@ -183,7 +192,8 @@ function dedupeByNormalizedKey(
   budget: MemoryMaintenanceBudget,
   now: string,
   tombstones: MemoryTombstone[],
-  events: MemoryEvent[]
+  events: MemoryEvent[],
+  preserveDuplicateKeys: Set<string>
 ): DedupedMemories {
   const groups = new Map<string, CyreneMemory[]>()
   for (const memory of memories) {
@@ -202,6 +212,11 @@ function dedupeByNormalizedKey(
       deduped.push(group[0] as CyreneMemory)
       continue
     }
+    const normalizedKey = (group[0] as CyreneMemory).normalizedKey
+    if (preserveDuplicateKeys.has(normalizedKey) || hasKeepBothConflictResolution(group)) {
+      deduped.push(...group)
+      continue
+    }
 
     const winner = [...group].sort(compareDedupWinner)[0] as CyreneMemory
     const duplicates = group.filter((memory) => memory.id !== winner.id)
@@ -217,6 +232,10 @@ function dedupeByNormalizedKey(
   }
 
   return Object.assign(deduped, { removed })
+}
+
+function hasKeepBothConflictResolution(memories: CyreneMemory[]): boolean {
+  return memories.some((memory) => memory.normalizedKeyConflictResolution === 'keep_both')
 }
 
 function compareDedupWinner(left: CyreneMemory, right: CyreneMemory): number {

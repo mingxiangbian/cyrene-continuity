@@ -2,6 +2,16 @@ import { z } from 'zod'
 import { proposeCodexMemoryCandidate } from '../../codex/memory-propose.js'
 import { jsonText } from '../mcp-json.js'
 
+const memoryCandidateKindSchema = z.enum([
+  'project_fact',
+  'project_decision',
+  'user_instruction',
+  'workflow_rule',
+  'known_pitfall',
+  'rejected_approach',
+  'open_question'
+])
+
 const memoryCandidateSchema = z.object({
   domain: z.enum(['project', 'personal', 'relationship', 'affective', 'procedural', 'system']),
   type: z.enum([
@@ -17,6 +27,8 @@ const memoryCandidateSchema = z.object({
   ]),
   strength: z.enum(['hard', 'soft', 'session']).optional(),
   scope: z.enum(['global', 'project', 'session']).optional(),
+  candidateKind: memoryCandidateKindSchema.optional(),
+  candidate_kind: memoryCandidateKindSchema.optional(),
   content: z.string(),
   normalizedKey: z.string().optional(),
   source: z.enum(['user_explicit', 'user_implicit', 'assistant_observed', 'tool_trace', 'file', 'legacy_markdown']).optional(),

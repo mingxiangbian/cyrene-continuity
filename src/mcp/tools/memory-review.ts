@@ -23,6 +23,7 @@ export const memoryReviewDecisionInputSchema = {
   cwd: z.string().optional(),
   id: z.string(),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  conflictResolution: z.enum(['supersede', 'keep_both', 'reject_new']).optional(),
   reason: z.string().optional()
 }
 
@@ -60,13 +61,14 @@ export async function handleMemoryPendingGet(input: { cwd?: string; id: string }
 }
 
 export async function handleMemoryPromote(
-  input: { cwd?: string; id: string; reviewHash: string; reason?: string },
+  input: { cwd?: string; id: string; reviewHash: string; conflictResolution?: 'supersede' | 'keep_both' | 'reject_new'; reason?: string },
   fallbackCwd: string
 ) {
   const result = await promoteCodexPendingMemory({
     cwd: input.cwd ?? fallbackCwd,
     id: input.id,
     reviewHash: input.reviewHash,
+    conflictResolution: input.conflictResolution,
     reason: input.reason
   })
   return jsonText(result)

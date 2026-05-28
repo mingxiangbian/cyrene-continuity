@@ -78,7 +78,7 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
     'cyrene_memory_promote',
     {
       description:
-        'Use this tool to promote only after explicit user approval of a pending Cyrene memory candidate and hash-checked Codex review.',
+        'Use this tool to promote only after explicit user approval of a pending Cyrene memory candidate and hash-checked Codex review; normalizedKey conflicts require explicit conflictResolution.',
       inputSchema: memoryReviewDecisionInputSchema
     },
     async (input) => handleMemoryPromote(input, options.cwd)

@@ -16,7 +16,9 @@ import {
   upsertPendingMemoryFromRoot
 } from '../memory/memory-store.js'
 import { validateMemoryCandidate } from '../memory/memory-validator.js'
+import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
 import type {
+  MemoryCandidateKind,
   MemoryDomain,
   MemoryEvidence,
   MemoryScope,
@@ -35,6 +37,8 @@ export interface CodexMemoryCandidateInput {
   scope?: MemoryScope
   content: string
   normalizedKey?: string
+  candidateKind?: MemoryCandidateKind
+  candidate_kind?: MemoryCandidateKind
   source?: MemorySource
   evidence: MemoryEvidence[]
   scores?: Partial<MemoryScores>
@@ -145,6 +149,12 @@ async function markDreamDueFailOpen(memoryRoot: string, now: string): Promise<vo
 }
 
 function toPendingMemory(input: CodexMemoryCandidateInput, now: string): PendingMemory {
+  const candidateKind = deriveMemoryCandidateKind({
+    candidateKind: input.candidateKind,
+    candidate_kind: input.candidate_kind,
+    tags: input.tags ?? [],
+    type: input.type
+  })
   return {
     id: randomUUID(),
     domain: input.domain,
@@ -162,6 +172,7 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     lastSeenAt: now,
     expiresAt: addDays(now, 30),
     userConfirmed: input.userConfirmed,
+    candidateKind,
     tags: input.tags ?? []
   }
 }

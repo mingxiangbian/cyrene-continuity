@@ -213,7 +213,7 @@ npm test -- tests/codex-memory-review.test.ts tests/codex-cli.test.ts tests/mcp-
 npm test
 npm run typecheck
 npm run build:plugin
-npm run plugin:validate
+python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin
 ```
 
 - [ ] **Step 3: Inspect diff and commit**
@@ -224,4 +224,3 @@ git status --short
 git add docs/superpowers/plans/2026-05-28-cyrene-v3-pr7-candidate-conflict-handling.md src tests plugin/runtime/cyrene-continuity.mjs
 git commit -m "feat: handle memory candidate conflicts"
 ```
-
