@@ -290,6 +290,19 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
+  it('builds an empty proposal for a missing root without creating it', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    const parent = await createTempDir('cyrene-dream-missing-root-parent-')
+    const missingRoot = join(parent, 'missing', 'memory')
+
+    const proposal = await buildDreamProposalForRoot({ memoryRoot: missingRoot, now: '2026-05-26T00:00:00.000Z' })
+
+    expect(proposal.memoryRoot).toBe(missingRoot)
+    expect(proposal.summary).toMatchObject({ promote: 0, reject: 0, expire: 0, keepPending: 0 })
+    await expect(readdir(join(parent, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('builds an expired rejection proposal without writing tombstones', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)

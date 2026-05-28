@@ -1,5 +1,5 @@
+import { lstat, realpath } from 'node:fs/promises'
 import {
-  ensureWritableMemoryRootPath,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
@@ -94,7 +94,7 @@ export async function buildDreamProposalForRoot(input: {
   memoryRoot: string
   now: string
 }): Promise<DreamRootProposal> {
-  const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot)
+  const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot)
   let active = await readActiveMemoriesFromRoot(memoryRoot)
   const tombstones = await readTombstonesFromRoot(memoryRoot)
   const pending = await readPendingMemoriesFromRoot(memoryRoot)
@@ -225,6 +225,24 @@ export async function buildDreamProposalForRoot(input: {
   }
 }
 
+async function resolveReadableMemoryRootPath(memoryRoot: string): Promise<string> {
+  try {
+    const stats = await lstat(memoryRoot)
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use memory symlink: ${memoryRoot}`)
+    }
+    if (!stats.isDirectory()) {
+      throw new Error(`Refusing to use non-directory memory path: ${memoryRoot}`)
+    }
+    return realpath(memoryRoot)
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return memoryRoot
+    }
+    throw error
+  }
+}
+
 function tombstoneForExpiredPending(candidate: PendingMemory, now: string): MemoryTombstone {
   return {
     id: `tombstone-${candidate.id}`,
@@ -237,6 +255,10 @@ function tombstoneForExpiredPending(candidate: PendingMemory, now: string): Memo
     createdAt: now,
     evidence: candidate.evidence
   }
+}
+
+function isFileErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code
 }
 
 function upsertActiveMemory(active: CyreneMemory[], memory: CyreneMemory): CyreneMemory[] {

@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs'
 import { access, readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -198,7 +199,7 @@ async function readDoctorMigrationState(): Promise<DoctorMigrationState> {
 
 async function readAutomationDreamStageStatus(): Promise<DoctorAutomationDreamStageStatus> {
   const automationsRoot = join(homedir(), '.codex', 'automations')
-  let entries: Awaited<ReturnType<typeof readdir>>
+  let entries: Dirent[]
   try {
     entries = await readdir(automationsRoot, { withFileTypes: true })
   } catch {

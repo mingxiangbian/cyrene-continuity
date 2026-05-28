@@ -688,7 +688,7 @@ git commit -m "build: update cyrene runtime for v2 upgrade train"
 - No repo source files unless verification exposes a required fix.
 - Automation: `cyrene-memory-dream-deep`
 
-- [ ] **Step 1: Update automation through Codex automation tool**
+- [x] **Step 1: Update automation through Codex automation tool**
 
 Use `automation_update` with id `cyrene-memory-dream-deep`, preserving all fields except prompt text. Replace:
 
@@ -702,7 +702,7 @@ with:
 /Users/phoenix/.cyrene/codex/bin/cyrene-continuity codex memory dream --stage deep-apply
 ```
 
-- [ ] **Step 2: Verify automation config**
+- [x] **Step 2: Verify automation config**
 
 Run:
 
@@ -712,7 +712,7 @@ rg -- '--stage deep(\\s|"|$)' /Users/phoenix/.codex/automations
 
 Expected: no active prompt uses `--stage deep`.
 
-- [ ] **Step 3: Run full verification**
+- [x] **Step 3: Run full verification**
 
 ```bash
 npm test
@@ -721,7 +721,7 @@ npm run build:plugin
 python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin
 ```
 
-- [ ] **Step 4: Run runtime smoke commands**
+- [x] **Step 4: Run runtime smoke commands**
 
 ```bash
 /Users/phoenix/.cyrene/codex/bin/cyrene-continuity codex memory dream --stage deep-preview
@@ -731,7 +731,7 @@ python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plu
 
 Only run `deep-apply` smoke after confirming it is acceptable to mutate real Cyrene memory roots, or use an isolated HOME fixture for the smoke.
 
-- [ ] **Step 5: Final code review**
+- [x] **Step 5: Final code review**
 
 Dispatch final reviewer for spec compliance and code quality. Fix findings before completion.
 

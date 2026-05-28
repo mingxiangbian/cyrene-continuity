@@ -15201,12 +15201,13 @@ function isFileErrorCode9(error2, code) {
 
 // src/codex/memory-dream.ts
 import { randomUUID as randomUUID9 } from "node:crypto";
-import { lstat as lstat10, mkdir as mkdir11, readFile as readFile11, rm as rm4, writeFile as writeFile8 } from "node:fs/promises";
+import { lstat as lstat11, mkdir as mkdir11, readFile as readFile11, rm as rm4, writeFile as writeFile8 } from "node:fs/promises";
 import { join as join17 } from "node:path";
 
 // src/codex/dream-proposal.ts
+import { lstat as lstat10, realpath as realpath7 } from "node:fs/promises";
 async function buildDreamProposalForRoot(input) {
-  const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
+  const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot);
   let active = await readActiveMemoriesFromRoot(memoryRoot);
   const tombstones = await readTombstonesFromRoot(memoryRoot);
   const pending = await readPendingMemoriesFromRoot(memoryRoot);
@@ -15325,6 +15326,23 @@ async function buildDreamProposalForRoot(input) {
     evalGate
   };
 }
+async function resolveReadableMemoryRootPath(memoryRoot) {
+  try {
+    const stats = await lstat10(memoryRoot);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use memory symlink: ${memoryRoot}`);
+    }
+    if (!stats.isDirectory()) {
+      throw new Error(`Refusing to use non-directory memory path: ${memoryRoot}`);
+    }
+    return realpath7(memoryRoot);
+  } catch (error2) {
+    if (isFileErrorCode10(error2, "ENOENT")) {
+      return memoryRoot;
+    }
+    throw error2;
+  }
+}
 function tombstoneForExpiredPending(candidate, now) {
   return {
     id: `tombstone-${candidate.id}`,
@@ -15337,6 +15355,9 @@ function tombstoneForExpiredPending(candidate, now) {
     createdAt: now,
     evidence: candidate.evidence
   };
+}
+function isFileErrorCode10(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 function upsertActiveMemory2(active, memory) {
   const index = active.findIndex((entry) => entry.id === memory.id || entry.normalizedKey === memory.normalizedKey);
@@ -15731,7 +15752,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
-      if (!isFileErrorCode10(error2, "EEXIST")) {
+      if (!isFileErrorCode11(error2, "EEXIST")) {
         throw error2;
       }
       const owner = await readDreamLockOwner(lockDir);
@@ -15745,11 +15766,11 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
 async function ensureDreamLocksDir(memoryRoot) {
   const locksDir = join17(memoryRoot, DREAM_LOCKS_DIR);
   await mkdir11(locksDir).catch((error2) => {
-    if (!isFileErrorCode10(error2, "EEXIST")) {
+    if (!isFileErrorCode11(error2, "EEXIST")) {
       throw error2;
     }
   });
-  const stats = await lstat10(locksDir);
+  const stats = await lstat11(locksDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream locks path: ${locksDir}`);
   }
@@ -15758,9 +15779,9 @@ async function ensureDreamLocksDir(memoryRoot) {
 async function readDreamLockOwner(lockDir) {
   let stats;
   try {
-    stats = await lstat10(lockDir);
+    stats = await lstat11(lockDir);
   } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -15779,7 +15800,7 @@ async function readDreamLockOwner(lockDir) {
       ...typeof parsed.token === "string" ? { token: parsed.token } : {}
     };
   } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -15811,13 +15832,13 @@ async function releaseDreamLock(lock) {
     await rm4(lock.lockDir, { recursive: true, force: true });
   }
 }
-function isFileErrorCode10(error2, code) {
+function isFileErrorCode11(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/profile-candidates.ts
 import { createHash as createHash7, randomUUID as randomUUID10 } from "node:crypto";
-import { lstat as lstat11, readFile as readFile12, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { lstat as lstat12, readFile as readFile12, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join18 } from "node:path";
 var PROFILE_CANDIDATES_FILE = "profile_candidates.jsonl";
 function reviewHashForProfileCandidate(candidate) {
@@ -16076,7 +16097,7 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
     const content = await readFile12(join18(root, PROFILE_CANDIDATES_FILE), "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
-    if (isFileErrorCode11(error2, "ENOENT")) {
+    if (isFileErrorCode12(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -16094,7 +16115,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
 }
 async function assertSafeProfileCandidateTarget(targetPath) {
   try {
-    const stats = await lstat11(targetPath);
+    const stats = await lstat12(targetPath);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use profile candidate symlink: ${targetPath}`);
     }
@@ -16102,13 +16123,13 @@ async function assertSafeProfileCandidateTarget(targetPath) {
       throw new Error(`Refusing to use non-file profile candidate path: ${targetPath}`);
     }
   } catch (error2) {
-    if (isFileErrorCode11(error2, "ENOENT")) {
+    if (isFileErrorCode12(error2, "ENOENT")) {
       return;
     }
     throw error2;
   }
 }
-function isFileErrorCode11(error2, code) {
+function isFileErrorCode12(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
