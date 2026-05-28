@@ -152,6 +152,58 @@ export interface CodexPendingMemoryRejectResult {
       }
 }
 
+export interface CodexPendingMemoryEditResult {
+  project: CodexPendingMemoryProject
+  memoryRoot: string
+  result:
+    | {
+        action: 'edit'
+        candidateId: string
+        candidate: PendingMemory
+        reviewHash: string
+      }
+    | {
+        action: 'not_found'
+        candidateId: string
+        reason: string
+      }
+    | {
+        action: 'conflict'
+        candidateId: string
+        reason: string
+        latest: CodexPendingMemorySummary
+      }
+    | {
+        action: 'rejected_by_validator'
+        candidateId: string
+        reason: string
+        tombstone: MemoryTombstone
+      }
+}
+
+export interface CodexPendingMemoryDeferResult {
+  project: CodexPendingMemoryProject
+  memoryRoot: string
+  result:
+    | {
+        action: 'defer'
+        candidateId: string
+        candidate: PendingMemory
+        reviewHash: string
+      }
+    | {
+        action: 'not_found'
+        candidateId: string
+        reason: string
+      }
+    | {
+        action: 'conflict'
+        candidateId: string
+        reason: string
+        latest: CodexPendingMemorySummary
+      }
+}
+
 export function reviewHashForPendingMemory(candidate: PendingMemory): string {
   const payload = {
     id: candidate.id,
@@ -579,6 +631,202 @@ export async function rejectCodexPendingMemory(input: {
   })
 }
 
+export async function editCodexPendingMemory(input: {
+  cwd: string
+  id: string
+  reviewHash: string
+  content: string
+  normalizedKey?: string
+  reason?: string
+  now?: string
+}): Promise<CodexPendingMemoryEditResult> {
+  const now = input.now ?? new Date().toISOString()
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id)
+  if (candidate === undefined) {
+    return {
+      project,
+      memoryRoot,
+      result: {
+        action: 'not_found',
+        candidateId: input.id,
+        reason: 'Pending memory candidate not found'
+      }
+    }
+  }
+
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
+  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot)
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot)
+    const lockedCandidate = lockedPending.find((memoryCandidate) => memoryCandidate.id === candidate.id)
+    if (lockedCandidate === undefined) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'not_found',
+          candidateId: candidate.id,
+          reason: 'Pending memory candidate not found'
+        }
+      }
+    }
+
+    const latestReviewHash = reviewHashForPendingMemory(lockedCandidate)
+    if (latestReviewHash !== input.reviewHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'conflict',
+          candidateId: candidate.id,
+          reason: 'Pending memory candidate changed since review',
+          latest: summarizePendingMemory(lockedCandidate)
+        }
+      }
+    }
+
+    const editedCandidate: PendingMemory = {
+      ...lockedCandidate,
+      content: input.content,
+      normalizedKey: input.normalizedKey ?? lockedCandidate.normalizedKey,
+      lastSeenAt: now
+    }
+    const [lockedActive, lockedTombstones] = await Promise.all([
+      readActiveMemoriesFromRoot(lockedMemoryRoot),
+      readTombstonesFromRoot(lockedMemoryRoot)
+    ])
+    const decision = validateMemoryCandidate({
+      candidate: editedCandidate,
+      existingMemories: lockedActive,
+      tombstones: lockedTombstones,
+      now
+    })
+    if (decision.action === 'reject') {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'rejected_by_validator',
+          candidateId: candidate.id,
+          reason: decision.reason,
+          tombstone: decision.tombstone
+        }
+      }
+    }
+
+    const validatedCandidate = decision.action === 'pending' ? decision.candidate : editedCandidate
+    const nextPending = lockedPending.map((memoryCandidate) =>
+      memoryCandidate.id === candidate.id ? validatedCandidate : memoryCandidate
+    )
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending)
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID(),
+      action: 'pending',
+      at: now,
+      reason: input.reason ?? 'Edited by Codex pending memory review',
+      candidateId: validatedCandidate.id,
+      details: { reviewAction: 'edit' }
+    })
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: 'edit',
+        candidateId: validatedCandidate.id,
+        candidate: validatedCandidate,
+        reviewHash: reviewHashForPendingMemory(validatedCandidate)
+      }
+    }
+  })
+}
+
+export async function deferCodexPendingMemory(input: {
+  cwd: string
+  id: string
+  reviewHash: string
+  days?: number
+  reason?: string
+  now?: string
+}): Promise<CodexPendingMemoryDeferResult> {
+  const now = input.now ?? new Date().toISOString()
+  const days = input.days ?? 7
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id)
+  if (candidate === undefined) {
+    return {
+      project,
+      memoryRoot,
+      result: {
+        action: 'not_found',
+        candidateId: input.id,
+        reason: 'Pending memory candidate not found'
+      }
+    }
+  }
+
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
+  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot)
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot)
+    const lockedCandidate = lockedPending.find((memoryCandidate) => memoryCandidate.id === candidate.id)
+    if (lockedCandidate === undefined) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'not_found',
+          candidateId: candidate.id,
+          reason: 'Pending memory candidate not found'
+        }
+      }
+    }
+
+    const latestReviewHash = reviewHashForPendingMemory(lockedCandidate)
+    if (latestReviewHash !== input.reviewHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'conflict',
+          candidateId: candidate.id,
+          reason: 'Pending memory candidate changed since review',
+          latest: summarizePendingMemory(lockedCandidate)
+        }
+      }
+    }
+
+    const deferredCandidate: PendingMemory = {
+      ...lockedCandidate,
+      promoteAfter: addDays(now, days)
+    }
+    const nextPending = lockedPending.map((memoryCandidate) =>
+      memoryCandidate.id === candidate.id ? deferredCandidate : memoryCandidate
+    )
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending)
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID(),
+      action: 'pending',
+      at: now,
+      reason: input.reason ?? 'Deferred by Codex pending memory review',
+      candidateId: deferredCandidate.id,
+      details: { reviewAction: 'defer', days }
+    })
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: 'defer',
+        candidateId: deferredCandidate.id,
+        candidate: deferredCandidate,
+        reviewHash: reviewHashForPendingMemory(deferredCandidate)
+      }
+    }
+  })
+}
+
 export async function getCodexPendingReviewNotice(input: { cwd: string }): Promise<CodexPendingReviewNotice> {
   const { readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd)
   const pending = sortPendingNewestFirst((await Promise.all(readableRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat())
@@ -686,4 +934,10 @@ function uniqueInOrder(values: string[]): string[] {
 
 function previewContent(content: string): string {
   return content.length <= 160 ? content : `${content.slice(0, 157)}...`
+}
+
+function addDays(iso: string, days: number): string {
+  const date = new Date(iso)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString()
 }

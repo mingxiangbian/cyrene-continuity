@@ -5,6 +5,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import {
+  deferCodexPendingMemory,
+  editCodexPendingMemory,
   getCodexPendingMemory,
   getCodexPendingReviewNotice,
   listCodexPendingMemories,
@@ -395,6 +397,106 @@ describe('Codex pending memory review', () => {
         reason: 'User rejected in Codex.'
       })
     ])
+  })
+
+  it('edits pending memory only after hash confirmation and validator approval', async () => {
+    const home = await createTempDir('cyrene-review-edit-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-edit-project-')
+    const candidate = createPending()
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await editCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      content: 'Use Codex chat approval and review hash before promoting pending memory.',
+      reason: 'User edited candidate wording.',
+      now: '2026-05-25T02:00:00.000Z'
+    })
+
+    expect(result.result.action).toBe('edit')
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    expect(pending[0]).toMatchObject({
+      id: candidate.id,
+      content: 'Use Codex chat approval and review hash before promoting pending memory.',
+      lastSeenAt: '2026-05-25T02:00:00.000Z'
+    })
+    const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
+    expect(events).toEqual([
+      expect.objectContaining({
+        action: 'pending',
+        candidateId: candidate.id,
+        reason: 'User edited candidate wording.'
+      })
+    ])
+  })
+
+  it('defers pending memory only after hash confirmation', async () => {
+    const home = await createTempDir('cyrene-review-defer-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-defer-project-')
+    const candidate = createPending()
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await deferCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      days: 14,
+      reason: 'User deferred review.',
+      now: '2026-05-25T02:00:00.000Z'
+    })
+
+    expect(result.result.action).toBe('defer')
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    expect(pending[0]).toMatchObject({
+      id: candidate.id,
+      promoteAfter: '2026-06-08T02:00:00.000Z'
+    })
+  })
+
+  it('edit and defer return conflict when review hash is stale', async () => {
+    const home = await createTempDir('cyrene-review-edit-conflict-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-edit-conflict-project-')
+    const candidate = createPending()
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const edit = await editCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: 'stale',
+      content: 'Changed content.'
+    })
+    const defer = await deferCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: 'stale'
+    })
+
+    expect(edit.result.action).toBe('conflict')
+    expect(defer.result.action).toBe('conflict')
+    expect(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).toContain(candidate.content)
+  })
+
+  it('does not edit pending memory when validator rejects the edited candidate', async () => {
+    const home = await createTempDir('cyrene-review-edit-reject-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-edit-reject-project-')
+    const candidate = createPending()
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await editCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      content: 'The user is emotionally dependent and unstable.',
+      now: '2026-05-25T02:00:00.000Z'
+    })
+
+    expect(result.result.action).toBe('rejected_by_validator')
+    expect(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).toContain(candidate.content)
   })
 
   it('returns conflict and does not mutate files when review hash is stale', async () => {
