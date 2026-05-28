@@ -101,6 +101,38 @@ describe('Codex pending memory review', () => {
     expect(result.pending[0]?.reviewHash).toBe(reviewHashForPendingMemory(candidate))
   })
 
+  it('summarizes pending review metadata for CLI display', async () => {
+    const home = await createTempDir('cyrene-review-summary-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-summary-project-')
+    const candidate = createPending({
+      id: 'summary-promote',
+      type: 'procedural_rule',
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First independent evidence.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second independent evidence.' }
+      ]
+    })
+    await seedPending(cwd, [candidate])
+
+    const result = await listCodexPendingMemories({ cwd })
+
+    expect(result.pending[0]).toMatchObject({
+      id: 'summary-promote',
+      recommendation: 'promote',
+      type: 'procedural_rule',
+      scope: 'project',
+      domain: 'procedural',
+      candidateKind: 'workflow_rule',
+      content: candidate.content,
+      evidenceCount: 2,
+      risk: 'low',
+      sensitivity: 0.1,
+      suggestedAction: `cyrene-continuity codex memory approve summary-promote --review-hash ${reviewHashForPendingMemory(candidate)}`
+    })
+  })
+
   it('gets a pending memory by id with full candidate and review hash', async () => {
     const home = await createTempDir('cyrene-review-home-')
     vi.stubEnv('HOME', home)

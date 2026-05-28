@@ -22,8 +22,24 @@ import {
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
-import { activateCandidate, validateMemoryCandidate } from '../memory/memory-validator.js'
+import {
+  activateCandidate,
+  evaluatePendingPromotion,
+  validateMemoryCandidate
+} from '../memory/memory-validator.js'
 import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../memory/types.js'
+
+export type CodexMemoryCandidateKind =
+  | 'project_fact'
+  | 'project_decision'
+  | 'user_instruction'
+  | 'workflow_rule'
+  | 'known_pitfall'
+  | 'rejected_approach'
+  | 'open_question'
+
+export type CodexPendingMemoryRecommendation = 'promote' | 'reject' | 'defer'
+export type CodexPendingMemoryRisk = 'low' | 'medium' | 'high'
 
 export interface CodexPendingMemorySummary {
   id: string
@@ -31,6 +47,12 @@ export interface CodexPendingMemorySummary {
   type: PendingMemory['type']
   strength: PendingMemory['strength']
   scope: PendingMemory['scope']
+  candidateKind: CodexMemoryCandidateKind
+  recommendation: CodexPendingMemoryRecommendation
+  suggestedAction: string
+  risk: CodexPendingMemoryRisk
+  sensitivity: number
+  evidenceCount: number
   content: string
   normalizedKey: string
   source: PendingMemory['source']
@@ -172,13 +194,21 @@ export function reviewHashForPendingMemory(candidate: PendingMemory): string {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
-export function summarizePendingMemory(candidate: PendingMemory): CodexPendingMemorySummary {
+export function summarizePendingMemory(candidate: PendingMemory, now = new Date().toISOString()): CodexPendingMemorySummary {
+  const reviewHash = reviewHashForPendingMemory(candidate)
+  const recommendation = deriveRecommendation(candidate, now)
   return {
     id: candidate.id,
     domain: candidate.domain,
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
+    candidateKind: deriveCandidateKind(candidate),
+    recommendation,
+    suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
+    risk: deriveRisk(candidate),
+    sensitivity: candidate.scores.sensitivity,
+    evidenceCount: candidate.evidence.length,
     content: candidate.content,
     normalizedKey: candidate.normalizedKey,
     source: candidate.source,
@@ -186,12 +216,77 @@ export function summarizePendingMemory(candidate: PendingMemory): CodexPendingMe
     firstSeenAt: candidate.firstSeenAt,
     lastSeenAt: candidate.lastSeenAt,
     expiresAt: candidate.expiresAt,
-    reviewHash: reviewHashForPendingMemory(candidate),
+    reviewHash,
     evidenceSummary: candidate.evidence
       .map((entry) => entry.summary ?? entry.quote ?? entry.runId ?? '')
       .filter((text) => text.trim() !== ''),
     scores: candidate.scores
   }
+}
+
+function deriveRecommendation(candidate: PendingMemory, now: string): CodexPendingMemoryRecommendation {
+  if (candidate.expiresAt <= now) {
+    return 'reject'
+  }
+  const promotion = evaluatePendingPromotion(candidate, now)
+  return promotion.promotable ? 'promote' : 'defer'
+}
+
+function deriveCandidateKind(candidate: PendingMemory): CodexMemoryCandidateKind {
+  const tagKind = candidate.tags.find((tag): tag is CodexMemoryCandidateKind =>
+    tag === 'project_fact' ||
+    tag === 'project_decision' ||
+    tag === 'user_instruction' ||
+    tag === 'workflow_rule' ||
+    tag === 'known_pitfall' ||
+    tag === 'rejected_approach' ||
+    tag === 'open_question'
+  )
+  if (tagKind !== undefined) {
+    return tagKind
+  }
+  if (candidate.type === 'project_fact') {
+    return 'project_fact'
+  }
+  if (candidate.type === 'procedural_rule' || candidate.type === 'system_policy') {
+    return 'workflow_rule'
+  }
+  if (
+    candidate.type === 'user_preference' ||
+    candidate.type === 'interaction_style' ||
+    candidate.type === 'relationship_boundary' ||
+    candidate.type === 'affective_pattern'
+  ) {
+    return 'user_instruction'
+  }
+  if (candidate.type === 'episode') {
+    return 'project_fact'
+  }
+  return 'project_fact'
+}
+
+function deriveRisk(candidate: PendingMemory): CodexPendingMemoryRisk {
+  if (candidate.scores.safety < 0.65 || candidate.scores.sensitivity > 0.6) {
+    return 'high'
+  }
+  if (candidate.scores.safety < 0.8 || candidate.scores.sensitivity > 0.45) {
+    return 'medium'
+  }
+  return 'low'
+}
+
+function suggestedReviewAction(
+  candidateId: string,
+  reviewHash: string,
+  recommendation: CodexPendingMemoryRecommendation
+): string {
+  if (recommendation === 'promote') {
+    return `cyrene-continuity codex memory approve ${candidateId} --review-hash ${reviewHash}`
+  }
+  if (recommendation === 'reject') {
+    return `cyrene-continuity codex memory reject ${candidateId} --review-hash ${reviewHash}`
+  }
+  return `cyrene-continuity codex memory defer ${candidateId} --review-hash ${reviewHash}`
 }
 
 export async function listCodexPendingMemories(input: {
