@@ -488,6 +488,37 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.not.toContain(newer.content)
   })
 
+  it('deep-apply keeps promotable pending memory when promotion recommendations are disabled', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_MEMORY_RECOMMEND_PROMOTION', '0')
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const candidate = createPending({
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
+
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
+      promoted: 0,
+      recommendedPromotions: 0,
+      keptPending: 1
+    })
+    const proposed = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'proposed_changes.json'), 'utf8')) as {
+      root: { proposedChanges: Array<{ action: string; reason: string }> }
+    }
+    expect(proposed.root.proposedChanges[0]).toMatchObject({
+      action: 'keep_pending',
+      reason: 'Promotion recommendations are disabled by configuration'
+    })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
   it('deep-apply keeps insufficient evidence pending', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)

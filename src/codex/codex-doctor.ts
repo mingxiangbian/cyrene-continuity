@@ -114,7 +114,11 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     memoryIndex.reason === undefined ? undefined : `  memory index reason: ${memoryIndex.reason}`,
     `  dream due: ${memoryState.dreamDue ? 'yes' : 'no'}`,
     `  last dream: ${memoryState.lastDreamAt ?? 'never'}`,
-    `  auto promote: ${config.memoryAutoPromoteEnabled ? 'enabled' : 'disabled'}`
+    `  promotion recommendations: ${config.memoryRecommendPromotionEnabled ? 'enabled' : 'disabled'}`,
+    `  deprecated CYRENE_MEMORY_AUTO_PROMOTE: ${config.deprecatedMemoryAutoPromoteConfigured ? 'set' : 'unset'}`,
+    config.deprecatedMemoryAutoPromoteConfigured
+      ? '  advisory: CYRENE_MEMORY_AUTO_PROMOTE is deprecated; use CYRENE_MEMORY_RECOMMEND_PROMOTION'
+      : undefined
   ].filter((line): line is string => line !== undefined && line !== '').join('\n') + '\n'
 }
 

@@ -95,6 +95,7 @@ export interface DreamRootProposal {
 export async function buildDreamProposalForRoot(input: {
   memoryRoot: string
   now: string
+  recommendPromotionEnabled?: boolean
 }): Promise<DreamRootProposal> {
   const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot)
   const active = await readActiveMemoriesFromRoot(memoryRoot)
@@ -171,6 +172,24 @@ export async function buildDreamProposalForRoot(input: {
         distinctEvidenceCount: evaluation.distinctEvidenceCount
       })
       applyPlan.push({ action: 'keep_pending', candidate, reason: evaluation.reason })
+      diff.keepPendingCandidateIds.push(candidate.id)
+      summary.keepPending += 1
+      continue
+    }
+
+    if (input.recommendPromotionEnabled === false) {
+      proposedChanges.push({
+        action: 'keep_pending',
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: 'Promotion recommendations are disabled by configuration',
+        distinctEvidenceCount: evaluation.distinctEvidenceCount
+      })
+      applyPlan.push({
+        action: 'keep_pending',
+        candidate,
+        reason: 'Promotion recommendations are disabled by configuration'
+      })
       diff.keepPendingCandidateIds.push(candidate.id)
       summary.keepPending += 1
       continue

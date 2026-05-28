@@ -17,7 +17,8 @@ export interface AppConfig {
   model: ModelConfig
   userCyreneDir: string
   memoryAutoExtractEnabled: boolean
-  memoryAutoPromoteEnabled: boolean
+  memoryRecommendPromotionEnabled: boolean
+  deprecatedMemoryAutoPromoteConfigured: boolean
   memoryActiveMaxItems: number
   memoryActiveContentMaxChars: number
   memoryIndexFileMaxChars: number
@@ -57,7 +58,11 @@ export function createDefaultConfig(cwd: string): AppConfig {
     },
     userCyreneDir: join(homedir(), '.cyrene'),
     memoryAutoExtractEnabled: parseBooleanEnv(envValue(dotEnv, 'CYRENE_MEMORY_AUTO_EXTRACT'), true),
-    memoryAutoPromoteEnabled: parseBooleanEnv(envValue(dotEnv, 'CYRENE_MEMORY_AUTO_PROMOTE'), true),
+    memoryRecommendPromotionEnabled: parseBooleanEnv(
+      envValue(dotEnv, 'CYRENE_MEMORY_RECOMMEND_PROMOTION') ?? envValue(dotEnv, 'CYRENE_MEMORY_AUTO_PROMOTE'),
+      true
+    ),
+    deprecatedMemoryAutoPromoteConfigured: envValue(dotEnv, 'CYRENE_MEMORY_AUTO_PROMOTE') !== undefined,
     memoryActiveMaxItems: parsePositiveIntEnv(envValue(dotEnv, 'CYRENE_MEMORY_ACTIVE_MAX_ITEMS'), 300),
     memoryActiveContentMaxChars: parsePositiveIntEnv(envValue(dotEnv, 'CYRENE_MEMORY_ACTIVE_CONTENT_MAX_CHARS'), 50000),
     memoryIndexFileMaxChars: parsePositiveIntEnv(envValue(dotEnv, 'CYRENE_MEMORY_INDEX_FILE_MAX_CHARS'), 250000),

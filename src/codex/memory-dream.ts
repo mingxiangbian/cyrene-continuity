@@ -88,7 +88,7 @@ export async function runCodexMemoryDream(input: {
     } else if (stage === 'rem') {
       results.push(await runRemDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours))
     } else if (stage === 'deep-preview') {
-      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage, now))
+      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage, now, config.memoryRecommendPromotionEnabled))
     } else {
       results.push(await runDeepDreamRoot(memoryRoot, now, config))
     }
@@ -245,10 +245,11 @@ async function runRemDreamRoot(
 async function runDeepPreviewDreamRoot(
   memoryRoot: string,
   stage: CodexMemoryDreamStage,
-  now: string
+  now: string,
+  recommendPromotionEnabled: boolean
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
-  const proposal = await buildDreamProposalForRoot({ memoryRoot, now })
+  const proposal = await buildDreamProposalForRoot({ memoryRoot, now, recommendPromotionEnabled })
   await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal })
   return {
     memoryRoot: proposal.memoryRoot,
@@ -283,7 +284,13 @@ async function runDeepDreamRoot(
 
     const result = await withMemoryMaintenanceLockFromRoot(lock.memoryRoot, async (lockedRoot) => {
       await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot)
-      return runDeepDreamRootLocked(lockedRoot, now, maintenanceBudget(config), config.memoryDreamIntervalHours)
+      return runDeepDreamRootLocked(
+        lockedRoot,
+        now,
+        maintenanceBudget(config),
+        config.memoryDreamIntervalHours,
+        config.memoryRecommendPromotionEnabled
+      )
     })
     return result
   } catch (error) {
@@ -300,9 +307,10 @@ async function runDeepDreamRootLocked(
   memoryRoot: string,
   now: string,
   budget: MemoryMaintenanceBudget,
-  intervalHours: number
+  intervalHours: number,
+  recommendPromotionEnabled: boolean
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
-  const proposal = await buildDreamProposalForRoot({ memoryRoot, now })
+  const proposal = await buildDreamProposalForRoot({ memoryRoot, now, recommendPromotionEnabled })
   await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal })
   if (!proposal.evalGate.passed) {
     const reason = `Dream apply blocked by eval gate: ${proposal.evalGate.failedChecks.join(', ')}`
