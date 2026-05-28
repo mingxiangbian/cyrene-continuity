@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { reviewHashForSimilarHintMemory } from '../src/codex/similar-hints-review.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -840,6 +841,47 @@ describe('cyrene-continuity codex CLI', () => {
     const applied = JSON.parse(apply.stdout) as { result: { action: string } }
     expect(applied.result.action).toBe('apply')
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('CLI maintenance renders active memory into the model profile.')
+  })
+
+  it('runs similar-hints explain and mark-transferable from the CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-similar-home-')
+    process.env.HOME = home
+    const identity = await identifyCodexProject(process.cwd())
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const memory = createActive()
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(memory)}\n`)
+
+    const explain = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'similar-hints', 'explain', '--memory-id', memory.id],
+      { env: cliEnv(home) }
+    )
+
+    expect(explain.stderr).toBe('')
+    expect(JSON.parse(explain.stdout)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ memoryId: memory.id })
+    ]))
+
+    const mark = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        'codex',
+        'similar-hints',
+        'mark-transferable',
+        '--memory-id',
+        memory.id,
+        '--review-hash',
+        reviewHashForSimilarHintMemory(memory)
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(mark.stderr).toBe('')
+    expect(JSON.parse(mark.stdout)).toMatchObject({ action: 'mark_transferable', memoryId: memory.id })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('"portability":"similar_project"')
   })
 
   it('runs the similar hints eval check from the Codex CLI', async () => {

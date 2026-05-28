@@ -477,7 +477,7 @@ git commit -m "feat: add profile candidate flow"
 - Test: `tests/similar-hints-review.test.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write explain and mark tests**
+- [x] **Step 1: Write explain and mark tests**
 
 Tests cover:
 
@@ -489,7 +489,7 @@ mark-transferable requires reviewHash
 mark-transferable writes portability similar_project and audit event
 ```
 
-- [ ] **Step 2: Implement explain**
+- [x] **Step 2: Implement explain**
 
 Implement:
 
@@ -503,7 +503,7 @@ export async function explainSimilarHints(input: {
 
 It reads index/project similarity data and uses `runSimilarHintsEvalGate()` findings.
 
-- [ ] **Step 3: Implement mark-transferable**
+- [x] **Step 3: Implement mark-transferable**
 
 Implement:
 
@@ -517,7 +517,7 @@ export async function markSimilarHintTransferable(input: {
 
 It updates only eligible active project memory and appends an audit event.
 
-- [ ] **Step 4: Wire CLI**
+- [x] **Step 4: Wire CLI**
 
 Add:
 
@@ -527,13 +527,13 @@ codex similar-hints explain --source-project-id <projectId>
 codex similar-hints mark-transferable --memory-id <id> --review-hash <hash>
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 ```bash
 npm test -- tests/similar-hints-review.test.ts tests/codex-cli.test.ts
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/codex/similar-hints-review.ts src/codex/codex-cli.ts tests/similar-hints-review.test.ts tests/codex-cli.test.ts

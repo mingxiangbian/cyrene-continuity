@@ -15905,6 +15905,193 @@ function isFileErrorCode11(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/similar-hints-review.ts
+import { createHash as createHash8, randomUUID as randomUUID11 } from "node:crypto";
+import { basename as basename4, dirname as dirname9 } from "node:path";
+function reviewHashForSimilarHintMemory(memory) {
+  const payload = {
+    id: memory.id,
+    domain: memory.domain,
+    type: memory.type,
+    strength: memory.strength,
+    scope: memory.scope,
+    content: memory.content,
+    normalizedKey: memory.normalizedKey,
+    source: memory.source,
+    portability: memory.portability ?? null,
+    scores: memory.scores,
+    updatedAt: memory.updatedAt,
+    tags: memory.tags
+  };
+  return createHash8("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+async function explainSimilarHints(input) {
+  const current = await identifyCodexProject(input.cwd);
+  if (input.memoryId !== void 0) {
+    const found = await findActiveMemory(input.cwd, input.memoryId);
+    if (found === void 0) {
+      return [{ memoryId: input.memoryId, selected: false, gateFindings: [{ reason: "memory not found" }] }];
+    }
+    const gate = gateForMemory(found.memory, current.projectId, found.projectId);
+    return [{
+      memoryId: found.memory.id,
+      sourceProjectId: found.projectId,
+      selected: gate.passed,
+      gateFindings: flattenGateFindings(gate)
+    }];
+  }
+  if (input.sourceProjectId !== void 0) {
+    const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
+    try {
+      const [metadata, similarities] = await Promise.all([
+        adapter.listProjectMetadata(),
+        adapter.listProjectSimilarities(current.projectId)
+      ]);
+      const similarity = similarities.find((item) => item.targetProjectId === input.sourceProjectId);
+      const project = metadata.find((item) => item.projectId === input.sourceProjectId);
+      return [{
+        sourceProjectId: input.sourceProjectId,
+        ...project === void 0 ? {} : { sourceProjectName: project.displayName },
+        ...similarity === void 0 ? {} : {
+          similarityScore: similarity.score,
+          similarityReason: similarity.reason
+        },
+        selected: false,
+        gateFindings: similarity === void 0 ? [{ reason: "source project is not selected as similar" }] : []
+      }];
+    } finally {
+      adapter.close();
+    }
+  }
+  return [];
+}
+async function markSimilarHintTransferable(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const found = await findActiveMemory(input.cwd, input.memoryId, true);
+  if (found === void 0) {
+    return { action: "not_found", memoryId: input.memoryId, reason: "Active project memory not found" };
+  }
+  const latestHash = reviewHashForSimilarHintMemory(found.memory);
+  if (latestHash !== input.reviewHash) {
+    return {
+      action: "conflict",
+      memoryId: input.memoryId,
+      reason: "Active memory changed since review",
+      latest: { reviewHash: latestHash }
+    };
+  }
+  const gate = gateForTransferableMemory(found.memory);
+  if (!gate.passed) {
+    return {
+      action: "blocked_by_gate",
+      memoryId: input.memoryId,
+      reason: "Active memory is not eligible for similar-project transfer",
+      gateFindings: flattenGateFindings(gate)
+    };
+  }
+  await assertMemoryMaintenanceTargetsSafeFromRoot(found.memoryRoot);
+  return withMemoryMaintenanceLockFromRoot(found.memoryRoot, async (lockedRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot);
+    const active = await readActiveMemoriesFromRoot(lockedRoot);
+    const lockedMemory = active.find((memory) => memory.id === input.memoryId);
+    if (lockedMemory === void 0) {
+      return { action: "not_found", memoryId: input.memoryId, reason: "Active project memory not found" };
+    }
+    const lockedHash = reviewHashForSimilarHintMemory(lockedMemory);
+    if (lockedHash !== input.reviewHash) {
+      return {
+        action: "conflict",
+        memoryId: input.memoryId,
+        reason: "Active memory changed since review",
+        latest: { reviewHash: lockedHash }
+      };
+    }
+    const lockedGate = gateForTransferableMemory(lockedMemory);
+    if (!lockedGate.passed) {
+      return {
+        action: "blocked_by_gate",
+        memoryId: input.memoryId,
+        reason: "Active memory is not eligible for similar-project transfer",
+        gateFindings: flattenGateFindings(lockedGate)
+      };
+    }
+    const nextMemory = { ...lockedMemory, portability: "similar_project", updatedAt: now };
+    await writeActiveMemoriesFromRoot(
+      lockedRoot,
+      active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
+    );
+    await appendMemoryEventFromRoot(lockedRoot, {
+      id: randomUUID11(),
+      action: "update",
+      at: now,
+      reason: "Marked active memory transferable for similar-project hints",
+      memoryId: lockedMemory.id,
+      details: { portability: "similar_project" }
+    });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    return { action: "mark_transferable", memoryId: lockedMemory.id, portability: "similar_project" };
+  });
+}
+async function findActiveMemory(cwd, memoryId, currentProjectOnly = false) {
+  const current = await identifyCodexProject(cwd);
+  const currentRoot = await ensureCodexProjectMemoryRoot(current.projectId);
+  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder3([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
+  for (const memoryRoot of roots) {
+    const active = await readActiveMemoriesFromRoot(memoryRoot);
+    const memory = active.find((item) => item.id === memoryId);
+    if (memory !== void 0) {
+      return { memoryRoot, projectId: projectIdFromMemoryRoot(memoryRoot), memory };
+    }
+  }
+  return void 0;
+}
+function gateForMemory(memory, currentProjectId, homeProjectId) {
+  return runSimilarHintsEvalGate([{
+    id: memory.id,
+    currentProjectId,
+    homeProjectId,
+    domain: memory.domain,
+    portability: memoryPortability(memory),
+    scope: memory.scope,
+    content: memory.content,
+    transferable: memoryPortability(memory) === "similar_project" || memoryPortability(memory) === "project_family",
+    notCurrentProjectFact: homeProjectId !== currentProjectId
+  }]);
+}
+function gateForTransferableMemory(memory) {
+  return runSimilarHintsEvalGate([{
+    id: memory.id,
+    currentProjectId: "current",
+    homeProjectId: "other",
+    domain: memory.domain,
+    portability: "similar_project",
+    scope: memory.scope,
+    content: memory.content,
+    transferable: true,
+    notCurrentProjectFact: true
+  }]);
+}
+function flattenGateFindings(gate) {
+  return gate.results.flatMap((result2) => result2.findings);
+}
+function memoryPortability(memory) {
+  return memory.portability ?? (memory.scope === "global" ? "global" : "local_only");
+}
+function projectIdFromMemoryRoot(memoryRoot) {
+  return basename4(dirname9(memoryRoot));
+}
+function uniqueInOrder3(values) {
+  const seen = /* @__PURE__ */ new Set();
+  const unique2 = [];
+  for (const value of values) {
+    if (!seen.has(value)) {
+      unique2.push(value);
+      seen.add(value);
+    }
+  }
+  return unique2;
+}
+
 // src/codex/codex-cli.ts
 async function handleCodexCommand(input) {
   const command = input.args[0];
@@ -15984,7 +16171,25 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>>");
+  if (command === "similar-hints" && input.args[1] === "explain") {
+    process.stdout.write(`${JSON.stringify(await explainSimilarHints({
+      cwd: input.cwd,
+      memoryId: parseOptionalOption(input.args, "--memory-id"),
+      sourceProjectId: parseOptionalOption(input.args, "--source-project-id")
+    }), null, 2)}
+`);
+    return;
+  }
+  if (command === "similar-hints" && input.args[1] === "mark-transferable") {
+    process.stdout.write(`${JSON.stringify(await markSimilarHintTransferable({
+      cwd: input.cwd,
+      memoryId: parseRequiredOption(input.args, "--memory-id", "similar hint memory id"),
+      reviewHash: parseRequiredOption(input.args, "--review-hash", "similar hint review hash")
+    }), null, 2)}
+`);
+    return;
+  }
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -16055,6 +16260,18 @@ function parseRequiredOption(args, option, label) {
   const value = index >= 0 ? args[index + 1] : inline?.slice(option.length + 1);
   if (value === void 0 || value === "" || value.startsWith("--")) {
     throw new Error(`Invalid ${label}: missing value`);
+  }
+  return value;
+}
+function parseOptionalOption(args, option) {
+  const index = args.indexOf(option);
+  const inline = args.find((arg) => arg.startsWith(`${option}=`));
+  const value = index >= 0 ? args[index + 1] : inline?.slice(option.length + 1);
+  if (value === void 0) {
+    return void 0;
+  }
+  if (value === "" || value.startsWith("--")) {
+    throw new Error(`Invalid ${option}: missing value`);
   }
   return value;
 }

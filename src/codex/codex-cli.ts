@@ -15,6 +15,10 @@ import {
   applyCodexProfileCandidate,
   runCodexProfileReflection
 } from './profile-candidates.js'
+import {
+  explainSimilarHints,
+  markSimilarHintTransferable
+} from './similar-hints-review.js'
 
 export async function handleCodexCommand(input: { cwd: string; args: string[]; runtimeEntryPath?: string }): Promise<void> {
   const command = input.args[0]
@@ -105,7 +109,25 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>>')
+  if (command === 'similar-hints' && input.args[1] === 'explain') {
+    process.stdout.write(`${JSON.stringify(await explainSimilarHints({
+      cwd: input.cwd,
+      memoryId: parseOptionalOption(input.args, '--memory-id'),
+      sourceProjectId: parseOptionalOption(input.args, '--source-project-id')
+    }), null, 2)}\n`)
+    return
+  }
+
+  if (command === 'similar-hints' && input.args[1] === 'mark-transferable') {
+    process.stdout.write(`${JSON.stringify(await markSimilarHintTransferable({
+      cwd: input.cwd,
+      memoryId: parseRequiredOption(input.args, '--memory-id', 'similar hint memory id'),
+      reviewHash: parseRequiredOption(input.args, '--review-hash', 'similar hint review hash')
+    }), null, 2)}\n`)
+    return
+  }
+
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -181,6 +203,19 @@ function parseRequiredOption(args: string[], option: string, label: string): str
   const value = index >= 0 ? args[index + 1] : inline?.slice(option.length + 1)
   if (value === undefined || value === '' || value.startsWith('--')) {
     throw new Error(`Invalid ${label}: missing value`)
+  }
+  return value
+}
+
+function parseOptionalOption(args: string[], option: string): string | undefined {
+  const index = args.indexOf(option)
+  const inline = args.find((arg) => arg.startsWith(`${option}=`))
+  const value = index >= 0 ? args[index + 1] : inline?.slice(option.length + 1)
+  if (value === undefined) {
+    return undefined
+  }
+  if (value === '' || value.startsWith('--')) {
+    throw new Error(`Invalid ${option}: missing value`)
   }
   return value
 }
