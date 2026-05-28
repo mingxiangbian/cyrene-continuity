@@ -246,6 +246,53 @@ describe('Cyrene MCP server', () => {
     }
   })
 
+  it('returns continuity diagnostics over MCP without mutating the index', async () => {
+    const home = await createTempDir('cyrene-mcp-continuity-readonly-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-mcp-continuity-readonly-project-')
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+    const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js')
+    const client = new Client({ name: 'cyrene-continuity-readonly-test', version: '0.0.0' })
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'mcp-server', '--stdio'],
+      env: cliEnv()
+    })
+
+    await client.connect(transport)
+    try {
+      const result = await client.callTool({
+        name: 'cyrene_continuity_get',
+        arguments: {
+          cwd,
+          userMessage: 'read continuity diagnostics',
+          task: 'coding'
+        }
+      })
+      const content = result.content as Array<{ type: string; text?: string }>
+      const text = content.find((item) => item.type === 'text')?.text ?? '{}'
+      const parsed = JSON.parse(text) as {
+        diagnostics?: {
+          memoryIndex?: {
+            source?: string
+            fallbackMode?: string
+            freshness?: string
+            routes?: string[]
+          }
+        }
+      }
+      expect(parsed.diagnostics?.memoryIndex).toMatchObject({
+        source: 'jsonl',
+        fallbackMode: 'sqlite',
+        freshness: 'empty',
+        routes: ['global', 'project', 'pending']
+      })
+      await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await client.close()
+    }
+  })
+
   it('exposes MCP tools from the built plugin runtime', async () => {
     await execFileAsync('npm', ['run', 'build:plugin'], { env: cliEnv() })
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
