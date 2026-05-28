@@ -168,6 +168,9 @@ describe('Cyrene MCP server', () => {
     const dreamJson = JSON.parse((await handleMemoryDreamRun({ cwd, stage: 'light' }, process.cwd())).content[0]?.text ?? '{}')
     expect(dreamJson.roots[0]).toMatchObject({ stage: 'light' })
 
+    const previewJson = JSON.parse((await handleMemoryDreamRun({ cwd, stage: 'deep-preview' }, process.cwd())).content[0]?.text ?? '{}')
+    expect(previewJson.roots[0]).toMatchObject({ stage: 'deep-preview' })
+
     const profileJson = JSON.parse((await handleMemoryProfileGet({ cwd }, process.cwd())).content[0]?.text ?? '{}')
     expect(profileJson.project).toBeDefined()
     expect(profileJson.content).toEqual(expect.any(String))
@@ -178,6 +181,15 @@ describe('Cyrene MCP server', () => {
 
     expect(source).toContain('promote only after explicit user approval')
     expect(source).toContain('reject only after explicit user rejection')
+  })
+
+  it('documents strict dream preview and apply MCP schema', async () => {
+    const source = await readFile(new URL('../src/mcp/tools/memory-dream.ts', import.meta.url), 'utf8')
+    const serverSource = await readFile(new URL('../src/mcp/mcp-server.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain("z.enum(['light', 'rem', 'deep-preview', 'deep-apply'])")
+    expect(source).not.toContain("z.enum(['light', 'rem', 'deep'])")
+    expect(serverSource).toContain('Use deep-preview for read-only proposed changes and deep-apply for gated mutation')
   })
 
   it('exposes Codex pending review tools through a fresh MCP server', async () => {

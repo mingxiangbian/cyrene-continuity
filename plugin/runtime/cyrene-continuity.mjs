@@ -14828,7 +14828,7 @@ var DREAM_LOCKS_DIR = ".locks";
 var MAX_PENDING_EVIDENCE2 = 10;
 async function runCodexMemoryDream(input) {
   const project = await identifyCodexProject(input.cwd);
-  const stage = input.stage ?? "deep";
+  const stage = input.stage ?? "deep-preview";
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const config2 = createDefaultConfig(input.cwd);
   const roots = await dreamRoots(project.projectId);
@@ -14838,6 +14838,8 @@ async function runCodexMemoryDream(input) {
       results.push(await runLightDreamRoot(memoryRoot, stage, now, config2.memoryDreamIntervalHours));
     } else if (stage === "rem") {
       results.push(await runRemDreamRoot(memoryRoot, stage, now, config2.memoryDreamIntervalHours));
+    } else if (stage === "deep-preview") {
+      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage));
     } else {
       results.push(await runDeepDreamRoot(memoryRoot, now, config2));
     }
@@ -14966,6 +14968,17 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours) {
     };
   });
 }
+async function runDeepPreviewDreamRoot(memoryRoot, stage) {
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
+  const root = await ensureWritableMemoryRootPath(memoryRoot);
+  return {
+    memoryRoot: root,
+    stage,
+    promoted: 0,
+    rejected: 0,
+    keptPending: (await readPendingMemoriesFromRoot(root)).length
+  };
+}
 async function runDeepDreamRoot(memoryRoot, now, config2) {
   let acquiredLock;
   try {
@@ -14973,7 +14986,7 @@ async function runDeepDreamRoot(memoryRoot, now, config2) {
     if (!lock.acquired) {
       return {
         memoryRoot: lock.memoryRoot,
-        stage: "deep",
+        stage: "deep-apply",
         promoted: 0,
         rejected: 0,
         keptPending: (await readPendingMemoriesFromRoot(lock.memoryRoot)).length,
@@ -15075,7 +15088,7 @@ async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours) {
   await writeDreamSuccess(memoryRoot, now, intervalHours);
   return {
     memoryRoot,
-    stage: "deep",
+    stage: "deep-apply",
     promoted,
     rejected,
     keptPending: maintenance.pendingCount,
@@ -15349,7 +15362,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory db rebuild|memory maintenance|memory profile>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -15384,8 +15397,11 @@ function parseDreamStage(args) {
   if (value === "" || value.startsWith("--")) {
     throw new Error("Invalid memory dream stage: missing value");
   }
-  if (value === "light" || value === "rem" || value === "deep") {
+  if (value === "light" || value === "rem" || value === "deep-preview" || value === "deep-apply") {
     return value;
+  }
+  if (value === "deep") {
+    throw new Error("Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.");
   }
   throw new Error(`Invalid memory dream stage: ${value}`);
 }
@@ -29633,7 +29649,7 @@ async function handleContinuityGet(input, fallbackCwd) {
 // src/mcp/tools/memory-dream.ts
 var memoryDreamRunInputSchema = {
   cwd: external_exports.string().optional(),
-  stage: external_exports.enum(["light", "rem", "deep"]).optional()
+  stage: external_exports.enum(["light", "rem", "deep-preview", "deep-apply"]).optional()
 };
 var memoryProfileGetInputSchema = {
   cwd: external_exports.string().optional()
@@ -29827,7 +29843,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_dream_run",
     {
-      description: "Run the Cyrene Codex memory dream pass for pending memory maintenance and gated promotion.",
+      description: "Run a Cyrene Codex memory dream pass. Use deep-preview for read-only proposed changes and deep-apply for gated mutation.",
       inputSchema: memoryDreamRunInputSchema
     },
     async (input) => handleMemoryDreamRun(input, options.cwd)

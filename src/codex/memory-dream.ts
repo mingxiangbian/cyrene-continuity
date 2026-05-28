@@ -39,7 +39,7 @@ import {
 } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
 
-export type CodexMemoryDreamStage = 'light' | 'rem' | 'deep'
+export type CodexMemoryDreamStage = 'light' | 'rem' | 'deep-preview' | 'deep-apply'
 
 export interface CodexMemoryDreamResult {
   project: { projectId: string; displayName: string }
@@ -78,7 +78,7 @@ export async function runCodexMemoryDream(input: {
   now?: string
 }): Promise<CodexMemoryDreamResult> {
   const project = await identifyCodexProject(input.cwd)
-  const stage = input.stage ?? 'deep'
+  const stage = input.stage ?? 'deep-preview'
   const now = input.now ?? new Date().toISOString()
   const config = createDefaultConfig(input.cwd)
   const roots = await dreamRoots(project.projectId)
@@ -89,6 +89,8 @@ export async function runCodexMemoryDream(input: {
       results.push(await runLightDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours))
     } else if (stage === 'rem') {
       results.push(await runRemDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours))
+    } else if (stage === 'deep-preview') {
+      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage))
     } else {
       results.push(await runDeepDreamRoot(memoryRoot, now, config))
     }
@@ -240,6 +242,21 @@ async function runRemDreamRoot(
   })
 }
 
+async function runDeepPreviewDreamRoot(
+  memoryRoot: string,
+  stage: CodexMemoryDreamStage
+): Promise<CodexMemoryDreamResult['roots'][number]> {
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
+  const root = await ensureWritableMemoryRootPath(memoryRoot)
+  return {
+    memoryRoot: root,
+    stage,
+    promoted: 0,
+    rejected: 0,
+    keptPending: (await readPendingMemoriesFromRoot(root)).length
+  }
+}
+
 async function runDeepDreamRoot(
   memoryRoot: string,
   now: string,
@@ -251,7 +268,7 @@ async function runDeepDreamRoot(
     if (!lock.acquired) {
       return {
         memoryRoot: lock.memoryRoot,
-        stage: 'deep',
+        stage: 'deep-apply',
         promoted: 0,
         rejected: 0,
         keptPending: (await readPendingMemoriesFromRoot(lock.memoryRoot)).length,
@@ -370,7 +387,7 @@ async function runDeepDreamRootLocked(
   await writeDreamSuccess(memoryRoot, now, intervalHours)
   return {
     memoryRoot,
-    stage: 'deep',
+    stage: 'deep-apply',
     promoted,
     rejected,
     keptPending: maintenance.pendingCount,

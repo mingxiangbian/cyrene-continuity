@@ -78,7 +78,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep]|memory db rebuild|memory maintenance|memory profile>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory db rebuild|memory maintenance|memory profile>')
   process.exit(1)
 }
 
@@ -115,8 +115,11 @@ function parseDreamStage(args: string[]): CodexMemoryDreamStage | undefined {
   if (value === '' || value.startsWith('--')) {
     throw new Error('Invalid memory dream stage: missing value')
   }
-  if (value === 'light' || value === 'rem' || value === 'deep') {
+  if (value === 'light' || value === 'rem' || value === 'deep-preview' || value === 'deep-apply') {
     return value
+  }
+  if (value === 'deep') {
+    throw new Error('Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.')
   }
   throw new Error(`Invalid memory dream stage: ${value}`)
 }

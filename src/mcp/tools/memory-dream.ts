@@ -4,7 +4,7 @@ import { jsonText } from '../mcp-json.js'
 
 export const memoryDreamRunInputSchema = {
   cwd: z.string().optional(),
-  stage: z.enum(['light', 'rem', 'deep']).optional()
+  stage: z.enum(['light', 'rem', 'deep-preview', 'deep-apply']).optional()
 }
 
 export const memoryProfileGetInputSchema = {
@@ -12,7 +12,7 @@ export const memoryProfileGetInputSchema = {
 }
 
 export async function handleMemoryDreamRun(
-  input: { cwd?: string; stage?: 'light' | 'rem' | 'deep' },
+  input: { cwd?: string; stage?: 'light' | 'rem' | 'deep-preview' | 'deep-apply' },
   fallbackCwd: string
 ) {
   const result = await runCodexMemoryDream({

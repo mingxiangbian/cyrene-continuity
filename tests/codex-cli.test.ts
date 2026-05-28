@@ -713,7 +713,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('project pending: 1')
   })
 
-  it('runs memory dream from the CLI', async () => {
+  it('runs memory dream apply from the CLI', async () => {
     const home = await createTempDir('cyrene-codex-cli-dream-home-')
     process.env.HOME = home
     const identity = await identifyCodexProject(process.cwd())
@@ -723,13 +723,33 @@ describe('cyrene-continuity codex CLI', () => {
 
     const result = await execFileAsync(
       process.execPath,
-      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep'],
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep-apply'],
       { env: cliEnv(home) }
     )
 
     expect(result.stderr).toBe('')
     const parsed = JSON.parse(result.stdout) as { roots: Array<{ promoted: number }> }
     expect(parsed.roots.some((root) => root.promoted === 1)).toBe(true)
+  })
+
+  it('runs memory dream preview from the CLI without promoting pending memory', async () => {
+    const home = await createTempDir('cyrene-codex-cli-dream-preview-home-')
+    process.env.HOME = home
+    const identity = await identifyCodexProject(process.cwd())
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending())}\n`)
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep-preview'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { roots: Array<{ stage: string; promoted: number; keptPending: number }> }
+    expect(parsed.roots.some((root) => root.stage === 'deep-preview' && root.promoted === 0 && root.keptPending === 1)).toBe(true)
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('runs memory maintenance from the CLI without promoting pending memory', async () => {
@@ -816,6 +836,21 @@ describe('cyrene-continuity codex CLI', () => {
       )
     ).rejects.toMatchObject({
       stderr: expect.stringContaining('Invalid memory dream stage')
+    })
+  })
+
+  it('rejects legacy memory dream deep stage with migration guidance', async () => {
+    const home = await createTempDir('cyrene-codex-cli-dream-legacy-home-')
+    process.env.HOME = home
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep'],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining('Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.')
     })
   })
 

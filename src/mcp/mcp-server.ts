@@ -93,7 +93,8 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
   server.registerTool(
     'cyrene_memory_dream_run',
     {
-      description: 'Run the Cyrene Codex memory dream pass for pending memory maintenance and gated promotion.',
+      description:
+        'Run a Cyrene Codex memory dream pass. Use deep-preview for read-only proposed changes and deep-apply for gated mutation.',
       inputSchema: memoryDreamRunInputSchema
     },
     async (input) => handleMemoryDreamRun(input, options.cwd)
