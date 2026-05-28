@@ -859,6 +859,43 @@ describe('cyrene-continuity codex CLI', () => {
     expect(doctor.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (ok)')
   })
 
+  it('reports failed Stop hook summary reason in memory status and doctor', async () => {
+    const home = await createTempDir('cyrene-codex-cli-stop-hook-failure-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-stop-hook-failure-repo-')
+    const identity = await identifyCodexProject(repo)
+    const currentMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(currentMemoryRoot, { recursive: true })
+    await writeFile(join(currentMemoryRoot, 'review-summaries.jsonl'), `${JSON.stringify({
+      id: 'summary-failed-1',
+      runId: 'session:turn',
+      sessionId: 'session',
+      turnId: 'turn',
+      createdAt: '2026-05-28T00:00:00.000Z',
+      status: 'failed',
+      summary: 'Codex Stop hook failed; no transcript content persisted.',
+      redaction: { input: {}, output: {} },
+      candidateIds: [],
+      failureReason: 'Transcript path is unreadable.'
+    })}\n`)
+
+    const status = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+    const doctor = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'doctor'],
+      { env: cliEnv(home) }
+    )
+
+    expect(status.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (failed)')
+    expect(status.stdout).toContain('stop hook reason: Transcript path is unreadable.')
+    expect(doctor.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (failed)')
+    expect(doctor.stdout).toContain('stop hook reason: Transcript path is unreadable.')
+  })
+
   it('reports unreadable dream state without failing memory status', async () => {
     const home = await createTempDir('cyrene-codex-cli-memory-status-dream-state-home-')
     process.env.HOME = home

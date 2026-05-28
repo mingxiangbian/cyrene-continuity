@@ -90,6 +90,40 @@ describe('Codex Stop hook runtime', () => {
     })
   })
 
+  it('records visible failed summary when transcript read fails without blocking Codex', async () => {
+    const home = await createTempDir('cyrene-codex-stop-failure-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-failure-project-')
+    const transcript = join(cwd, 'transcript-dir')
+    await mkdir(transcript)
+
+    const result = await handleCodexStopHookPayload({
+      cwd,
+      session_id: 's-fail',
+      turn_id: 't-fail',
+      transcript_path: transcript
+    })
+
+    expect(result.action).toBe('summary_failed')
+    expect(JSON.parse(formatCodexStopHookCommandOutput(result))).toEqual({ continue: true, suppressOutput: true })
+    const identity = await identifyCodexProject(cwd)
+    const summaries = await readFile(join(codexProjectMemoryRoot(identity.projectId), 'review-summaries.jsonl'), 'utf8')
+    const [summary] = summaries.trim().split('\n').map((line) => JSON.parse(line) as {
+      status: string
+      sessionId?: string
+      turnId?: string
+      failureReason?: string
+      summary?: string
+    })
+    expect(summary).toMatchObject({
+      status: 'failed',
+      sessionId: 's-fail',
+      turnId: 't-fail',
+      summary: 'Codex Stop hook failed; no transcript content persisted.'
+    })
+    expect(summary.failureReason).toEqual(expect.any(String))
+  })
+
   it('writes pending memory for explicit durable user instruction', async () => {
     const home = await createTempDir('cyrene-codex-stop-home-')
     vi.stubEnv('HOME', home)

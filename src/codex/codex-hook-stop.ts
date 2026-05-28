@@ -1,9 +1,14 @@
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { createDefaultConfig, type AppConfig } from '../config.js'
 import { callModel as defaultCallModel } from '../llm-client.js'
+import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { listCodexPendingMemories } from './memory-review.js'
 import { proposeCodexMemoryCandidate } from './memory-propose.js'
+import { identifyCodexProject } from './project-id.js'
+import { redactReviewText } from './review-redaction.js'
 import { runCodexReviewSummary, stableEvidenceGroupId, type RunCodexReviewSummaryInput } from './review-summary-runtime.js'
+import { appendCodexReviewSummary } from './review-summary-store.js'
 import { parseTranscriptMessages, type TranscriptMessage } from './transcript.js'
 
 export interface CodexStopHookPayload {
@@ -71,6 +76,18 @@ export async function handleCodexStopHookPayload(
   deps: CodexStopHookDeps = {}
 ): Promise<CodexStopHookResult> {
   const cwd = asString(payload.cwd) ?? process.cwd()
+  try {
+    return await handleCodexStopHookPayloadUnsafe(payload, deps, cwd)
+  } catch (error) {
+    return recordStopHookFailureSummary(cwd, payload, error)
+  }
+}
+
+async function handleCodexStopHookPayloadUnsafe(
+  payload: CodexStopHookPayload,
+  deps: CodexStopHookDeps,
+  cwd: string
+): Promise<CodexStopHookResult> {
   const transcriptPath = asString(payload.transcript_path) ?? asString(payload.transcriptPath)
   if (transcriptPath === undefined) {
     return { action: 'noop', reason: 'No transcript path provided.' }
@@ -155,6 +172,38 @@ export async function handleCodexStopHookPayload(
     return { action: 'noop', reason: review.reason }
   }
   return { action: 'noop', reason: 'Codex review summary proposed no memory candidates.' }
+}
+
+async function recordStopHookFailureSummary(
+  cwd: string,
+  payload: CodexStopHookPayload,
+  error: unknown
+): Promise<CodexStopHookResult> {
+  try {
+    const project = await identifyCodexProject(cwd)
+    const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId)
+    const summaryId = randomUUID()
+    const sessionId = asString(payload.session_id)
+    const turnId = asString(payload.turn_id)
+    const runId = [sessionId, turnId].filter(Boolean).join(':') || summaryId
+    const reason = redactReviewText(error instanceof Error ? error.message : String(error))
+    const failureReason = reason.text.slice(0, 500)
+    await appendCodexReviewSummary(memoryRoot, {
+      id: summaryId,
+      runId,
+      sessionId,
+      turnId,
+      createdAt: new Date().toISOString(),
+      status: 'failed',
+      summary: 'Codex Stop hook failed; no transcript content persisted.',
+      redaction: { input: {}, output: reason.counts },
+      candidateIds: [],
+      failureReason
+    })
+    return { action: 'summary_failed', summaryId, reason: failureReason }
+  } catch {
+    return { action: 'summary_failed', reason: 'Stop hook command failed.' }
+  }
 }
 
 async function confirmPendingCandidateIds(

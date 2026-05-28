@@ -361,15 +361,19 @@ async function readLatestReviewSummary(root: string): Promise<{
     return { status: 'unreadable', reason: errorMessage(error) }
   }
 
-  let latest: { createdAt: string; status: 'ok' | 'failed' } | undefined
+  let latest: { createdAt: string; status: 'ok' | 'failed'; failureReason?: string } | undefined
   try {
     for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
-      const parsed = JSON.parse(line) as { createdAt?: unknown; status?: unknown }
+      const parsed = JSON.parse(line) as { createdAt?: unknown; status?: unknown; failureReason?: unknown }
       if (typeof parsed.createdAt !== 'string' || !isSummaryStatus(parsed.status)) {
         continue
       }
       if (latest === undefined || parsed.createdAt > latest.createdAt) {
-        latest = { createdAt: parsed.createdAt, status: parsed.status }
+        latest = {
+          createdAt: parsed.createdAt,
+          status: parsed.status,
+          failureReason: typeof parsed.failureReason === 'string' ? parsed.failureReason : undefined
+        }
       }
     }
   } catch (error) {
@@ -382,7 +386,8 @@ async function readLatestReviewSummary(root: string): Promise<{
   return {
     status: 'present',
     lastRunAt: latest.createdAt,
-    lastRunStatus: latest.status
+    lastRunStatus: latest.status,
+    reason: latest.status === 'failed' ? latest.failureReason : undefined
   }
 }
 
