@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
@@ -479,6 +480,82 @@ describe('Codex continuity context', () => {
     expect(context.memory.items).toEqual([])
   })
 
+  it('does not rebuild stale memory index from continuity read path', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-stale-readonly-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-stale-readonly-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const dbPath = join(home, '.cyrene', 'codex', 'memory.db')
+    const sourcePath = join(projectMemoryRoot, 'index.jsonl')
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await mkdir(join(home, '.cyrene', 'codex'), { recursive: true })
+    await writeFile(dbPath, '')
+    await writeFile(sourcePath, JSON.stringify(createMemory({
+      id: 'stale-readonly-memory',
+      content: 'Stale readonly memory should be returned through JSONL fallback.',
+      normalizedKey: 'stale-readonly-memory'
+    })) + '\n')
+    await utimes(dbPath, new Date('2026-01-01T00:00:00.000Z'), new Date('2026-01-01T00:00:00.000Z'))
+    await utimes(sourcePath, new Date('2026-01-02T00:00:00.000Z'), new Date('2026-01-02T00:00:00.000Z'))
+    const before = await stat(dbPath)
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'stale readonly memory',
+      task: 'coding'
+    })
+
+    const after = await stat(dbPath)
+    const memoryIndex = context.diagnostics?.memoryIndex as Record<string, unknown> | undefined
+    expect(after.mtimeMs).toBe(before.mtimeMs)
+    expect(context.projectMemory.map((item) => item.id)).toEqual(['stale-readonly-memory'])
+    expect(memoryIndex).toMatchObject({
+      freshness: 'stale',
+      source: 'jsonl',
+      routes: ['global', 'project', 'pending']
+    })
+    expect(String(memoryIndex?.staleReason)).toContain('indexed source is newer')
+  })
+
+  it('keeps JSONL fallback pending memory provisional without creating the index', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-pending-fallback-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-pending-fallback-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const pending = createPendingMemory()
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'pending.jsonl'), JSON.stringify({
+      ...pending,
+      content: 'Pending fallback candidate must remain provisional.',
+      normalizedKey: 'pending-fallback-provisional'
+    }) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'pending fallback provisional',
+      task: 'memory'
+    })
+
+    const memoryIndex = context.diagnostics?.memoryIndex as Record<string, unknown> | undefined
+    await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(context.pendingHypotheses).toEqual([
+      expect.objectContaining({
+        id: pending.id,
+        provisional: true,
+        status: 'pending'
+      })
+    ])
+    expect(context.memory.items).toEqual([])
+    expect(context.projectMemory).toEqual([])
+    expect(memoryIndex).toMatchObject({
+      freshness: 'stale',
+      source: 'jsonl',
+      fallbackMode: 'sqlite'
+    })
+  })
+
   it('returns eligible similar-project hints without mixing them into active memory', async () => {
     const home = await createTempDir('cyrene-codex-continuity-similar-home-')
     process.env.HOME = home
@@ -525,11 +602,8 @@ describe('Codex continuity context', () => {
       }))
     ].join('\n') + '\n')
 
-    await getCodexContinuityContext({
-      cwd: otherRepo,
-      userMessage: 'Index this MCP plugin project.',
-      task: 'planning'
-    })
+    await rebuildCodexMemoryIndex({ cwd: otherRepo })
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
@@ -593,11 +667,8 @@ describe('Codex continuity context', () => {
       tags: ['mcp', 'plugin']
     })) + '\n')
 
-    await getCodexContinuityContext({
-      cwd: otherRepo,
-      userMessage: 'Index this MCP plugin project.',
-      task: 'planning'
-    })
+    await rebuildCodexMemoryIndex({ cwd: otherRepo })
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
@@ -643,11 +714,8 @@ describe('Codex continuity context', () => {
       tags: ['mcp']
     })) + '\n')
 
-    await getCodexContinuityContext({
-      cwd: otherRepo,
-      userMessage: 'Index this MCP plugin project.',
-      task: 'planning'
-    })
+    await rebuildCodexMemoryIndex({ cwd: otherRepo })
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'What MCP plugin guidance applies?',
@@ -676,11 +744,8 @@ describe('Codex continuity context', () => {
     await mkdir(codexProjectMemoryRoot(current.projectId), { recursive: true })
     await mkdir(codexProjectMemoryRoot(other.projectId), { recursive: true })
 
-    await getCodexContinuityContext({
-      cwd: otherRepo,
-      userMessage: 'Index an unrelated project.',
-      task: 'planning'
-    })
+    await rebuildCodexMemoryIndex({ cwd: otherRepo })
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'What transferable guidance applies?',

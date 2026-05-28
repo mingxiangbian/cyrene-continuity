@@ -16,6 +16,12 @@ import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot } from '../memo
 import type { CyreneMemory, PendingMemory } from '../memory/types.js'
 import { estimateTokens } from '../token-counter.js'
 import { codexMemoryDbPath, codexMemoryIndexRoots } from './codex-memory-index.js'
+import type {
+  CodexMemoryFallbackMode,
+  CodexMemoryIndexFreshness,
+  CodexMemoryIndexStatus
+} from './codex-memory-index-status.js'
+import { readCodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
@@ -84,6 +90,19 @@ interface EvalGateDiagnostics {
   failedChecks: string[]
 }
 
+type RetrievalSource = 'sqlite' | 'jsonl'
+type RetrievalRoute = 'global' | 'project' | 'pending' | 'similar_project'
+
+interface RetrievalDiagnostics extends MemoryIndexDiagnostics {
+  source: RetrievalSource
+  routes: RetrievalRoute[]
+  fallbackMode: CodexMemoryFallbackMode
+  freshness: CodexMemoryIndexFreshness
+  lastSyncAt?: string
+  sourceLatestAt?: string
+  staleReason?: string
+}
+
 interface ReviewReminder {
   kind: 'pending_review'
   candidateId: string
@@ -121,6 +140,13 @@ export interface CodexContinuityContext {
       available: boolean
       reason?: string
       ftsTokenizer?: string
+      source: RetrievalSource
+      routes: RetrievalRoute[]
+      fallbackMode: CodexMemoryFallbackMode
+      freshness: CodexMemoryIndexFreshness
+      lastSyncAt?: string
+      sourceLatestAt?: string
+      staleReason?: string
     }
     projectSimilarity?: ProjectSimilarityDiagnostics
     evalGate?: EvalGateDiagnostics
@@ -227,7 +253,14 @@ export async function getCodexContinuityContext(input: {
       memoryIndex: {
         available: routedMemory.diagnostics.available,
         reason: routedMemory.diagnostics.reason,
-        ftsTokenizer: routedMemory.diagnostics.ftsTokenizer
+        ftsTokenizer: routedMemory.diagnostics.ftsTokenizer,
+        source: routedMemory.diagnostics.source,
+        routes: routedMemory.diagnostics.routes,
+        fallbackMode: routedMemory.diagnostics.fallbackMode,
+        freshness: routedMemory.diagnostics.freshness,
+        lastSyncAt: routedMemory.diagnostics.lastSyncAt,
+        sourceLatestAt: routedMemory.diagnostics.sourceLatestAt,
+        staleReason: routedMemory.diagnostics.staleReason
       },
       projectSimilarity: routedMemory.projectSimilarityDiagnostics,
       evalGate: routedMemory.evalGateDiagnostics,
@@ -262,7 +295,7 @@ interface RoutedMemoryResult {
   projectMemory: Array<IndexedActiveMemory | RetrievedMemory>
   pendingHypotheses: IndexedPendingMemory[]
   similarProjectHints: IndexedSimilarMemory[]
-  diagnostics: MemoryIndexDiagnostics
+  diagnostics: RetrievalDiagnostics
   projectSimilarityDiagnostics: ProjectSimilarityDiagnostics
   evalGateDiagnostics: EvalGateDiagnostics
 }
@@ -274,18 +307,32 @@ async function retrieveRoutedMemory(input: {
   task: CodexContinuityTask
   fallback: RetrieveMemoriesInput
 }): Promise<RoutedMemoryResult> {
+  const roots = await codexMemoryIndexRoots(input.projectId)
+  const indexStatus = await readCodexMemoryIndexStatus(roots.map((root) => root.memoryRoot))
+  if (!isQueryableIndexStatus(indexStatus)) {
+    return fallbackRoutedMemory(input.fallback, jsonlRetrievalDiagnostics(indexStatus), input.projectId)
+  }
+
   const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() })
   try {
-    const roots = await codexMemoryIndexRoots(input.projectId)
-    const diagnostics = await adapter.rebuildFromRoots({ roots })
+    const diagnostics = adapter.diagnostics()
     if (!diagnostics.available) {
-      return fallbackRoutedMemory(input.fallback, diagnostics, input.projectId)
+      return fallbackRoutedMemory(
+        input.fallback,
+        jsonlRetrievalDiagnostics({
+          ...indexStatus,
+          available: false,
+          reason: diagnostics.reason,
+          fallbackMode: 'jsonl',
+          freshness: 'unavailable'
+        }, diagnostics),
+        input.projectId
+      )
     }
     const currentFingerprint = await buildCodexProjectFingerprint({
       cwd: input.cwd,
       project: await identifyCodexProject(input.cwd)
     })
-    await adapter.upsertProjectMetadata(currentFingerprint)
     const metadata = await adapter.listProjectMetadata()
     const selectedSimilarities = selectSimilarProjects({
       source: currentFingerprint,
@@ -294,9 +341,6 @@ async function retrieveRoutedMemory(input: {
       maxProjects: 5,
       now: new Date().toISOString()
     })
-    for (const similarity of selectedSimilarities) {
-      await adapter.upsertProjectSimilarity(similarity)
-    }
     const targetNames = new Map(metadata.map((project) => [project.projectId, project.displayName]))
     const similarProjectHints = await adapter.querySimilarActive({
       currentProjectId: input.projectId,
@@ -351,10 +395,10 @@ async function retrieveRoutedMemory(input: {
       projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
-      diagnostics,
+      diagnostics: sqliteRetrievalDiagnostics(indexStatus, diagnostics),
       projectSimilarityDiagnostics: {
         indexedProjects: metadata.length,
-        candidateProjects: Math.max(0, metadata.length - 1),
+        candidateProjects: metadata.filter((project) => project.projectId !== input.projectId).length,
         selectedProjects: selectedSimilarities.length,
         reason: projectSimilarityReason(metadata.length, selectedSimilarities.length)
       },
@@ -366,11 +410,13 @@ async function retrieveRoutedMemory(input: {
   } catch (error) {
     return fallbackRoutedMemory(
       input.fallback,
-      {
+      jsonlRetrievalDiagnostics({
+        ...indexStatus,
         available: false,
-        dbPath: codexMemoryDbPath(),
-        reason: error instanceof Error ? error.message : String(error)
-      },
+        reason: error instanceof Error ? error.message : String(error),
+        fallbackMode: 'jsonl',
+        freshness: 'unavailable'
+      }),
       input.projectId
     )
   } finally {
@@ -378,9 +424,13 @@ async function retrieveRoutedMemory(input: {
   }
 }
 
+function isQueryableIndexStatus(status: CodexMemoryIndexStatus): boolean {
+  return status.available && (status.freshness === 'fresh' || (status.freshness === 'empty' && status.lastSyncAt !== undefined))
+}
+
 async function fallbackRoutedMemory(
   input: RetrieveMemoriesInput,
-  diagnostics: MemoryIndexDiagnostics,
+  diagnostics: RetrievalDiagnostics,
   projectId: string
 ): Promise<RoutedMemoryResult> {
   const memories = await retrieveMemories(input)
@@ -394,12 +444,51 @@ async function fallbackRoutedMemory(
       indexedProjects: 0,
       candidateProjects: 0,
       selectedProjects: 0,
-      reason: 'memory_index_unavailable'
+      reason: diagnostics.freshness === 'stale' ? 'memory_index_stale' : 'memory_index_unavailable'
     },
     evalGateDiagnostics: {
       passed: true,
       failedChecks: []
     }
+  }
+}
+
+function sqliteRetrievalDiagnostics(
+  status: CodexMemoryIndexStatus,
+  diagnostics: MemoryIndexDiagnostics
+): RetrievalDiagnostics {
+  return retrievalDiagnosticsFromStatus(status, 'sqlite', ['global', 'project', 'pending', 'similar_project'], diagnostics)
+}
+
+function jsonlRetrievalDiagnostics(
+  status: CodexMemoryIndexStatus,
+  diagnostics: Partial<MemoryIndexDiagnostics> = {}
+): RetrievalDiagnostics {
+  return retrievalDiagnosticsFromStatus(status, 'jsonl', ['global', 'project', 'pending'], diagnostics)
+}
+
+function retrievalDiagnosticsFromStatus(
+  status: CodexMemoryIndexStatus,
+  source: RetrievalSource,
+  routes: RetrievalRoute[],
+  diagnostics: Partial<MemoryIndexDiagnostics>
+): RetrievalDiagnostics {
+  const ftsTokenizer = diagnostics.ftsTokenizer ?? status.ftsTokenizer
+  const reason = diagnostics.reason ?? status.reason
+  const embedding = diagnostics.embedding ?? { enabled: false, cacheHits: 0, cacheMisses: 0 }
+  return {
+    available: diagnostics.available ?? status.available,
+    dbPath: diagnostics.dbPath ?? status.dbPath,
+    ...(ftsTokenizer === undefined ? {} : { ftsTokenizer }),
+    ...(reason === undefined ? {} : { reason }),
+    embedding,
+    source,
+    routes,
+    fallbackMode: status.fallbackMode,
+    freshness: status.freshness,
+    ...(status.lastSyncAt === undefined ? {} : { lastSyncAt: status.lastSyncAt }),
+    ...(status.sourceLatestAt === undefined ? {} : { sourceLatestAt: status.sourceLatestAt }),
+    ...(status.staleReason === undefined ? {} : { staleReason: status.staleReason })
   }
 }
 

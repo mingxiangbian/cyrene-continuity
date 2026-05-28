@@ -1,28 +1,23 @@
 import { constants } from 'node:fs'
-import { access, lstat, readFile, stat } from 'node:fs/promises'
+import { access, lstat, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import {
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
 } from '../memory/memory-store.js'
-import type { MemoryIndexDiagnostics } from '../memory/memory-index.js'
 import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
   getReadableCodexProjectMemoryRoots
 } from './codex-memory-root.js'
-import {
-  codexMemoryDbPath,
-  readCodexMemoryIndexDiagnostics
-} from './codex-memory-index.js'
+import type { CodexMemoryIndexStatus } from './codex-memory-index-status.js'
+import { readCodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
 
 type CodexMemoryRootHealth = 'missing' | 'readable-writable' | 'readable-readonly' | 'unreadable' | 'unsafe'
-type CodexMemoryFallbackMode = 'sqlite' | 'jsonl'
-type CodexMemoryIndexFreshness = 'fresh' | 'stale' | 'empty' | 'unavailable'
 type CodexSimilarProjectRetrieval = 'ready' | 'degraded'
 type CodexSessionSummaryStatus = 'present' | 'missing' | 'unreadable'
 
@@ -38,18 +33,6 @@ interface CodexMemoryCounts {
   tombstones: number
   profileCandidates: number
   reason?: string
-}
-
-interface CodexMemoryIndexStatus {
-  available: boolean
-  dbPath: string
-  ftsTokenizer?: MemoryIndexDiagnostics['ftsTokenizer']
-  reason?: string
-  fallbackMode: CodexMemoryFallbackMode
-  freshness: CodexMemoryIndexFreshness
-  lastSyncAt?: string
-  sourceLatestAt?: string
-  staleReason?: string
 }
 
 interface CodexStopHookStatus {
@@ -88,7 +71,6 @@ export interface CodexMemoryStatus {
   }
 }
 
-const INDEXED_SOURCE_FILES = ['index.jsonl', 'pending.jsonl']
 const PROFILE_CANDIDATES_FILE = 'profile_candidates.jsonl'
 const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
 
@@ -96,20 +78,19 @@ export async function readCodexMemoryStatus(input: { cwd: string }): Promise<Cod
   const project = await identifyCodexProject(input.cwd)
   const globalRoot = codexGlobalMemoryRoot()
   const projectRoot = codexProjectMemoryRoot(project.projectId)
-  const [knownProjectMemoryRoots, globalStatus, projectStatus, globalCounts, projectCounts, diagnostics, stopHook, dream] =
+  const [knownProjectMemoryRoots, globalStatus, projectStatus, globalCounts, projectCounts, stopHook, dream] =
     await Promise.all([
       readKnownProjectMemoryRoots(),
       readRootStatus(globalRoot),
       readRootStatus(projectRoot),
       readRootCounts(globalRoot),
       readRootCounts(projectRoot),
-      readStatusIndexDiagnostics(),
       readStopHookStatus(projectRoot),
       readDreamStatus(projectRoot)
     ])
   const indexedMemoryRoots = uniqueStrings([globalRoot, projectRoot, ...knownProjectMemoryRoots])
   const knownProjectIds = projectIdsFromMemoryRoots(knownProjectMemoryRoots)
-  const index = await readIndexStatus(diagnostics, indexedMemoryRoots)
+  const index = await readCodexMemoryIndexStatus(indexedMemoryRoots)
 
   return {
     nodeVersion: process.versions.node,
@@ -222,60 +203,6 @@ function projectIdDiagnostic(currentProjectId: string, knownProjectIds: string[]
     return 'current projectId has no readable project memory root'
   }
   return 'multiple project memory roots detected'
-}
-
-async function readStatusIndexDiagnostics(): Promise<MemoryIndexDiagnostics> {
-  const diagnostics = await readCodexMemoryIndexDiagnostics()
-  const dbPathProblem = await readDbPathProblem(diagnostics.dbPath)
-  if (dbPathProblem === undefined) {
-    return diagnostics
-  }
-  return {
-    ...diagnostics,
-    available: false,
-    reason: dbPathProblem
-  }
-}
-
-async function readIndexStatus(
-  diagnostics: MemoryIndexDiagnostics,
-  memoryRoots: string[]
-): Promise<CodexMemoryIndexStatus> {
-  const dbPath = diagnostics.dbPath
-  const fallbackMode: CodexMemoryFallbackMode = diagnostics.available ? 'sqlite' : 'jsonl'
-  const dbMtime = await readMtime(dbPath)
-  const sourceMtime = await readLatestIndexedSourceMtime(memoryRoots)
-  const base = {
-    available: diagnostics.available,
-    dbPath,
-    ftsTokenizer: diagnostics.ftsTokenizer,
-    reason: diagnostics.reason,
-    fallbackMode,
-    lastSyncAt: dbMtime?.toISOString(),
-    sourceLatestAt: sourceMtime?.mtime.toISOString()
-  }
-
-  if (!diagnostics.available) {
-    return { ...base, freshness: 'unavailable' }
-  }
-  if (sourceMtime === undefined) {
-    return { ...base, freshness: 'empty' }
-  }
-  if (dbMtime === undefined) {
-    return {
-      ...base,
-      freshness: 'stale',
-      staleReason: `memory db is missing while indexed source exists: ${sourceMtime.path}`
-    }
-  }
-  if (sourceMtime.mtime.getTime() > dbMtime.getTime() + 1000) {
-    return {
-      ...base,
-      freshness: 'stale',
-      staleReason: `indexed source is newer than memory db: ${sourceMtime.path}`
-    }
-  }
-  return { ...base, freshness: 'fresh' }
 }
 
 async function readRootStatus(root: string): Promise<CodexMemoryRootStatus> {
@@ -430,52 +357,6 @@ async function readPendingProfileCandidateCount(root: string): Promise<number> {
         return false
       }
     }).length
-}
-
-async function readDbPathProblem(dbPath: string): Promise<string | undefined> {
-  try {
-    const stats = await lstat(dbPath)
-    if (stats.isDirectory()) {
-      return `memory db path is a directory: ${dbPath}`
-    }
-    if (!stats.isFile()) {
-      return `memory db path is not a file: ${dbPath}`
-    }
-    return undefined
-  } catch (error) {
-    if (isErrorCode(error, 'ENOENT')) {
-      return undefined
-    }
-    return errorMessage(error)
-  }
-}
-
-async function readLatestIndexedSourceMtime(memoryRoots: string[]): Promise<{ path: string; mtime: Date } | undefined> {
-  let latest: { path: string; mtime: Date } | undefined
-  for (const root of memoryRoots) {
-    for (const file of INDEXED_SOURCE_FILES) {
-      const filePath = join(root, file)
-      const mtime = await readMtime(filePath)
-      if (mtime === undefined) {
-        continue
-      }
-      if (latest === undefined || mtime > latest.mtime) {
-        latest = { path: filePath, mtime }
-      }
-    }
-  }
-  return latest
-}
-
-async function readMtime(path: string): Promise<Date | undefined> {
-  try {
-    return (await stat(path)).mtime
-  } catch (error) {
-    if (isErrorCode(error, 'ENOENT') || isErrorCode(error, 'ENOTDIR')) {
-      return undefined
-    }
-    throw error
-  }
 }
 
 async function canAccess(path: string, mode: number): Promise<boolean> {

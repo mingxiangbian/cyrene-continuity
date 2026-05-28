@@ -10,6 +10,7 @@ import {
   getReadableCodexProjectMemoryRoot,
   getReadableCodexProjectMemoryRoots
 } from './codex-memory-root.js'
+import { buildCodexProjectFingerprint } from './project-fingerprint.js'
 import { identifyCodexProject } from './project-id.js'
 
 export interface CodexMemoryIndexRebuildResult {
@@ -54,9 +55,13 @@ export async function codexMemoryIndexRoots(projectId: string): Promise<MemoryIn
 export async function rebuildCodexMemoryIndex(input: { cwd: string }): Promise<CodexMemoryIndexRebuildResult> {
   const project = await identifyCodexProject(input.cwd)
   const roots = await codexMemoryIndexRoots(project.projectId)
+  const currentProjectMetadata = await buildCodexProjectFingerprint({ cwd: input.cwd, project })
   const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() })
   try {
     const diagnostics = await adapter.rebuildFromRoots({ roots })
+    if (diagnostics.available) {
+      await adapter.upsertProjectMetadata(currentProjectMetadata)
+    }
     return { dbPath: codexMemoryDbPath(), diagnostics, syncedRoots: roots.length }
   } finally {
     adapter.close()
