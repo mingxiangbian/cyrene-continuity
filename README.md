@@ -82,7 +82,9 @@ npm run dev -- codex project list
 npm run dev -- codex project alias <projectId> <alias>
 npm run dev -- codex project merge <fromProjectId> <toProjectId>
 npm run dev -- codex eval run --check similar-hints
+npm run dev -- codex eval run --check release
 npm run dev -- codex memory status
+npm run dev -- codex memory dashboard
 npm run dev -- codex memory review
 npm run dev -- codex memory approve <candidateId> --review-hash <hash>
 npm run dev -- codex memory reject <candidateId> --review-hash <hash>
@@ -129,7 +131,9 @@ Use `cyrene-continuity codex project status` and
 `cyrene-continuity codex project alias <projectId> <alias>` to label a known
 project root, and `cyrene-continuity codex project merge <from> <to>` to
 explicitly merge split project memory. Alias and merge never run implicitly from
-retrieval.
+retrieval. Project merges are blocked when the source active memory contains
+personal, relationship, or affective domains, because those memories must not be
+migrated across project IDs as generic project context.
 
 ## Similar-Project Hints
 
@@ -139,11 +143,35 @@ These hints are transferable guidance, not facts about the current project.
 `local_only`, personal, relationship, and affective memories are excluded by
 policy and by the deterministic eval gate.
 
+## Eval Gates
+
+Deterministic gates protect retrieval, review, apply, and release paths:
+
+- `memory_routing_eval`: active, pending, and similar-project memories must stay
+  in their explicit routes.
+- `pending_usage_eval`: Dream apply cannot promote assistant-observed or
+  unauditable pending memory.
+- `profile_pollution_eval`: profile apply must trace to approved active memory
+  and profile previews cannot include pending-only content.
+- `affective_boundary_eval`: diagnostic affective claims are blocked from
+  profile and Dream apply outputs.
+- `cross_project_leak_eval`: same-project, global, local-only, or missing-home
+  similar hints are rejected, and personal, relationship, or affective memory is
+  not migrated across project IDs.
+- `similar_hint_eval`: similar-project hints must be explicitly transferable and
+  scrubbed of absolute paths, raw remotes, and secret-like values.
+
+`codex eval run --check similar-hints` reports the live similar-project hint
+boundary result. `codex eval run --check release` reports the minimum gate
+checklist expected before plugin release; it does not replace the verification
+commands below.
+
 ## Verify
 
 ```bash
 npm test
 npm run typecheck
+npm run build:plugin
 python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin
 ```
 

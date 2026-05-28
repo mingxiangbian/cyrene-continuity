@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  combineEvalGateResults,
   runDreamApplyEvalGate,
   runMemoryMigrationEvalGate,
+  runProfileApplyEvalGate,
   runMemoryRoutingEvalGate,
   runSimilarHintsEvalGate,
   type SimilarHintEvalCandidate
@@ -189,6 +191,18 @@ describe('memory migration eval gate', () => {
   })
 })
 
+describe('eval gate result combination', () => {
+  it('reports each failed check once when combining gates', () => {
+    const left = runSimilarHintsEvalGate([candidate({ id: 'personal-hint', domain: 'personal' })])
+    const right = runSimilarHintsEvalGate([candidate({ id: 'relationship-hint', domain: 'relationship' })])
+
+    const result = combineEvalGateResults([left, right])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks.filter((check) => check === 'similar_hint_eval')).toHaveLength(1)
+  })
+})
+
 describe('similar hints eval gate', () => {
   it('passes safe transferable procedural hints', () => {
     const result = runSimilarHintsEvalGate([candidate()])
@@ -322,6 +336,21 @@ describe('similar hints eval gate', () => {
       { memoryId: 'git-url', reason: 'content contains raw remote' },
       { memoryId: 'http-url', reason: 'content contains raw remote' }
     ]))
+  })
+})
+
+describe('profile apply eval gate', () => {
+  it('fails profile_pollution_eval when source memory ids are not approved active memory', () => {
+    const result = runProfileApplyEvalGate({
+      id: 'profile-stale-source',
+      content: 'Prefer concise implementation summaries.',
+      sourceMemoryIds: ['missing-active-memory'],
+      approvedSourceMemoryIds: ['active-memory']
+    })
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toEqual(['profile_pollution_eval'])
+    expect(JSON.stringify(result.results)).toContain('missing approved source memory')
   })
 })
 

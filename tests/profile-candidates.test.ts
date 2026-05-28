@@ -137,7 +137,9 @@ describe('Codex profile candidates', () => {
     const home = await createTempDir('cyrene-profile-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-profile-project-')
-    const memoryRoot = await seedProjectActive(cwd, [])
+    const memoryRoot = await seedProjectActive(cwd, [
+      createActive({ id: 'active-1', content: 'Approved source memory.', profileVisibility: 'never' })
+    ])
     const candidate = createProfileCandidate({
       content: 'The user is unstable and emotionally dependent.',
       evidenceSummary: 'Unsafe diagnostic affective claim.'
@@ -167,8 +169,8 @@ describe('Codex profile candidates', () => {
     const cwd = await createTempDir('cyrene-profile-project-')
     const memoryRoot = await seedProjectActive(cwd, [])
     const candidate = createProfileCandidate({
-      sourceMemoryIds: [],
-      evidenceSummary: ''
+      sourceMemoryIds: ['missing-active-memory'],
+      evidenceSummary: 'Stale source memory.'
     })
     await writeFile(join(memoryRoot, 'profile_candidates.jsonl'), `${JSON.stringify(candidate)}\n`)
 
@@ -248,7 +250,12 @@ describe('Codex profile candidates', () => {
     const home = await createTempDir('cyrene-profile-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-profile-project-')
-    const memoryRoot = await seedProjectActive(cwd, [])
+    const memoryRoot = await seedProjectActive(cwd, [
+      createActive({ id: 'source-project', content: 'Source project memory.', profileVisibility: 'never' }),
+      createActive({ id: 'source-interaction', content: 'Source interaction memory.', profileVisibility: 'never' }),
+      createActive({ id: 'source-response', content: 'Source response memory.', profileVisibility: 'never' }),
+      createActive({ id: 'source-always', content: 'Source always memory.', profileVisibility: 'never' })
+    ])
     const candidates = [
       createProfileCandidate({
         id: 'profile-project',

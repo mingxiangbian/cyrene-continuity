@@ -12766,7 +12766,9 @@ function combineEvalGateResults(gates) {
   return gate(gates.flatMap((item) => item.results));
 }
 function gate(results) {
-  const failedChecks = results.filter((result2) => !result2.passed && result2.severity === "error").map((result2) => result2.name);
+  const failedChecks = Array.from(new Set(
+    results.filter((result2) => !result2.passed && result2.severity === "error").map((result2) => result2.name)
+  ));
   return {
     passed: failedChecks.length === 0,
     failedChecks,
@@ -12875,6 +12877,14 @@ function runProfileCandidatePollutionEval(candidate) {
   const findings = [];
   if (candidate.sourceMemoryIds.length === 0) {
     findings.push({ memoryId: candidate.id, reason: "profile candidate has no approved source memory" });
+  }
+  if (candidate.approvedSourceMemoryIds !== void 0) {
+    const approved = new Set(candidate.approvedSourceMemoryIds);
+    for (const sourceMemoryId of candidate.sourceMemoryIds) {
+      if (!approved.has(sourceMemoryId)) {
+        findings.push({ memoryId: candidate.id, reason: `missing approved source memory: ${sourceMemoryId}` });
+      }
+    }
   }
   return result("profile_pollution_eval", findings);
 }
@@ -17403,10 +17413,12 @@ async function applyCodexProfileCandidate(input) {
         }
       };
     }
+    const active = await readActiveMemoriesFromRoot(lockedRoot);
     const gate2 = runProfileApplyEvalGate({
       id: lockedCandidate.id,
       content: lockedCandidate.content,
-      sourceMemoryIds: lockedCandidate.sourceMemoryIds
+      sourceMemoryIds: lockedCandidate.sourceMemoryIds,
+      approvedSourceMemoryIds: active.map((memory2) => memory2.id)
     });
     if (!gate2.passed) {
       return {
@@ -17421,7 +17433,6 @@ async function applyCodexProfileCandidate(input) {
       };
     }
     const before = await readModelProfileFromRootIfExists(lockedRoot) ?? "";
-    const active = await readActiveMemoriesFromRoot(lockedRoot);
     const memory = activeMemoryFromProfileCandidate(lockedCandidate, now, lockedHash);
     await writeActiveMemoriesFromRoot(lockedRoot, upsertActiveMemory2(active, memory));
     const updatedCandidates = lockedCandidates.map((item) => item.id === lockedCandidate.id ? { ...item, status: "applied", appliedAt: now, appliedMemoryId: memory.id } : item);

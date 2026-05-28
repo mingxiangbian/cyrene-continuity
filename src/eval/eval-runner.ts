@@ -81,6 +81,7 @@ export interface ProfileApplyEvalCandidate {
   id: string
   content: string
   sourceMemoryIds: string[]
+  approvedSourceMemoryIds?: string[]
 }
 
 export interface EvalGateResult {
@@ -128,9 +129,11 @@ export function combineEvalGateResults(gates: EvalGateResult[]): EvalGateResult 
 }
 
 function gate(results: EvalResult[]): EvalGateResult {
-  const failedChecks = results
-    .filter((result) => !result.passed && result.severity === 'error')
-    .map((result) => result.name)
+  const failedChecks = Array.from(new Set(
+    results
+      .filter((result) => !result.passed && result.severity === 'error')
+      .map((result) => result.name)
+  ))
 
   return {
     passed: failedChecks.length === 0,
@@ -256,6 +259,14 @@ function runProfileCandidatePollutionEval(candidate: ProfileApplyEvalCandidate):
   const findings: EvalFinding[] = []
   if (candidate.sourceMemoryIds.length === 0) {
     findings.push({ memoryId: candidate.id, reason: 'profile candidate has no approved source memory' })
+  }
+  if (candidate.approvedSourceMemoryIds !== undefined) {
+    const approved = new Set(candidate.approvedSourceMemoryIds)
+    for (const sourceMemoryId of candidate.sourceMemoryIds) {
+      if (!approved.has(sourceMemoryId)) {
+        findings.push({ memoryId: candidate.id, reason: `missing approved source memory: ${sourceMemoryId}` })
+      }
+    }
   }
   return result('profile_pollution_eval', findings)
 }

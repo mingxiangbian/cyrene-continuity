@@ -212,10 +212,12 @@ export async function applyCodexProfileCandidate(input: {
       }
     }
 
+    const active = await readActiveMemoriesFromRoot(lockedRoot)
     const gate = runProfileApplyEvalGate({
       id: lockedCandidate.id,
       content: lockedCandidate.content,
-      sourceMemoryIds: lockedCandidate.sourceMemoryIds
+      sourceMemoryIds: lockedCandidate.sourceMemoryIds,
+      approvedSourceMemoryIds: active.map((memory) => memory.id)
     })
     if (!gate.passed) {
       return {
@@ -231,7 +233,6 @@ export async function applyCodexProfileCandidate(input: {
     }
 
     const before = await readModelProfileFromRootIfExists(lockedRoot) ?? ''
-    const active = await readActiveMemoriesFromRoot(lockedRoot)
     const memory = activeMemoryFromProfileCandidate(lockedCandidate, now, lockedHash)
     await writeActiveMemoriesFromRoot(lockedRoot, upsertActiveMemory(active, memory))
     const updatedCandidates: ProfileCandidate[] = lockedCandidates.map((item) => item.id === lockedCandidate.id
