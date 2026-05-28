@@ -79,7 +79,7 @@ function createPending(overrides: Partial<PendingMemory> = {}): PendingMemory {
   }
 }
 
-function createActive(): CyreneMemory {
+function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
   return {
     id: 'cli-active-1',
     domain: 'procedural',
@@ -100,7 +100,8 @@ function createActive(): CyreneMemory {
     },
     createdAt: '2026-05-25T00:00:00.000Z',
     updatedAt: '2026-05-25T00:00:00.000Z',
-    tags: ['cli']
+    tags: ['cli'],
+    ...overrides
   }
 }
 
@@ -857,6 +858,78 @@ describe('cyrene-continuity codex CLI', () => {
     expect(status.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (ok)')
     expect(doctor.stdout).toContain('projectId diagnostic: multiple project memory roots detected')
     expect(doctor.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (ok)')
+  })
+
+  it('project status and list expose split diagnostics and aliases', async () => {
+    const home = await createTempDir('cyrene-codex-cli-project-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-project-repo-')
+    const identity = await identifyCodexProject(repo)
+    await mkdir(codexProjectMemoryRoot(identity.projectId), { recursive: true })
+    await mkdir(codexProjectMemoryRoot('legacy-project-id'), { recursive: true })
+
+    await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        'codex',
+        'project',
+        'alias',
+        'legacy-project-id',
+        identity.displayName
+      ],
+      { env: cliEnv(home) }
+    )
+
+    const status = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'project', 'status'],
+      { env: cliEnv(home) }
+    )
+    const list = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'project', 'list'],
+      { env: cliEnv(home) }
+    )
+
+    expect(status.stdout).toContain(`projectId: ${identity.projectId}`)
+    expect(status.stdout).toContain('projectId split: possible')
+    expect(status.stdout).toContain('split candidates: legacy-project-id')
+    expect(status.stdout).toContain(`action: cyrene-continuity codex project merge legacy-project-id ${identity.projectId}`)
+    expect(list.stdout).toContain('legacy-project-id')
+    expect(list.stdout).toContain(`aliases: ${identity.displayName}`)
+  })
+
+  it('project merge requires an explicit command and merges into the selected target', async () => {
+    const home = await createTempDir('cyrene-codex-cli-project-merge-home-')
+    process.env.HOME = home
+    await mkdir(codexProjectMemoryRoot('from-project'), { recursive: true })
+    await mkdir(codexProjectMemoryRoot('to-project'), { recursive: true })
+    await writeFile(
+      join(codexProjectMemoryRoot('from-project'), 'index.jsonl'),
+      `${JSON.stringify(createActive({ id: 'from-active', content: 'Merged project memory.' }))}\n`
+    )
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        'codex',
+        'project',
+        'merge',
+        'from-project',
+        'to-project'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stdout).toContain('merged from: from-project')
+    expect(result.stdout).toContain('merged into: to-project')
+    await expect(readFile(join(codexProjectMemoryRoot('to-project'), 'index.jsonl'), 'utf8')).resolves.toContain(
+      'Merged project memory.'
+    )
   })
 
   it('reports failed Stop hook summary reason in memory status and doctor', async () => {
