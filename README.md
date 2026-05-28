@@ -77,6 +77,10 @@ npm run dev -- codex install --dev
 npm run dev -- codex install --plugin
 npm run dev -- codex install-hook --stop
 npm run dev -- codex hook stop
+npm run dev -- codex project status
+npm run dev -- codex project list
+npm run dev -- codex project alias <projectId> <alias>
+npm run dev -- codex project merge <fromProjectId> <toProjectId>
 npm run dev -- codex eval run --check similar-hints
 npm run dev -- codex memory status
 npm run dev -- codex memory review
@@ -117,6 +121,15 @@ explicitly marked transferable before it can appear in cross-project hints.
 Embedding retrieval is disabled by default. Set `CYRENE_EMBEDDING_PROVIDER` only
 when a safe provider is configured; unsafe content or provider failures fall
 back to structured FTS retrieval with diagnostics.
+
+## Project Tools
+
+Use `cyrene-continuity codex project status` and
+`cyrene-continuity codex project list` to inspect projectId drift. Use
+`cyrene-continuity codex project alias <projectId> <alias>` to label a known
+project root, and `cyrene-continuity codex project merge <from> <to>` to
+explicitly merge split project memory. Alias and merge never run implicitly from
+retrieval.
 
 ## Similar-Project Hints
 

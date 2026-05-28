@@ -505,7 +505,7 @@ var require_help = __commonJS({
           }
           return term;
         }
-        function formatList(textArray) {
+        function formatList2(textArray) {
           return textArray.join("\n").replace(/^/gm, " ".repeat(itemIndentWidth));
         }
         let output = [`Usage: ${helper.commandUsage(cmd)}`, ""];
@@ -523,7 +523,7 @@ var require_help = __commonJS({
           );
         });
         if (argumentList.length > 0) {
-          output = output.concat(["Arguments:", formatList(argumentList), ""]);
+          output = output.concat(["Arguments:", formatList2(argumentList), ""]);
         }
         const optionList = helper.visibleOptions(cmd).map((option) => {
           return formatItem(
@@ -532,7 +532,7 @@ var require_help = __commonJS({
           );
         });
         if (optionList.length > 0) {
-          output = output.concat(["Options:", formatList(optionList), ""]);
+          output = output.concat(["Options:", formatList2(optionList), ""]);
         }
         if (this.showGlobalOptions) {
           const globalOptionList = helper.visibleGlobalOptions(cmd).map((option) => {
@@ -544,7 +544,7 @@ var require_help = __commonJS({
           if (globalOptionList.length > 0) {
             output = output.concat([
               "Global Options:",
-              formatList(globalOptionList),
+              formatList2(globalOptionList),
               ""
             ]);
           }
@@ -556,7 +556,7 @@ var require_help = __commonJS({
           );
         });
         if (commandList.length > 0) {
-          output = output.concat(["Commands:", formatList(commandList), ""]);
+          output = output.concat(["Commands:", formatList2(commandList), ""]);
         }
         return output.join("\n");
       }
@@ -10347,26 +10347,33 @@ async function getReadableCodexProjectMemoryRoot(projectId) {
   return getSafeDirectoryOrNull2(join5(projectRoot, "memory"), projectRoot);
 }
 async function getReadableCodexProjectMemoryRoots() {
-  const projectsRoot = await getReadableCodexProjectsRoot();
-  if (projectsRoot === null) {
-    return [];
-  }
-  const entries = await readdir(projectsRoot, { withFileTypes: true });
+  const projectRoots = await getReadableCodexProjectRoots();
   const memoryRoots = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const projectRoot = await getReadableProjectScanDirectoryOrNull(join5(projectsRoot, entry.name), projectsRoot);
-    if (projectRoot === null) {
-      continue;
-    }
+  for (const projectRoot of projectRoots) {
     const memoryRoot = await getReadableProjectScanDirectoryOrNull(join5(projectRoot, "memory"), projectRoot);
     if (memoryRoot !== null) {
       memoryRoots.push(memoryRoot);
     }
   }
   return memoryRoots;
+}
+async function getReadableCodexProjectRoots() {
+  const projectsRoot = await getReadableCodexProjectsRoot();
+  if (projectsRoot === null) {
+    return [];
+  }
+  const entries = await readdir(projectsRoot, { withFileTypes: true });
+  const projectRoots = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const projectRoot = await getReadableProjectScanDirectoryOrNull(join5(projectsRoot, entry.name), projectsRoot);
+    if (projectRoot !== null) {
+      projectRoots.push(projectRoot);
+    }
+  }
+  return projectRoots;
 }
 async function getReadableProjectScanDirectoryOrNull(dirPath, parentRealPath) {
   try {
@@ -16903,9 +16910,280 @@ function isFileErrorCode12(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/project-registry.ts
+import { mkdir as mkdir12, readFile as readFile14, writeFile as writeFile10 } from "node:fs/promises";
+import { basename as basename5, dirname as dirname10, join as join20 } from "node:path";
+var PROJECT_METADATA_FILE = "project.json";
+var MERGE_JSONL_FILES = [
+  "index.jsonl",
+  "pending.jsonl",
+  "tombstones.jsonl",
+  "events.jsonl",
+  "profile_candidates.jsonl",
+  "review-summaries.jsonl"
+];
+async function listCodexProjects() {
+  const projectRoots = await getReadableCodexProjectRoots();
+  const entries = await Promise.all(projectRoots.map((root) => registryEntryFromRoot(root)));
+  return entries.sort((left, right) => left.projectId.localeCompare(right.projectId));
+}
+async function addCodexProjectAlias(input) {
+  const projectId = validateProjectId(input.projectId);
+  const alias = validateAlias(input.alias);
+  const memoryRoot = await ensureCodexProjectMemoryRoot(projectId);
+  const projectRoot = dirname10(memoryRoot);
+  const metadata = await readProjectMetadata(projectRoot);
+  await writeProjectMetadata(projectRoot, {
+    ...metadata,
+    projectId,
+    aliases: uniqueSorted([...metadata.aliases ?? [], alias]),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  return registryEntryFromRoot(projectRoot);
+}
+async function mergeCodexProjects(input) {
+  const fromProjectId = validateProjectId(input.fromProjectId);
+  const toProjectId = validateProjectId(input.toProjectId);
+  if (fromProjectId === toProjectId) {
+    throw new Error("Cannot merge a project into itself.");
+  }
+  const fromMemoryRoot = await getReadableCodexProjectMemoryRoot(fromProjectId);
+  if (fromMemoryRoot === null) {
+    throw new Error(`Project memory root not found: ${fromProjectId}`);
+  }
+  const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId);
+  const fromProjectRoot = dirname10(fromMemoryRoot);
+  const toProjectRoot = dirname10(toMemoryRoot);
+  const mergedFiles = [];
+  for (const fileName of MERGE_JSONL_FILES) {
+    const merged = await mergeJsonlFile(join20(fromMemoryRoot, fileName), join20(toMemoryRoot, fileName));
+    if (merged) {
+      mergedFiles.push(fileName);
+    }
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const fromMetadata = await readProjectMetadata(fromProjectRoot);
+  const toMetadata = await readProjectMetadata(toProjectRoot);
+  await writeProjectMetadata(fromProjectRoot, {
+    ...fromMetadata,
+    projectId: fromProjectId,
+    mergedInto: toProjectId,
+    updatedAt: now
+  });
+  await writeProjectMetadata(toProjectRoot, {
+    ...toMetadata,
+    projectId: toProjectId,
+    aliases: uniqueSorted([...toMetadata.aliases ?? [], ...fromMetadata.aliases ?? []]),
+    mergedFrom: uniqueSorted([...toMetadata.mergedFrom ?? [], fromProjectId, ...fromMetadata.mergedFrom ?? []]),
+    updatedAt: now
+  });
+  return { fromProjectId, toProjectId, mergedFiles };
+}
+async function registryEntryFromRoot(root) {
+  const projectId = basename5(root);
+  const memoryRoot = join20(root, "memory");
+  const metadata = await readProjectMetadata(root);
+  const [active, pending, tombstones] = await Promise.all([
+    readActiveMemoriesFromRoot(memoryRoot),
+    readPendingMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ]);
+  return {
+    projectId,
+    root,
+    memoryRoot,
+    aliases: uniqueSorted(metadata.aliases ?? []),
+    mergedFrom: uniqueSorted(metadata.mergedFrom ?? []),
+    mergedInto: metadata.mergedInto,
+    counts: {
+      active: active.length,
+      pending: pending.length,
+      tombstones: tombstones.length
+    }
+  };
+}
+async function mergeJsonlFile(sourcePath, targetPath) {
+  const sourceLines = await readJsonLinesIfExists(sourcePath);
+  if (sourceLines.length === 0) {
+    return false;
+  }
+  const targetLines = await readJsonLinesIfExists(targetPath);
+  const merged = mergeJsonLines(targetLines, sourceLines);
+  await mkdir12(dirname10(targetPath), { recursive: true });
+  await writeFile10(targetPath, `${merged.join("\n")}
+`, "utf8");
+  return true;
+}
+function mergeJsonLines(targetLines, sourceLines) {
+  const seen = /* @__PURE__ */ new Set();
+  const result2 = [];
+  for (const line of [...targetLines, ...sourceLines]) {
+    const key = jsonLineKey(line);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result2.push(line);
+  }
+  return result2;
+}
+function jsonLineKey(line) {
+  try {
+    const parsed = JSON.parse(line);
+    if (typeof parsed.id === "string" && parsed.id.trim() !== "") {
+      return `id:${parsed.id}`;
+    }
+  } catch {
+  }
+  return `line:${line}`;
+}
+async function readJsonLinesIfExists(path) {
+  try {
+    return (await readFile14(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } catch (error2) {
+    if (isFileErrorCode13(error2, "ENOENT")) {
+      return [];
+    }
+    throw error2;
+  }
+}
+async function readProjectMetadata(projectRoot) {
+  try {
+    const parsed = JSON.parse(await readFile14(join20(projectRoot, PROJECT_METADATA_FILE), "utf8"));
+    if (!isRecord4(parsed)) {
+      return {};
+    }
+    return {
+      projectId: typeof parsed.projectId === "string" ? parsed.projectId : void 0,
+      aliases: readStringArray(parsed.aliases),
+      mergedFrom: readStringArray(parsed.mergedFrom),
+      mergedInto: typeof parsed.mergedInto === "string" ? parsed.mergedInto : void 0,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : void 0
+    };
+  } catch (error2) {
+    if (isFileErrorCode13(error2, "ENOENT")) {
+      return {};
+    }
+    throw error2;
+  }
+}
+async function writeProjectMetadata(projectRoot, metadata) {
+  await mkdir12(projectRoot, { recursive: true });
+  await writeFile10(join20(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
+`, "utf8");
+}
+function validateProjectId(value) {
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
+    throw new Error(`Invalid projectId: ${value}`);
+  }
+  return trimmed;
+}
+function validateAlias(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    throw new Error("Invalid project alias: missing value");
+  }
+  return trimmed;
+}
+function readStringArray(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim() !== "") : [];
+}
+function uniqueSorted(values) {
+  return Array.from(new Set(values)).sort();
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null;
+}
+function isFileErrorCode13(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
+// src/codex/project-tools.ts
+async function formatCodexProjectStatus(input) {
+  const current = await identifyCodexProject(input.cwd);
+  const [projects, readableCurrentRoot] = await Promise.all([
+    listCodexProjects(),
+    getReadableCodexProjectMemoryRoot(current.projectId)
+  ]);
+  const splitCandidates = findSplitCandidates(projects, current.projectId, current.displayName);
+  const splitStatus = splitCandidates.length > 0 ? "possible" : projects.length > 1 ? "multiple-roots" : "none";
+  return [
+    "Cyrene Project Status",
+    "",
+    "current:",
+    `  projectId: ${current.projectId}`,
+    `  displayName: ${current.displayName}`,
+    `  cwd: ${current.cwd}`,
+    `  git root: ${current.gitRoot ?? "none"}`,
+    `  remote hash: ${current.gitRemoteHash ?? "none"}`,
+    "",
+    "project memory:",
+    `  root: ${codexProjectMemoryRoot(current.projectId)}`,
+    `  exists: ${readableCurrentRoot === null ? "no" : "yes"}`,
+    "",
+    "diagnostics:",
+    `  known project roots: ${projects.length}`,
+    `  projectId split: ${splitStatus}`,
+    splitCandidates.length === 0 ? void 0 : `  split candidates: ${splitCandidates.map((item) => item.projectId).join(", ")}`,
+    splitCandidates.length === 0 ? void 0 : `  action: cyrene-continuity codex project merge ${splitCandidates[0]?.projectId} ${current.projectId}`,
+    ""
+  ].filter((line) => line !== void 0).join("\n");
+}
+async function formatCodexProjectList(input) {
+  const current = await identifyCodexProject(input.cwd);
+  const projects = await listCodexProjects();
+  return [
+    "Cyrene Projects",
+    "",
+    `current projectId: ${current.projectId}`,
+    "",
+    "projects:",
+    ...projects.map((project) => formatProjectListEntry(project, project.projectId === current.projectId)),
+    ""
+  ].join("\n");
+}
+async function runCodexProjectAlias(input) {
+  const project = await addCodexProjectAlias(input);
+  return [
+    "Cyrene Project Alias",
+    `projectId: ${project.projectId}`,
+    `aliases: ${formatList(project.aliases)}`,
+    ""
+  ].join("\n");
+}
+async function runCodexProjectMerge(input) {
+  const result2 = await mergeCodexProjects(input);
+  return [
+    "Cyrene Project Merge",
+    `merged from: ${result2.fromProjectId}`,
+    `merged into: ${result2.toProjectId}`,
+    `merged files: ${formatList(result2.mergedFiles)}`,
+    ""
+  ].join("\n");
+}
+function findSplitCandidates(projects, currentProjectId, currentDisplayName) {
+  return projects.filter((project) => project.projectId !== currentProjectId).filter((project) => project.aliases.includes(currentProjectId) || project.aliases.includes(currentDisplayName));
+}
+function formatProjectListEntry(project, current) {
+  return [
+    `  - projectId: ${project.projectId}${current ? " (current)" : ""}`,
+    `    aliases: ${formatList(project.aliases)}`,
+    `    mergedFrom: ${formatList(project.mergedFrom)}`,
+    `    mergedInto: ${project.mergedInto ?? "none"}`,
+    `    active: ${project.counts.active}`,
+    `    pending: ${project.counts.pending}`,
+    `    tombstones: ${project.counts.tombstones}`,
+    `    memory root: ${project.memoryRoot}`
+  ].join("\n");
+}
+function formatList(values) {
+  return values.length === 0 ? "none" : values.join(", ");
+}
+
 // src/codex/similar-hints-review.ts
 import { createHash as createHash8, randomUUID as randomUUID12 } from "node:crypto";
-import { basename as basename5, dirname as dirname10 } from "node:path";
+import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
     id: memory.id,
@@ -17076,7 +17354,7 @@ function memoryPortability(memory) {
   return memory.portability ?? (memory.scope === "global" ? "global" : "local_only");
 }
 function projectIdFromMemoryRoot(memoryRoot) {
-  return basename5(dirname10(memoryRoot));
+  return basename6(dirname11(memoryRoot));
 }
 function uniqueInOrder3(values) {
   const seen = /* @__PURE__ */ new Set();
@@ -17116,6 +17394,28 @@ async function handleCodexCommand(input) {
   }
   if (command === "hook" && input.args[1] === "stop") {
     process.stdout.write(await handleCodexStopHookCommand());
+    return;
+  }
+  if (command === "project" && input.args[1] === "status") {
+    process.stdout.write(await formatCodexProjectStatus({ cwd: input.cwd }));
+    return;
+  }
+  if (command === "project" && input.args[1] === "list") {
+    process.stdout.write(await formatCodexProjectList({ cwd: input.cwd }));
+    return;
+  }
+  if (command === "project" && input.args[1] === "alias") {
+    process.stdout.write(await runCodexProjectAlias({
+      projectId: parseRequiredPositional(input.args, 2, "projectId"),
+      alias: parseRequiredPositional(input.args, 3, "project alias")
+    }));
+    return;
+  }
+  if (command === "project" && input.args[1] === "merge") {
+    process.stdout.write(await runCodexProjectMerge({
+      fromProjectId: parseRequiredPositional(input.args, 2, "source projectId"),
+      toProjectId: parseRequiredPositional(input.args, 3, "target projectId")
+    }));
     return;
   }
   if (command === "eval" && input.args.length === 4 && input.args[1] === "run" && input.args[2] === "--check" && input.args[3] === "similar-hints") {
@@ -17237,7 +17537,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash>|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory review [--limit <n>]|memory approve <id> --review-hash <hash>|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
