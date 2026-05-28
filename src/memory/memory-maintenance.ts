@@ -51,6 +51,7 @@ export async function runMemoryMaintenanceFromRoot(input: {
   budget: MemoryMaintenanceBudget
   now?: string
   reason?: string
+  preservePendingCandidateIds?: string[]
 }): Promise<MemoryMaintenanceResult> {
   return withMemoryMaintenanceLockFromRoot(input.memoryRoot, (memoryRoot) =>
     runMemoryMaintenanceFromRootLocked({ ...input, memoryRoot })
@@ -68,6 +69,7 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
   budget: MemoryMaintenanceBudget
   now?: string
   reason?: string
+  preservePendingCandidateIds?: string[]
 }): Promise<MemoryMaintenanceResult> {
   const now = input.now ?? new Date().toISOString()
   const snapshot = await createMemorySnapshotFromRoot(
@@ -107,7 +109,11 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
   const archiveResult = archiveToBudget(boundedActive, input.budget, now, tombstones, events)
   boundedActive = archiveResult.active
 
-  const boundedPending = sortPendingNewestFirst(pending).slice(0, input.budget.pendingMaxItems)
+  const boundedPending = boundPendingToBudget(
+    pending,
+    input.budget.pendingMaxItems,
+    input.preservePendingCandidateIds ?? []
+  )
 
   await writeActiveMemoriesFromRoot(input.memoryRoot, boundedActive)
   await writePendingMemoriesFromRoot(input.memoryRoot, boundedPending)
@@ -373,6 +379,28 @@ function sortPendingNewestFirst(pending: PendingMemory[]): PendingMemory[] {
     const lastSeen = right.lastSeenAt.localeCompare(left.lastSeenAt)
     return lastSeen === 0 ? left.id.localeCompare(right.id) : lastSeen
   })
+}
+
+function boundPendingToBudget(
+  pending: PendingMemory[],
+  maxItems: number,
+  preserveCandidateIds: string[]
+): PendingMemory[] {
+  const sorted = sortPendingNewestFirst(pending)
+  if (preserveCandidateIds.length === 0) return sorted.slice(0, maxItems)
+
+  const preserve = new Set(preserveCandidateIds)
+  const preserved: PendingMemory[] = []
+  const unreserved: PendingMemory[] = []
+  for (const candidate of sorted) {
+    if (preserve.has(candidate.id)) {
+      preserved.push(candidate)
+    } else {
+      unreserved.push(candidate)
+    }
+  }
+
+  return [...preserved, ...unreserved.slice(0, Math.max(maxItems - preserved.length, 0))]
 }
 
 function truncateWithSuffix(value: string, maxChars: number): string {

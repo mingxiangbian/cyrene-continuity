@@ -453,6 +453,41 @@ describe('Codex memory dream runtime', () => {
     await expect(readdir(join(memoryRoot, 'snapshots'))).resolves.toHaveLength(1)
   })
 
+  it('deep-apply keeps recommended candidates retrievable when maintenance trims pending', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_MEMORY_PENDING_MAX_ITEMS', '1')
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const recommended = createPending({
+      id: 'recommended-pending',
+      content: 'Recommended memory should remain retrievable after deep apply.',
+      normalizedKey: 'recommended-memory-remains-retrievable',
+      seenCount: 2,
+      lastSeenAt: '2026-05-24T00:00:00.000Z',
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const newer = createPending({
+      id: 'newer-pending',
+      content: 'Newer unrecommended memory may be trimmed first.',
+      normalizedKey: 'newer-unrecommended-memory',
+      lastSeenAt: '2026-05-26T00:00:00.000Z'
+    })
+    const memoryRoot = await seedProjectPending(cwd, [recommended, newer])
+
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
+
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
+      promoted: 0,
+      recommendedPromotions: 1,
+      keptPending: 1
+    })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(recommended.content)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.not.toContain(newer.content)
+  })
+
   it('deep-apply keeps insufficient evidence pending', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)

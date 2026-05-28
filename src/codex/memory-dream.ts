@@ -323,7 +323,10 @@ async function runDeepDreamRootLocked(
     memoryRoot: proposal.memoryRoot,
     budget,
     now,
-    reason: 'after codex memory dream deep-apply pass'
+    reason: 'after codex memory dream deep-apply pass',
+    preservePendingCandidateIds: proposal.proposedChanges.flatMap((change) =>
+      change.action === 'recommend_promote' ? [change.candidateId] : []
+    )
   })
 
   await writeDreamSuccess(proposal.memoryRoot, now, intervalHours)
