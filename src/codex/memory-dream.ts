@@ -14,16 +14,14 @@ import {
   appendMemoryEventFromRoot,
   appendTombstoneFromRoot,
   ensureWritableMemoryRootPath,
-  readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
-  writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
 import {
   distinctEvidenceCount,
   evaluatePendingPromotion
 } from '../memory/memory-validator.js'
-import type { CyreneMemory, MemoryEvent, MemoryScores, MemoryTombstone, PendingMemory } from '../memory/types.js'
+import type { MemoryEvent, MemoryScores, MemoryTombstone, PendingMemory } from '../memory/types.js'
 import {
   ensureCodexProjectMemoryRoot,
   getReadableCodexGlobalMemoryRoot,
@@ -46,6 +44,7 @@ export interface CodexMemoryDreamResult {
     memoryRoot: string
     stage: CodexMemoryDreamStage
     promoted: number
+    recommendedPromotions: number
     rejected: number
     keptPending: number
     maintenance?: MemoryMaintenanceResult
@@ -197,6 +196,7 @@ async function runLightDreamRoot(
       memoryRoot: lockedRoot,
       stage,
       promoted: 0,
+      recommendedPromotions: 0,
       rejected: 0,
       keptPending: merged.pending.length
     }
@@ -224,7 +224,7 @@ async function runRemDreamRoot(
         details: {
           stage,
           candidateId: candidate.id,
-          proposedAction: evaluation.promotable ? 'promote' : proposedActionForPending(candidate, evaluation.reason),
+          proposedAction: evaluation.promotable ? 'recommend_promote' : proposedActionForPending(candidate, evaluation.reason),
           reason: evaluation.reason,
           distinctEvidenceCount: evaluation.distinctEvidenceCount
         }
@@ -235,6 +235,7 @@ async function runRemDreamRoot(
       memoryRoot: lockedRoot,
       stage,
       promoted: 0,
+      recommendedPromotions: 0,
       rejected: 0,
       keptPending: pending.length
     }
@@ -252,7 +253,8 @@ async function runDeepPreviewDreamRoot(
   return {
     memoryRoot: proposal.memoryRoot,
     stage,
-    promoted: proposal.summary.promote,
+    promoted: 0,
+    recommendedPromotions: proposal.summary.recommendedPromotions,
     rejected: proposal.summary.reject,
     keptPending: proposal.summary.keepPending
   }
@@ -271,6 +273,7 @@ async function runDeepDreamRoot(
         memoryRoot: lock.memoryRoot,
         stage: 'deep-apply',
         promoted: 0,
+        recommendedPromotions: 0,
         rejected: 0,
         keptPending: (await readPendingMemoriesFromRoot(lock.memoryRoot)).length,
         skipped: lock.reason
@@ -300,14 +303,15 @@ async function runDeepDreamRootLocked(
   intervalHours: number
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
   const proposal = await buildDreamProposalForRoot({ memoryRoot, now })
+  await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal })
   if (!proposal.evalGate.passed) {
     const reason = `Dream apply blocked by eval gate: ${proposal.evalGate.failedChecks.join(', ')}`
-    await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal })
     await writeDreamFailed(proposal.memoryRoot, now, new Error(reason))
     return {
       memoryRoot: proposal.memoryRoot,
       stage: 'deep-apply',
       promoted: 0,
+      recommendedPromotions: proposal.summary.recommendedPromotions,
       rejected: 0,
       keptPending: (await readPendingMemoriesFromRoot(proposal.memoryRoot)).length,
       skipped: reason
@@ -327,6 +331,7 @@ async function runDeepDreamRootLocked(
     memoryRoot: proposal.memoryRoot,
     stage: 'deep-apply',
     promoted: applied.promoted,
+    recommendedPromotions: proposal.summary.recommendedPromotions,
     rejected: applied.rejected,
     keptPending: maintenance.pendingCount,
     maintenance
@@ -338,11 +343,9 @@ async function applyDreamProposal(
   proposal: DreamRootProposal,
   now: string
 ): Promise<{ promoted: number; rejected: number }> {
-  let active = await readActiveMemoriesFromRoot(memoryRoot)
   const nextPending: PendingMemory[] = []
   const events: MemoryEvent[] = []
   const newTombstones: MemoryTombstone[] = []
-  let promoted = 0
   let rejected = 0
   let mutated = false
 
@@ -362,25 +365,10 @@ async function applyDreamProposal(
       })
       rejected += 1
       mutated = true
-      continue
     }
-
-    active = upsertActiveMemory(active, operation.memory)
-    events.push({
-      id: randomUUID(),
-      action: 'promote',
-      at: now,
-      reason: operation.reason,
-      memoryId: operation.memory.id,
-      candidateId: operation.candidateId,
-      details: { distinctEvidenceCount: operation.distinctEvidenceCount, source: 'dream' }
-    })
-    promoted += 1
-    mutated = true
   }
 
   if (mutated) {
-    await writeActiveMemoriesFromRoot(memoryRoot, active)
     await writePendingMemoriesFromRoot(memoryRoot, nextPending)
     for (const tombstone of newTombstones) {
       await appendTombstoneFromRoot(memoryRoot, tombstone)
@@ -390,7 +378,7 @@ async function applyDreamProposal(
     }
   }
 
-  return { promoted, rejected }
+  return { promoted: 0, rejected }
 }
 
 function mergePendingDuplicates(pending: PendingMemory[]): { changed: boolean; pending: PendingMemory[] } {
@@ -454,16 +442,6 @@ function proposedActionForPending(candidate: PendingMemory, reason: string): str
 
 function shouldRejectWithoutMoreEvidence(reason: string): boolean {
   return /diagnostic affective claim|missing auditable evidence/i.test(reason)
-}
-
-function upsertActiveMemory(active: CyreneMemory[], memory: CyreneMemory): CyreneMemory[] {
-  const index = active.findIndex((entry) => entry.id === memory.id || entry.normalizedKey === memory.normalizedKey)
-  if (index === -1) {
-    return [...active, memory]
-  }
-  const next = [...active]
-  next[index] = memory
-  return next
 }
 
 function maintenanceBudget(config: ReturnType<typeof createDefaultConfig>): MemoryMaintenanceBudget {

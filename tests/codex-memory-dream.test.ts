@@ -56,6 +56,17 @@ function parseJsonLines<T>(content: string): T[] {
     .map((line) => JSON.parse(line) as T)
 }
 
+async function readOptionalText(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return ''
+    }
+    throw error
+  }
+}
+
 function createPending(overrides: Partial<PendingMemory> = {}): PendingMemory {
   return {
     id: 'pending-1',
@@ -214,7 +225,7 @@ describe('Codex memory dream runtime', () => {
           stage: 'rem',
           candidateId: candidate.id,
           distinctEvidenceCount: 2,
-          proposedAction: 'promote'
+          proposedAction: 'recommend_promote'
         })
       })
     )
@@ -258,13 +269,13 @@ describe('Codex memory dream runtime', () => {
           stage: 'rem',
           candidateId: second.id,
           distinctEvidenceCount: 2,
-          proposedAction: 'promote'
+          proposedAction: 'recommend_promote'
         })
       })
     )
   })
 
-  it('builds a promote proposal for repeated independent procedural memory without writing active memory', async () => {
+  it('builds a recommended promotion proposal for repeated independent procedural memory without writing active memory', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -279,13 +290,17 @@ describe('Codex memory dream runtime', () => {
 
     const proposal = await buildDreamProposalForRoot({ memoryRoot, now: '2026-05-26T00:00:00.000Z' })
 
-    expect(proposal.summary).toMatchObject({ promote: 1, reject: 0, expire: 0, keepPending: 0 })
+    expect(proposal.summary).toMatchObject({ recommendedPromotions: 1, reject: 0, expire: 0, keepPending: 1 })
     expect(proposal.proposedChanges[0]).toMatchObject({
-      action: 'promote',
+      action: 'recommend_promote',
       candidateId: candidate.id,
+      recommendedMemoryId: candidate.id,
       normalizedKey: candidate.normalizedKey,
       distinctEvidenceCount: 2
     })
+    expect(proposal.applyPlan).toEqual([
+      expect.objectContaining({ action: 'keep_pending', candidate: expect.objectContaining({ id: candidate.id }) })
+    ])
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
@@ -299,7 +314,7 @@ describe('Codex memory dream runtime', () => {
     const proposal = await buildDreamProposalForRoot({ memoryRoot: missingRoot, now: '2026-05-26T00:00:00.000Z' })
 
     expect(proposal.memoryRoot).toBe(missingRoot)
-    expect(proposal.summary).toMatchObject({ promote: 0, reject: 0, expire: 0, keepPending: 0 })
+    expect(proposal.summary).toMatchObject({ recommendedPromotions: 0, reject: 0, expire: 0, keepPending: 0 })
     await expect(readdir(join(parent, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -319,7 +334,7 @@ describe('Codex memory dream runtime', () => {
 
     const proposal = await buildDreamProposalForRoot({ memoryRoot, now: '2026-05-26T00:00:00.000Z' })
 
-    expect(proposal.summary).toMatchObject({ promote: 0, reject: 1, expire: 1, keepPending: 0 })
+    expect(proposal.summary).toMatchObject({ recommendedPromotions: 0, reject: 1, expire: 1, keepPending: 0 })
     expect(proposal.proposedChanges[0]).toMatchObject({
       action: 'reject',
       candidateId: candidate.id,
@@ -347,21 +362,26 @@ describe('Codex memory dream runtime', () => {
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
       stage: 'deep-preview',
-      promoted: 1,
+      promoted: 0,
+      recommendedPromotions: 1,
       rejected: 0,
-      keptPending: 0
+      keptPending: 1
     })
     await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain(candidate.normalizedKey)
     const proposed = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'proposed_changes.json'), 'utf8')) as {
       root: { proposedChanges: Array<{ action: string; candidateId: string }> }
     }
-    expect(proposed.root.proposedChanges[0]).toMatchObject({ action: 'promote', candidateId: candidate.id })
+    expect(proposed.root.proposedChanges[0]).toMatchObject({ action: 'recommend_promote', candidateId: candidate.id })
     const diff = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'diff.json'), 'utf8')) as {
       addActiveMemoryIds: string[]
+      recommendActiveMemoryIds: string[]
       removePendingCandidateIds: string[]
+      keepPendingCandidateIds: string[]
     }
-    expect(diff.addActiveMemoryIds).toEqual([candidate.id])
-    expect(diff.removePendingCandidateIds).toEqual([candidate.id])
+    expect(diff.addActiveMemoryIds).toEqual([])
+    expect(diff.recommendActiveMemoryIds).toEqual([candidate.id])
+    expect(diff.removePendingCandidateIds).toEqual([])
+    expect(diff.keepPendingCandidateIds).toEqual([candidate.id])
     const evalResults = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'eval_results.json'), 'utf8')) as { passed: boolean }
     expect(evalResults.passed).toBe(true)
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
@@ -404,7 +424,7 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
-  it('deep-apply promotes repeated independent procedural memory and writes model profile', async () => {
+  it('deep-apply recommends repeated independent procedural memory without promoting it', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -419,11 +439,17 @@ describe('Codex memory dream runtime', () => {
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 1, rejected: 0 })
-    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
-    expect(active[0]).toMatchObject({ id: candidate.id, status: 'active', content: candidate.content })
-    expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
-    await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain(candidate.content)
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
+      stage: 'deep-apply',
+      promoted: 0,
+      recommendedPromotions: 1,
+      rejected: 0,
+      keptPending: 1
+    })
+    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.not.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readOptionalText(join(memoryRoot, 'events.jsonl'))).resolves.not.toContain('"action":"promote"')
+    await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain('recommend_promote')
     await expect(readdir(join(memoryRoot, 'snapshots'))).resolves.toHaveLength(1)
   })
 
@@ -436,8 +462,8 @@ describe('Codex memory dream runtime', () => {
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, keptPending: 1 })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, keptPending: 1 })
+    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
@@ -454,9 +480,10 @@ describe('Codex memory dream runtime', () => {
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
 
-    await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0 })
+    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
@@ -476,8 +503,8 @@ describe('Codex memory dream runtime', () => {
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, rejected: 0, keptPending: 1 })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, rejected: 0, keptPending: 1 })
+    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
@@ -514,6 +541,7 @@ describe('Codex memory dream runtime', () => {
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
       stage: 'deep-apply',
       promoted: 0,
+      recommendedPromotions: 0,
       rejected: 0,
       keptPending: 1,
       skipped: expect.stringContaining('eval gate')
@@ -550,7 +578,7 @@ describe('Codex memory dream runtime', () => {
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, rejected: 1, keptPending: 0 })
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, rejected: 1, keptPending: 0 })
     expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'rejected' })
@@ -572,8 +600,8 @@ describe('Codex memory dream runtime', () => {
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, rejected: 1, keptPending: 0 })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, rejected: 1, keptPending: 0 })
+    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
     expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'expired' })
@@ -592,6 +620,7 @@ describe('Codex memory dream runtime', () => {
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
       promoted: 0,
+      recommendedPromotions: 0,
       rejected: 0,
       maintenance: expect.objectContaining({ expired: 1, activeCount: 0 })
     })
@@ -655,7 +684,7 @@ describe('Codex memory dream runtime', () => {
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 1 })
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 1 })
     await expect(readFile(join(memoryRoot, '.locks', 'dream.lock', 'owner.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -678,7 +707,7 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(ownerPath, 'utf8')).resolves.toContain('other-owner')
   })
 
-  it('deep-apply promotes global-scope pending memory from the global root', async () => {
+  it('deep-apply recommends global-scope pending memory from the global root', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-dream-project-')
@@ -695,7 +724,8 @@ describe('Codex memory dream runtime', () => {
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 1 })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 1 })
+    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.not.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 })

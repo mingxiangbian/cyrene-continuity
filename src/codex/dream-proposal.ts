@@ -14,7 +14,7 @@ import {
   evaluatePendingPromotion,
   validateMemoryCandidate
 } from '../memory/memory-validator.js'
-import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../memory/types.js'
+import type { MemoryTombstone, PendingMemory } from '../memory/types.js'
 
 export interface DreamEvalGateResult {
   passed: boolean
@@ -23,7 +23,7 @@ export interface DreamEvalGateResult {
 }
 
 export interface DreamProposalSummary {
-  promote: number
+  recommendedPromotions: number
   reject: number
   expire: number
   keepPending: number
@@ -31,6 +31,14 @@ export interface DreamProposalSummary {
 }
 
 export type DreamProposedChange =
+  | {
+      action: 'recommend_promote'
+      candidateId: string
+      recommendedMemoryId: string
+      normalizedKey: string
+      reason: string
+      distinctEvidenceCount: number
+    }
   | {
       action: 'promote'
       candidateId: string
@@ -56,13 +64,6 @@ export type DreamProposedChange =
 
 export type DreamApplyOperation =
   | {
-      action: 'promote'
-      candidateId: string
-      memory: CyreneMemory
-      reason: string
-      distinctEvidenceCount: number
-    }
-  | {
       action: 'reject'
       candidateId: string
       tombstone: MemoryTombstone
@@ -76,6 +77,7 @@ export type DreamApplyOperation =
 
 export interface DreamLogicalDiff {
   addActiveMemoryIds: string[]
+  recommendActiveMemoryIds: string[]
   removePendingCandidateIds: string[]
   addTombstoneIds: string[]
   keepPendingCandidateIds: string[]
@@ -95,19 +97,20 @@ export async function buildDreamProposalForRoot(input: {
   now: string
 }): Promise<DreamRootProposal> {
   const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot)
-  let active = await readActiveMemoriesFromRoot(memoryRoot)
+  const active = await readActiveMemoriesFromRoot(memoryRoot)
   const tombstones = await readTombstonesFromRoot(memoryRoot)
   const pending = await readPendingMemoriesFromRoot(memoryRoot)
   const proposedChanges: DreamProposedChange[] = []
   const applyPlan: DreamApplyOperation[] = []
   const diff: DreamLogicalDiff = {
     addActiveMemoryIds: [],
+    recommendActiveMemoryIds: [],
     removePendingCandidateIds: [],
     addTombstoneIds: [],
     keepPendingCandidateIds: []
   }
   const summary: DreamProposalSummary = {
-    promote: 0,
+    recommendedPromotions: 0,
     reject: 0,
     expire: 0,
     keepPending: 0,
@@ -192,25 +195,19 @@ export async function buildDreamProposalForRoot(input: {
       continue
     }
 
-    active = upsertActiveMemory(active, memory)
     proposedChanges.push({
-      action: 'promote',
+      action: 'recommend_promote',
       candidateId: candidate.id,
-      memoryId: memory.id,
+      recommendedMemoryId: memory.id,
       normalizedKey: candidate.normalizedKey,
       reason: evaluation.reason,
       distinctEvidenceCount: evaluation.distinctEvidenceCount
     })
-    applyPlan.push({
-      action: 'promote',
-      candidateId: candidate.id,
-      memory,
-      reason: evaluation.reason,
-      distinctEvidenceCount: evaluation.distinctEvidenceCount
-    })
-    diff.addActiveMemoryIds.push(memory.id)
-    diff.removePendingCandidateIds.push(candidate.id)
-    summary.promote += 1
+    applyPlan.push({ action: 'keep_pending', candidate, reason: evaluation.reason })
+    diff.recommendActiveMemoryIds.push(memory.id)
+    diff.keepPendingCandidateIds.push(candidate.id)
+    summary.recommendedPromotions += 1
+    summary.keepPending += 1
   }
 
   const evalGate = runDreamApplyEvalGate({ proposedChanges, pending })
@@ -259,14 +256,4 @@ function tombstoneForExpiredPending(candidate: PendingMemory, now: string): Memo
 
 function isFileErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
-}
-
-function upsertActiveMemory(active: CyreneMemory[], memory: CyreneMemory): CyreneMemory[] {
-  const index = active.findIndex((entry) => entry.id === memory.id || entry.normalizedKey === memory.normalizedKey)
-  if (index === -1) {
-    return [...active, memory]
-  }
-  const next = [...active]
-  next[index] = memory
-  return next
 }

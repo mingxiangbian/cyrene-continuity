@@ -24,6 +24,17 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir
 }
 
+async function readOptionalText(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return ''
+    }
+    throw error
+  }
+}
+
 function cliEnv(home: string): NodeJS.ProcessEnv {
   const { FORCE_COLOR: _forceColor, NO_COLOR: _noColor, ...env } = process.env
   return { ...env, HOME: home, CYRENE_MEMORY_AUTO_EXTRACT: '0' }
@@ -746,13 +757,14 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('project pending: 1')
   })
 
-  it('runs memory dream apply from the CLI', async () => {
+  it('runs memory dream apply from the CLI without promoting unapproved pending memory', async () => {
     const home = await createTempDir('cyrene-codex-cli-dream-home-')
     process.env.HOME = home
     const identity = await identifyCodexProject(process.cwd())
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending())}\n`)
+    const candidate = createPending()
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(candidate)}\n`)
 
     const result = await execFileAsync(
       process.execPath,
@@ -761,8 +773,10 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    const parsed = JSON.parse(result.stdout) as { roots: Array<{ promoted: number }> }
-    expect(parsed.roots.some((root) => root.promoted === 1)).toBe(true)
+    const parsed = JSON.parse(result.stdout) as { roots: Array<{ promoted: number; recommendedPromotions: number; keptPending: number }> }
+    expect(parsed.roots.some((root) => root.promoted === 0 && root.recommendedPromotions === 1 && root.keptPending === 1)).toBe(true)
+    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.not.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('runs memory dream preview from the CLI without promoting pending memory', async () => {
@@ -780,8 +794,12 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    const parsed = JSON.parse(result.stdout) as { roots: Array<{ stage: string; promoted: number; keptPending: number }> }
-    expect(parsed.roots.some((root) => root.stage === 'deep-preview' && root.promoted === 1 && root.keptPending === 0)).toBe(true)
+    const parsed = JSON.parse(result.stdout) as {
+      roots: Array<{ stage: string; promoted: number; recommendedPromotions: number; keptPending: number }>
+    }
+    expect(parsed.roots.some((root) =>
+      root.stage === 'deep-preview' && root.promoted === 0 && root.recommendedPromotions === 1 && root.keptPending === 1
+    )).toBe(true)
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain('cli-dream-promotes-pending')
   })

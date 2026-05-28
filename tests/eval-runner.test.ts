@@ -224,6 +224,34 @@ describe('dream apply eval gate', () => {
     expect(JSON.stringify(result.results)).toContain('assistant_observed')
   })
 
+  it('treats recommend_promote as review material, not an active mutation', () => {
+    const candidate = pending({
+      source: 'assistant_observed',
+      evidence: [
+        {
+          runId: 'run-1',
+          evidenceGroupId: 'group-1',
+          sourceKind: 'assistant_observed',
+          summary: 'Assistant observed a possible preference.'
+        }
+      ]
+    })
+
+    const result = runDreamApplyEvalGate({
+      pending: [candidate],
+      proposedChanges: [{
+        action: 'recommend_promote',
+        candidateId: candidate.id,
+        recommendedMemoryId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason: 'test recommendation',
+        distinctEvidenceCount: 1
+      }]
+    })
+
+    expect(result.failedChecks).not.toContain('pending_usage_eval')
+  })
+
   it('fails profile_pollution_eval when profile preview includes pending-only content', () => {
     const candidate = pending({ content: 'Pending-only preference must not enter MODEL_PROFILE.md.' })
 

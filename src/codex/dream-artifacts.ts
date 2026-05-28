@@ -88,7 +88,7 @@ function renderDreamReport(input: {
     `- proposalId: ${input.proposalId}`,
     `- createdAt: ${input.createdAt}`,
     `- memoryRoot: ${input.proposal.memoryRoot}`,
-    `- promote: ${input.proposal.summary.promote}`,
+    `- recommendedPromotions: ${input.proposal.summary.recommendedPromotions}`,
     `- reject: ${input.proposal.summary.reject}`,
     `- expire: ${input.proposal.summary.expire}`,
     `- keepPending: ${input.proposal.summary.keepPending}`,
@@ -102,7 +102,9 @@ function renderDreamReport(input: {
     lines.push('- none')
   } else {
     for (const change of input.proposal.proposedChanges) {
-      if (change.action === 'promote') {
+      if (change.action === 'recommend_promote') {
+        lines.push(`- recommend_promote ${change.normalizedKey} (${change.candidateId}) -> ${change.recommendedMemoryId}: ${change.reason}`)
+      } else if (change.action === 'promote') {
         lines.push(`- promote ${change.normalizedKey} (${change.candidateId}) -> ${change.memoryId}: ${change.reason}`)
       } else if (change.action === 'reject') {
         lines.push(`- reject ${change.normalizedKey} (${change.candidateId}) as ${change.tombstoneReason}: ${change.reason}`)
@@ -112,7 +114,12 @@ function renderDreamReport(input: {
     }
   }
 
-  lines.push('', '## Apply', '', 'Run `cyrene-continuity codex memory dream --stage deep-apply` to apply gated changes.')
+  lines.push(
+    '',
+    '## Apply',
+    '',
+    'Use cyrene_memory_pending_list / cyrene_memory_pending_get and explicit cyrene_memory_promote approval to promote recommended candidates. deep-apply does not promote unapproved pending memory.'
+  )
   return `${lines.join('\n')}\n`
 }
 
