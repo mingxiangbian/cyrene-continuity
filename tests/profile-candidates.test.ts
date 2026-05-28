@@ -161,6 +161,32 @@ describe('Codex profile candidates', () => {
     expect(stored[0]).toMatchObject({ status: 'pending' })
   })
 
+  it('apply gate fail does not write profile when the candidate has no approved source memory', async () => {
+    const home = await createTempDir('cyrene-profile-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-profile-project-')
+    const memoryRoot = await seedProjectActive(cwd, [])
+    const candidate = createProfileCandidate({
+      sourceMemoryIds: [],
+      evidenceSummary: ''
+    })
+    await writeFile(join(memoryRoot, 'profile_candidates.jsonl'), `${JSON.stringify(candidate)}\n`)
+
+    const result = await applyCodexProfileCandidate({
+      cwd,
+      candidateId: candidate.id,
+      reviewHash: reviewHashForProfileCandidate(candidate),
+      now: '2026-05-26T00:00:01.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'blocked_by_gate',
+      candidateId: candidate.id,
+      failedChecks: ['profile_pollution_eval']
+    })
+    await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('apply gate pass returns a profile diff and renders from structured memory', async () => {
     const home = await createTempDir('cyrene-profile-home-')
     vi.stubEnv('HOME', home)

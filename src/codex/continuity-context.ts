@@ -1,7 +1,16 @@
 import { buildContinuitySnapshot } from '../affect/affect-runtime.js'
 import type { PrincipledDissentPolicy } from '../affect/types.js'
 import { createDefaultConfig } from '../config.js'
-import { runSimilarHintsEvalGate } from '../eval/eval-runner.js'
+import {
+  combineEvalGateResults,
+  runMemoryRoutingEvalGate,
+  runSimilarHintsEvalGate
+} from '../eval/eval-runner.js'
+import type {
+  MemoryRoutingActiveItem,
+  MemoryRoutingPendingItem,
+  MemoryRoutingSimilarHintItem
+} from '../eval/eval-runner.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
 import type { IndexedActiveMemory, IndexedPendingMemory, IndexedSimilarMemory, MemoryIndexDiagnostics } from '../memory/memory-index.js'
 import { deriveMemoryPortability, openMemoryIndexAdapter } from '../memory/memory-index.js'
@@ -354,7 +363,7 @@ async function retrieveRoutedMemory(input: {
       maxItems: 6,
       maxTokens: 500
     })
-    const evalGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
+    const similarHintGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
       id: item.memory.id,
       currentProjectId: input.projectId,
       homeProjectId: item.homeProjectId,
@@ -365,7 +374,6 @@ async function retrieveRoutedMemory(input: {
       transferable: true,
       notCurrentProjectFact: true
     })))
-    const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : []
     const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
@@ -390,6 +398,15 @@ async function retrieveRoutedMemory(input: {
         maxTokens: 400
       })
     ])
+    const memoryRoutingGate = runMemoryRoutingEvalGate({
+      currentProjectId: input.projectId,
+      globalMemory: globalMemory.map(toMemoryRoutingActiveItem),
+      projectMemory: projectMemory.map(toMemoryRoutingActiveItem),
+      pendingHypotheses: pendingHypotheses.map(toMemoryRoutingPendingItem),
+      similarProjectHints: similarProjectHints.map(toMemoryRoutingSimilarHintItem)
+    })
+    const evalGate = combineEvalGateResults([similarHintGate, memoryRoutingGate])
+    const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : []
     return {
       globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
       projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
@@ -537,6 +554,33 @@ function comparePendingHypotheses(left: IndexedPendingMemory, right: IndexedPend
     return scoreDiff
   }
   return left.memory.id.localeCompare(right.memory.id)
+}
+
+function toMemoryRoutingActiveItem(item: IndexedActiveMemory): MemoryRoutingActiveItem {
+  return {
+    id: item.memory.id,
+    status: item.memory.status,
+    scope: item.memory.scope,
+    homeProjectId: item.homeProjectId
+  }
+}
+
+function toMemoryRoutingPendingItem(item: IndexedPendingMemory): MemoryRoutingPendingItem {
+  return {
+    id: item.memory.id,
+    status: item.memory.status,
+    provisional: item.provisional
+  }
+}
+
+function toMemoryRoutingSimilarHintItem(item: IndexedSimilarMemory): MemoryRoutingSimilarHintItem {
+  return {
+    id: item.memory.id,
+    status: item.memory.status,
+    domain: item.memory.domain,
+    homeProjectId: item.homeProjectId,
+    notCurrentProjectFact: true
+  }
 }
 
 function selectPendingWithinBudget(items: IndexedPendingMemory[], maxItems: number, maxTokens: number): IndexedPendingMemory[] {

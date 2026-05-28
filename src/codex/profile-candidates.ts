@@ -15,6 +15,7 @@ import {
 } from '../memory/memory-store.js'
 import { deriveProfileVisibility } from '../memory/memory-validator.js'
 import type { CyreneMemory } from '../memory/types.js'
+import { runProfileApplyEvalGate, type EvalCheckName } from '../eval/eval-runner.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { identifyCodexProject } from './project-id.js'
@@ -92,7 +93,7 @@ export interface ProfileApplyResult {
     | {
         action: 'blocked_by_gate'
         candidateId: string
-        failedChecks: Array<'profile_pollution_eval' | 'affective_boundary_eval'>
+        failedChecks: EvalCheckName[]
         reason: string
       }
 }
@@ -211,7 +212,11 @@ export async function applyCodexProfileCandidate(input: {
       }
     }
 
-    const gate = evaluateProfileApplyGate(lockedCandidate)
+    const gate = runProfileApplyEvalGate({
+      id: lockedCandidate.id,
+      content: lockedCandidate.content,
+      sourceMemoryIds: lockedCandidate.sourceMemoryIds
+    })
     if (!gate.passed) {
       return {
         project: { projectId: project.projectId, displayName: project.displayName },
@@ -220,7 +225,7 @@ export async function applyCodexProfileCandidate(input: {
           action: 'blocked_by_gate',
           candidateId: lockedCandidate.id,
           failedChecks: gate.failedChecks,
-          reason: gate.reason
+          reason: `Profile apply blocked by eval gate: ${gate.failedChecks.join(', ')}`
         }
       }
     }
@@ -399,21 +404,6 @@ function subtractLines(left: string[], right: string[]): string[] {
     }
   }
   return result
-}
-
-function evaluateProfileApplyGate(candidate: ProfileCandidate): {
-  passed: boolean
-  failedChecks: Array<'profile_pollution_eval' | 'affective_boundary_eval'>
-  reason: string
-} {
-  if (isUnsafeProfileCandidate(candidate)) {
-    return {
-      passed: false,
-      failedChecks: ['affective_boundary_eval'],
-      reason: 'Profile candidate contains diagnostic affective content'
-    }
-  }
-  return { passed: true, failedChecks: [], reason: 'Profile candidate passed apply gate' }
 }
 
 function isUnsafeProfileCandidate(candidate: ProfileCandidate): boolean {

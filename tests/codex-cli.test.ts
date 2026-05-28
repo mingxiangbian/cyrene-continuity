@@ -1590,6 +1590,45 @@ describe('cyrene-continuity codex CLI', () => {
     })
   })
 
+  it('runs the release eval check from the Codex CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-release-eval-home-')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        'codex',
+        'eval',
+        'run',
+        '--check',
+        'release'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      check: string
+      passed: boolean
+      failedChecks: string[]
+      minimumChecks: string[]
+    }
+    expect(parsed).toEqual({
+      check: 'release',
+      passed: true,
+      failedChecks: [],
+      minimumChecks: [
+        'memory_routing_eval',
+        'profile_pollution_eval',
+        'affective_boundary_eval',
+        'cross_project_leak_eval',
+        'pending_usage_eval',
+        'similar_hint_eval'
+      ]
+    })
+  })
+
   it('rejects similar hints eval check with trailing unsupported args', async () => {
     const home = await createTempDir('cyrene-codex-cli-eval-extra-home-')
 

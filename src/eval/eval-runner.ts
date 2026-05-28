@@ -9,6 +9,15 @@ export type EvalCheckName =
   | 'profile_pollution_eval'
   | 'affective_boundary_eval'
 
+export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
+  'memory_routing_eval',
+  'profile_pollution_eval',
+  'affective_boundary_eval',
+  'cross_project_leak_eval',
+  'pending_usage_eval',
+  'similar_hint_eval'
+]
+
 export interface EvalFinding {
   memoryId?: string
   reason: string

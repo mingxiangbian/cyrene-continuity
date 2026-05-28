@@ -10,6 +10,7 @@ import {
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
 } from '../memory/memory-store.js'
+import { runMemoryMigrationEvalGate } from '../eval/eval-runner.js'
 
 export interface CodexProjectRegistryEntry {
   projectId: string
@@ -85,6 +86,14 @@ export async function mergeCodexProjects(input: {
     throw new Error(`Project memory root not found: ${fromProjectId}`)
   }
   const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId)
+  const gate = runMemoryMigrationEvalGate({
+    fromProjectId,
+    toProjectId,
+    activeMemories: await readActiveMemoriesFromRoot(fromMemoryRoot)
+  })
+  if (!gate.passed) {
+    throw new Error(`Project merge blocked by eval gate: ${gate.failedChecks.join(', ')}`)
+  }
   const fromProjectRoot = dirname(fromMemoryRoot)
   const toProjectRoot = dirname(toMemoryRoot)
   const mergedFiles: string[] = []

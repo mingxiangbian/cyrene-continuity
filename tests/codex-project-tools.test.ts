@@ -91,4 +91,24 @@ describe('Codex project tools', () => {
     await expect(readFile(join(toRoot, 'index.jsonl'), 'utf8')).resolves.toContain('From project memory.')
     await expect(readFile(join(toRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
+
+  it('blocks cross-project migration of personal relationship or affective memory', async () => {
+    const home = await createTempDir('cyrene-project-merge-gate-home-')
+    vi.stubEnv('HOME', home)
+    const fromRoot = await ensureCodexProjectMemoryRoot('from-project')
+    await ensureCodexProjectMemoryRoot('to-project')
+    await writeFile(
+      join(fromRoot, 'index.jsonl'),
+      [
+        createActive({ id: 'personal-memory', domain: 'personal', type: 'user_preference' }),
+        createActive({ id: 'relationship-memory', domain: 'relationship', type: 'relationship_boundary' }),
+        createActive({ id: 'affective-memory', domain: 'affective', type: 'affective_pattern' })
+      ].map((memory) => JSON.stringify(memory)).join('\n') + '\n'
+    )
+
+    await expect(mergeCodexProjects({
+      fromProjectId: 'from-project',
+      toProjectId: 'to-project'
+    })).rejects.toThrow('Project merge blocked by eval gate: cross_project_leak_eval')
+  })
 })

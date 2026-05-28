@@ -725,7 +725,7 @@ describe('Codex continuity context', () => {
     expect(context.similarProjectHints).toEqual([])
     expect(context.diagnostics?.evalGate).toMatchObject({
       passed: false,
-      failedChecks: ['similar_hint_boundary_eval']
+      failedChecks: ['similar_hint_eval']
     })
   })
 
