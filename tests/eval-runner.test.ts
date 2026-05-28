@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   runDreamApplyEvalGate,
+  runMemoryMigrationEvalGate,
+  runMemoryRoutingEvalGate,
   runSimilarHintsEvalGate,
   type SimilarHintEvalCandidate
 } from '../src/eval/eval-runner.js'
-import type { PendingMemory } from '../src/memory/types.js'
+import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 function candidate(overrides: Partial<SimilarHintEvalCandidate> = {}): SimilarHintEvalCandidate {
   return {
@@ -57,6 +59,136 @@ function pending(overrides: Partial<PendingMemory> = {}): PendingMemory {
   }
 }
 
+function activeMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
+  return {
+    id: 'active-1',
+    domain: 'procedural',
+    type: 'procedural_rule',
+    strength: 'hard',
+    scope: 'project',
+    status: 'active',
+    content: 'Use explicit release gates before shipping plugin changes.',
+    normalizedKey: 'release-gates',
+    evidence: [{
+      runId: 'run-1',
+      sourceKind: 'user_explicit',
+      summary: 'User asked for release gates.'
+    }],
+    source: 'user_explicit',
+    scores: {
+      evidenceStrength: 0.95,
+      stability: 0.9,
+      usefulness: 0.9,
+      safety: 0.95,
+      sensitivity: 0.1
+    },
+    createdAt: '2026-05-25T00:00:00.000Z',
+    updatedAt: '2026-05-25T00:00:00.000Z',
+    tags: ['codex'],
+    ...overrides
+  }
+}
+
+describe('memory routing eval gate', () => {
+  it('passes active, pending, and similar-project memories only in their explicit routes', () => {
+    const result = runMemoryRoutingEvalGate({
+      currentProjectId: 'current',
+      globalMemory: [{
+        id: 'global-active',
+        status: 'active',
+        scope: 'global',
+        homeProjectId: null
+      }],
+      projectMemory: [{
+        id: 'project-active',
+        status: 'active',
+        scope: 'project',
+        homeProjectId: 'current'
+      }],
+      pendingHypotheses: [{
+        id: 'pending-ok',
+        status: 'pending',
+        provisional: true
+      }],
+      similarProjectHints: [{
+        id: 'hint-ok',
+        status: 'active',
+        domain: 'procedural',
+        homeProjectId: 'other',
+        notCurrentProjectFact: true
+      }]
+    })
+
+    expect(result.passed).toBe(true)
+    expect(result.failedChecks).toEqual([])
+    expect(result.results.map((check) => check.name)).toEqual(['memory_routing_eval'])
+  })
+
+  it('fails memory_routing_eval when pending or similar hints are routed as confirmed facts', () => {
+    const result = runMemoryRoutingEvalGate({
+      currentProjectId: 'current',
+      globalMemory: [{
+        id: 'pending-in-active',
+        status: 'pending',
+        scope: 'project',
+        homeProjectId: 'current'
+      }],
+      projectMemory: [],
+      pendingHypotheses: [{
+        id: 'pending-ok',
+        status: 'pending',
+        provisional: true
+      }],
+      similarProjectHints: [{
+        id: 'hint-current-fact',
+        status: 'active',
+        domain: 'procedural',
+        homeProjectId: 'other',
+        notCurrentProjectFact: false
+      }]
+    })
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toEqual(['memory_routing_eval'])
+    expect(JSON.stringify(result.results)).toContain('pending-in-active')
+    expect(JSON.stringify(result.results)).toContain('hint-current-fact')
+  })
+})
+
+describe('memory migration eval gate', () => {
+  it('passes project and procedural memory migration', () => {
+    const result = runMemoryMigrationEvalGate({
+      fromProjectId: 'legacy',
+      toProjectId: 'current',
+      activeMemories: [
+        activeMemory({ id: 'project', domain: 'project', type: 'project_fact' }),
+        activeMemory({ id: 'procedural', domain: 'procedural', type: 'procedural_rule' })
+      ]
+    })
+
+    expect(result.passed).toBe(true)
+    expect(result.failedChecks).toEqual([])
+  })
+
+  it('fails cross_project_leak_eval for personal relationship or affective memory migration', () => {
+    const result = runMemoryMigrationEvalGate({
+      fromProjectId: 'legacy',
+      toProjectId: 'current',
+      activeMemories: [
+        activeMemory({ id: 'personal', domain: 'personal', type: 'user_preference' }),
+        activeMemory({ id: 'relationship', domain: 'relationship', type: 'relationship_boundary' }),
+        activeMemory({ id: 'affective', domain: 'affective', type: 'affective_pattern' })
+      ]
+    })
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toEqual(['cross_project_leak_eval'])
+    expect(JSON.stringify(result.results)).toContain('personal')
+    expect(JSON.stringify(result.results)).toContain('relationship')
+    expect(JSON.stringify(result.results)).toContain('affective')
+  })
+})
+
 describe('similar hints eval gate', () => {
   it('passes safe transferable procedural hints', () => {
     const result = runSimilarHintsEvalGate([candidate()])
@@ -102,7 +234,7 @@ describe('similar hints eval gate', () => {
     ])
 
     expect(result.passed).toBe(false)
-    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(result.failedChecks).toContain('similar_hint_eval')
     expect(JSON.stringify(result.results)).toContain('personal')
     expect(JSON.stringify(result.results)).toContain('relationship')
     expect(JSON.stringify(result.results)).toContain('affective')
@@ -124,7 +256,7 @@ describe('similar hints eval gate', () => {
     ])
 
     expect(result.passed).toBe(false)
-    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(result.failedChecks).toContain('similar_hint_eval')
     expect(JSON.stringify(result.results)).toContain('wrapped-path')
     expect(JSON.stringify(result.results)).toContain('gitlab-ssh')
     expect(JSON.stringify(result.results)).toContain('gitlab-https')
@@ -150,7 +282,7 @@ describe('similar hints eval gate', () => {
     ])
 
     expect(result.passed).toBe(false)
-    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(result.failedChecks).toContain('similar_hint_eval')
     expect(JSON.stringify(result.results)).toContain('path-opt')
     expect(JSON.stringify(result.results)).toContain('path-usr')
     expect(JSON.stringify(result.results)).toContain('path-windows')
@@ -165,10 +297,10 @@ describe('similar hints eval gate', () => {
       candidate({ id: 'github-https-no-suffix', content: 'Clone https://github.com/org/private-repo.' }),
       candidate({ id: 'gitlab-https-no-suffix', content: 'Clone https://gitlab.com/org/private.' })
     ])
-    const boundary = result.results.find((check) => check.name === 'similar_hint_boundary_eval')
+    const boundary = result.results.find((check) => check.name === 'similar_hint_eval')
 
     expect(result.passed).toBe(false)
-    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(result.failedChecks).toContain('similar_hint_eval')
     expect(boundary?.findings).toEqual(expect.arrayContaining([
       { memoryId: 'github-https-no-suffix', reason: 'content contains raw remote' },
       { memoryId: 'gitlab-https-no-suffix', reason: 'content contains raw remote' }
@@ -181,10 +313,10 @@ describe('similar hints eval gate', () => {
       candidate({ id: 'git-url', content: 'Clone git://github.com/org/private.git.' }),
       candidate({ id: 'http-url', content: 'Clone http://github.com/org/private.git.' })
     ])
-    const boundary = result.results.find((check) => check.name === 'similar_hint_boundary_eval')
+    const boundary = result.results.find((check) => check.name === 'similar_hint_eval')
 
     expect(result.passed).toBe(false)
-    expect(result.failedChecks).toContain('similar_hint_boundary_eval')
+    expect(result.failedChecks).toContain('similar_hint_eval')
     expect(boundary?.findings).toEqual(expect.arrayContaining([
       { memoryId: 'ssh-url', reason: 'content contains raw remote' },
       { memoryId: 'git-url', reason: 'content contains raw remote' },

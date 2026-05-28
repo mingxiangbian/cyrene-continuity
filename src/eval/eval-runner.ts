@@ -1,9 +1,10 @@
 import type { DreamProposedChange } from '../codex/dream-proposal.js'
-import type { MemoryDomain, MemoryPortability, MemoryScope, PendingMemory } from '../memory/types.js'
+import type { CyreneMemory, MemoryDomain, MemoryPortability, MemoryScope, PendingMemory } from '../memory/types.js'
 
 export type EvalCheckName =
+  | 'memory_routing_eval'
   | 'cross_project_leak_eval'
-  | 'similar_hint_boundary_eval'
+  | 'similar_hint_eval'
   | 'pending_usage_eval'
   | 'profile_pollution_eval'
   | 'affective_boundary_eval'
@@ -32,6 +33,47 @@ export interface SimilarHintEvalCandidate {
   notCurrentProjectFact: boolean
 }
 
+export interface MemoryRoutingActiveItem {
+  id: string
+  status: 'active' | 'pending'
+  scope: MemoryScope
+  homeProjectId: string | null
+}
+
+export interface MemoryRoutingPendingItem {
+  id: string
+  status: 'active' | 'pending'
+  provisional?: boolean
+}
+
+export interface MemoryRoutingSimilarHintItem {
+  id: string
+  status: 'active' | 'pending'
+  domain: MemoryDomain
+  homeProjectId: string | null
+  notCurrentProjectFact: boolean
+}
+
+export interface MemoryRoutingEvalInput {
+  currentProjectId: string
+  globalMemory: MemoryRoutingActiveItem[]
+  projectMemory: MemoryRoutingActiveItem[]
+  pendingHypotheses: MemoryRoutingPendingItem[]
+  similarProjectHints: MemoryRoutingSimilarHintItem[]
+}
+
+export interface MemoryMigrationEvalInput {
+  fromProjectId: string
+  toProjectId: string
+  activeMemories: Array<Pick<CyreneMemory, 'id' | 'domain'>>
+}
+
+export interface ProfileApplyEvalCandidate {
+  id: string
+  content: string
+  sourceMemoryIds: string[]
+}
+
 export interface EvalGateResult {
   passed: boolean
   failedChecks: EvalCheckName[]
@@ -39,19 +81,25 @@ export interface EvalGateResult {
 }
 
 export function runSimilarHintsEvalGate(candidates: SimilarHintEvalCandidate[]): EvalGateResult {
-  const results = [
+  return gate([
     runCrossProjectLeakEval(candidates),
-    runSimilarHintBoundaryEval(candidates)
-  ]
-  const failedChecks = results
-    .filter((result) => !result.passed && result.severity === 'error')
-    .map((result) => result.name)
+    runSimilarHintEval(candidates)
+  ])
+}
 
-  return {
-    passed: failedChecks.length === 0,
-    failedChecks,
-    results
-  }
+export function runMemoryRoutingEvalGate(input: MemoryRoutingEvalInput): EvalGateResult {
+  return gate([runMemoryRoutingEval(input)])
+}
+
+export function runMemoryMigrationEvalGate(input: MemoryMigrationEvalInput): EvalGateResult {
+  return gate([runCrossProjectMigrationLeakEval(input)])
+}
+
+export function runProfileApplyEvalGate(candidate: ProfileApplyEvalCandidate): EvalGateResult {
+  return gate([
+    runProfileCandidatePollutionEval(candidate),
+    runProfileCandidateAffectiveBoundaryEval(candidate)
+  ])
 }
 
 export function runDreamApplyEvalGate(input: {
@@ -59,11 +107,18 @@ export function runDreamApplyEvalGate(input: {
   pending: PendingMemory[]
   profilePreview?: string
 }): EvalGateResult {
-  const results = [
+  return gate([
     runPendingUsageEval(input.proposedChanges, input.pending),
     runProfilePollutionEval(input.proposedChanges, input.pending, input.profilePreview),
     runAffectiveBoundaryEval(input.proposedChanges, input.pending)
-  ]
+  ])
+}
+
+export function combineEvalGateResults(gates: EvalGateResult[]): EvalGateResult {
+  return gate(gates.flatMap((item) => item.results))
+}
+
+function gate(results: EvalResult[]): EvalGateResult {
   const failedChecks = results
     .filter((result) => !result.passed && result.severity === 'error')
     .map((result) => result.name)
@@ -95,7 +150,7 @@ function runCrossProjectLeakEval(candidates: SimilarHintEvalCandidate[]): EvalRe
   return result('cross_project_leak_eval', findings)
 }
 
-function runSimilarHintBoundaryEval(candidates: SimilarHintEvalCandidate[]): EvalResult {
+function runSimilarHintEval(candidates: SimilarHintEvalCandidate[]): EvalResult {
   const findings: EvalFinding[] = []
 
   for (const candidate of candidates) {
@@ -116,7 +171,92 @@ function runSimilarHintBoundaryEval(candidates: SimilarHintEvalCandidate[]): Eva
     }
   }
 
-  return result('similar_hint_boundary_eval', findings)
+  return result('similar_hint_eval', findings)
+}
+
+function runMemoryRoutingEval(input: MemoryRoutingEvalInput): EvalResult {
+  const findings: EvalFinding[] = []
+
+  for (const item of input.globalMemory) {
+    if (item.status !== 'active') {
+      findings.push({ memoryId: item.id, reason: 'globalMemory contains non-active memory' })
+    }
+    if (item.scope !== 'global') {
+      findings.push({ memoryId: item.id, reason: 'globalMemory contains non-global memory' })
+    }
+    if (item.homeProjectId !== null) {
+      findings.push({ memoryId: item.id, reason: 'globalMemory contains project-local memory' })
+    }
+  }
+
+  for (const item of input.projectMemory) {
+    if (item.status !== 'active') {
+      findings.push({ memoryId: item.id, reason: 'projectMemory contains non-active memory' })
+    }
+    if (item.scope === 'global') {
+      findings.push({ memoryId: item.id, reason: 'projectMemory contains global memory' })
+    }
+    if (item.homeProjectId !== input.currentProjectId) {
+      findings.push({ memoryId: item.id, reason: 'projectMemory contains memory from another projectId' })
+    }
+  }
+
+  for (const item of input.pendingHypotheses) {
+    if (item.status !== 'pending') {
+      findings.push({ memoryId: item.id, reason: 'pendingHypotheses contains confirmed memory' })
+    }
+    if (item.provisional !== true) {
+      findings.push({ memoryId: item.id, reason: 'pendingHypotheses item is not marked provisional' })
+    }
+  }
+
+  for (const item of input.similarProjectHints) {
+    if (item.status !== 'active') {
+      findings.push({ memoryId: item.id, reason: 'similarProjectHints contains non-active memory' })
+    }
+    if (item.homeProjectId === null || item.homeProjectId === input.currentProjectId) {
+      findings.push({ memoryId: item.id, reason: 'similarProjectHints contains current-project memory' })
+    }
+    if (!item.notCurrentProjectFact) {
+      findings.push({ memoryId: item.id, reason: 'similarProjectHints item is not marked as non-current-project fact' })
+    }
+  }
+
+  return result('memory_routing_eval', findings)
+}
+
+function runCrossProjectMigrationLeakEval(input: MemoryMigrationEvalInput): EvalResult {
+  const findings: EvalFinding[] = []
+  if (input.fromProjectId === input.toProjectId) {
+    return result('cross_project_leak_eval', findings)
+  }
+
+  for (const memory of input.activeMemories) {
+    if (isDisallowedSimilarHintDomain(memory.domain)) {
+      findings.push({
+        memoryId: memory.id,
+        reason: `domain cannot migrate across projectIds: ${memory.domain}`
+      })
+    }
+  }
+
+  return result('cross_project_leak_eval', findings)
+}
+
+function runProfileCandidatePollutionEval(candidate: ProfileApplyEvalCandidate): EvalResult {
+  const findings: EvalFinding[] = []
+  if (candidate.sourceMemoryIds.length === 0) {
+    findings.push({ memoryId: candidate.id, reason: 'profile candidate has no approved source memory' })
+  }
+  return result('profile_pollution_eval', findings)
+}
+
+function runProfileCandidateAffectiveBoundaryEval(candidate: ProfileApplyEvalCandidate): EvalResult {
+  const findings: EvalFinding[] = []
+  if (containsDiagnosticAffectiveClaim(candidate.content)) {
+    findings.push({ memoryId: candidate.id, reason: 'profile candidate contains diagnostic affective content' })
+  }
+  return result('affective_boundary_eval', findings)
 }
 
 function runPendingUsageEval(proposedChanges: DreamProposedChange[], pending: PendingMemory[]): EvalResult {
