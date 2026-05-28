@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
 import { access, lstat, readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
@@ -9,7 +9,8 @@ import {
 import type { MemoryIndexDiagnostics } from '../memory/memory-index.js'
 import {
   codexGlobalMemoryRoot,
-  codexProjectMemoryRoot
+  codexProjectMemoryRoot,
+  getReadableCodexProjectMemoryRoots
 } from './codex-memory-root.js'
 import {
   codexMemoryDbPath,
@@ -23,6 +24,7 @@ type CodexMemoryRootHealth = 'missing' | 'readable-writable' | 'readable-readonl
 type CodexMemoryFallbackMode = 'sqlite' | 'jsonl'
 type CodexMemoryIndexFreshness = 'fresh' | 'stale' | 'empty' | 'unavailable'
 type CodexSimilarProjectRetrieval = 'ready' | 'degraded'
+type CodexSessionSummaryStatus = 'present' | 'missing' | 'unreadable'
 
 interface CodexMemoryRootStatus {
   path: string
@@ -50,6 +52,14 @@ interface CodexMemoryIndexStatus {
   staleReason?: string
 }
 
+interface CodexStopHookStatus {
+  configured: boolean
+  sessionSummaries: CodexSessionSummaryStatus
+  lastRunAt?: string
+  lastRunStatus?: 'ok' | 'failed'
+  reason?: string
+}
+
 export interface CodexMemoryStatus {
   nodeVersion: string
   project: {
@@ -58,6 +68,9 @@ export interface CodexMemoryStatus {
     cwd: string
     gitRoot?: string
     gitRemoteHash?: string
+    knownProjectRootCount: number
+    knownProjectIds: string[]
+    idDiagnostic: string
   }
   roots: {
     global: CodexMemoryRootStatus & { counts: CodexMemoryCounts }
@@ -66,30 +79,37 @@ export interface CodexMemoryStatus {
   index: CodexMemoryIndexStatus
   similarProjectRetrieval: CodexSimilarProjectRetrieval
   stopHookConfigured: boolean
+  stopHook: CodexStopHookStatus
   dream: {
+    state: 'ok' | 'unreadable'
     due: boolean
     lastDreamAt?: string
+    reason?: string
   }
 }
 
 const INDEXED_SOURCE_FILES = ['index.jsonl', 'pending.jsonl']
 const PROFILE_CANDIDATES_FILE = 'profile_candidates.jsonl'
+const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
 
 export async function readCodexMemoryStatus(input: { cwd: string }): Promise<CodexMemoryStatus> {
   const project = await identifyCodexProject(input.cwd)
   const globalRoot = codexGlobalMemoryRoot()
   const projectRoot = codexProjectMemoryRoot(project.projectId)
-  const [globalStatus, projectStatus, globalCounts, projectCounts, diagnostics, stopHookConfigured, dreamState] =
+  const [knownProjectMemoryRoots, globalStatus, projectStatus, globalCounts, projectCounts, diagnostics, stopHook, dream] =
     await Promise.all([
+      readKnownProjectMemoryRoots(),
       readRootStatus(globalRoot),
       readRootStatus(projectRoot),
       readRootCounts(globalRoot),
       readRootCounts(projectRoot),
       readStatusIndexDiagnostics(),
-      isCodexStopHookConfigured(),
-      readCodexMemoryDreamState(projectRoot)
+      readStopHookStatus(projectRoot),
+      readDreamStatus(projectRoot)
     ])
-  const index = await readIndexStatus(diagnostics, [globalRoot, projectRoot])
+  const indexedMemoryRoots = uniqueStrings([globalRoot, projectRoot, ...knownProjectMemoryRoots])
+  const knownProjectIds = projectIdsFromMemoryRoots(knownProjectMemoryRoots)
+  const index = await readIndexStatus(diagnostics, indexedMemoryRoots)
 
   return {
     nodeVersion: process.versions.node,
@@ -98,7 +118,10 @@ export async function readCodexMemoryStatus(input: { cwd: string }): Promise<Cod
       displayName: project.displayName,
       cwd: project.cwd,
       gitRoot: project.gitRoot,
-      gitRemoteHash: project.gitRemoteHash
+      gitRemoteHash: project.gitRemoteHash,
+      knownProjectRootCount: knownProjectIds.length,
+      knownProjectIds,
+      idDiagnostic: projectIdDiagnostic(project.projectId, knownProjectIds)
     },
     roots: {
       global: { ...globalStatus, counts: globalCounts },
@@ -106,11 +129,9 @@ export async function readCodexMemoryStatus(input: { cwd: string }): Promise<Cod
     },
     index,
     similarProjectRetrieval: index.available && index.freshness !== 'stale' ? 'ready' : 'degraded',
-    stopHookConfigured,
-    dream: {
-      due: dreamState?.dreamDue === true,
-      lastDreamAt: dreamState?.lastDreamAt
-    }
+    stopHookConfigured: stopHook.configured,
+    stopHook,
+    dream
   }
 }
 
@@ -128,6 +149,9 @@ export async function formatCodexMemoryStatus(input: { cwd: string }): Promise<s
     `  cwd: ${status.project.cwd}`,
     `  git root: ${status.project.gitRoot ?? 'none'}`,
     `  remote hash: ${status.project.gitRemoteHash ?? 'none'}`,
+    `  known project roots: ${status.project.knownProjectRootCount}`,
+    `  projectId diagnostic: ${status.project.idDiagnostic}`,
+    status.project.knownProjectIds.length === 0 ? undefined : `  known projectIds: ${status.project.knownProjectIds.join(', ')}`,
     '',
     'roots:',
     `  global root: ${status.roots.global.path}`,
@@ -161,12 +185,43 @@ export async function formatCodexMemoryStatus(input: { cwd: string }): Promise<s
     status.index.freshness === 'stale' ? '  action: run cyrene-continuity codex memory db rebuild' : undefined,
     '',
     'hooks:',
-    `  stop hook: ${status.stopHookConfigured ? 'configured' : 'missing'}`,
+    `  stop hook: ${status.stopHook.configured ? 'configured' : 'missing'}`,
+    `  session summaries: ${status.stopHook.sessionSummaries}`,
+    `  last stop hook run: ${formatStopHookRun(status.stopHook)}`,
+    status.stopHook.reason === undefined ? undefined : `  stop hook reason: ${status.stopHook.reason}`,
     '',
     'dream:',
+    `  dream state: ${status.dream.state}`,
+    status.dream.reason === undefined ? undefined : `  dream state reason: ${status.dream.reason}`,
     `  dream due: ${status.dream.due ? 'yes' : 'no'}`,
     `  last dream: ${status.dream.lastDreamAt ?? 'never'}`
   ].filter((line): line is string => line !== undefined && line !== '').join('\n') + '\n'
+}
+
+async function readKnownProjectMemoryRoots(): Promise<string[]> {
+  try {
+    return getReadableCodexProjectMemoryRoots()
+  } catch {
+    return []
+  }
+}
+
+function projectIdsFromMemoryRoots(memoryRoots: string[]): string[] {
+  return memoryRoots.map((root) => basename(dirname(root))).sort()
+}
+
+function projectIdDiagnostic(currentProjectId: string, knownProjectIds: string[]): string {
+  if (knownProjectIds.length === 0) {
+    return 'no project memory roots found'
+  }
+  const hasCurrent = knownProjectIds.includes(currentProjectId)
+  if (knownProjectIds.length === 1 && hasCurrent) {
+    return 'current project root only'
+  }
+  if (!hasCurrent) {
+    return 'current projectId has no readable project memory root'
+  }
+  return 'multiple project memory roots detected'
 }
 
 async function readStatusIndexDiagnostics(): Promise<MemoryIndexDiagnostics> {
@@ -276,6 +331,78 @@ async function readRootCounts(root: string): Promise<CodexMemoryCounts> {
   }
 }
 
+async function readStopHookStatus(projectRoot: string): Promise<CodexStopHookStatus> {
+  const [configured, latestSummary] = await Promise.all([
+    isCodexStopHookConfigured(),
+    readLatestReviewSummary(projectRoot)
+  ])
+  return {
+    configured,
+    sessionSummaries: latestSummary.status,
+    lastRunAt: latestSummary.lastRunAt,
+    lastRunStatus: latestSummary.lastRunStatus,
+    reason: latestSummary.reason
+  }
+}
+
+async function readLatestReviewSummary(root: string): Promise<{
+  status: CodexSessionSummaryStatus
+  lastRunAt?: string
+  lastRunStatus?: 'ok' | 'failed'
+  reason?: string
+}> {
+  let text: string
+  try {
+    text = await readFile(join(root, REVIEW_SUMMARIES_FILE), 'utf8')
+  } catch (error) {
+    if (isErrorCode(error, 'ENOENT')) {
+      return { status: 'missing' }
+    }
+    return { status: 'unreadable', reason: errorMessage(error) }
+  }
+
+  let latest: { createdAt: string; status: 'ok' | 'failed' } | undefined
+  try {
+    for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+      const parsed = JSON.parse(line) as { createdAt?: unknown; status?: unknown }
+      if (typeof parsed.createdAt !== 'string' || !isSummaryStatus(parsed.status)) {
+        continue
+      }
+      if (latest === undefined || parsed.createdAt > latest.createdAt) {
+        latest = { createdAt: parsed.createdAt, status: parsed.status }
+      }
+    }
+  } catch (error) {
+    return { status: 'unreadable', reason: errorMessage(error) }
+  }
+
+  if (latest === undefined) {
+    return { status: 'missing' }
+  }
+  return {
+    status: 'present',
+    lastRunAt: latest.createdAt,
+    lastRunStatus: latest.status
+  }
+}
+
+async function readDreamStatus(root: string): Promise<CodexMemoryStatus['dream']> {
+  try {
+    const dreamState = await readCodexMemoryDreamState(root)
+    return {
+      state: 'ok',
+      due: dreamState.dreamDue === true,
+      lastDreamAt: dreamState.lastDreamAt
+    }
+  } catch (error) {
+    return {
+      state: 'unreadable',
+      due: false,
+      reason: errorMessage(error)
+    }
+  }
+}
+
 async function readPendingProfileCandidateCount(root: string): Promise<number> {
   let text: string
   try {
@@ -357,6 +484,18 @@ async function canAccess(path: string, mode: number): Promise<boolean> {
 
 function formatRootHealth(root: CodexMemoryRootStatus): string {
   return root.reason === undefined ? root.health : `${root.health} (${root.reason})`
+}
+
+function formatStopHookRun(status: CodexStopHookStatus): string {
+  return status.lastRunAt === undefined ? 'never' : `${status.lastRunAt} (${status.lastRunStatus ?? 'unknown'})`
+}
+
+function isSummaryStatus(value: unknown): value is 'ok' | 'failed' {
+  return value === 'ok' || value === 'failed'
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values))
 }
 
 function isErrorCode(error: unknown, code: string): boolean {

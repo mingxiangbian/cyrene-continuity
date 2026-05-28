@@ -10460,7 +10460,7 @@ function isFileErrorCode4(error2, code) {
 // src/codex/codex-memory-status.ts
 import { constants } from "node:fs";
 import { access as access2, lstat as lstat6, readFile as readFile5, stat } from "node:fs/promises";
-import { join as join9 } from "node:path";
+import { basename as basename3, dirname as dirname6, join as join9 } from "node:path";
 
 // src/codex/codex-memory-index.ts
 import { basename as basename2, dirname as dirname3, join as join6 } from "node:path";
@@ -11721,20 +11721,24 @@ function isFileErrorCode5(error2, code) {
 // src/codex/codex-memory-status.ts
 var INDEXED_SOURCE_FILES = ["index.jsonl", "pending.jsonl"];
 var PROFILE_CANDIDATES_FILE = "profile_candidates.jsonl";
+var REVIEW_SUMMARIES_FILE = "review-summaries.jsonl";
 async function readCodexMemoryStatus(input) {
   const project = await identifyCodexProject(input.cwd);
   const globalRoot = codexGlobalMemoryRoot();
   const projectRoot = codexProjectMemoryRoot(project.projectId);
-  const [globalStatus, projectStatus, globalCounts, projectCounts, diagnostics, stopHookConfigured, dreamState] = await Promise.all([
+  const [knownProjectMemoryRoots, globalStatus, projectStatus, globalCounts, projectCounts, diagnostics, stopHook, dream] = await Promise.all([
+    readKnownProjectMemoryRoots(),
     readRootStatus(globalRoot),
     readRootStatus(projectRoot),
     readRootCounts(globalRoot),
     readRootCounts(projectRoot),
     readStatusIndexDiagnostics(),
-    isCodexStopHookConfigured(),
-    readCodexMemoryDreamState(projectRoot)
+    readStopHookStatus(projectRoot),
+    readDreamStatus(projectRoot)
   ]);
-  const index = await readIndexStatus(diagnostics, [globalRoot, projectRoot]);
+  const indexedMemoryRoots = uniqueStrings([globalRoot, projectRoot, ...knownProjectMemoryRoots]);
+  const knownProjectIds = projectIdsFromMemoryRoots(knownProjectMemoryRoots);
+  const index = await readIndexStatus(diagnostics, indexedMemoryRoots);
   return {
     nodeVersion: process.versions.node,
     project: {
@@ -11742,7 +11746,10 @@ async function readCodexMemoryStatus(input) {
       displayName: project.displayName,
       cwd: project.cwd,
       gitRoot: project.gitRoot,
-      gitRemoteHash: project.gitRemoteHash
+      gitRemoteHash: project.gitRemoteHash,
+      knownProjectRootCount: knownProjectIds.length,
+      knownProjectIds,
+      idDiagnostic: projectIdDiagnostic(project.projectId, knownProjectIds)
     },
     roots: {
       global: { ...globalStatus, counts: globalCounts },
@@ -11750,11 +11757,9 @@ async function readCodexMemoryStatus(input) {
     },
     index,
     similarProjectRetrieval: index.available && index.freshness !== "stale" ? "ready" : "degraded",
-    stopHookConfigured,
-    dream: {
-      due: dreamState?.dreamDue === true,
-      lastDreamAt: dreamState?.lastDreamAt
-    }
+    stopHookConfigured: stopHook.configured,
+    stopHook,
+    dream
   };
 }
 async function formatCodexMemoryStatus(input) {
@@ -11771,6 +11776,9 @@ async function formatCodexMemoryStatus(input) {
     `  cwd: ${status.project.cwd}`,
     `  git root: ${status.project.gitRoot ?? "none"}`,
     `  remote hash: ${status.project.gitRemoteHash ?? "none"}`,
+    `  known project roots: ${status.project.knownProjectRootCount}`,
+    `  projectId diagnostic: ${status.project.idDiagnostic}`,
+    status.project.knownProjectIds.length === 0 ? void 0 : `  known projectIds: ${status.project.knownProjectIds.join(", ")}`,
     "",
     "roots:",
     `  global root: ${status.roots.global.path}`,
@@ -11804,12 +11812,40 @@ async function formatCodexMemoryStatus(input) {
     status.index.freshness === "stale" ? "  action: run cyrene-continuity codex memory db rebuild" : void 0,
     "",
     "hooks:",
-    `  stop hook: ${status.stopHookConfigured ? "configured" : "missing"}`,
+    `  stop hook: ${status.stopHook.configured ? "configured" : "missing"}`,
+    `  session summaries: ${status.stopHook.sessionSummaries}`,
+    `  last stop hook run: ${formatStopHookRun(status.stopHook)}`,
+    status.stopHook.reason === void 0 ? void 0 : `  stop hook reason: ${status.stopHook.reason}`,
     "",
     "dream:",
+    `  dream state: ${status.dream.state}`,
+    status.dream.reason === void 0 ? void 0 : `  dream state reason: ${status.dream.reason}`,
     `  dream due: ${status.dream.due ? "yes" : "no"}`,
     `  last dream: ${status.dream.lastDreamAt ?? "never"}`
   ].filter((line) => line !== void 0 && line !== "").join("\n") + "\n";
+}
+async function readKnownProjectMemoryRoots() {
+  try {
+    return getReadableCodexProjectMemoryRoots();
+  } catch {
+    return [];
+  }
+}
+function projectIdsFromMemoryRoots(memoryRoots) {
+  return memoryRoots.map((root) => basename3(dirname6(root))).sort();
+}
+function projectIdDiagnostic(currentProjectId, knownProjectIds) {
+  if (knownProjectIds.length === 0) {
+    return "no project memory roots found";
+  }
+  const hasCurrent = knownProjectIds.includes(currentProjectId);
+  if (knownProjectIds.length === 1 && hasCurrent) {
+    return "current project root only";
+  }
+  if (!hasCurrent) {
+    return "current projectId has no readable project memory root";
+  }
+  return "multiple project memory roots detected";
 }
 async function readStatusIndexDiagnostics() {
   const diagnostics = await readCodexMemoryIndexDiagnostics();
@@ -11910,6 +11946,68 @@ async function readRootCounts(root) {
     };
   }
 }
+async function readStopHookStatus(projectRoot) {
+  const [configured, latestSummary] = await Promise.all([
+    isCodexStopHookConfigured(),
+    readLatestReviewSummary(projectRoot)
+  ]);
+  return {
+    configured,
+    sessionSummaries: latestSummary.status,
+    lastRunAt: latestSummary.lastRunAt,
+    lastRunStatus: latestSummary.lastRunStatus,
+    reason: latestSummary.reason
+  };
+}
+async function readLatestReviewSummary(root) {
+  let text;
+  try {
+    text = await readFile5(join9(root, REVIEW_SUMMARIES_FILE), "utf8");
+  } catch (error2) {
+    if (isErrorCode(error2, "ENOENT")) {
+      return { status: "missing" };
+    }
+    return { status: "unreadable", reason: errorMessage(error2) };
+  }
+  let latest;
+  try {
+    for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+      const parsed = JSON.parse(line);
+      if (typeof parsed.createdAt !== "string" || !isSummaryStatus(parsed.status)) {
+        continue;
+      }
+      if (latest === void 0 || parsed.createdAt > latest.createdAt) {
+        latest = { createdAt: parsed.createdAt, status: parsed.status };
+      }
+    }
+  } catch (error2) {
+    return { status: "unreadable", reason: errorMessage(error2) };
+  }
+  if (latest === void 0) {
+    return { status: "missing" };
+  }
+  return {
+    status: "present",
+    lastRunAt: latest.createdAt,
+    lastRunStatus: latest.status
+  };
+}
+async function readDreamStatus(root) {
+  try {
+    const dreamState = await readCodexMemoryDreamState(root);
+    return {
+      state: "ok",
+      due: dreamState.dreamDue === true,
+      lastDreamAt: dreamState.lastDreamAt
+    };
+  } catch (error2) {
+    return {
+      state: "unreadable",
+      due: false,
+      reason: errorMessage(error2)
+    };
+  }
+}
 async function readPendingProfileCandidateCount(root) {
   let text;
   try {
@@ -11983,6 +12081,15 @@ async function canAccess(path, mode) {
 function formatRootHealth(root) {
   return root.reason === void 0 ? root.health : `${root.health} (${root.reason})`;
 }
+function formatStopHookRun(status) {
+  return status.lastRunAt === void 0 ? "never" : `${status.lastRunAt} (${status.lastRunStatus ?? "unknown"})`;
+}
+function isSummaryStatus(value) {
+  return value === "ok" || value === "failed";
+}
+function uniqueStrings(values) {
+  return Array.from(new Set(values));
+}
 function isErrorCode(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
@@ -11991,16 +12098,16 @@ function errorMessage(error2) {
 }
 
 // src/codex/runtime-paths.ts
-import { basename as basename3, dirname as dirname6, resolve as resolve5 } from "node:path";
+import { basename as basename4, dirname as dirname7, resolve as resolve5 } from "node:path";
 var PLUGIN_RUNTIME_FILE = "cyrene-continuity.mjs";
 function isPluginRuntimeEntryPath(runtimeEntryPath) {
   const entryPath = resolve5(runtimeEntryPath);
-  return basename3(entryPath) === PLUGIN_RUNTIME_FILE && basename3(dirname6(entryPath)) === "runtime";
+  return basename4(entryPath) === PLUGIN_RUNTIME_FILE && basename4(dirname7(entryPath)) === "runtime";
 }
 function resolvePluginRoot(runtimeEntryPath) {
   const entryPath = resolve5(runtimeEntryPath);
   if (isPluginRuntimeEntryPath(entryPath)) {
-    return dirname6(dirname6(entryPath));
+    return dirname7(dirname7(entryPath));
   }
   return resolve5(requireDevRepoRoot(entryPath), "plugin");
 }
@@ -12016,12 +12123,12 @@ function resolveDevRepoRoot(runtimeEntryPath) {
   if (isPluginRuntimeEntryPath(entryPath)) {
     return null;
   }
-  const entryDir = dirname6(entryPath);
-  if (basename3(entryDir) === "src") {
-    return dirname6(entryDir);
+  const entryDir = dirname7(entryPath);
+  if (basename4(entryDir) === "src") {
+    return dirname7(entryDir);
   }
-  if (basename3(entryDir) === "codex" && basename3(dirname6(entryDir)) === "src") {
-    return dirname6(dirname6(entryDir));
+  if (basename4(entryDir) === "codex" && basename4(dirname7(entryDir)) === "src") {
+    return dirname7(dirname7(entryDir));
   }
   return resolve5(entryDir, "..", "..");
 }
@@ -12107,6 +12214,8 @@ async function formatCodexDoctor(input) {
     `  codex root: ${codexGlobalRoot()}`,
     `  projectId: ${identity.projectId}`,
     `  displayName: ${identity.displayName}`,
+    `  known project roots: ${memoryStatus.project.knownProjectRootCount}`,
+    `  projectId diagnostic: ${memoryStatus.project.idDiagnostic}`,
     "",
     "memory:",
     `  global profile: ${memoryState.globalProfilePresent ? "present" : "missing"}`,
@@ -12124,6 +12233,9 @@ async function formatCodexDoctor(input) {
     memoryIndex.sourceLatestAt === void 0 ? void 0 : `  memory index source latest: ${memoryIndex.sourceLatestAt}`,
     memoryIndex.staleReason === void 0 ? void 0 : `  memory index stale reason: ${memoryIndex.staleReason}`,
     `  similar-project retrieval: ${memoryStatus.similarProjectRetrieval}`,
+    `  session summaries: ${memoryStatus.stopHook.sessionSummaries}`,
+    `  last stop hook run: ${memoryStatus.stopHook.lastRunAt === void 0 ? "never" : `${memoryStatus.stopHook.lastRunAt} (${memoryStatus.stopHook.lastRunStatus ?? "unknown"})`}`,
+    memoryStatus.stopHook.reason === void 0 ? void 0 : `  stop hook reason: ${memoryStatus.stopHook.reason}`,
     `  dream due: ${memoryState.dreamDue ? "yes" : "no"}`,
     `  last dream: ${memoryState.lastDreamAt ?? "never"}`,
     `  promotion recommendations: ${config2.memoryRecommendPromotionEnabled ? "enabled" : "disabled"}`,
@@ -12665,7 +12777,7 @@ import { setTimeout as delay } from "node:timers/promises";
 // src/memory/memory-exporter.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { lstat as lstat7, open, readdir as readdir3, readFile as readFile7, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
-import { dirname as dirname7, isAbsolute as isAbsolute3, join as join11, relative as relative3 } from "node:path";
+import { dirname as dirname8, isAbsolute as isAbsolute3, join as join11, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
 import { createHash as createHash2 } from "node:crypto";
@@ -13123,7 +13235,7 @@ async function removeLegacyGeneratedProjectionFiles(root) {
   await removeEmptyLegacyProjectionsDirectory(root);
 }
 async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
-  const parent = dirname7(legacyFile);
+  const parent = dirname8(legacyFile);
   if (parent !== ".") {
     const parentPath = join11(root, parent);
     let parentStats;
@@ -14834,10 +14946,10 @@ function redactReviewText(input) {
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile2 } from "node:fs/promises";
 import { join as join15 } from "node:path";
-var REVIEW_SUMMARIES_FILE = "review-summaries.jsonl";
+var REVIEW_SUMMARIES_FILE2 = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  await appendFile2(join15(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record2)}
+  await appendFile2(join15(root, REVIEW_SUMMARIES_FILE2), `${JSON.stringify(record2)}
 `, "utf8");
 }
 
@@ -15340,7 +15452,7 @@ function asString2(value) {
 // src/codex/codex-install.ts
 import { lstat as lstat9, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile6 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname8, join as join16, resolve as resolve6 } from "node:path";
+import { dirname as dirname9, join as join16, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -15354,7 +15466,7 @@ async function installCodexDevBridge(input = {}) {
   );
   const skillTarget = join16(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
-  await mkdir9(dirname8(skillTarget), { recursive: true });
+  await mkdir9(dirname9(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
   await mkdir9(stateRoot, { recursive: true });
@@ -16460,7 +16572,7 @@ function isFileErrorCode12(error2, code) {
 
 // src/codex/similar-hints-review.ts
 import { createHash as createHash8, randomUUID as randomUUID11 } from "node:crypto";
-import { basename as basename4, dirname as dirname9 } from "node:path";
+import { basename as basename5, dirname as dirname10 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
     id: memory.id,
@@ -16631,7 +16743,7 @@ function memoryPortability(memory) {
   return memory.portability ?? (memory.scope === "global" ? "global" : "local_only");
 }
 function projectIdFromMemoryRoot(memoryRoot) {
-  return basename4(dirname9(memoryRoot));
+  return basename5(dirname10(memoryRoot));
 }
 function uniqueInOrder3(values) {
   const seen = /* @__PURE__ */ new Set();

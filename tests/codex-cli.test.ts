@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -769,6 +769,103 @@ describe('cyrene-continuity codex CLI', () => {
     expect(doctor.stdout).toContain('memory fallback mode:')
     expect(doctor.stdout).toContain('memory index freshness: stale')
     await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reports stale shared index when another readable project root has newer memory source', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-all-roots-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-all-roots-repo-')
+    const identity = await identifyCodexProject(repo)
+    const currentMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const legacyProjectId = 'legacy-project-id'
+    const legacyMemoryRoot = codexProjectMemoryRoot(legacyProjectId)
+    const dbPath = join(home, '.cyrene', 'codex', 'memory.db')
+    const currentSource = join(currentMemoryRoot, 'index.jsonl')
+    const legacySource = join(legacyMemoryRoot, 'pending.jsonl')
+    await mkdir(currentMemoryRoot, { recursive: true })
+    await mkdir(legacyMemoryRoot, { recursive: true })
+    await mkdir(join(home, '.cyrene', 'codex'), { recursive: true })
+    await writeFile(currentSource, `${JSON.stringify(createActive())}\n`)
+    await writeFile(dbPath, '')
+    await writeFile(legacySource, `${JSON.stringify(createPending())}\n`)
+    await utimes(currentSource, new Date('2026-05-28T00:00:00.000Z'), new Date('2026-05-28T00:00:00.000Z'))
+    await utimes(dbPath, new Date('2026-05-28T00:01:00.000Z'), new Date('2026-05-28T00:01:00.000Z'))
+    await utimes(legacySource, new Date('2026-05-28T00:02:00.000Z'), new Date('2026-05-28T00:02:00.000Z'))
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('index freshness: stale')
+    expect(result.stdout).toContain(legacyProjectId)
+    expect(result.stdout).toContain('similar-project retrieval: degraded')
+  })
+
+  it('reports projectId and Stop hook run diagnostics in memory status and doctor', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-project-hook-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-project-hook-repo-')
+    const identity = await identifyCodexProject(repo)
+    const currentMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(currentMemoryRoot, { recursive: true })
+    await mkdir(codexProjectMemoryRoot('legacy-project-id'), { recursive: true })
+    await writeFile(join(currentMemoryRoot, 'review-summaries.jsonl'), `${JSON.stringify({
+      id: 'summary-1',
+      runId: 'session:turn',
+      createdAt: '2026-05-28T00:00:00.000Z',
+      status: 'ok',
+      summary: 'Review-safe summary.',
+      redaction: { input: {}, output: {} },
+      candidateIds: []
+    })}\n`)
+    await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'install-hook', '--stop'],
+      { env: cliEnv(home) }
+    )
+
+    const status = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+    const doctor = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'doctor'],
+      { env: cliEnv(home) }
+    )
+
+    expect(status.stderr).toBe('')
+    expect(status.stdout).toContain('known project roots: 2')
+    expect(status.stdout).toContain('projectId diagnostic: multiple project memory roots detected')
+    expect(status.stdout).toContain('stop hook: configured')
+    expect(status.stdout).toContain('session summaries: present')
+    expect(status.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (ok)')
+    expect(doctor.stdout).toContain('projectId diagnostic: multiple project memory roots detected')
+    expect(doctor.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (ok)')
+  })
+
+  it('reports unreadable dream state without failing memory status', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-dream-state-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-dream-state-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'dream-state.json'), '{not json')
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('dream state: unreadable')
+    expect(result.stdout).toContain('dream state reason:')
   })
 
   it('doctor reports pending counts and current repo MCP command freshness', async () => {
