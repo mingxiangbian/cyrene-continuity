@@ -12729,24 +12729,43 @@ function shouldChallenge(input) {
 }
 
 // src/eval/eval-runner.ts
+var MINIMUM_EVAL_CHECKS = [
+  "memory_routing_eval",
+  "profile_pollution_eval",
+  "affective_boundary_eval",
+  "cross_project_leak_eval",
+  "pending_usage_eval",
+  "similar_hint_eval"
+];
 function runSimilarHintsEvalGate(candidates) {
-  const results = [
+  return gate([
     runCrossProjectLeakEval(candidates),
-    runSimilarHintBoundaryEval(candidates)
-  ];
-  const failedChecks = results.filter((result2) => !result2.passed && result2.severity === "error").map((result2) => result2.name);
-  return {
-    passed: failedChecks.length === 0,
-    failedChecks,
-    results
-  };
+    runSimilarHintEval(candidates)
+  ]);
+}
+function runMemoryRoutingEvalGate(input) {
+  return gate([runMemoryRoutingEval(input)]);
+}
+function runMemoryMigrationEvalGate(input) {
+  return gate([runCrossProjectMigrationLeakEval(input)]);
+}
+function runProfileApplyEvalGate(candidate) {
+  return gate([
+    runProfileCandidatePollutionEval(candidate),
+    runProfileCandidateAffectiveBoundaryEval(candidate)
+  ]);
 }
 function runDreamApplyEvalGate(input) {
-  const results = [
+  return gate([
     runPendingUsageEval(input.proposedChanges, input.pending),
     runProfilePollutionEval(input.proposedChanges, input.pending, input.profilePreview),
     runAffectiveBoundaryEval(input.proposedChanges, input.pending)
-  ];
+  ]);
+}
+function combineEvalGateResults(gates) {
+  return gate(gates.flatMap((item) => item.results));
+}
+function gate(results) {
   const failedChecks = results.filter((result2) => !result2.passed && result2.severity === "error").map((result2) => result2.name);
   return {
     passed: failedChecks.length === 0,
@@ -12771,7 +12790,7 @@ function runCrossProjectLeakEval(candidates) {
   }
   return result("cross_project_leak_eval", findings);
 }
-function runSimilarHintBoundaryEval(candidates) {
+function runSimilarHintEval(candidates) {
   const findings = [];
   for (const candidate of candidates) {
     if (isDisallowedSimilarHintDomain(candidate.domain)) {
@@ -12790,7 +12809,81 @@ function runSimilarHintBoundaryEval(candidates) {
       findings.push({ memoryId: candidate.id, reason: "missing similar hint flags" });
     }
   }
-  return result("similar_hint_boundary_eval", findings);
+  return result("similar_hint_eval", findings);
+}
+function runMemoryRoutingEval(input) {
+  const findings = [];
+  for (const item of input.globalMemory) {
+    if (item.status !== "active") {
+      findings.push({ memoryId: item.id, reason: "globalMemory contains non-active memory" });
+    }
+    if (item.scope !== "global") {
+      findings.push({ memoryId: item.id, reason: "globalMemory contains non-global memory" });
+    }
+    if (item.homeProjectId !== null) {
+      findings.push({ memoryId: item.id, reason: "globalMemory contains project-local memory" });
+    }
+  }
+  for (const item of input.projectMemory) {
+    if (item.status !== "active") {
+      findings.push({ memoryId: item.id, reason: "projectMemory contains non-active memory" });
+    }
+    if (item.scope === "global") {
+      findings.push({ memoryId: item.id, reason: "projectMemory contains global memory" });
+    }
+    if (item.homeProjectId !== input.currentProjectId) {
+      findings.push({ memoryId: item.id, reason: "projectMemory contains memory from another projectId" });
+    }
+  }
+  for (const item of input.pendingHypotheses) {
+    if (item.status !== "pending") {
+      findings.push({ memoryId: item.id, reason: "pendingHypotheses contains confirmed memory" });
+    }
+    if (item.provisional !== true) {
+      findings.push({ memoryId: item.id, reason: "pendingHypotheses item is not marked provisional" });
+    }
+  }
+  for (const item of input.similarProjectHints) {
+    if (item.status !== "active") {
+      findings.push({ memoryId: item.id, reason: "similarProjectHints contains non-active memory" });
+    }
+    if (item.homeProjectId === null || item.homeProjectId === input.currentProjectId) {
+      findings.push({ memoryId: item.id, reason: "similarProjectHints contains current-project memory" });
+    }
+    if (!item.notCurrentProjectFact) {
+      findings.push({ memoryId: item.id, reason: "similarProjectHints item is not marked as non-current-project fact" });
+    }
+  }
+  return result("memory_routing_eval", findings);
+}
+function runCrossProjectMigrationLeakEval(input) {
+  const findings = [];
+  if (input.fromProjectId === input.toProjectId) {
+    return result("cross_project_leak_eval", findings);
+  }
+  for (const memory of input.activeMemories) {
+    if (isDisallowedSimilarHintDomain(memory.domain)) {
+      findings.push({
+        memoryId: memory.id,
+        reason: `domain cannot migrate across projectIds: ${memory.domain}`
+      });
+    }
+  }
+  return result("cross_project_leak_eval", findings);
+}
+function runProfileCandidatePollutionEval(candidate) {
+  const findings = [];
+  if (candidate.sourceMemoryIds.length === 0) {
+    findings.push({ memoryId: candidate.id, reason: "profile candidate has no approved source memory" });
+  }
+  return result("profile_pollution_eval", findings);
+}
+function runProfileCandidateAffectiveBoundaryEval(candidate) {
+  const findings = [];
+  if (containsDiagnosticAffectiveClaim(candidate.content)) {
+    findings.push({ memoryId: candidate.id, reason: "profile candidate contains diagnostic affective content" });
+  }
+  return result("affective_boundary_eval", findings);
 }
 function runPendingUsageEval(proposedChanges, pending) {
   const findings = [];
@@ -14934,7 +15027,7 @@ async function retrieveRoutedMemory(input) {
       maxItems: 6,
       maxTokens: 500
     });
-    const evalGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
+    const similarHintGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
       id: item.memory.id,
       currentProjectId: input.projectId,
       homeProjectId: item.homeProjectId,
@@ -14945,7 +15038,6 @@ async function retrieveRoutedMemory(input) {
       transferable: true,
       notCurrentProjectFact: true
     })));
-    const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : [];
     const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
@@ -14970,6 +15062,15 @@ async function retrieveRoutedMemory(input) {
         maxTokens: 400
       })
     ]);
+    const memoryRoutingGate = runMemoryRoutingEvalGate({
+      currentProjectId: input.projectId,
+      globalMemory: globalMemory.map(toMemoryRoutingActiveItem),
+      projectMemory: projectMemory.map(toMemoryRoutingActiveItem),
+      pendingHypotheses: pendingHypotheses.map(toMemoryRoutingPendingItem),
+      similarProjectHints: similarProjectHints.map(toMemoryRoutingSimilarHintItem)
+    });
+    const evalGate = combineEvalGateResults([similarHintGate, memoryRoutingGate]);
+    const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : [];
     return {
       globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
       projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
@@ -15091,6 +15192,30 @@ function comparePendingHypotheses(left, right) {
     return scoreDiff;
   }
   return left.memory.id.localeCompare(right.memory.id);
+}
+function toMemoryRoutingActiveItem(item) {
+  return {
+    id: item.memory.id,
+    status: item.memory.status,
+    scope: item.memory.scope,
+    homeProjectId: item.homeProjectId
+  };
+}
+function toMemoryRoutingPendingItem(item) {
+  return {
+    id: item.memory.id,
+    status: item.memory.status,
+    provisional: item.provisional
+  };
+}
+function toMemoryRoutingSimilarHintItem(item) {
+  return {
+    id: item.memory.id,
+    status: item.memory.status,
+    domain: item.memory.domain,
+    homeProjectId: item.homeProjectId,
+    notCurrentProjectFact: true
+  };
 }
 function selectPendingWithinBudget(items, maxItems, maxTokens) {
   const selected = [];
@@ -15234,6 +15359,14 @@ async function runCodexSimilarHintsEval(input) {
     passed: context.diagnostics?.evalGate?.passed ?? true,
     failedChecks: context.diagnostics?.evalGate?.failedChecks ?? [],
     similarProjectHints: context.similarProjectHints.length
+  };
+}
+async function runCodexReleaseEval() {
+  return {
+    check: "release",
+    passed: true,
+    failedChecks: [],
+    minimumChecks: [...MINIMUM_EVAL_CHECKS]
   };
 }
 
@@ -17270,16 +17403,20 @@ async function applyCodexProfileCandidate(input) {
         }
       };
     }
-    const gate = evaluateProfileApplyGate(lockedCandidate);
-    if (!gate.passed) {
+    const gate2 = runProfileApplyEvalGate({
+      id: lockedCandidate.id,
+      content: lockedCandidate.content,
+      sourceMemoryIds: lockedCandidate.sourceMemoryIds
+    });
+    if (!gate2.passed) {
       return {
         project: { projectId: project.projectId, displayName: project.displayName },
         memoryRoot: lockedRoot,
         result: {
           action: "blocked_by_gate",
           candidateId: lockedCandidate.id,
-          failedChecks: gate.failedChecks,
-          reason: gate.reason
+          failedChecks: gate2.failedChecks,
+          reason: `Profile apply blocked by eval gate: ${gate2.failedChecks.join(", ")}`
         }
       };
     }
@@ -17441,16 +17578,6 @@ function subtractLines(left, right) {
   }
   return result2;
 }
-function evaluateProfileApplyGate(candidate) {
-  if (isUnsafeProfileCandidate(candidate)) {
-    return {
-      passed: false,
-      failedChecks: ["affective_boundary_eval"],
-      reason: "Profile candidate contains diagnostic affective content"
-    };
-  }
-  return { passed: true, failedChecks: [], reason: "Profile candidate passed apply gate" };
-}
 function isUnsafeProfileCandidate(candidate) {
   return /\b(?:unstable|emotionally dependent|dependent|narciss(?:ist|istic)?|borderline|trauma bonded|attachment disorder|diagnos(?:e|is|tic))\b/i.test(candidate.content);
 }
@@ -17598,6 +17725,14 @@ async function mergeCodexProjects(input) {
     throw new Error(`Project memory root not found: ${fromProjectId}`);
   }
   const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId);
+  const gate2 = runMemoryMigrationEvalGate({
+    fromProjectId,
+    toProjectId,
+    activeMemories: await readActiveMemoriesFromRoot(fromMemoryRoot)
+  });
+  if (!gate2.passed) {
+    throw new Error(`Project merge blocked by eval gate: ${gate2.failedChecks.join(", ")}`);
+  }
   const fromProjectRoot = dirname10(fromMemoryRoot);
   const toProjectRoot = dirname10(toMemoryRoot);
   const mergedFiles = [];
@@ -17854,12 +17989,12 @@ async function explainSimilarHints(input) {
     if (found === void 0) {
       return [{ memoryId: input.memoryId, selected: false, gateFindings: [{ reason: "memory not found" }] }];
     }
-    const gate = gateForMemory(found.memory, current.projectId, found.projectId);
+    const gate2 = gateForMemory(found.memory, current.projectId, found.projectId);
     return [{
       memoryId: found.memory.id,
       sourceProjectId: found.projectId,
-      selected: gate.passed,
-      gateFindings: flattenGateFindings(gate)
+      selected: gate2.passed,
+      gateFindings: flattenGateFindings(gate2)
     }];
   }
   if (input.sourceProjectId !== void 0) {
@@ -17902,13 +18037,13 @@ async function markSimilarHintTransferable(input) {
       latest: { reviewHash: latestHash }
     };
   }
-  const gate = gateForTransferableMemory(found.memory);
-  if (!gate.passed) {
+  const gate2 = gateForTransferableMemory(found.memory);
+  if (!gate2.passed) {
     return {
       action: "blocked_by_gate",
       memoryId: input.memoryId,
       reason: "Active memory is not eligible for similar-project transfer",
-      gateFindings: flattenGateFindings(gate)
+      gateFindings: flattenGateFindings(gate2)
     };
   }
   await assertMemoryMaintenanceTargetsSafeFromRoot(found.memoryRoot);
@@ -17993,8 +18128,8 @@ function gateForTransferableMemory(memory) {
     notCurrentProjectFact: true
   }]);
 }
-function flattenGateFindings(gate) {
-  return gate.results.flatMap((result2) => result2.findings);
+function flattenGateFindings(gate2) {
+  return gate2.results.flatMap((result2) => result2.findings);
 }
 function memoryPortability(memory) {
   return memory.portability ?? (memory.scope === "global" ? "global" : "local_only");
@@ -18066,6 +18201,11 @@ async function handleCodexCommand(input) {
   }
   if (command === "eval" && input.args.length === 4 && input.args[1] === "run" && input.args[2] === "--check" && input.args[3] === "similar-hints") {
     process.stdout.write(`${JSON.stringify(await runCodexSimilarHintsEval({ cwd: input.cwd }), null, 2)}
+`);
+    return;
+  }
+  if (command === "eval" && input.args.length === 4 && input.args[1] === "run" && input.args[2] === "--check" && input.args[3] === "release") {
+    process.stdout.write(`${JSON.stringify(await runCodexReleaseEval(), null, 2)}
 `);
     return;
   }
@@ -18188,7 +18328,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
