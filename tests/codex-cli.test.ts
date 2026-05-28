@@ -802,6 +802,46 @@ describe('cyrene-continuity codex CLI', () => {
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('CLI maintenance renders active memory into the model profile.')
   })
 
+  it('runs profile reflect and apply from the CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-profile-home-')
+    process.env.HOME = home
+    const identity = await identifyCodexProject(process.cwd())
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+
+    const reflect = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'profile', 'reflect', '--source', 'daily-interview'],
+      { env: cliEnv(home) }
+    )
+
+    expect(reflect.stderr).toBe('')
+    const reflected = JSON.parse(reflect.stdout) as { candidates: Array<{ id: string; reviewHash: string }> }
+    expect(reflected.candidates[0]?.reviewHash).toMatch(/^[a-f0-9]{64}$/)
+
+    const apply = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        'codex',
+        'profile',
+        'apply',
+        '--candidate',
+        reflected.candidates[0]?.id ?? '',
+        '--review-hash',
+        reflected.candidates[0]?.reviewHash ?? ''
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(apply.stderr).toBe('')
+    const applied = JSON.parse(apply.stdout) as { result: { action: string } }
+    expect(applied.result.action).toBe('apply')
+    await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('CLI maintenance renders active memory into the model profile.')
+  })
+
   it('runs the similar hints eval check from the Codex CLI', async () => {
     const home = await createTempDir('cyrene-codex-cli-eval-home-')
     const repo = await createTempDir('cyrene-codex-cli-eval-repo-')

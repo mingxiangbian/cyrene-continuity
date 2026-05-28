@@ -11991,6 +11991,19 @@ function runSimilarHintsEvalGate(candidates) {
     results
   };
 }
+function runDreamApplyEvalGate(input) {
+  const results = [
+    runPendingUsageEval(input.proposedChanges, input.pending),
+    runProfilePollutionEval(input.proposedChanges, input.pending, input.profilePreview),
+    runAffectiveBoundaryEval(input.proposedChanges, input.pending)
+  ];
+  const failedChecks = results.filter((result2) => !result2.passed && result2.severity === "error").map((result2) => result2.name);
+  return {
+    passed: failedChecks.length === 0,
+    failedChecks,
+    results
+  };
+}
 function runCrossProjectLeakEval(candidates) {
   const findings = [];
   for (const candidate of candidates) {
@@ -12029,6 +12042,54 @@ function runSimilarHintBoundaryEval(candidates) {
   }
   return result("similar_hint_boundary_eval", findings);
 }
+function runPendingUsageEval(proposedChanges, pending) {
+  const findings = [];
+  for (const change of proposedChanges) {
+    if (change.action !== "promote") {
+      continue;
+    }
+    const candidate = pending.find((item) => item.id === change.candidateId);
+    if (candidate === void 0) {
+      findings.push({ memoryId: change.memoryId, reason: `promoted candidate is missing from pending set: ${change.candidateId}` });
+      continue;
+    }
+    if (candidate.source === "assistant_observed" || candidate.evidence.some((entry) => entry.sourceKind === "assistant_observed")) {
+      findings.push({ memoryId: change.memoryId, reason: "assistant_observed pending candidate cannot be promoted by dream apply" });
+    }
+    if (candidate.evidence.length === 0) {
+      findings.push({ memoryId: change.memoryId, reason: "promoted pending candidate has no auditable evidence" });
+    }
+  }
+  return result("pending_usage_eval", findings);
+}
+function runProfilePollutionEval(proposedChanges, pending, profilePreview) {
+  const findings = [];
+  if (profilePreview === void 0 || profilePreview === "") {
+    return result("profile_pollution_eval", findings);
+  }
+  const promotedCandidateIds = new Set(
+    proposedChanges.filter((change) => change.action === "promote").map((change) => change.candidateId)
+  );
+  for (const candidate of pending) {
+    if (!promotedCandidateIds.has(candidate.id) && profilePreview.includes(candidate.content)) {
+      findings.push({ memoryId: candidate.id, reason: "profile preview contains pending-only content" });
+    }
+  }
+  return result("profile_pollution_eval", findings);
+}
+function runAffectiveBoundaryEval(proposedChanges, pending) {
+  const findings = [];
+  const changedCandidateIds = new Set(proposedChanges.map((change) => change.candidateId));
+  for (const candidate of pending) {
+    if (!changedCandidateIds.has(candidate.id)) {
+      continue;
+    }
+    if ((candidate.domain === "affective" || candidate.domain === "relationship") && containsDiagnosticAffectiveClaim(candidate.content)) {
+      findings.push({ memoryId: candidate.id, reason: "diagnostic affective claim cannot be applied by dream" });
+    }
+  }
+  return result("affective_boundary_eval", findings);
+}
 function result(name, findings) {
   return {
     name,
@@ -12050,6 +12111,9 @@ function containsRawRemote(content) {
 }
 function containsSecretLikeValue(content) {
   return /\b(?:(?:sk|ghp|github_pat|xoxb)[_-][A-Za-z0-9_-]{24,}|(?:reviewHash|candidateHash)(?:\s*[=:]\s*|\s+)[a-fA-F0-9]{64})\b/.test(content);
+}
+function containsDiagnosticAffectiveClaim(content) {
+  return /\b(?:unstable|emotionally dependent|dependent|narciss(?:ist|istic)?|borderline|trauma bonded|attachment disorder|diagnos(?:e|is|tic))\b/i.test(content);
 }
 
 // src/memory/project-similarity.ts
@@ -15033,18 +15097,25 @@ async function buildDreamProposalForRoot(input) {
       reason: evaluation.reason,
       distinctEvidenceCount: evaluation.distinctEvidenceCount
     });
-    applyPlan.push({ action: "promote", candidateId: candidate.id, memory });
+    applyPlan.push({
+      action: "promote",
+      candidateId: candidate.id,
+      memory,
+      reason: evaluation.reason,
+      distinctEvidenceCount: evaluation.distinctEvidenceCount
+    });
     diff.addActiveMemoryIds.push(memory.id);
     diff.removePendingCandidateIds.push(candidate.id);
     summary.promote += 1;
   }
+  const evalGate = runDreamApplyEvalGate({ proposedChanges, pending });
   return {
     memoryRoot,
     proposedChanges,
     applyPlan,
     diff,
     summary,
-    evalGate: { passed: true, failedChecks: [] }
+    evalGate
   };
 }
 function tombstoneForExpiredPending(candidate, now) {
@@ -15258,62 +15329,72 @@ async function runDeepDreamRoot(memoryRoot, now, config2) {
   }
 }
 async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours) {
+  const proposal = await buildDreamProposalForRoot({ memoryRoot, now });
+  if (!proposal.evalGate.passed) {
+    const reason = `Dream apply blocked by eval gate: ${proposal.evalGate.failedChecks.join(", ")}`;
+    await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal });
+    await writeDreamFailed(proposal.memoryRoot, now, new Error(reason));
+    return {
+      memoryRoot: proposal.memoryRoot,
+      stage: "deep-apply",
+      promoted: 0,
+      rejected: 0,
+      keptPending: (await readPendingMemoriesFromRoot(proposal.memoryRoot)).length,
+      skipped: reason
+    };
+  }
+  const applied = await applyDreamProposal(proposal.memoryRoot, proposal, now);
+  const maintenance = await runMemoryMaintenanceFromRootLocked({
+    memoryRoot: proposal.memoryRoot,
+    budget,
+    now,
+    reason: "after codex memory dream deep-apply pass"
+  });
+  await writeDreamSuccess(proposal.memoryRoot, now, intervalHours);
+  return {
+    memoryRoot: proposal.memoryRoot,
+    stage: "deep-apply",
+    promoted: applied.promoted,
+    rejected: applied.rejected,
+    keptPending: maintenance.pendingCount,
+    maintenance
+  };
+}
+async function applyDreamProposal(memoryRoot, proposal, now) {
   let active = await readActiveMemoriesFromRoot(memoryRoot);
-  const tombstones = await readTombstonesFromRoot(memoryRoot);
-  const pending = await readPendingMemoriesFromRoot(memoryRoot);
   const nextPending = [];
   const events = [];
   const newTombstones = [];
   let promoted = 0;
   let rejected = 0;
   let mutated = false;
-  for (const candidate of pending) {
-    if (candidate.expiresAt <= now) {
-      newTombstones.push(tombstoneForExpiredPending2(candidate, now));
+  for (const operation of proposal.applyPlan) {
+    if (operation.action === "keep_pending") {
+      nextPending.push(operation.candidate);
+      continue;
+    }
+    if (operation.action === "reject") {
+      newTombstones.push(operation.tombstone);
       events.push({
         id: randomUUID9(),
         action: "reject",
         at: now,
-        reason: "Memory candidate expired before dream promotion",
-        candidateId: candidate.id
+        reason: operation.reason,
+        candidateId: operation.candidateId
       });
       rejected += 1;
       mutated = true;
       continue;
     }
-    const decision = validateMemoryCandidate({ candidate, existingMemories: active, tombstones, now });
-    if (decision.action === "reject") {
-      newTombstones.push(decision.tombstone);
-      events.push({
-        id: randomUUID9(),
-        action: "reject",
-        at: now,
-        reason: decision.reason,
-        candidateId: candidate.id
-      });
-      rejected += 1;
-      mutated = true;
-      continue;
-    }
-    const evaluation = evaluatePendingPromotion(candidate, now);
-    if (!evaluation.promotable) {
-      nextPending.push(candidate);
-      continue;
-    }
-    const memory = decision.action === "auto_write" ? decision.memory : decision.action === "pending" ? activateCandidate(decision.candidate, now) : void 0;
-    if (memory === void 0) {
-      nextPending.push(candidate);
-      continue;
-    }
-    active = upsertActiveMemory3(active, memory);
+    active = upsertActiveMemory3(active, operation.memory);
     events.push({
       id: randomUUID9(),
       action: "promote",
       at: now,
-      reason: evaluation.reason,
-      memoryId: memory.id,
-      candidateId: candidate.id,
-      details: { distinctEvidenceCount: evaluation.distinctEvidenceCount, source: "dream" }
+      reason: operation.reason,
+      memoryId: operation.memory.id,
+      candidateId: operation.candidateId,
+      details: { distinctEvidenceCount: operation.distinctEvidenceCount, source: "dream" }
     });
     promoted += 1;
     mutated = true;
@@ -15328,21 +15409,7 @@ async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours) {
       await appendMemoryEventFromRoot(memoryRoot, event);
     }
   }
-  const maintenance = await runMemoryMaintenanceFromRootLocked({
-    memoryRoot,
-    budget,
-    now,
-    reason: "after codex memory dream deep pass"
-  });
-  await writeDreamSuccess(memoryRoot, now, intervalHours);
-  return {
-    memoryRoot,
-    stage: "deep-apply",
-    promoted,
-    rejected,
-    keptPending: maintenance.pendingCount,
-    maintenance
-  };
+  return { promoted, rejected };
 }
 function mergePendingDuplicates(pending) {
   const merged = [];
@@ -15398,19 +15465,6 @@ function proposedActionForPending(candidate, reason) {
 }
 function shouldRejectWithoutMoreEvidence(reason) {
   return /diagnostic affective claim|missing auditable evidence/i.test(reason);
-}
-function tombstoneForExpiredPending2(candidate, now) {
-  return {
-    id: `tombstone-${candidate.id}`,
-    normalizedKey: candidate.normalizedKey,
-    domain: candidate.domain,
-    type: candidate.type,
-    strength: candidate.strength,
-    scope: candidate.scope,
-    reason: "expired",
-    createdAt: now,
-    evidence: candidate.evidence
-  };
 }
 function upsertActiveMemory3(active, memory) {
   const index = active.findIndex((entry) => entry.id === memory.id || entry.normalizedKey === memory.normalizedKey);
@@ -15554,6 +15608,303 @@ function isFileErrorCode10(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/profile-candidates.ts
+import { createHash as createHash7, randomUUID as randomUUID10 } from "node:crypto";
+import { lstat as lstat11, readFile as readFile12, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join18 } from "node:path";
+var PROFILE_CANDIDATES_FILE = "profile_candidates.jsonl";
+function reviewHashForProfileCandidate(candidate) {
+  const payload = {
+    id: candidate.id,
+    scope: candidate.scope,
+    status: candidate.status,
+    source: candidate.source,
+    proposedSection: candidate.proposedSection,
+    content: candidate.content,
+    rationale: candidate.rationale,
+    sourceMemoryIds: candidate.sourceMemoryIds,
+    evidenceSummary: candidate.evidenceSummary,
+    createdAt: candidate.createdAt
+  };
+  return createHash7("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+async function runCodexProfileReflection(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const project = await identifyCodexProject(input.cwd);
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
+  const active = await readActiveMemoriesFromRoot(memoryRoot);
+  const existing = await readProfileCandidatesFromRoot(memoryRoot);
+  const reflected = active.flatMap((memory) => profileCandidateFromMemory(memory, now)).filter((candidate) => !isUnsafeProfileCandidate(candidate));
+  const nextCandidates = upsertProfileCandidates(existing, reflected);
+  if (reflected.length > 0 || existing.length > 0) {
+    await writeProfileCandidatesFromRoot(memoryRoot, nextCandidates);
+  }
+  return {
+    project: { projectId: project.projectId, displayName: project.displayName },
+    memoryRoot,
+    source: input.source,
+    candidates: reflected.map(summarizeProfileCandidate),
+    openQuestions: [],
+    conflictNotes: []
+  };
+}
+async function applyCodexProfileCandidate(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const project = await identifyCodexProject(input.cwd);
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
+  const candidates = await readProfileCandidatesFromRoot(memoryRoot);
+  const candidate = candidates.find((item) => item.id === input.candidateId && item.status === "pending");
+  if (candidate === void 0) {
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      memoryRoot,
+      result: {
+        action: "not_found",
+        candidateId: input.candidateId,
+        reason: "Profile candidate not found"
+      }
+    };
+  }
+  const latestHash = reviewHashForProfileCandidate(candidate);
+  if (latestHash !== input.reviewHash) {
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      memoryRoot,
+      result: {
+        action: "conflict",
+        candidateId: input.candidateId,
+        reason: "Profile candidate changed since review",
+        latest: summarizeProfileCandidate(candidate)
+      }
+    };
+  }
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
+  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot);
+    const lockedCandidates = await readProfileCandidatesFromRoot(lockedRoot);
+    const lockedCandidate = lockedCandidates.find((item) => item.id === input.candidateId && item.status === "pending");
+    if (lockedCandidate === void 0) {
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        memoryRoot: lockedRoot,
+        result: {
+          action: "not_found",
+          candidateId: input.candidateId,
+          reason: "Profile candidate not found"
+        }
+      };
+    }
+    const lockedHash = reviewHashForProfileCandidate(lockedCandidate);
+    if (lockedHash !== input.reviewHash) {
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        memoryRoot: lockedRoot,
+        result: {
+          action: "conflict",
+          candidateId: input.candidateId,
+          reason: "Profile candidate changed since review",
+          latest: summarizeProfileCandidate(lockedCandidate)
+        }
+      };
+    }
+    const gate = evaluateProfileApplyGate(lockedCandidate);
+    if (!gate.passed) {
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        memoryRoot: lockedRoot,
+        result: {
+          action: "blocked_by_gate",
+          candidateId: lockedCandidate.id,
+          failedChecks: gate.failedChecks,
+          reason: gate.reason
+        }
+      };
+    }
+    const before = await readModelProfileFromRootIfExists(lockedRoot) ?? "";
+    const active = await readActiveMemoriesFromRoot(lockedRoot);
+    const memory = activeMemoryFromProfileCandidate(lockedCandidate, now);
+    await writeActiveMemoriesFromRoot(lockedRoot, upsertActiveMemory4(active, memory));
+    await writeProfileCandidatesFromRoot(
+      lockedRoot,
+      lockedCandidates.map((item) => item.id === lockedCandidate.id ? { ...item, status: "applied", appliedAt: now, appliedMemoryId: memory.id } : item)
+    );
+    await appendMemoryEventFromRoot(lockedRoot, {
+      id: randomUUID10(),
+      action: "promote",
+      at: now,
+      reason: "Approved by Codex profile candidate review",
+      memoryId: memory.id,
+      candidateId: lockedCandidate.id
+    });
+    await renderMemoryProjectionsFromRoot(lockedRoot);
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    const after = await readModelProfileFromRootIfExists(lockedRoot) ?? "";
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      memoryRoot: lockedRoot,
+      result: {
+        action: "apply",
+        candidateId: lockedCandidate.id,
+        reviewHash: lockedHash,
+        diff: { before, after, addedMemoryId: memory.id }
+      }
+    };
+  });
+}
+function profileCandidateFromMemory(memory, now) {
+  const visibility = deriveProfileVisibility(memory);
+  if (visibility !== "always" && visibility !== "safe_summary") {
+    return [];
+  }
+  return [{
+    id: `profile-${memory.id}`,
+    scope: memory.scope === "global" ? "global" : "project",
+    status: "pending",
+    source: "daily_profile_reflection",
+    proposedSection: profileSection2(memory, visibility),
+    content: memory.content,
+    rationale: "Derived from active memory marked profile-visible.",
+    sourceMemoryIds: [memory.id],
+    evidenceSummary: memory.evidence.map((entry) => entry.summary ?? entry.runId ?? "").filter(Boolean).join(" "),
+    createdAt: now
+  }];
+}
+function profileSection2(memory, visibility) {
+  if (visibility === "always") {
+    return "Always Apply";
+  }
+  if (memory.domain === "project") {
+    return "Project Context";
+  }
+  if (memory.domain === "procedural" || memory.domain === "system") {
+    return "Response Policy";
+  }
+  if (memory.domain === "personal" || memory.domain === "relationship" || memory.domain === "affective") {
+    return "Interaction Preferences";
+  }
+  return "Restricted Notes";
+}
+function summarizeProfileCandidate(candidate) {
+  return { ...candidate, reviewHash: reviewHashForProfileCandidate(candidate) };
+}
+function activeMemoryFromProfileCandidate(candidate, now) {
+  return {
+    id: `profile-memory-${candidate.id}`,
+    domain: profileMemoryDomain(candidate.proposedSection),
+    type: "procedural_rule",
+    strength: "hard",
+    scope: candidate.scope,
+    status: "active",
+    content: candidate.content,
+    normalizedKey: `profile:${candidate.id}`,
+    evidence: [{
+      runId: candidate.id,
+      sourceKind: "tool_trace",
+      summary: candidate.evidenceSummary
+    }],
+    source: "tool_trace",
+    scores: {
+      evidenceStrength: 0.9,
+      stability: 0.9,
+      usefulness: 0.9,
+      safety: 0.9,
+      sensitivity: 0.1
+    },
+    createdAt: candidate.createdAt,
+    updatedAt: now,
+    userConfirmed: true,
+    profileVisibility: "always",
+    tags: ["profile-candidate"]
+  };
+}
+function profileMemoryDomain(section) {
+  if (section === "Project Context") {
+    return "project";
+  }
+  if (section === "Interaction Preferences") {
+    return "personal";
+  }
+  if (section === "Response Policy") {
+    return "procedural";
+  }
+  return "procedural";
+}
+function evaluateProfileApplyGate(candidate) {
+  if (isUnsafeProfileCandidate(candidate)) {
+    return {
+      passed: false,
+      failedChecks: ["affective_boundary_eval"],
+      reason: "Profile candidate contains diagnostic affective content"
+    };
+  }
+  return { passed: true, failedChecks: [], reason: "Profile candidate passed apply gate" };
+}
+function isUnsafeProfileCandidate(candidate) {
+  return /\b(?:unstable|emotionally dependent|dependent|narciss(?:ist|istic)?|borderline|trauma bonded|attachment disorder|diagnos(?:e|is|tic))\b/i.test(candidate.content);
+}
+function upsertProfileCandidates(existing, candidates) {
+  const next = [...existing];
+  for (const candidate of candidates) {
+    const index = next.findIndex((item) => item.id === candidate.id);
+    if (index === -1) {
+      next.push(candidate);
+    } else if (next[index]?.status === "pending") {
+      next[index] = candidate;
+    }
+  }
+  return next;
+}
+function upsertActiveMemory4(active, memory) {
+  const index = active.findIndex((entry) => entry.id === memory.id || entry.normalizedKey === memory.normalizedKey);
+  if (index === -1) {
+    return [...active, memory];
+  }
+  const next = [...active];
+  next[index] = memory;
+  return next;
+}
+async function readProfileCandidatesFromRoot(memoryRoot) {
+  const root = await ensureWritableMemoryRootPath(memoryRoot);
+  try {
+    const content = await readFile12(join18(root, PROFILE_CANDIDATES_FILE), "utf8");
+    return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+  } catch (error2) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
+      return [];
+    }
+    throw error2;
+  }
+}
+async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
+  const root = await ensureWritableMemoryRootPath(memoryRoot);
+  const targetPath = join18(root, PROFILE_CANDIDATES_FILE);
+  await assertSafeProfileCandidateTarget(targetPath);
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID10()}.tmp`;
+  const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
+  await writeFile9(tempPath, content === "" ? "" : `${content}
+`, "utf8");
+  await rename5(tempPath, targetPath);
+}
+async function assertSafeProfileCandidateTarget(targetPath) {
+  try {
+    const stats = await lstat11(targetPath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use profile candidate symlink: ${targetPath}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`Refusing to use non-file profile candidate path: ${targetPath}`);
+    }
+  } catch (error2) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
+      return;
+    }
+    throw error2;
+  }
+}
+function isFileErrorCode11(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
 // src/codex/codex-cli.ts
 async function handleCodexCommand(input) {
   const command = input.args[0];
@@ -15616,7 +15967,24 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile>");
+  if (command === "profile" && input.args[1] === "reflect") {
+    process.stdout.write(`${JSON.stringify(await runCodexProfileReflection({
+      cwd: input.cwd,
+      source: parseProfileReflectionSource(input.args)
+    }), null, 2)}
+`);
+    return;
+  }
+  if (command === "profile" && input.args[1] === "apply") {
+    process.stdout.write(`${JSON.stringify(await applyCodexProfileCandidate({
+      cwd: input.cwd,
+      candidateId: parseRequiredOption(input.args, "--candidate", "profile candidate"),
+      reviewHash: parseRequiredOption(input.args, "--review-hash", "profile review hash")
+    }), null, 2)}
+`);
+    return;
+  }
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>>");
   process.exit(1);
 }
 function parseConfigPath(args) {
@@ -15673,6 +16041,22 @@ function parseDreamReportRoot(args) {
     return value;
   }
   throw new Error(`Invalid memory dream report root: ${value}`);
+}
+function parseProfileReflectionSource(args) {
+  const value = parseRequiredOption(args, "--source", "profile reflection source");
+  if (value === "daily-interview") {
+    return value;
+  }
+  throw new Error(`Invalid profile reflection source: ${value}`);
+}
+function parseRequiredOption(args, option, label) {
+  const index = args.indexOf(option);
+  const inline = args.find((arg) => arg.startsWith(`${option}=`));
+  const value = index >= 0 ? args[index + 1] : inline?.slice(option.length + 1);
+  if (value === void 0 || value === "" || value.startsWith("--")) {
+    throw new Error(`Invalid ${label}: missing value`);
+  }
+  return value;
 }
 
 // node_modules/zod/v3/external.js

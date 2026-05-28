@@ -11,6 +11,10 @@ import {
   runCodexMemoryMaintenance,
   type CodexMemoryDreamStage
 } from './memory-dream.js'
+import {
+  applyCodexProfileCandidate,
+  runCodexProfileReflection
+} from './profile-candidates.js'
 
 export async function handleCodexCommand(input: { cwd: string; args: string[]; runtimeEntryPath?: string }): Promise<void> {
   const command = input.args[0]
@@ -84,7 +88,24 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile>')
+  if (command === 'profile' && input.args[1] === 'reflect') {
+    process.stdout.write(`${JSON.stringify(await runCodexProfileReflection({
+      cwd: input.cwd,
+      source: parseProfileReflectionSource(input.args)
+    }), null, 2)}\n`)
+    return
+  }
+
+  if (command === 'profile' && input.args[1] === 'apply') {
+    process.stdout.write(`${JSON.stringify(await applyCodexProfileCandidate({
+      cwd: input.cwd,
+      candidateId: parseRequiredOption(input.args, '--candidate', 'profile candidate'),
+      reviewHash: parseRequiredOption(input.args, '--review-hash', 'profile review hash')
+    }), null, 2)}\n`)
+    return
+  }
+
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|eval run --check similar-hints|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -144,4 +165,22 @@ function parseDreamReportRoot(args: string[]): 'global' | 'project' {
     return value
   }
   throw new Error(`Invalid memory dream report root: ${value}`)
+}
+
+function parseProfileReflectionSource(args: string[]): 'daily-interview' {
+  const value = parseRequiredOption(args, '--source', 'profile reflection source')
+  if (value === 'daily-interview') {
+    return value
+  }
+  throw new Error(`Invalid profile reflection source: ${value}`)
+}
+
+function parseRequiredOption(args: string[], option: string, label: string): string {
+  const index = args.indexOf(option)
+  const inline = args.find((arg) => arg.startsWith(`${option}=`))
+  const value = index >= 0 ? args[index + 1] : inline?.slice(option.length + 1)
+  if (value === undefined || value === '' || value.startsWith('--')) {
+    throw new Error(`Invalid ${label}: missing value`)
+  }
+  return value
 }

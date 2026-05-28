@@ -395,7 +395,7 @@ git commit -m "feat: gate dream apply mutations"
 - Test: `tests/profile-candidates.test.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write profile candidate tests**
+- [x] **Step 1: Write profile candidate tests**
 
 Tests cover:
 
@@ -408,7 +408,7 @@ apply gate fail does not write profile
 apply gate pass returns ProfileDiff
 ```
 
-- [ ] **Step 2: Implement store**
+- [x] **Step 2: Implement store**
 
 Create read/write/upsert helpers for:
 
@@ -418,7 +418,7 @@ Create read/write/upsert helpers for:
 
 Use atomic writes and reject symlink/non-directory memory root via existing memory root helpers.
 
-- [ ] **Step 3: Implement reflection**
+- [x] **Step 3: Implement reflection**
 
 Implement:
 
@@ -432,7 +432,7 @@ export async function runCodexProfileReflection(input: {
 
 It may generate zero candidates when there is no safe input context; it must still return arrays and write no active memory.
 
-- [ ] **Step 4: Implement apply**
+- [x] **Step 4: Implement apply**
 
 Implement:
 
@@ -447,7 +447,7 @@ export async function applyCodexProfileCandidate(input: {
 
 It validates hash, runs profile/affective gate, marks candidate `applied`, writes audit event, and regenerates profile only from structured applied state.
 
-- [ ] **Step 5: Wire CLI**
+- [x] **Step 5: Wire CLI**
 
 Add:
 
@@ -456,13 +456,13 @@ codex profile reflect --source daily-interview
 codex profile apply --candidate <id> --review-hash <hash>
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 ```bash
 npm test -- tests/profile-candidates.test.ts tests/codex-cli.test.ts
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/codex/profile-candidates.ts src/codex/codex-cli.ts tests/profile-candidates.test.ts tests/codex-cli.test.ts
