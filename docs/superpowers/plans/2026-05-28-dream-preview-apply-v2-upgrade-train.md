@@ -608,7 +608,7 @@ git commit -m "feat: add optional embedding retrieval foundation"
 - Modify: `src/codex/codex-doctor.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write doctor tests**
+- [x] **Step 1: Write doctor tests**
 
 Tests cover doctor output includes:
 
@@ -620,25 +620,25 @@ embedding provider: disabled|enabled|misconfigured
 profile candidates: ok|missing|unreadable
 ```
 
-- [ ] **Step 2: Implement read-only automation scan**
+- [x] **Step 2: Implement read-only automation scan**
 
 Doctor may read `${HOME}/.codex/automations/*/automation.toml`, but it must not edit it.
 
-- [ ] **Step 3: Implement shim stage checks**
+- [x] **Step 3: Implement shim stage checks**
 
 Use stable shim path existence and command text checks conservatively. Avoid running mutating `deep-apply` inside doctor; report command availability based on runtime and parser where possible.
 
-- [ ] **Step 4: Implement embedding/profile candidate status**
+- [x] **Step 4: Implement embedding/profile candidate status**
 
 Read env config and memory root file state; report status only.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 ```bash
 npm test -- tests/codex-cli.test.ts
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/codex/codex-doctor.ts tests/codex-cli.test.ts

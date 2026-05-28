@@ -589,6 +589,38 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('auto promote: enabled')
   })
 
+  it('doctor reports migration checks for automations, shims, embeddings, and profile candidates', async () => {
+    const home = await createTempDir('cyrene-codex-cli-migration-doctor-home-')
+    process.env.HOME = home
+    const identity = await identifyCodexProject(process.cwd())
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const automationRoot = join(home, '.codex', 'automations', 'cyrene-memory-dream-deep')
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await mkdir(automationRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'profile_candidates.jsonl'), '{"id":"profile-candidate-1"}\n')
+    await writeFile(
+      join(automationRoot, 'automation.toml'),
+      [
+        'id = "cyrene-memory-dream-deep"',
+        'status = "ACTIVE"',
+        'prompt = "Run codex memory dream --stage deep and report the summary."'
+      ].join('\n')
+    )
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'doctor'],
+      { env: { ...cliEnv(home), CYRENE_EMBEDDING_PROVIDER: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain('automation dream stage: needs migration')
+    expect(result.stdout).toContain('stable shim deep-preview: missing')
+    expect(result.stdout).toContain('stable shim deep-apply: missing')
+    expect(result.stdout).toContain('embedding provider: disabled')
+    expect(result.stdout).toContain('profile candidates: ok')
+  })
+
   it('rebuilds the Codex memory SQLite index from JSONL roots', async () => {
     const home = await createTempDir('cyrene-codex-cli-memory-db-home-')
     process.env.HOME = home

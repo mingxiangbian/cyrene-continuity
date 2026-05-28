@@ -1,8 +1,9 @@
-import { access, readFile } from 'node:fs/promises'
+import { access, readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDefaultConfig } from '../config.js'
+import { createEmbeddingProviderFromEnv } from '../memory/embedding-provider.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
 import { readPendingMemoriesFromRoot } from '../memory/memory-store.js'
 import {
@@ -47,6 +48,7 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
   const identity = await identifyCodexProject(input.cwd)
   const config = createDefaultConfig(input.cwd)
   const memoryState = await readDoctorMemoryState(identity.projectId)
+  const migrationState = await readDoctorMigrationState()
   const memoryIndex = await readCodexMemoryIndexDiagnostics()
   const actions = [
     cyreneConfigured || pluginBridgeInstalled ? undefined : `  action: run ${installCommand} to install the Cyrene bridge`,
@@ -85,6 +87,12 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  runtime: ${pluginState.runtimeExists ? 'present' : 'missing'}`,
     `  stable shim: ${pluginState.shimExists ? 'present' : 'missing'}`,
     '',
+    'migration:',
+    `  automation dream stage: ${migrationState.automationDreamStage}`,
+    `  stable shim deep-preview: ${migrationState.stableShimDeepPreview}`,
+    `  stable shim deep-apply: ${migrationState.stableShimDeepApply}`,
+    `  embedding provider: ${migrationState.embeddingProvider}`,
+    '',
     'skill:',
     `  cyrene-continuity: ${skillExists ? 'ok' : pluginBridgeInstalled && pluginState.skillDeclared ? 'plugin' : 'missing'}`,
     '',
@@ -98,6 +106,7 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  global pending: ${memoryState.globalPendingCount}`,
     `  project profile: ${memoryState.projectProfilePresent ? 'present' : 'missing'}`,
     `  project pending: ${memoryState.projectPendingCount}`,
+    `  profile candidates: ${memoryState.profileCandidates}`,
     `  memory index: ${memoryIndex.available ? 'available' : 'unavailable'}`,
     `  memory db: ${codexMemoryDbPath()}`,
     memoryIndex.ftsTokenizer === undefined ? undefined : `  memory fts: ${memoryIndex.ftsTokenizer}`,
@@ -113,6 +122,7 @@ interface DoctorMemoryState {
   globalPendingCount: number
   projectProfilePresent: boolean
   projectPendingCount: number
+  profileCandidates: DoctorProfileCandidatesStatus
   dreamDue: boolean
   lastDreamAt?: string
 }
@@ -120,11 +130,19 @@ interface DoctorMemoryState {
 async function readDoctorMemoryState(projectId: string): Promise<DoctorMemoryState> {
   const globalRoot = (await getReadableCodexGlobalMemoryRoot()) ?? codexGlobalMemoryRoot()
   const projectRoot = (await getReadableCodexProjectMemoryRoot(projectId)) ?? codexProjectMemoryRoot(projectId)
-  const [globalProfilePresent, globalPending, projectProfilePresent, projectPending, dreamState] = await Promise.all([
+  const [
+    globalProfilePresent,
+    globalPending,
+    projectProfilePresent,
+    projectPending,
+    profileCandidates,
+    dreamState
+  ] = await Promise.all([
     profilePresent(globalRoot),
     readPendingMemoriesFromRoot(globalRoot),
     profilePresent(projectRoot),
     readPendingMemoriesFromRoot(projectRoot),
+    readProfileCandidatesStatus(projectRoot),
     readCodexMemoryDreamState(projectRoot)
   ])
   return {
@@ -132,13 +150,120 @@ async function readDoctorMemoryState(projectId: string): Promise<DoctorMemorySta
     globalPendingCount: globalPending.length,
     projectProfilePresent,
     projectPendingCount: projectPending.length,
+    profileCandidates,
     dreamDue: dreamState?.dreamDue === true,
     lastDreamAt: dreamState?.lastDreamAt
   }
 }
 
+type DoctorProfileCandidatesStatus = 'ok' | 'missing' | 'unreadable'
+
+async function readProfileCandidatesStatus(memoryRoot: string): Promise<DoctorProfileCandidatesStatus> {
+  try {
+    await readFile(join(memoryRoot, 'profile_candidates.jsonl'), 'utf8')
+    return 'ok'
+  } catch (error) {
+    return isErrorCode(error, 'ENOENT') ? 'missing' : 'unreadable'
+  }
+}
+
 async function profilePresent(memoryRoot: string): Promise<boolean> {
   return (await readModelProfileFromRootIfExists(memoryRoot)) !== undefined
+}
+
+interface DoctorMigrationState {
+  automationDreamStage: DoctorAutomationDreamStageStatus
+  stableShimDeepPreview: DoctorStableShimStageStatus
+  stableShimDeepApply: DoctorStableShimStageStatus
+  embeddingProvider: DoctorEmbeddingProviderStatus
+}
+
+type DoctorAutomationDreamStageStatus = 'migrated' | 'needs migration' | 'unknown'
+type DoctorStableShimStageStatus = 'ok' | 'missing' | 'failed'
+type DoctorEmbeddingProviderStatus = 'disabled' | 'enabled' | 'misconfigured'
+
+async function readDoctorMigrationState(): Promise<DoctorMigrationState> {
+  const [automationDreamStage, stableShimDeepPreview, stableShimDeepApply] = await Promise.all([
+    readAutomationDreamStageStatus(),
+    readStableShimStageStatus(),
+    readStableShimStageStatus()
+  ])
+  return {
+    automationDreamStage,
+    stableShimDeepPreview,
+    stableShimDeepApply,
+    embeddingProvider: readEmbeddingProviderStatus()
+  }
+}
+
+async function readAutomationDreamStageStatus(): Promise<DoctorAutomationDreamStageStatus> {
+  const automationsRoot = join(homedir(), '.codex', 'automations')
+  let entries: Awaited<ReturnType<typeof readdir>>
+  try {
+    entries = await readdir(automationsRoot, { withFileTypes: true })
+  } catch {
+    return 'unknown'
+  }
+
+  let migrated = false
+  let sawAutomation = false
+  for (const entry of entries) {
+    const automationPath = entry.isDirectory()
+      ? join(automationsRoot, entry.name, 'automation.toml')
+      : join(automationsRoot, entry.name)
+    const text = await readOptional(automationPath)
+    if (text === '') {
+      continue
+    }
+    sawAutomation = true
+    if (readTomlStringValue(text, 'status') === 'PAUSED') {
+      continue
+    }
+    if (containsLegacyDreamDeepStage(text)) {
+      return 'needs migration'
+    }
+    if (containsCurrentDreamDeepStage(text)) {
+      migrated = true
+    }
+  }
+  if (!sawAutomation) {
+    return 'unknown'
+  }
+  return migrated ? 'migrated' : 'unknown'
+}
+
+async function readStableShimStageStatus(): Promise<DoctorStableShimStageStatus> {
+  try {
+    const text = await readFile(codexStableExecutablePath(), 'utf8')
+    return text.trim() === '' ? 'failed' : 'ok'
+  } catch (error) {
+    return isErrorCode(error, 'ENOENT') ? 'missing' : 'failed'
+  }
+}
+
+function readEmbeddingProviderStatus(): DoctorEmbeddingProviderStatus {
+  const configuredProvider = process.env.CYRENE_EMBEDDING_PROVIDER?.trim()
+  if (
+    configuredProvider === undefined ||
+    configuredProvider === '' ||
+    configuredProvider === 'off' ||
+    configuredProvider === 'disabled'
+  ) {
+    return 'disabled'
+  }
+  const diagnostics = createEmbeddingProviderFromEnv().diagnostics
+  if (!diagnostics.enabled || diagnostics.provider === 'fail') {
+    return 'misconfigured'
+  }
+  return 'enabled'
+}
+
+function containsLegacyDreamDeepStage(text: string): boolean {
+  return /--stage(?:=|\s+)deep(?=$|[\s"'\\])/m.test(text)
+}
+
+function containsCurrentDreamDeepStage(text: string): boolean {
+  return /--stage(?:=|\s+)(?:deep-preview|deep-apply)(?=$|[\s"'\\])/m.test(text)
 }
 
 interface DoctorMcpCommand {
@@ -381,4 +506,8 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+function isErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code
 }
