@@ -216,6 +216,33 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
+  it('keeps empty project memory groups for UI empty states', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    await writeFile(
+      join(memoryRoot, 'index.jsonl'),
+      `${JSON.stringify(createActive({ id: 'only-fact', candidateKind: 'project_fact', tags: [] }))}\n`
+    )
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/project-memory' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
+      expect(groupIds(data.groups)).toEqual({
+        'Project Facts': ['only-fact'],
+        'Project Decisions': [],
+        'Workflow Rules': [],
+        'Known Pitfalls': [],
+        'Rejected Approaches': [],
+        'Open Questions': [],
+        'Other Project Memory': []
+      })
+    }
+  })
+
   it('forces project harvest dry-run to startup cwd and preserves pending memory', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)

@@ -210,9 +210,7 @@ function groupProjectMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
     groups.get(labelForProjectMemory(memory))?.push(memory)
   }
 
-  return PROJECT_MEMORY_LABELS
-    .map((label) => ({ label, memories: groups.get(label) ?? [] }))
-    .filter((group) => group.memories.length > 0)
+  return PROJECT_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
 }
 
 function labelForProjectMemory(memory: CyreneMemory): ProjectMemoryLabel {
