@@ -18974,13 +18974,13 @@ function groupMemoriesForSelection(memories, scope) {
   return scope === "global" ? groupGlobalMemories(memories) : groupProjectMemories(memories);
 }
 function labelForProjectMemory(memory) {
-  const classification = memory.candidateKind ?? memory.candidate_kind ?? memory.type;
-  if (classification === "project_decision") return "Project Decisions";
-  if (classification === "workflow_rule" || classification === "procedural_rule") return "Workflow Rules";
-  if (classification === "known_pitfall") return "Known Pitfalls";
-  if (classification === "rejected_approach") return "Rejected Approaches";
-  if (classification === "open_question") return "Open Questions";
-  if (classification === "project_fact") return "Project Facts";
+  const classifications = memoryClassifications(memory);
+  if (classifications.includes("project_decision")) return "Project Decisions";
+  if (classifications.includes("workflow_rule") || classifications.includes("procedural_rule")) return "Workflow Rules";
+  if (classifications.includes("known_pitfall")) return "Known Pitfalls";
+  if (classifications.includes("rejected_approach")) return "Rejected Approaches";
+  if (classifications.includes("open_question")) return "Open Questions";
+  if (classifications.includes("project_fact")) return "Project Facts";
   if (hasTag(memory, "project_decision")) return "Project Decisions";
   if (hasTag(memory, "workflow_rule")) return "Workflow Rules";
   if (hasTag(memory, "known_pitfall")) return "Known Pitfalls";
@@ -18990,16 +18990,16 @@ function labelForProjectMemory(memory) {
   return "Other Project Memory";
 }
 function labelForGlobalMemory(memory) {
-  const classification = memory.candidateKind ?? memory.candidate_kind ?? memory.type;
-  if (classification === "user_preference") return "User Preferences";
-  if (classification === "interaction_style") return "Interaction Style";
-  if (classification === "relationship_boundary") return "Relationship Boundaries";
-  if (classification === "affective_pattern") return "Affective Patterns";
-  if (classification === "workflow_rule" || classification === "procedural_rule") return "Workflow Rules";
-  if (classification === "system_policy") return "System Policies";
-  if (classification === "reference") return "References";
-  if (classification === "episode") return "Episodes";
-  if (classification === "project_fact") return "Project Facts";
+  const classifications = memoryClassifications(memory);
+  if (classifications.includes("user_preference")) return "User Preferences";
+  if (classifications.includes("interaction_style")) return "Interaction Style";
+  if (classifications.includes("relationship_boundary")) return "Relationship Boundaries";
+  if (classifications.includes("affective_pattern")) return "Affective Patterns";
+  if (classifications.includes("workflow_rule") || classifications.includes("procedural_rule")) return "Workflow Rules";
+  if (classifications.includes("system_policy")) return "System Policies";
+  if (classifications.includes("reference")) return "References";
+  if (classifications.includes("episode")) return "Episodes";
+  if (classifications.includes("project_fact")) return "Project Facts";
   if (hasTag(memory, "user_preference")) return "User Preferences";
   if (hasTag(memory, "interaction_style")) return "Interaction Style";
   if (hasTag(memory, "relationship_boundary")) return "Relationship Boundaries";
@@ -19010,6 +19010,10 @@ function labelForGlobalMemory(memory) {
   if (hasTag(memory, "episode")) return "Episodes";
   if (hasTag(memory, "project_fact")) return "Project Facts";
   return "Other Global Memory";
+}
+function memoryClassifications(memory) {
+  const classifications = [memory.candidateKind, memory.candidate_kind, memory.type];
+  return classifications.filter((value) => typeof value === "string" && value.trim() !== "");
 }
 function hasTag(memory, expected) {
   return memory.tags.includes(expected);

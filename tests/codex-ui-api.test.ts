@@ -277,6 +277,14 @@ describe('handleCodexUiApiRequest', () => {
           tags: []
         }),
         createActive({
+          id: 'instruction-rule-1',
+          domain: 'procedural',
+          type: 'procedural_rule',
+          scope: 'global',
+          candidateKind: 'user_instruction',
+          tags: []
+        }),
+        createActive({
           id: 'other-global-1',
           domain: 'relationship',
           type: 'reference',
@@ -303,7 +311,7 @@ describe('handleCodexUiApiRequest', () => {
         'Interaction Style': ['style-1'],
         'Relationship Boundaries': [],
         'Affective Patterns': ['affect-1'],
-        'Workflow Rules': ['rule-1'],
+        'Workflow Rules': ['instruction-rule-1', 'rule-1'],
         'System Policies': [],
         References: ['other-global-1'],
         Episodes: [],
