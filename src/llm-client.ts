@@ -91,7 +91,23 @@ function validateModelConfig(config: AppConfig, routeModel: string): void {
   const missing: string[] = []
   if (config.model.baseUrl.trim() === '') missing.push('CYRENE_BASE_URL')
   if (config.model.model.trim() === '' || routeModel.trim() === '') missing.push('CYRENE_MODEL')
+  if (modelBaseUrlRequiresApiKey(config.model.baseUrl) && !config.model.apiKey?.trim()) {
+    missing.push('CYRENE_API_KEY')
+  }
   if (missing.length > 0) throw new Error(`Model config is incomplete: set ${missing.join(' and ')}.`)
+}
+
+export function modelBaseUrlRequiresApiKey(baseUrl: string): boolean {
+  const trimmed = baseUrl.trim()
+  if (trimmed === '') return false
+  try {
+    const url = new URL(trimmed)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    const host = url.hostname.toLowerCase()
+    return !['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'].includes(host)
+  } catch {
+    return false
+  }
 }
 
 function mergeAbortSignals(timeoutSignal: AbortSignal, inputSignal?: AbortSignal): AbortSignal {

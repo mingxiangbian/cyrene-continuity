@@ -11,6 +11,10 @@ Use this skill when the task benefits from Cyrene's long-term project memory, re
 
 When using this repository from source, rebuild and install the plugin bridge with `npm run build:plugin` and `npm run dev -- codex install --plugin`, then start a new Codex session so the bundled MCP server and this skill are rediscovered.
 
+## Local Web UI
+
+Use `cyrene-continuity codex ui` when the user wants local visual review of the memory pipeline or hash-checked single-candidate pending memory actions. The UI can approve/reject/defer/edit pending candidates, but it must not imply batch review, Dream apply, Profile apply, or active-memory edits.
+
 ## Required behavior
 
 1. At the start of substantial planning, architecture, debugging, code review, or Cyrene-related work, call the MCP tool `cyrene_continuity_get` when available.

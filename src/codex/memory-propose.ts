@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
-import { ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
+import { codexProjectMemoryRoot, ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { markCodexMemoryDreamDue } from './memory-dream-state.js'
 import { summarizePendingMemory } from './memory-review.js'
 import { identifyCodexProject } from './project-id.js'
+import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import {
   assertMemoryMaintenanceTargetsSafeFromRoot,
   withMemoryMaintenanceLockFromRoot
@@ -82,6 +83,13 @@ export async function proposeCodexMemoryCandidate(input: {
   const now = input.now ?? new Date().toISOString()
   const project = await identifyCodexProject(input.cwd)
   const candidate = toPendingMemory(input.candidate, now)
+  if (candidate.scope !== 'global' && await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      result: { action: 'reject', reason: 'Project memory is disabled for this project.' },
+      memoryRoot: codexProjectMemoryRoot(project.projectId)
+    }
+  }
   const memoryRoot = candidate.scope === 'global'
     ? await ensureCodexGlobalMemoryRoot()
     : await ensureCodexProjectMemoryRoot(project.projectId)

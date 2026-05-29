@@ -28,10 +28,12 @@ import {
   validateMemoryCandidate
 } from '../memory/memory-validator.js'
 import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
+import { listCodexProjects } from './project-registry.js'
 import type {
   CyreneMemory,
   MemoryCandidateKind,
   MemoryConflictResolution,
+  MemoryScores,
   MemoryTombstone,
   PendingMemory
 } from '../memory/types.js'
@@ -340,9 +342,10 @@ function suggestedReviewAction(
 
 export async function listCodexPendingMemories(input: {
   cwd: string
+  projectId?: string
   limit?: number
 }): Promise<CodexPendingMemoryListResult> {
-  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd)
+  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd, input.projectId)
   const pending = sortPendingNewestFirst((await Promise.all(readableRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat())
   const summaries = pending.map((candidate) => summarizePendingMemory(candidate))
   return {
@@ -355,9 +358,10 @@ export async function listCodexPendingMemories(input: {
 
 export async function getCodexPendingMemory(input: {
   cwd: string
+  projectId?: string
   id: string
 }): Promise<CodexPendingMemoryGetResult> {
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id)
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId)
   if (candidate === undefined) {
     return {
       project,
@@ -383,6 +387,7 @@ export async function getCodexPendingMemory(input: {
 
 export async function promoteCodexPendingMemory(input: {
   cwd: string
+  projectId?: string
   id: string
   reviewHash: string
   conflictResolution?: MemoryConflictResolution
@@ -390,7 +395,7 @@ export async function promoteCodexPendingMemory(input: {
   now?: string
 }): Promise<CodexPendingMemoryPromoteResult> {
   const now = input.now ?? new Date().toISOString()
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id)
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId)
   if (candidate === undefined) {
     return {
       project,
@@ -651,13 +656,14 @@ function memoryForPromotedDecision(
 
 export async function rejectCodexPendingMemory(input: {
   cwd: string
+  projectId?: string
   id: string
   reviewHash: string
   reason?: string
   now?: string
 }): Promise<CodexPendingMemoryRejectResult> {
   const now = input.now ?? new Date().toISOString()
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id)
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId)
   if (candidate === undefined) {
     return {
       project,
@@ -729,15 +735,19 @@ export async function rejectCodexPendingMemory(input: {
 
 export async function editCodexPendingMemory(input: {
   cwd: string
+  projectId?: string
   id: string
   reviewHash: string
   content: string
   normalizedKey?: string
+  candidateKind?: MemoryCandidateKind
+  tags?: string[]
+  scores?: Partial<MemoryScores>
   reason?: string
   now?: string
 }): Promise<CodexPendingMemoryEditResult> {
   const now = input.now ?? new Date().toISOString()
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id)
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId)
   if (candidate === undefined) {
     return {
       project,
@@ -785,6 +795,9 @@ export async function editCodexPendingMemory(input: {
       ...lockedCandidate,
       content: input.content,
       normalizedKey: input.normalizedKey ?? lockedCandidate.normalizedKey,
+      ...(input.candidateKind === undefined ? {} : { candidateKind: input.candidateKind }),
+      ...(input.tags === undefined ? {} : { tags: uniqueInOrder(input.tags) }),
+      ...(input.scores === undefined ? {} : { scores: { ...lockedCandidate.scores, ...input.scores } }),
       lastSeenAt: now
     }
     const [lockedActive, lockedTombstones] = await Promise.all([
@@ -840,6 +853,7 @@ export async function editCodexPendingMemory(input: {
 
 export async function deferCodexPendingMemory(input: {
   cwd: string
+  projectId?: string
   id: string
   reviewHash: string
   days?: number
@@ -848,7 +862,7 @@ export async function deferCodexPendingMemory(input: {
 }): Promise<CodexPendingMemoryDeferResult> {
   const now = input.now ?? new Date().toISOString()
   const days = input.days ?? 7
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id)
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId)
   if (candidate === undefined) {
     return {
       project,
@@ -923,8 +937,8 @@ export async function deferCodexPendingMemory(input: {
   })
 }
 
-export async function getCodexPendingReviewNotice(input: { cwd: string }): Promise<CodexPendingReviewNotice> {
-  const { readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd)
+export async function getCodexPendingReviewNotice(input: { cwd: string; projectId?: string }): Promise<CodexPendingReviewNotice> {
+  const { readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd, input.projectId)
   const pending = sortPendingNewestFirst((await Promise.all(readableRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat())
   const newest = pending[0]
   return {
@@ -1028,11 +1042,11 @@ function tombstoneForSupersededMemory(memory: CyreneMemory, replacementMemory: C
   }
 }
 
-async function getProjectAndMemoryRoot(cwd: string): Promise<{
+async function getProjectAndMemoryRoot(cwd: string, projectId?: string): Promise<{
   project: CodexPendingMemoryProject
   memoryRoot: string
 }> {
-  const identity = await identifyCodexProject(cwd)
+  const identity = projectId === undefined ? await identifyCodexProject(cwd) : await identifyCodexProjectById(cwd, projectId)
   const memoryRoot =
     (await getReadableCodexProjectMemoryRoot(identity.projectId)) ?? codexProjectMemoryRoot(identity.projectId)
   return {
@@ -1041,12 +1055,27 @@ async function getProjectAndMemoryRoot(cwd: string): Promise<{
   }
 }
 
-async function getProjectAndReadableMemoryRoots(cwd: string): Promise<{
+async function identifyCodexProjectById(cwd: string, projectId: string): Promise<CodexPendingMemoryProject> {
+  const validProjectId = validateProjectId(projectId)
+  const current = await identifyCodexProject(cwd)
+  if (current.projectId === validProjectId) {
+    return { projectId: current.projectId, displayName: current.displayName }
+  }
+
+  const projects = await listCodexProjects().catch(() => [])
+  const project = projects.find((entry) => entry.projectId === validProjectId)
+  return {
+    projectId: validProjectId,
+    displayName: project?.aliases[0] ?? validProjectId
+  }
+}
+
+async function getProjectAndReadableMemoryRoots(cwd: string, projectId?: string): Promise<{
   project: CodexPendingMemoryProject
   memoryRoot: string
   readableRoots: string[]
 }> {
-  const { project, memoryRoot } = await getProjectAndMemoryRoot(cwd)
+  const { project, memoryRoot } = await getProjectAndMemoryRoot(cwd, projectId)
   const globalRoot = (await getReadableCodexGlobalMemoryRoot()) ?? codexGlobalMemoryRoot()
   return {
     project,
@@ -1055,13 +1084,13 @@ async function getProjectAndReadableMemoryRoots(cwd: string): Promise<{
   }
 }
 
-async function findPendingCandidateInCodexRoots(cwd: string, id: string): Promise<{
+async function findPendingCandidateInCodexRoots(cwd: string, id: string, projectId?: string): Promise<{
   project: CodexPendingMemoryProject
   memoryRoot: string
   pending: PendingMemory[]
   candidate?: PendingMemory
 }> {
-  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(cwd)
+  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(cwd, projectId)
   for (const root of readableRoots) {
     const pending = await readPendingMemoriesFromRoot(root)
     const candidate = pending.find((memory) => memory.id === id)
@@ -1089,6 +1118,14 @@ function uniqueInOrder(values: string[]): string[] {
     seen.add(value)
     return true
   })
+}
+
+function validateProjectId(value: string): string {
+  const trimmed = value.trim()
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed) || /^\.+$/.test(trimmed)) {
+    throw new Error(`Invalid projectId: ${value}`)
+  }
+  return trimmed
 }
 
 function previewContent(content: string): string {

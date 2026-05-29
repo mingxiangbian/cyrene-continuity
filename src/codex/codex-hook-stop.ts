@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { lstat, readFile, realpath } from 'node:fs/promises'
+import { lstat, open, readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createDefaultConfig, type AppConfig } from '../config.js'
-import { callModel as defaultCallModel } from '../llm-client.js'
+import { callModel as defaultCallModel, modelBaseUrlRequiresApiKey } from '../llm-client.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { appendCodexHookTrace } from './hook-trace-store.js'
 import { listCodexPendingMemories } from './memory-review.js'
 import { proposeCodexMemoryCandidate } from './memory-propose.js'
 import { identifyCodexProject } from './project-id.js'
+import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
 import { redactReviewText } from './review-redaction.js'
 import { runCodexReviewSummary, stableEvidenceGroupId, type RunCodexReviewSummaryInput } from './review-summary-runtime.js'
@@ -43,9 +44,18 @@ export interface CodexStopHookCommandOutput {
   systemMessage?: string
 }
 
+type ReviewSummaryOrSkipResult =
+  | Awaited<ReturnType<typeof runCodexReviewSummary>>
+  | { action: 'summary'; summaryId: string; memoryRoot: string; candidateIds: []; reason: string }
+
 const DURABLE_SIGNAL = /记住|请记住|以后默认|之后默认|以后你要|以后请|from now on|please remember|remember that|default to/i
 const GLOBAL_SCOPE_SIGNAL = /所有项目|全部项目|每个项目|所有 repo|全部 repo|全局|global|all projects|every project|all repos|every repo/i
 const MAX_TRANSCRIPT_BYTES = 5 * 1024 * 1024
+
+interface SafeTranscriptPath {
+  path: string
+  size: number
+}
 
 export async function handleCodexStopHookCommand(): Promise<string> {
   let result: CodexStopHookResult
@@ -98,6 +108,10 @@ async function handleCodexStopHookPayloadUnsafe(
   cwd: string
 ): Promise<CodexStopHookResult> {
   const config = deps.config ?? createDefaultConfig(cwd)
+  const project = await identifyCodexProject(cwd)
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return { action: 'noop', reason: 'Project memory is disabled for this project.' }
+  }
   await appendStopHookTrace(cwd, payload)
   if (!config.memoryAutoExtractEnabled) {
     return { action: 'noop', reason: 'Codex memory auto extraction is disabled.' }
@@ -118,14 +132,12 @@ async function handleCodexStopHookPayloadUnsafe(
     return { action: 'noop', reason: 'No transcript messages found.' }
   }
 
-  const review = await runCodexReviewSummary({
+  const review = await runReviewSummaryOrSkip({
+    payload,
     cwd,
-    sessionId: asString(payload.session_id),
-    turnId: asString(payload.turn_id),
     messages,
     config,
-    callModel: deps.callModel ?? defaultCallModel,
-    signal: AbortSignal.timeout(20_000)
+    deps
   })
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages)
   const explicitResult = instruction === undefined
@@ -190,7 +202,11 @@ async function handleCodexStopHookPayloadUnsafe(
   }
 
   if (review.action === 'summary') {
-    return { action: 'summary', summaryId: review.summaryId, reason: 'Codex review summary written.' }
+    return {
+      action: 'summary',
+      summaryId: review.summaryId,
+      reason: 'reason' in review ? review.reason : 'Codex review summary written.'
+    }
   }
   if (review.action === 'summary_failed') {
     return { action: 'summary_failed', summaryId: review.summaryId, reason: review.reason }
@@ -228,6 +244,36 @@ async function runProjectMemoryHarvestFailOpen(input: Parameters<typeof runCodex
   }
 }
 
+async function runReviewSummaryOrSkip(input: {
+  payload: CodexStopHookPayload
+  cwd: string
+  messages: TranscriptMessage[]
+  config: AppConfig
+  deps: CodexStopHookDeps
+}): Promise<ReviewSummaryOrSkipResult> {
+  if (input.deps.callModel === undefined && !isMemoryExtractionModelConfigured(input.config)) {
+    return recordModelConfigSkippedSummary(input.cwd, input.payload)
+  }
+
+  return runCodexReviewSummary({
+    cwd: input.cwd,
+    sessionId: asString(input.payload.session_id),
+    turnId: asString(input.payload.turn_id),
+    messages: input.messages,
+    config: input.config,
+    callModel: input.deps.callModel ?? defaultCallModel,
+    signal: AbortSignal.timeout(20_000)
+  })
+}
+
+function isMemoryExtractionModelConfigured(config: AppConfig): boolean {
+  const routeModel = config.model.cheapModel || config.model.strongModel || config.model.model
+  return config.model.baseUrl.trim() !== ''
+    && config.model.model.trim() !== ''
+    && routeModel.trim() !== ''
+    && (!modelBaseUrlRequiresApiKey(config.model.baseUrl) || Boolean(config.model.apiKey?.trim()))
+}
+
 function pendingReason(input: { hasHarvestCandidates: boolean; explicitReason?: string }): string {
   if (input.hasHarvestCandidates) {
     if (input.explicitReason !== undefined) {
@@ -255,6 +301,9 @@ async function recordStopHookFailureSummary(
 ): Promise<CodexStopHookResult> {
   try {
     const project = await identifyCodexProject(cwd)
+    if (await isCodexProjectMemoryDisabled(project.projectId)) {
+      return { action: 'noop', reason: 'Project memory is disabled for this project.' }
+    }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId)
     const summaryId = randomUUID()
     const sessionId = asString(payload.session_id)
@@ -278,6 +327,49 @@ async function recordStopHookFailureSummary(
   } catch {
     return { action: 'summary_failed', reason: 'Stop hook command failed.' }
   }
+}
+
+async function recordModelConfigSkippedSummary(
+  cwd: string,
+  payload: CodexStopHookPayload
+): Promise<Extract<ReviewSummaryOrSkipResult, { action: 'summary'; reason: string }>> {
+  const project = await identifyCodexProject(cwd)
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      action: 'summary',
+      summaryId: '',
+      memoryRoot: codexDisabledMemoryRoot(project.projectId),
+      candidateIds: [],
+      reason: 'Project memory is disabled for this project.'
+    }
+  }
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId)
+  const summaryId = randomUUID()
+  const sessionId = asString(payload.session_id)
+  const turnId = asString(payload.turn_id)
+  const runId = [sessionId, turnId].filter(Boolean).join(':') || summaryId
+  await appendCodexReviewSummary(memoryRoot, {
+    id: summaryId,
+    runId,
+    sessionId,
+    turnId,
+    createdAt: new Date().toISOString(),
+    status: 'ok',
+    summary: 'Codex Stop hook skipped LLM review summary because model config is incomplete.',
+    redaction: { input: {}, output: {} },
+    candidateIds: []
+  })
+  return {
+    action: 'summary',
+    summaryId,
+    memoryRoot,
+    candidateIds: [],
+    reason: 'Codex review summary skipped because model config is incomplete.'
+  }
+}
+
+function codexDisabledMemoryRoot(projectId: string): string {
+  return `disabled:${projectId}`
 }
 
 async function confirmPendingCandidateIds(
@@ -378,7 +470,10 @@ function extractRecentExplicitMemoryInstructionFromMessages(messages: Transcript
 async function readTranscriptText(cwd: string, transcriptPath: string): Promise<string | undefined> {
   try {
     const safePath = await resolveSafeTranscriptPath(cwd, transcriptPath)
-    return await readFile(safePath, 'utf8')
+    if (safePath.size > MAX_TRANSCRIPT_BYTES) {
+      return readTranscriptTail(safePath)
+    }
+    return await readFile(safePath.path, 'utf8')
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
       return undefined
@@ -387,7 +482,7 @@ async function readTranscriptText(cwd: string, transcriptPath: string): Promise<
   }
 }
 
-async function resolveSafeTranscriptPath(cwd: string, transcriptPath: string): Promise<string> {
+async function resolveSafeTranscriptPath(cwd: string, transcriptPath: string): Promise<SafeTranscriptPath> {
   const resolved = isAbsolute(transcriptPath) ? transcriptPath : resolve(cwd, transcriptPath)
   const stats = await lstat(resolved)
   if (stats.isSymbolicLink()) {
@@ -396,15 +491,30 @@ async function resolveSafeTranscriptPath(cwd: string, transcriptPath: string): P
   if (!stats.isFile()) {
     throw new Error('Transcript path is not a regular file.')
   }
-  if (stats.size > MAX_TRANSCRIPT_BYTES) {
-    throw new Error('Transcript path exceeds the maximum readable size.')
-  }
   const safePath = await realpath(resolved)
   const allowedRoots = await allowedTranscriptRoots(cwd)
   if (!allowedRoots.some((root) => isPathInside(root, safePath))) {
     throw new Error('Transcript path must be inside the project cwd or Codex home.')
   }
-  return safePath
+  return { path: safePath, size: stats.size }
+}
+
+async function readTranscriptTail(target: SafeTranscriptPath): Promise<string | undefined> {
+  const length = Math.min(target.size, MAX_TRANSCRIPT_BYTES)
+  const start = Math.max(0, target.size - length)
+  const file = await open(target.path, 'r')
+  try {
+    const buffer = Buffer.alloc(length)
+    const result = await file.read(buffer, 0, length, start)
+    let text = buffer.subarray(0, result.bytesRead).toString('utf8')
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n')
+      text = firstNewline === -1 ? '' : text.slice(firstNewline + 1)
+    }
+    return text.trim() === '' ? undefined : text
+  } finally {
+    await file.close()
+  }
 }
 
 async function allowedTranscriptRoots(cwd: string): Promise<string[]> {

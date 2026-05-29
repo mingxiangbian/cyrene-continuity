@@ -89,9 +89,11 @@ function findSplitCandidates(
 function formatProjectListEntry(project: CodexProjectRegistryEntry, current: boolean): string {
   return [
     `  - projectId: ${project.projectId}${current ? ' (current)' : ''}`,
+    `    displayName: ${project.displayName}`,
     `    aliases: ${formatList(project.aliases)}`,
     `    mergedFrom: ${formatList(project.mergedFrom)}`,
     `    mergedInto: ${project.mergedInto ?? 'none'}`,
+    `    disabled: ${project.disabled ? 'yes' : 'no'}`,
     `    active: ${project.counts.active}`,
     `    pending: ${project.counts.pending}`,
     `    tombstones: ${project.counts.tombstones}`,

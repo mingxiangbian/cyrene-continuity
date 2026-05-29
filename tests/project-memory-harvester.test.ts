@@ -9,6 +9,7 @@ import {
   type CodexProjectMemoryHarvestResult
 } from '../src/codex/project-memory-harvester.js'
 import { collectProjectMemorySignals, type ProjectMemorySignal } from '../src/codex/project-memory-signals.js'
+import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
 import { createDefaultConfig, type AppConfig } from '../src/config.js'
 import type { CallModelInput, ModelResponse } from '../src/llm-client.js'
 
@@ -47,7 +48,7 @@ function createConfig(cwd: string, modelOverrides: Partial<AppConfig['model']> =
       ...config.model,
       baseUrl: 'https://example.test',
       model: 'strong',
-      apiKey: undefined,
+      apiKey: 'test-key',
       temperature: 0,
       strongModel: 'strong',
       cheapModel: 'cheap',
@@ -107,6 +108,29 @@ describe('runCodexProjectMemoryHarvest', () => {
     expect(callModel).not.toHaveBeenCalled()
   })
 
+  it('does not collect signals or write candidates when project memory is disabled', async () => {
+    const home = await createTempDir('cyrene-harvester-disabled-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-harvester-disabled-project-')
+    const identity = await identifyCodexProject(cwd)
+    await deleteCodexProjectMemory({ projectId: identity.projectId, reason: 'No project memory here.' })
+    const callModel = vi.fn(async () => modelResponse('{"candidates":[]}'))
+
+    const result = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd),
+      callModel
+    })
+
+    expect(result).toMatchObject({
+      action: 'noop',
+      reason: 'Project memory is disabled for this project.'
+    })
+    expect(collectSignals).not.toHaveBeenCalled()
+    expect(callModel).not.toHaveBeenCalled()
+    await expect(readPending(cwd)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('returns needs_model_config when base model is missing even if route models are configured', async () => {
     const home = await createTempDir('cyrene-harvester-home-')
     vi.stubEnv('HOME', home)
@@ -125,6 +149,31 @@ describe('runCodexProjectMemoryHarvest', () => {
       signals: sampleSignals(),
       warnings: []
     })
+    expect(callModel).not.toHaveBeenCalled()
+  })
+
+  it('returns needs_model_config when a hosted endpoint is missing an API key', async () => {
+    const home = await createTempDir('cyrene-harvester-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-harvester-project-')
+    collectSignals.mockResolvedValue({ signals: sampleSignals(), warnings: [] })
+    const callModel = vi.fn(async () => modelResponse('{"candidates":[]}'))
+
+    const result = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd, { baseUrl: 'https://api.deepseek.com', apiKey: undefined }),
+      callModel
+    })
+
+    expect(result).toMatchObject({
+      action: 'needs_model_config',
+      signals: sampleSignals(),
+      warnings: []
+    })
+    if (result.action !== 'needs_model_config') {
+      throw new Error(`Expected needs_model_config, got ${result.action}`)
+    }
+    expect(result.reason).toContain('CYRENE_API_KEY')
     expect(callModel).not.toHaveBeenCalled()
   })
 

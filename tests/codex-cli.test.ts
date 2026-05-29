@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,6 +35,45 @@ async function readOptionalText(filePath: string): Promise<string> {
     }
     throw error
   }
+}
+
+function readChildStdoutUntil(
+  child: ChildProcess,
+  predicate: (stdout: string) => boolean,
+  timeoutMs = 5_000
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = ''
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error(`Timed out waiting for expected stdout after ${timeoutMs}ms: stdout=${stdout}`))
+    }, timeoutMs)
+    const onData = (chunk: Buffer | string) => {
+      stdout += chunk.toString()
+      if (predicate(stdout)) {
+        cleanup()
+        resolve(stdout)
+      }
+    }
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup()
+      reject(new Error(`Child exited before expected stdout: code=${code ?? 'null'} signal=${signal ?? 'null'} stdout=${stdout}`))
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    const cleanup = () => {
+      clearTimeout(timeout)
+      child.stdout?.off('data', onData)
+      child.off('exit', onExit)
+      child.off('error', onError)
+    }
+
+    child.stdout?.on('data', onData)
+    child.once('exit', onExit)
+    child.once('error', onError)
+  })
 }
 
 function cliEnv(home: string): NodeJS.ProcessEnv {
@@ -115,6 +155,74 @@ async function seedCliPending(cwd: string, pending: PendingMemory | PendingMemor
 }
 
 describe('cyrene-continuity codex CLI', () => {
+  it('starts the Codex Web UI server until terminated', async () => {
+    const home = await createTempDir('cyrene-codex-ui-home-')
+    const cwd = await createTempDir('cyrene-codex-ui-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'codex-ui-cli-test' }), 'utf8')
+
+    const child = execFile(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        cwd,
+        'codex',
+        'ui',
+        '--port',
+        '0'
+      ],
+      { cwd: process.cwd(), env: cliEnv(home) }
+    )
+
+    try {
+      const stdout = await readChildStdoutUntil(child, (text) => /Cyrene Web UI: http:\/\/127\.0\.0\.1:\d+/.test(text))
+      const url = stdout.match(/Cyrene Web UI: (http:\/\/127\.0\.0\.1:\d+)/)?.[1]
+      expect(url).toBeDefined()
+      const response = await fetch(url as string)
+      const html = await response.text()
+      expect(html).toContain('Cyrene Memory Console')
+    } finally {
+      child.kill('SIGTERM')
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve()
+          return
+        }
+        child.once('exit', () => resolve())
+      })
+    }
+  })
+
+  it.each([
+    ['separate option without value', ['--port'], 'Invalid --port: missing value'],
+    ['empty inline option', ['--port='], 'Invalid --port: missing value'],
+    ['out-of-range port', ['--port', '65536'], 'Invalid --port: expected integer port 0-65535']
+  ])('rejects Codex Web UI %s', async (_label, portArgs, stderr) => {
+    const home = await createTempDir('cyrene-codex-ui-bad-port-home-')
+    const cwd = await createTempDir('cyrene-codex-ui-bad-port-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'codex-ui-bad-port-test' }), 'utf8')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          'node_modules/tsx/dist/cli.mjs',
+          'src/main.ts',
+          '--cwd',
+          cwd,
+          'codex',
+          'ui',
+          ...portArgs
+        ],
+        { cwd: process.cwd(), env: cliEnv(home), timeout: 1_000 }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining(stderr)
+    })
+  })
+
   it('runs project memory harvest dry-run without model config', async () => {
     const home = await createTempDir('cyrene-codex-cli-harvest-home-')
     const cwd = await createTempDir('cyrene-codex-cli-harvest-project-')
@@ -577,13 +685,18 @@ describe('cyrene-continuity codex CLI', () => {
   it('usage lists Codex lifecycle hook routes', async () => {
     const home = await createTempDir('cyrene-codex-cli-hook-usage-home-')
 
-    await expect(execFileAsync(
-      process.execPath,
-      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'unknown-command'],
-      { env: cliEnv(home) }
-    )).rejects.toMatchObject({
-      stderr: expect.stringContaining('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
-    })
+    try {
+      await execFileAsync(
+        process.execPath,
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'unknown-command'],
+        { env: cliEnv(home) }
+      )
+      throw new Error('unknown command unexpectedly succeeded')
+    } catch (error) {
+      const stderr = String((error as { stderr?: string }).stderr ?? '')
+      expect(stderr).toContain('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
+      expect(stderr).toContain('ui [--port <n>]')
+    }
   })
 
   it('install-hook --stop writes hooks.json and preserves existing Stop hooks', async () => {
