@@ -153,6 +153,66 @@ describe('startCodexUiServer', () => {
     })
   })
 
+  it('rejects cross-site state-changing API requests before model calls', async () => {
+    const home = await createTempDir('cyrene-ui-server-cross-site-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
+    vi.stubEnv('CYRENE_MODEL', 'test-model')
+    const cwd = await createProject()
+    let callCount = 0
+    server = await startCodexUiServer({
+      cwd,
+      port: 0,
+      callModel: async () => {
+        callCount += 1
+        return { content: '{"candidates":[]}', toolCalls: [] }
+      }
+    })
+
+    const response = await fetch(`${server.url}/api/memory/harvest-project/dry-run`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://example.invalid',
+        'sec-fetch-site': 'cross-site'
+      },
+      body: '{}'
+    })
+    const body = await readJson(response)
+
+    expect(response.status).toBe(403)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(body).toMatchObject({
+      ok: false,
+      error: { code: 'cross_origin_forbidden' }
+    })
+    expect(callCount).toBe(0)
+  })
+
+  it('rejects cross-site non-GET API requests before route dispatch', async () => {
+    const localServer = await startTestServer()
+
+    for (const method of ['DELETE', 'OPTIONS']) {
+      const response = await fetch(`${localServer.url}/api/status`, {
+        method,
+        headers: {
+          origin: 'https://example.invalid',
+          'sec-fetch-site': 'cross-site'
+        }
+      })
+      const body = await readJson(response)
+
+      expect(response.status).toBe(403)
+      expect(response.headers.get('content-type')).toContain('application/json')
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(body).toMatchObject({
+        ok: false,
+        error: { code: 'cross_origin_forbidden' }
+      })
+    }
+  })
+
   it('returns structured JSON when request body exceeds 64 KiB', async () => {
     const localServer = await startTestServer()
 

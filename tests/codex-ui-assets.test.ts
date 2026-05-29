@@ -22,6 +22,9 @@ describe('Codex UI source assets', () => {
     expect(js).toContain("typeof result.reason === 'string'")
     expect(js).toContain('result.reason.trim()')
     expect(js).toContain('No preview candidates were produced.')
+    expect(js).toContain('renderPreviewCandidateRow')
+    expect(js).toContain('dry-run preview')
+    expect(js).toContain('preview · dry-run only')
 
     for (const unsafeRoute of [
       '/api/memory/approve',

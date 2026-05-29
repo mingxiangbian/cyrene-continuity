@@ -126,6 +126,10 @@ async function handleApiRequest(
 ): Promise<void> {
   try {
     const method = request.method ?? 'GET'
+    if (isNonGetMethod(method) && isCrossOriginRequest(request)) {
+      writeJson(response, 403, failure('cross_origin_forbidden', 'Cross-origin non-GET API requests are not allowed.'))
+      return
+    }
     const body = needsBody(method) ? await readJsonBody(request) : undefined
     const result = await handleCodexUiApiRequest({
       cwd: input.cwd,
@@ -217,8 +221,37 @@ function safeRequestPathname(request: IncomingMessage): string | undefined {
 }
 
 function needsBody(method: string): boolean {
+  return isStateChangingMethod(method)
+}
+
+function isStateChangingMethod(method: string): boolean {
   const upperMethod = method.toUpperCase()
   return upperMethod === 'POST' || upperMethod === 'PUT' || upperMethod === 'PATCH'
+}
+
+function isNonGetMethod(method: string): boolean {
+  return method.toUpperCase() !== 'GET'
+}
+
+function isCrossOriginRequest(request: IncomingMessage): boolean {
+  const fetchSite = singleHeaderValue(request.headers['sec-fetch-site'])?.toLowerCase()
+  if (fetchSite === 'cross-site') return true
+
+  const origin = singleHeaderValue(request.headers.origin)
+  if (origin === undefined) return false
+
+  const host = singleHeaderValue(request.headers.host)
+  if (host === undefined) return true
+
+  try {
+    return new URL(origin).host !== host
+  } catch {
+    return true
+  }
+}
+
+function singleHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
 }
 
 function failure(code: string, message: string): CodexUiApiResponse<never> {

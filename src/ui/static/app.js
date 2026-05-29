@@ -261,6 +261,18 @@ function renderMemoryRow(memory) {
   `
 }
 
+function renderPreviewCandidateRow(candidate) {
+  return `
+    <article class="data-row">
+      <div>
+        <div class="row-title">${escapeHtml(candidate.content || candidate.id || 'Dry-run preview candidate')}</div>
+        <div class="row-meta">${escapeHtml(candidate.candidateKind || candidate.type || 'memory')} · preview · dry-run only</div>
+      </div>
+      ${statusChip('preview', 'dry-run only', 'warn')}
+    </article>
+  `
+}
+
 function renderHarvester() {
   const result = state.harvester.result
   const resultHtml = state.harvester.error
@@ -321,7 +333,7 @@ function renderHarvesterResult(result) {
       <div class="soft-inset">Action: ${escapeHtml(result.action || 'preview')} · No pending memory was written.</div>
       ${reason}
       ${warnings.map((warning) => `<p class="notice warn">${escapeHtml(warning)}</p>`).join('')}
-      ${candidates.map(renderMemoryRow).join('') || emptyState(emptyCopy)}
+      ${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}
     </div>
   `
 }
