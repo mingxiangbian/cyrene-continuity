@@ -19,17 +19,21 @@ export interface StartCodexUiServerInput {
 
 const HOST = '127.0.0.1'
 const DEFAULT_PORT = 47833
-const DEFAULT_PORT_ATTEMPTS = 50
+const FOLLOWING_PORT_ATTEMPTS = 20
 const MAX_BODY_BYTES = 65_536
 const STATIC_CACHE_CONTROL = 'no-store, no-cache'
 
 export async function startCodexUiServer(input: StartCodexUiServerInput): Promise<CodexUiServer> {
-  if (input.port !== undefined) {
+  if (input.port === 0) {
     return listen(input, input.port)
   }
+  return listenWithFallback(input, input.port ?? DEFAULT_PORT)
+}
 
+async function listenWithFallback(input: StartCodexUiServerInput, requestedPort: number): Promise<CodexUiServer> {
   let lastError: unknown
-  for (let port = DEFAULT_PORT; port < DEFAULT_PORT + DEFAULT_PORT_ATTEMPTS; port += 1) {
+  for (let offset = 0; offset <= FOLLOWING_PORT_ATTEMPTS; offset += 1) {
+    const port = requestedPort + offset
     try {
       return await listen(input, port)
     } catch (error) {
@@ -43,7 +47,9 @@ export async function startCodexUiServer(input: StartCodexUiServerInput): Promis
 function listen(input: StartCodexUiServerInput, port: number): Promise<CodexUiServer> {
   return new Promise((resolve, reject) => {
     const server = createServer((request, response) => {
-      void handleRequest(input, request, response)
+      handleRequest(input, request, response).catch((error: unknown) => {
+        handleUnhandledRequestError(request, response, error)
+      })
     })
 
     const onError = (error: Error) => {
@@ -83,6 +89,20 @@ function createCodexUiServer(server: Server, port: number): CodexUiServer {
       })
     })
   }
+}
+
+function handleUnhandledRequestError(request: IncomingMessage, response: ServerResponse, error: unknown): void {
+  if (response.headersSent || response.writableEnded) {
+    response.destroy()
+    return
+  }
+
+  const pathname = safeRequestPathname(request)
+  if (pathname?.startsWith('/api/')) {
+    writeJson(response, 500, failure('internal_error', errorMessage(error)))
+    return
+  }
+  writePlain(response, 500, 'Internal server error\n')
 }
 
 async function handleRequest(
@@ -186,6 +206,14 @@ function writePlain(response: ServerResponse, status: number, body: string): voi
 
 function requestPathname(request: IncomingMessage): string {
   return new URL(request.url ?? '/', `http://${HOST}`).pathname
+}
+
+function safeRequestPathname(request: IncomingMessage): string | undefined {
+  try {
+    return requestPathname(request)
+  } catch {
+    return undefined
+  }
 }
 
 function needsBody(method: string): boolean {

@@ -99,6 +99,26 @@ describe('startCodexUiServer', () => {
     await replacement.close()
   })
 
+  it('falls back from an occupied explicit nonzero port', async () => {
+    const reserved = await startTestServer()
+    const requestedPort = reserved.port
+    let fallback: CodexUiServer | undefined
+
+    try {
+      fallback = await startCodexUiServer({ cwd: await createProject(), port: requestedPort })
+
+      expect(fallback.host).toBe('127.0.0.1')
+      expect(fallback.port).not.toBe(requestedPort)
+      expect(fallback.port).toBeGreaterThan(requestedPort)
+    } finally {
+      if (fallback !== undefined) {
+        await fallback.close()
+      }
+      await reserved.close()
+      server = undefined
+    }
+  })
+
   it('returns structured JSON 404 for missing API routes', async () => {
     const localServer = await startTestServer()
 
