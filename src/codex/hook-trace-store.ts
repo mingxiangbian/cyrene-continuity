@@ -116,7 +116,7 @@ export async function readRecentCodexHookTrace(input: {
   return {
     records: records
       .filter((record) => isWithinMaxAge(record, input.now, input.maxAgeDays))
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
       .slice(-newestLimit),
     warnings
   }

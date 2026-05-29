@@ -201,4 +201,27 @@ describe('Codex hook trace store', () => {
     })
     expect(recent.records.map((record) => record.summary)).toEqual(['Recent prompt.', 'Newest stop.'])
   })
+
+  it('sorts trace records by parsed timestamp instead of lexical timestamp order', async () => {
+    const home = await createTempDir('cyrene-hook-trace-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-hook-trace-project-')
+
+    await appendCodexHookTrace({
+      cwd,
+      event: 'session_start',
+      summary: 'Chronologically older offset timestamp.',
+      now: '2026-05-29T02:00:00+02:00'
+    })
+    await appendCodexHookTrace({
+      cwd,
+      event: 'stop',
+      summary: 'Chronologically newer UTC timestamp.',
+      now: '2026-05-29T01:00:00.000Z'
+    })
+
+    const limited = await readRecentCodexHookTrace({ cwd, limit: 1 })
+
+    expect(limited.records).toMatchObject([{ summary: 'Chronologically newer UTC timestamp.' }])
+  })
 })
