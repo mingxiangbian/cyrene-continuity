@@ -8,6 +8,7 @@ import {
   memoryProfileGetInputSchema
 } from './tools/memory-dream.js'
 import { handleMemoryPropose, memoryProposeInputSchema } from './tools/memory-propose.js'
+import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from './tools/memory-harvest-project.js'
 import {
   handleMemoryDefer,
   handleMemoryEdit,
@@ -54,6 +55,16 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
       inputSchema: memoryProposeInputSchema
     },
     async (input) => handleMemoryPropose(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_harvest_project',
+    {
+      description:
+        'Harvest active project signals into pending-only Cyrene memory candidates; use dryRun to preview candidates without writing pending review items.',
+      inputSchema: memoryHarvestProjectInputSchema
+    },
+    async (input) => handleMemoryHarvestProject(input, options.cwd)
   )
 
   server.registerTool(

@@ -36,6 +36,10 @@ import {
   markSimilarHintTransferable
 } from './similar-hints-review.js'
 import type { MemoryConflictResolution } from '../memory/types.js'
+import { createDefaultConfig } from '../config.js'
+import { callModel as defaultCallModel } from '../llm-client.js'
+import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
+import type { CodexProjectHarvestMode } from './project-memory-signals.js'
 
 export async function handleCodexCommand(input: { cwd: string; args: string[]; runtimeEntryPath?: string }): Promise<void> {
   const command = input.args[0]
@@ -142,6 +146,19 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
       cwd: input.cwd,
       stage: parseDreamStage(input.args)
     }), null, 2)}\n`)
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'harvest-project') {
+    const sinceWarning = harvestProjectSinceWarning(input.args)
+    const result = await runCodexProjectMemoryHarvest({
+      cwd: input.cwd,
+      config: createDefaultConfig(input.cwd),
+      callModel: defaultCallModel,
+      dryRun: input.args.includes('--dry-run'),
+      mode: parseHarvestProjectMode(input.args)
+    })
+    process.stdout.write(`${JSON.stringify(addHarvestProjectCompatibilityWarnings(result, sinceWarning), null, 2)}\n`)
     return
   }
 
@@ -258,8 +275,37 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
+}
+
+function parseHarvestProjectMode(args: string[]): CodexProjectHarvestMode | undefined {
+  return args.includes('--changed-files') ? 'changed_files' : undefined
+}
+
+function harvestProjectSinceWarning(args: string[]): string | undefined {
+  const hasSinceOption = args.includes('--since') || args.some((arg) => arg.startsWith('--since='))
+  if (!hasSinceOption) {
+    return undefined
+  }
+  const since = parseOptionalOption(args, '--since')
+  if (since === undefined) {
+    throw new Error('Invalid --since: missing value')
+  }
+  if (since !== 'last-summary') {
+    throw new Error(`Invalid --since: ${since}. Expected last-summary`)
+  }
+  return '--since last-summary accepted for compatibility; current harvest uses default signal collection.'
+}
+
+function addHarvestProjectCompatibilityWarnings<T extends { warnings: string[] }>(result: T, warning: string | undefined): T {
+  if (warning === undefined) {
+    return result
+  }
+  return {
+    ...result,
+    warnings: [...result.warnings, warning]
+  }
 }
 
 function parseConfigPath(args: string[]): string | undefined {

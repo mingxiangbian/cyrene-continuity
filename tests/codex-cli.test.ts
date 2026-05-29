@@ -115,6 +115,88 @@ async function seedCliPending(cwd: string, pending: PendingMemory | PendingMemor
 }
 
 describe('cyrene-continuity codex CLI', () => {
+  it('runs project memory harvest dry-run without model config', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-test' }), 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project',
+        '--dry-run'
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; signals?: unknown[] }
+    expect(parsed.action).toBe('needs_model_config')
+    expect(parsed.signals?.length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    ['separate option', ['--since', 'last-summary']],
+    ['inline option', ['--since=last-summary']]
+  ])('accepts project memory harvest %s compatibility option', async (_label, sinceArgs) => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-since-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-since-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-since-test' }), 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project',
+        '--dry-run',
+        ...sinceArgs
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    const parsed = JSON.parse(result.stdout) as { warnings?: string[] }
+    expect(result.stderr).toBe('')
+    expect(parsed.warnings).toContain(
+      '--since last-summary accepted for compatibility; current harvest uses default signal collection.'
+    )
+  })
+
+  it.each([
+    ['missing trailing value', ['--since'], 'Invalid --since: missing value'],
+    ['empty inline value', ['--since='], 'Invalid --since: missing value'],
+    ['invalid value', ['--since', 'latest'], 'Invalid --since: latest. Expected last-summary']
+  ])('rejects project memory harvest %s', async (_label, sinceArgs, stderr) => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-bad-since-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-bad-since-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-bad-since-test' }), 'utf8')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+          join(process.cwd(), 'src/main.ts'),
+          'codex',
+          'memory',
+          'harvest-project',
+          '--dry-run',
+          ...sinceArgs
+        ],
+        { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining(stderr)
+    })
+  })
+
   it('doctor rejects --config without a path', async () => {
     const home = await createTempDir('cyrene-codex-cli-config-missing-home-')
 

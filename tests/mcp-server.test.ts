@@ -16,6 +16,7 @@ import {
   handleMemoryReject
 } from '../src/mcp/tools/memory-review.js'
 import { handleMemoryDreamRun, handleMemoryProfileGet } from '../src/mcp/tools/memory-dream.js'
+import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from '../src/mcp/tools/memory-harvest-project.js'
 
 const execFileAsync = promisify(execFile)
 const originalHome = process.env.HOME
@@ -270,6 +271,26 @@ describe('Cyrene MCP server', () => {
     expect(profileJson.content).toEqual(expect.any(String))
   })
 
+  it('handles project memory harvest with fallback cwd and no cwd schema', async () => {
+    const home = await createTempDir('cyrene-mcp-harvest-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', '')
+    vi.stubEnv('CYRENE_MODEL', '')
+    const cwd = await createTempDir('cyrene-mcp-harvest-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-mcp-test' }), 'utf8')
+    const source = await readFile(new URL('../src/mcp/tools/memory-harvest-project.ts', import.meta.url), 'utf8')
+
+    expect(memoryHarvestProjectInputSchema).not.toHaveProperty('cwd')
+    expect(source).not.toContain('input.cwd')
+
+    const result = await handleMemoryHarvestProject({ dryRun: true }, cwd)
+    const parsed = JSON.parse(result.content[0]?.text ?? '{}') as { action?: string; signals?: Array<{ files?: string[] }> }
+
+    expect(result.content[0]?.type).toBe('text')
+    expect(parsed.action).toBe('needs_model_config')
+    expect(parsed.signals?.some((signal) => signal.files?.includes('package.json'))).toBe(true)
+  })
+
   it('requires explicit user consent in memory review tool descriptions', async () => {
     const source = await readFile(new URL('../src/mcp/mcp-server.ts', import.meta.url), 'utf8')
 
@@ -309,6 +330,7 @@ describe('Cyrene MCP server', () => {
       expect(names).toContain('cyrene_memory_defer')
       expect(names).toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
+      expect(names).toContain('cyrene_memory_harvest_project')
       const schemasByName = new Map(result.tools.map((tool) => [tool.name, tool.inputSchema as { properties?: Record<string, unknown> }]))
       for (const toolName of [
         'cyrene_continuity_get',
@@ -321,6 +343,7 @@ describe('Cyrene MCP server', () => {
         'cyrene_memory_defer',
         'cyrene_memory_dream_run',
         'cyrene_memory_profile_get',
+        'cyrene_memory_harvest_project',
         'cyrene_project_identify'
       ]) {
         expect(schemasByName.get(toolName)?.properties ?? {}).not.toHaveProperty('cwd')
