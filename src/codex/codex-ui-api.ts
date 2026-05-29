@@ -4,10 +4,21 @@ import { createDefaultConfig } from '../config.js'
 import { callModel as defaultCallModel, type CallModelInput, type ModelResponse } from '../llm-client.js'
 import { assertSafeMemoryDataFileTarget, readActiveMemoriesFromRoot } from '../memory/memory-store.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
-import type { CyreneMemory, MemoryCandidateKind } from '../memory/types.js'
+import { isMemoryCandidateKind } from '../memory/candidate-kind.js'
+import type { CyreneMemory, MemoryCandidateKind, MemoryScores } from '../memory/types.js'
 import { readCodexMemoryStatus } from './codex-memory-status.js'
 import { codexProjectMemoryRoot } from './codex-memory-root.js'
-import { listCodexPendingMemories } from './memory-review.js'
+import {
+  deferCodexPendingMemory,
+  editCodexPendingMemory,
+  listCodexPendingMemories,
+  promoteCodexPendingMemory,
+  rejectCodexPendingMemory,
+  type CodexPendingMemoryDeferResult,
+  type CodexPendingMemoryEditResult,
+  type CodexPendingMemoryPromoteResult,
+  type CodexPendingMemoryRejectResult
+} from './memory-review.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject, type CodexProjectIdentity } from './project-id.js'
 import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
@@ -16,7 +27,7 @@ import type { CodexReviewSummaryRecord } from './review-summary-store.js'
 
 export type CodexUiApiResponse<T> =
   | { ok: true; data: T }
-  | { ok: false; error: { code: string; message: string } }
+  | { ok: false; error: { code: string; message: string; details?: unknown } }
 
 export interface CodexUiApiResult<T> {
   status: number
@@ -56,6 +67,24 @@ const PROJECT_MEMORY_LABELS = [
 ] as const
 
 type ProjectMemoryLabel = typeof PROJECT_MEMORY_LABELS[number]
+type MemoryWriteAction = 'approve' | 'reject' | 'defer' | 'edit'
+type MemoryWriteReviewResult =
+  | CodexPendingMemoryPromoteResult
+  | CodexPendingMemoryRejectResult
+  | CodexPendingMemoryDeferResult
+  | CodexPendingMemoryEditResult
+
+interface MemoryWriteRoute {
+  id: string
+  action: MemoryWriteAction
+}
+
+interface EditPatch {
+  content: string
+  candidateKind?: MemoryCandidateKind
+  tags?: string[]
+  scores?: Partial<MemoryScores>
+}
 
 export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInput): Promise<CodexUiApiResult<unknown>> {
   try {
@@ -78,6 +107,14 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
         now: input.now
       })
       return ok({ result })
+    }
+
+    const writeRoute = parseMemoryWriteRoute(input.pathname)
+    if (writeRoute !== undefined) {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      return handleMemoryWriteRoute(input, writeRoute)
     }
 
     if (input.method.toUpperCase() !== 'GET') {
@@ -106,6 +143,212 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
     }
   } catch (error) {
     return failure(500, 'internal_error', errorMessage(error))
+  }
+}
+
+function parseMemoryWriteRoute(pathname: string): MemoryWriteRoute | undefined {
+  const match = /^\/api\/memory\/([^/]+)\/(approve|reject|defer|edit)$/.exec(pathname)
+  if (match === null) return undefined
+  return { id: decodeURIComponent(match[1]), action: match[2] as MemoryWriteAction }
+}
+
+async function handleMemoryWriteRoute(
+  input: HandleCodexUiApiRequestInput,
+  route: MemoryWriteRoute
+): Promise<CodexUiApiResult<unknown>> {
+  const body = input.body
+  if (!isRecord(body) || typeof body.reviewHash !== 'string' || body.reviewHash.trim() === '') {
+    return failure(400, 'invalid_request', 'Write requests require reviewHash.')
+  }
+
+  const reviewHash = body.reviewHash.trim()
+  if (route.action === 'approve') {
+    return writeResultToApi(
+      await promoteCodexPendingMemory({ cwd: input.cwd, id: route.id, reviewHash, now: input.now }),
+      'approve',
+      reviewHash,
+      input.now
+    )
+  }
+
+  if (route.action === 'reject') {
+    if (typeof body.reason !== 'string' || body.reason.trim() === '') {
+      return failure(400, 'invalid_request', 'Reject requires a reason.')
+    }
+    return writeResultToApi(
+      await rejectCodexPendingMemory({
+        cwd: input.cwd,
+        id: route.id,
+        reviewHash,
+        reason: body.reason.trim(),
+        now: input.now
+      }),
+      'reject',
+      reviewHash,
+      input.now
+    )
+  }
+
+  if (route.action === 'defer') {
+    if (typeof body.reason !== 'string' || body.reason.trim() === '') {
+      return failure(400, 'invalid_request', 'Defer requires a reason.')
+    }
+    const days = optionalPositiveInteger(body.days, 7)
+    if (days === undefined) {
+      return failure(400, 'invalid_request', 'Defer days must be a positive integer.')
+    }
+    return writeResultToApi(
+      await deferCodexPendingMemory({
+        cwd: input.cwd,
+        id: route.id,
+        reviewHash,
+        reason: body.reason.trim(),
+        days,
+        now: input.now
+      }),
+      'defer',
+      reviewHash,
+      input.now
+    )
+  }
+
+  if (typeof body.changeNote !== 'string' || body.changeNote.trim() === '') {
+    return failure(400, 'invalid_request', 'Edit requires a change note.')
+  }
+  if (!isRecord(body.patch)) {
+    return failure(400, 'invalid_request', 'Edit requires a patch object.')
+  }
+  const patch = parseEditPatch(body.patch)
+  if ('error' in patch) return patch.error
+
+  return writeResultToApi(
+    await editCodexPendingMemory({
+      cwd: input.cwd,
+      id: route.id,
+      reviewHash,
+      reason: body.changeNote.trim(),
+      now: input.now,
+      ...patch.value
+    }),
+    'edit',
+    reviewHash,
+    input.now
+  )
+}
+
+function parseEditPatch(value: Record<string, unknown>): { value: EditPatch } | { error: CodexUiApiResult<never> } {
+  if (typeof value.content !== 'string' || value.content.trim() === '') {
+    return { error: failure(400, 'invalid_request', 'Edit patch requires content.') }
+  }
+
+  const patch: EditPatch = { content: value.content.trim() }
+  if (value.candidateKind !== undefined) {
+    if (!isMemoryCandidateKind(value.candidateKind)) {
+      return { error: failure(400, 'invalid_request', 'Edit patch candidateKind is invalid.') }
+    }
+    patch.candidateKind = value.candidateKind
+  }
+  if (value.tags !== undefined) {
+    if (!Array.isArray(value.tags) || !value.tags.every((item) => typeof item === 'string')) {
+      return { error: failure(400, 'invalid_request', 'Edit patch tags must be strings.') }
+    }
+    patch.tags = value.tags.map((item) => item.trim()).filter(Boolean)
+  }
+  if (value.scores !== undefined) {
+    if (!isRecord(value.scores)) {
+      return { error: failure(400, 'invalid_request', 'Edit patch scores must be an object.') }
+    }
+    const scores = parseScorePatch(value.scores)
+    if ('error' in scores) return scores
+    patch.scores = scores.value
+  }
+  return { value: patch }
+}
+
+function parseScorePatch(value: Record<string, unknown>): { value: Partial<MemoryScores> } | { error: CodexUiApiResult<never> } {
+  const scoreFields = ['evidenceStrength', 'stability', 'usefulness', 'safety', 'sensitivity'] as const
+  const allowed = new Set<string>(scoreFields)
+  const scores: Partial<MemoryScores> = {}
+
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      return { error: failure(400, 'invalid_request', 'Edit patch scores contain an unsupported field.') }
+    }
+  }
+
+  for (const key of scoreFields) {
+    const score = value[key]
+    if (score === undefined) continue
+    if (typeof score !== 'number' || !Number.isFinite(score) || score < 0 || score > 1) {
+      return { error: failure(400, 'invalid_request', 'Edit patch scores must be numbers from 0 to 1.') }
+    }
+    scores[key] = score
+  }
+
+  return { value: scores }
+}
+
+function optionalPositiveInteger(value: unknown, fallback: number): number | undefined {
+  if (value === undefined) return fallback
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+function writeResultToApi(
+  reviewResult: MemoryWriteReviewResult,
+  action: MemoryWriteAction,
+  reviewHash: string,
+  now?: string
+): CodexUiApiResult<unknown> {
+  const result = reviewResult.result
+  if (result.action === 'not_found') {
+    return failure(404, 'not_found', result.reason)
+  }
+  if (result.action === 'conflict') {
+    return failure(409, 'review_hash_mismatch', result.reason, { latest: result.latest })
+  }
+  if (result.action === 'normalized_key_conflict') {
+    return failure(409, 'normalized_key_conflict', result.reason, { result })
+  }
+  if (result.action === 'rejected_by_validator') {
+    return failure(400, 'rejected_by_validator', result.reason, { result })
+  }
+
+  const summary = summaryForWriteResult(action, result.action)
+  const receipt = writeReceipt(action, result.candidateId, reviewHash, summary, now)
+  if (result.action === 'promote') return ok({ receipt, memory: result.memory })
+  if (result.action === 'reject_new') return ok({ receipt, tombstone: result.tombstone })
+  if (result.action === 'reject') return ok({ receipt, tombstone: result.tombstone })
+  if (result.action === 'defer') return ok({ receipt, candidate: result.candidate })
+  return ok({ receipt, candidate: result.candidate })
+}
+
+function summaryForWriteResult(action: MemoryWriteAction, resultAction: string): string {
+  if (resultAction === 'reject_new') return 'Pending memory rejected by conflict resolution.'
+  if (action === 'approve') return 'Pending memory approved.'
+  if (action === 'reject') return 'Pending memory rejected.'
+  if (action === 'defer') return 'Pending memory deferred.'
+  return 'Pending memory edited.'
+}
+
+function writeReceipt(
+  action: MemoryWriteAction,
+  id: string,
+  reviewHash: string,
+  summary: string,
+  now?: string
+): {
+  action: MemoryWriteAction
+  id: string
+  reviewHash: string
+  createdAt: string
+  summary: string
+} {
+  return {
+    action,
+    id,
+    reviewHash,
+    createdAt: now ?? new Date().toISOString(),
+    summary
   }
 }
 
@@ -281,8 +524,18 @@ function ok<T>(data: T): CodexUiApiResult<T> {
   return { status: 200, body: { ok: true, data } }
 }
 
-function failure(status: number, code: string, message: string): CodexUiApiResult<never> {
-  return { status, body: { ok: false, error: { code, message } } }
+function failure(status: number, code: string, message: string, details?: unknown): CodexUiApiResult<never> {
+  return {
+    status,
+    body: {
+      ok: false,
+      error: {
+        code,
+        message,
+        ...(details === undefined ? {} : { details })
+      }
+    }
+  }
 }
 
 function notFound(): CodexUiApiResult<never> {

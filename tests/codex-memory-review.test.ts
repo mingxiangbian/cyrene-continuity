@@ -734,6 +734,40 @@ describe('Codex pending memory review', () => {
     ])
   })
 
+  it('edits pending candidate kind, tags, and scores while keeping it pending', async () => {
+    const home = await createTempDir('cyrene-review-edit-kind-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-edit-kind-project-')
+    const candidate = createPending({ tags: ['old'], candidateKind: 'workflow_rule' })
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await editCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      content: 'Updated pending memory content for project decisions.',
+      candidateKind: 'project_decision',
+      tags: ['project_decision', 'reviewed'],
+      scores: { usefulness: 0.82 },
+      reason: 'User edited candidate metadata.',
+      now: '2026-05-25T02:00:00.000Z'
+    })
+
+    expect(result.result.action).toBe('edit')
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({
+      id: candidate.id,
+      status: 'pending',
+      content: 'Updated pending memory content for project decisions.',
+      candidateKind: 'project_decision',
+      tags: ['project_decision', 'reviewed'],
+      scores: expect.objectContaining({ usefulness: 0.82 }),
+      lastSeenAt: '2026-05-25T02:00:00.000Z'
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('defers pending memory only after hash confirmation', async () => {
     const home = await createTempDir('cyrene-review-defer-home-')
     vi.stubEnv('HOME', home)

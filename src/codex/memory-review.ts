@@ -32,6 +32,7 @@ import type {
   CyreneMemory,
   MemoryCandidateKind,
   MemoryConflictResolution,
+  MemoryScores,
   MemoryTombstone,
   PendingMemory
 } from '../memory/types.js'
@@ -733,6 +734,9 @@ export async function editCodexPendingMemory(input: {
   reviewHash: string
   content: string
   normalizedKey?: string
+  candidateKind?: MemoryCandidateKind
+  tags?: string[]
+  scores?: Partial<MemoryScores>
   reason?: string
   now?: string
 }): Promise<CodexPendingMemoryEditResult> {
@@ -785,6 +789,9 @@ export async function editCodexPendingMemory(input: {
       ...lockedCandidate,
       content: input.content,
       normalizedKey: input.normalizedKey ?? lockedCandidate.normalizedKey,
+      ...(input.candidateKind === undefined ? {} : { candidateKind: input.candidateKind }),
+      ...(input.tags === undefined ? {} : { tags: uniqueInOrder(input.tags) }),
+      ...(input.scores === undefined ? {} : { scores: { ...lockedCandidate.scores, ...input.scores } }),
       lastSeenAt: now
     }
     const [lockedActive, lockedTombstones] = await Promise.all([

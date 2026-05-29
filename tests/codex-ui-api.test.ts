@@ -291,6 +291,132 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
+  it('rejects write routes when reviewHash is missing', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, pending } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/memory/${pending.id}/approve`,
+      body: {}
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_request' }
+    })
+  })
+
+  it('maps stale review hashes to a 409 response', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, pending } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/memory/${pending.id}/approve`,
+      body: { reviewHash: 'stale' }
+    })
+
+    expect(result.status).toBe(409)
+    expect(result.body).toMatchObject({
+      ok: false,
+      error: { code: 'review_hash_mismatch' }
+    })
+  })
+
+  it('requires reasons for reject and defer write routes', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, pending } = await seedProject()
+    const hash = await pendingHash(cwd)
+
+    for (const action of ['reject', 'defer']) {
+      const result = await handleCodexUiApiRequest({
+        cwd,
+        method: 'POST',
+        pathname: `/api/memory/${pending.id}/${action}`,
+        body: { reviewHash: hash }
+      })
+
+      expect(result.status).toBe(400)
+      expect(result.body).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_request' }
+      })
+    }
+  })
+
+  it('approves pending memory through the Web UI write route', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, pending, memoryRoot } = await seedProject()
+    const hash = await pendingHash(cwd)
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/memory/${pending.id}/approve`,
+      body: { reviewHash: hash }
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: {
+          action: 'approve',
+          id: pending.id,
+          reviewHash: hash
+        }
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(pending.content)
+  })
+
+  it('edits pending memory through the Web UI write route without promoting it', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, pending, memoryRoot } = await seedProject()
+    const hash = await pendingHash(cwd)
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/memory/${pending.id}/edit`,
+      body: {
+        reviewHash: hash,
+        changeNote: 'User clarified the candidate.',
+        patch: {
+          content: 'Keep Web UI write actions hash-checked and pending-only.',
+          candidateKind: 'workflow_rule',
+          tags: ['web_ui', 'reviewed'],
+          scores: { usefulness: 0.88 }
+        }
+      }
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: { action: 'edit', id: pending.id },
+        candidate: expect.objectContaining({
+          id: pending.id,
+          status: 'pending',
+          content: 'Keep Web UI write actions hash-checked and pending-only.',
+          tags: ['web_ui', 'reviewed']
+        })
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('Keep Web UI write actions hash-checked')
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Project Facts should be grouped for the UI.')
+  })
+
   it('returns structured method errors for non-GET read routes', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
@@ -357,4 +483,11 @@ describe('handleCodexUiApiRequest', () => {
 
 function groupIds(groups: Array<{ label: string; memories: Array<{ id: string }> }>): Record<string, string[]> {
   return Object.fromEntries(groups.map((group) => [group.label, group.memories.map((memory) => memory.id)]))
+}
+
+async function pendingHash(cwd: string): Promise<string> {
+  const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/memory/pending' })
+  if (!result.body.ok) throw new Error('expected pending list')
+  const data = result.body.data as { pending: Array<{ reviewHash: string }> }
+  return data.pending[0].reviewHash
 }
