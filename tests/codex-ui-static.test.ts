@@ -18,7 +18,15 @@ describe('Codex UI static assets', () => {
   })
 
   it('bundles expected initial UI content', () => {
-    expect(getCodexUiStaticAsset('/')?.body).toContain('Cyrene Memory Console')
+    const html = getCodexUiStaticAsset('/')?.body
+
+    expect(html).toContain('Cyrene Memory Console')
+    expect(html).toContain('href="/styles.css"')
+    expect(html).toContain('src="/app.js"')
+    expect(html).toContain('data-app')
+    expect(html).toContain('class="sidebar"')
+    expect(html).toContain('class="main-shell"')
+    expect(html).toContain('class="detail-rail"')
     expect(getCodexUiStaticAsset('/app.js')?.body).toContain('Write actions disabled in v1')
     expect(getCodexUiStaticAsset('/styles.css')?.body).toContain('--coral: #cc785c')
     expect(getCodexUiStaticAsset('/styles.css')?.body).toContain('--canvas: #f4efe7')

@@ -31,7 +31,7 @@ body {
 }
 
 .sidebar,
-.main-panel,
+.main-shell,
 .detail-rail {
   min-width: 0;
   border-right: 1px solid var(--line);
@@ -43,7 +43,7 @@ body {
   padding: 24px;
 }
 
-.main-panel {
+.main-shell {
   background: var(--surface);
   padding: 24px;
 }
