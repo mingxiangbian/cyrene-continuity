@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { codexProjectMemoryRoot, ensureCodexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { appendCodexHookTrace, readRecentCodexHookTrace } from '../src/codex/hook-trace-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 
@@ -120,6 +120,42 @@ describe('Codex hook trace store', () => {
     expect(result.records).toHaveLength(1)
     expect(result.records[0]?.id).toBe('record-2')
     expect(result.warnings).toEqual([expect.stringContaining('Malformed hook trace line')])
+  })
+
+  it('skips valid JSON trace lines with invalid record shapes and returns warnings', async () => {
+    const home = await createTempDir('cyrene-hook-trace-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-hook-trace-project-')
+    const project = await identifyCodexProject(cwd)
+    await ensureCodexProjectMemoryRoot(project.projectId)
+    const tracePath = join(codexProjectMemoryRoot(project.projectId), 'hook-trace.jsonl')
+    const validRecord = {
+      id: 'record-1',
+      createdAt: '2026-05-29T00:00:00.000Z',
+      event: 'user_prompt_submit',
+      cwd,
+      summary: 'Prompt submitted.',
+      signals: ['active project']
+    }
+
+    await writeFile(
+      tracePath,
+      [
+        JSON.stringify({}),
+        JSON.stringify({ id: 'bad', createdAt: null }),
+        JSON.stringify(validRecord)
+      ].join('\n') + '\n',
+      'utf8'
+    )
+
+    const result = await readRecentCodexHookTrace({ cwd })
+
+    expect(result.records).toEqual([validRecord])
+    expect(result.warnings).toHaveLength(2)
+    expect(result.warnings).toEqual([
+      expect.stringContaining('Malformed hook trace line'),
+      expect.stringContaining('Malformed hook trace line')
+    ])
   })
 
   it('limits recent trace records by count and age', async () => {

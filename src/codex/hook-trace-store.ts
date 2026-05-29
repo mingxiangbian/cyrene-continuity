@@ -13,6 +13,7 @@ const SIGNAL_MAX_LENGTH = 240
 const COMMAND_SUMMARY_MAX_LENGTH = 500
 const OUTPUT_SUMMARY_MAX_LENGTH = 500
 const MAX_TOUCHED_FILES = 50
+const HOOK_TRACE_EVENTS = new Set<string>(['session_start', 'user_prompt_submit', 'post_tool_use', 'stop'])
 
 export type CodexHookTraceEventName = 'session_start' | 'user_prompt_submit' | 'post_tool_use' | 'stop'
 
@@ -100,7 +101,12 @@ export async function readRecentCodexHookTrace(input: {
     }
 
     try {
-      records.push(JSON.parse(trimmed) as CodexHookTraceRecord)
+      const record: unknown = JSON.parse(trimmed)
+      if (!isCodexHookTraceRecord(record)) {
+        warnings.push(`Malformed hook trace line ${index + 1} skipped.`)
+        continue
+      }
+      records.push(record)
     } catch {
       warnings.push(`Malformed hook trace line ${index + 1} skipped.`)
     }
@@ -140,6 +146,59 @@ function cleanTool(tool: CodexHookTraceTool | undefined): CodexHookTraceTool | u
 function cleanString(value: string, maxLength?: number): string {
   const redacted = redactReviewText(value).text
   return maxLength === undefined ? redacted : redacted.slice(0, maxLength)
+}
+
+function isCodexHookTraceRecord(value: unknown): value is CodexHookTraceRecord {
+  if (!isPlainRecord(value)) {
+    return false
+  }
+
+  return (
+    isNonemptyString(value.id) &&
+    isNonemptyString(value.createdAt) &&
+    typeof value.event === 'string' &&
+    HOOK_TRACE_EVENTS.has(value.event) &&
+    typeof value.cwd === 'string' &&
+    typeof value.summary === 'string' &&
+    isStringArray(value.signals) &&
+    isOptionalString(value.sessionId) &&
+    isOptionalString(value.turnId) &&
+    isOptionalHookTraceTool(value.tool)
+  )
+}
+
+function isOptionalHookTraceTool(value: unknown): value is CodexHookTraceTool | undefined {
+  if (value === undefined) {
+    return true
+  }
+  if (!isPlainRecord(value)) {
+    return false
+  }
+
+  return (
+    typeof value.name === 'string' &&
+    isOptionalString(value.useId) &&
+    isOptionalString(value.commandSummary) &&
+    (value.exitCode === undefined || typeof value.exitCode === 'number') &&
+    (value.touchedFiles === undefined || isStringArray(value.touchedFiles)) &&
+    isOptionalString(value.outputSummary)
+  )
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isNonemptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === 'string'
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
 }
 
 function isWithinMaxAge(record: CodexHookTraceRecord, now: string | undefined, maxAgeDays: number | undefined): boolean {
