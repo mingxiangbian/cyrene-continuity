@@ -450,13 +450,17 @@ function parseOptionalPositiveInteger(args: string[], option: string): number | 
 }
 
 function parseOptionalNonNegativeInteger(args: string[], option: string): number | undefined {
+  const index = args.indexOf(option)
+  if (index >= 0 && args[index + 1] === undefined) {
+    throw new Error(`Invalid ${option}: missing value`)
+  }
   const value = parseOptionalOption(args, option)
   if (value === undefined) {
     return undefined
   }
   const parsed = Number(value)
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error(`Invalid ${option}: expected non-negative integer`)
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+    throw new Error(`Invalid ${option}: expected integer port 0-65535`)
   }
   return parsed
 }

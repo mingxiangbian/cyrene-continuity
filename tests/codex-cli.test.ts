@@ -37,9 +37,17 @@ async function readOptionalText(filePath: string): Promise<string> {
   }
 }
 
-function readChildStdoutUntil(child: ChildProcess, predicate: (stdout: string) => boolean): Promise<string> {
+function readChildStdoutUntil(
+  child: ChildProcess,
+  predicate: (stdout: string) => boolean,
+  timeoutMs = 5_000
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = ''
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error(`Timed out waiting for expected stdout after ${timeoutMs}ms: stdout=${stdout}`))
+    }, timeoutMs)
     const onData = (chunk: Buffer | string) => {
       stdout += chunk.toString()
       if (predicate(stdout)) {
@@ -56,6 +64,7 @@ function readChildStdoutUntil(child: ChildProcess, predicate: (stdout: string) =
       reject(error)
     }
     const cleanup = () => {
+      clearTimeout(timeout)
       child.stdout?.off('data', onData)
       child.off('exit', onExit)
       child.off('error', onError)
@@ -183,6 +192,35 @@ describe('cyrene-continuity codex CLI', () => {
         child.once('exit', () => resolve())
       })
     }
+  })
+
+  it.each([
+    ['separate option without value', ['--port'], 'Invalid --port: missing value'],
+    ['empty inline option', ['--port='], 'Invalid --port: missing value'],
+    ['out-of-range port', ['--port', '65536'], 'Invalid --port: expected integer port 0-65535']
+  ])('rejects Codex Web UI %s', async (_label, portArgs, stderr) => {
+    const home = await createTempDir('cyrene-codex-ui-bad-port-home-')
+    const cwd = await createTempDir('cyrene-codex-ui-bad-port-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'codex-ui-bad-port-test' }), 'utf8')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          'node_modules/tsx/dist/cli.mjs',
+          'src/main.ts',
+          '--cwd',
+          cwd,
+          'codex',
+          'ui',
+          ...portArgs
+        ],
+        { cwd: process.cwd(), env: cliEnv(home), timeout: 1_000 }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining(stderr)
+    })
   })
 
   it('runs project memory harvest dry-run without model config', async () => {
