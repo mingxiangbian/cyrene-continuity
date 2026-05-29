@@ -3,6 +3,18 @@ import { describe, expect, it } from 'vitest'
 import { getCodexUiStaticAsset, listCodexUiStaticAssetPaths } from '../src/codex/codex-ui-static.js'
 
 describe('Codex UI static assets', () => {
+  it('keeps generated asset bodies in sync with static source files', async () => {
+    const [html, js, css] = await Promise.all([
+      readFile(new URL('../src/ui/static/index.html', import.meta.url), 'utf8'),
+      readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8'),
+      readFile(new URL('../src/ui/static/styles.css', import.meta.url), 'utf8')
+    ])
+
+    expect(getCodexUiStaticAsset('/')?.body).toBe(html)
+    expect(getCodexUiStaticAsset('/app.js')?.body).toBe(js)
+    expect(getCodexUiStaticAsset('/styles.css')?.body).toBe(css)
+  })
+
   it('lists bundled static asset paths', () => {
     expect(listCodexUiStaticAssetPaths().sort()).toEqual(['/', '/app.js', '/styles.css'].sort())
   })
