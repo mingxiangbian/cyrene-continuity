@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -137,10 +137,31 @@ describe('handleCodexUiApiRequest', () => {
     if (result.body.ok) {
       const data = result.body.data as {
         pending: { pending: Array<{ id: string }> }
-        profile: { profile: string | null }
+        profile: { profile: string }
+        signals: { signals: Array<{ kind: string; files?: string[] }> }
       }
       expect(data.pending.pending[0]).toMatchObject({ id: 'pending-1' })
       expect(data.profile.profile).toBe('Project profile text for UI.')
+      expect(data.signals.signals).toContainEqual(expect.objectContaining({
+        kind: 'project_manifest',
+        files: ['package.json']
+      }))
+    }
+  })
+
+  it('returns an empty string when profile is missing', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    await unlink(join(memoryRoot, 'MODEL_PROFILE.md'))
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/profile' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { profile: string }
+      expect(data.profile).toBe('')
     }
   })
 
@@ -160,10 +181,22 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
-  it('returns grouped project memory for Project Facts', async () => {
+  it('returns grouped project memory for all UI labels', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
-    const { cwd } = await seedProject()
+    const { cwd, memoryRoot } = await seedProject()
+    await writeFile(
+      join(memoryRoot, 'index.jsonl'),
+      [
+        createActive({ id: 'fact-by-type', candidateKind: undefined, type: 'project_fact', tags: [] }),
+        createActive({ id: 'decision-1', candidateKind: 'project_decision', tags: [] }),
+        createActive({ id: 'workflow-by-type', candidateKind: undefined, type: 'procedural_rule', tags: [] }),
+        createActive({ id: 'pitfall-1', candidateKind: 'known_pitfall', tags: [] }),
+        createActive({ id: 'rejected-1', candidateKind: 'rejected_approach', tags: [] }),
+        createActive({ id: 'question-1', candidateKind: 'open_question', tags: [] }),
+        createActive({ id: 'other-1', candidateKind: undefined, type: 'reference', tags: [] })
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
 
     const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/project-memory' })
 
@@ -171,9 +204,14 @@ describe('handleCodexUiApiRequest', () => {
     expect(result.body.ok).toBe(true)
     if (result.body.ok) {
       const data = result.body.data as { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
-      expect(data.groups).toContainEqual({
-        label: 'Project Facts',
-        memories: [expect.objectContaining({ id: 'active-1' })]
+      expect(groupIds(data.groups)).toEqual({
+        'Project Facts': ['fact-by-type'],
+        'Project Decisions': ['decision-1'],
+        'Workflow Rules': ['workflow-by-type'],
+        'Known Pitfalls': ['pitfall-1'],
+        'Rejected Approaches': ['rejected-1'],
+        'Open Questions': ['question-1'],
+        'Other Project Memory': ['other-1']
       })
     }
   })
@@ -269,3 +307,7 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 })
+
+function groupIds(groups: Array<{ label: string; memories: Array<{ id: string }> }>): Record<string, string[]> {
+  return Object.fromEntries(groups.map((group) => [group.label, group.memories.map((memory) => memory.id)]))
+}

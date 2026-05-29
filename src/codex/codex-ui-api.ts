@@ -11,6 +11,7 @@ import { listCodexPendingMemories } from './memory-review.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject, type CodexProjectIdentity } from './project-id.js'
 import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
+import { collectProjectMemorySignals } from './project-memory-signals.js'
 import type { CodexReviewSummaryRecord } from './review-summary-store.js'
 
 export type CodexUiApiResponse<T> =
@@ -79,7 +80,7 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       case '/api/status':
         return ok(await readCodexMemoryStatus({ cwd: input.cwd }))
       case '/api/dashboard':
-        return ok(await readDashboard(input.cwd))
+        return ok(await readDashboard(input.cwd, input.now))
       case '/api/memory/pending':
         return ok(await listCodexPendingMemories({ cwd: input.cwd }))
       case '/api/memory/active':
@@ -107,15 +108,16 @@ async function readActive(cwd: string): Promise<ActiveMemoryResult> {
   return { project, active, memoryRoot }
 }
 
-async function readDashboard(cwd: string) {
-  const [status, pending, active, reviewSummaries, projectMemory, dream, profile] = await Promise.all([
+async function readDashboard(cwd: string, now?: string) {
+  const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals] = await Promise.all([
     readCodexMemoryStatus({ cwd }),
     listCodexPendingMemories({ cwd }),
     readActive(cwd),
     readReviewSummaries(cwd),
     readProjectMemory(cwd),
     readDream(cwd),
-    readProfile(cwd)
+    readProfile(cwd),
+    collectProjectMemorySignals({ cwd, now, mode: 'default' })
   ])
   return {
     status,
@@ -124,7 +126,8 @@ async function readDashboard(cwd: string) {
     reviewSummaries,
     projectMemory,
     dream,
-    profile
+    profile,
+    signals
   }
 }
 
@@ -150,12 +153,12 @@ async function readReviewSummaries(cwd: string): Promise<{
 async function readProfile(cwd: string): Promise<{
   project: CodexProjectIdentity
   memoryRoot: string
-  profile: string | null
+  profile: string
 }> {
   const project = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(project.projectId)
   const profile = await readModelProfileFromRootIfExists(memoryRoot)
-  return { project, memoryRoot, profile: profile ?? null }
+  return { project, memoryRoot, profile: profile ?? '' }
 }
 
 async function readDream(cwd: string): Promise<{
@@ -213,18 +216,24 @@ function groupProjectMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
 }
 
 function labelForProjectMemory(memory: CyreneMemory): ProjectMemoryLabel {
-  const candidateKind = memory.candidateKind ?? memory.candidate_kind
-  if (hasKindOrTag(memory, candidateKind, 'project_decision')) return 'Project Decisions'
-  if (hasKindOrTag(memory, candidateKind, 'workflow_rule')) return 'Workflow Rules'
-  if (hasKindOrTag(memory, candidateKind, 'known_pitfall')) return 'Known Pitfalls'
-  if (hasKindOrTag(memory, candidateKind, 'rejected_approach')) return 'Rejected Approaches'
-  if (hasKindOrTag(memory, candidateKind, 'open_question')) return 'Open Questions'
-  if (hasKindOrTag(memory, candidateKind, 'project_fact') || memory.type === 'project_fact') return 'Project Facts'
+  const classification = memory.candidateKind ?? memory.candidate_kind ?? memory.type
+  if (classification === 'project_decision') return 'Project Decisions'
+  if (classification === 'workflow_rule' || classification === 'procedural_rule') return 'Workflow Rules'
+  if (classification === 'known_pitfall') return 'Known Pitfalls'
+  if (classification === 'rejected_approach') return 'Rejected Approaches'
+  if (classification === 'open_question') return 'Open Questions'
+  if (classification === 'project_fact') return 'Project Facts'
+  if (hasTag(memory, 'project_decision')) return 'Project Decisions'
+  if (hasTag(memory, 'workflow_rule')) return 'Workflow Rules'
+  if (hasTag(memory, 'known_pitfall')) return 'Known Pitfalls'
+  if (hasTag(memory, 'rejected_approach')) return 'Rejected Approaches'
+  if (hasTag(memory, 'open_question')) return 'Open Questions'
+  if (hasTag(memory, 'project_fact')) return 'Project Facts'
   return 'Other Project Memory'
 }
 
-function hasKindOrTag(memory: CyreneMemory, candidateKind: MemoryCandidateKind | undefined, expected: MemoryCandidateKind): boolean {
-  return candidateKind === expected || memory.tags.includes(expected)
+function hasTag(memory: CyreneMemory, expected: MemoryCandidateKind): boolean {
+  return memory.tags.includes(expected)
 }
 
 function isReviewSummaryRecord(value: unknown): value is CodexReviewSummaryRecord {
