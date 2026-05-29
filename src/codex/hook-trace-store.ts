@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { assertSafeMemoryDataFileTarget } from '../memory/memory-store.js'
-import { codexProjectMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
+import { ensureCodexProjectMemoryRoot, getReadableCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { identifyCodexProject } from './project-id.js'
 import { redactReviewText } from './review-redaction.js'
 
@@ -76,13 +76,16 @@ export async function readRecentCodexHookTrace(input: {
   maxAgeDays?: number
 }): Promise<{ records: CodexHookTraceRecord[]; warnings: string[] }> {
   const project = await identifyCodexProject(input.cwd)
-  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId)
-  const targetPath = join(codexProjectMemoryRoot(project.projectId), HOOK_TRACE_FILE)
+  const memoryRoot = await getReadableCodexProjectMemoryRoot(project.projectId)
+  if (memoryRoot === null) {
+    return { records: [], warnings: [] }
+  }
+  const targetPath = join(memoryRoot, HOOK_TRACE_FILE)
   await assertSafeMemoryDataFileTarget(targetPath)
 
   let content: string
   try {
-    content = await readFile(join(memoryRoot, HOOK_TRACE_FILE), 'utf8')
+    content = await readFile(targetPath, 'utf8')
   } catch (error) {
     if (isFileErrorCode(error, 'ENOENT')) {
       return { records: [], warnings: [] }

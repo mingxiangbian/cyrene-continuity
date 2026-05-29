@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -57,6 +57,19 @@ describe('Codex hook trace store', () => {
       records: [appended],
       warnings: []
     })
+  })
+
+  it('does not create the project memory root when reading missing traces', async () => {
+    const home = await createTempDir('cyrene-hook-trace-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-hook-trace-project-')
+    const project = await identifyCodexProject(cwd)
+
+    await expect(readRecentCodexHookTrace({ cwd })).resolves.toEqual({
+      records: [],
+      warnings: []
+    })
+    await expect(lstat(codexProjectMemoryRoot(project.projectId))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('redacts secret-like content before writing trace records', async () => {
