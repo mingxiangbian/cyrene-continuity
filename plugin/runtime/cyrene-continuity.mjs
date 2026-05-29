@@ -602,8 +602,8 @@ var require_help = __commonJS({
 |.{1,${columnWidth - 1}}([${breaks}]|$)|[^${breaks}]+?([${breaks}]|$)`,
           "g"
         );
-        const lines = columnText.match(regex) || [];
-        return leadingStr + lines.map((line, i) => {
+        const lines2 = columnText.match(regex) || [];
+        return leadingStr + lines2.map((line, i) => {
           if (line === "\n") return "";
           return (i > 0 ? indentString : "") + line.trimEnd();
         }).join("\n");
@@ -5894,9 +5894,9 @@ var require_compile = __commonJS({
       if (_sch)
         return _sch;
       const rootId = (0, resolve_1.getFullPath)(this.opts.uriResolver, sch.root.baseId);
-      const { es5, lines } = this.opts.code;
+      const { es5, lines: lines2 } = this.opts.code;
       const { ownProperties } = this.opts;
-      const gen = new codegen_1.CodeGen(this.scope, { es5, lines, ownProperties });
+      const gen = new codegen_1.CodeGen(this.scope, { es5, lines: lines2, ownProperties });
       let _ValidationError;
       if (sch.$async) {
         _ValidationError = gen.scopeValue("Error", {
@@ -7037,8 +7037,8 @@ var require_core = __commonJS({
         this._loading = {};
         this._cache = /* @__PURE__ */ new Map();
         opts = this.opts = { ...opts, ...requiredOptions(opts) };
-        const { es5, lines } = this.opts.code;
-        this.scope = new codegen_2.ValueScope({ scope: {}, prefixes: EXT_SCOPE_NAMES, es5, lines });
+        const { es5, lines: lines2 } = this.opts.code;
+        this.scope = new codegen_2.ValueScope({ scope: {}, prefixes: EXT_SCOPE_NAMES, es5, lines: lines2 });
         this.logger = getLogger(opts.logger);
         const formatOpt = opts.validateFormats;
         opts.validateFormats = false;
@@ -11325,8 +11325,8 @@ var SqliteMemoryIndexAdapter = class {
 function memoryIndexId(root, memoryId) {
   return JSON.stringify([root.scope, root.projectId, memoryId]);
 }
-function dependencyFingerprint(dependencyNames) {
-  return dependencyNames.slice().sort().join("\n");
+function dependencyFingerprint(dependencyNames2) {
+  return dependencyNames2.slice().sort().join("\n");
 }
 function projectMetadataFromRecord(row) {
   const projectId = readString(row.project_id, "project_id");
@@ -11442,15 +11442,15 @@ import { join as join6 } from "node:path";
 async function buildCodexProjectFingerprint(input) {
   const root = input.project.gitRoot ?? input.cwd;
   const packageJson = await readPackageJson(root);
-  const dependencyNames = packageJson === void 0 ? [] : Object.keys({
+  const dependencyNames2 = packageJson === void 0 ? [] : Object.keys({
     ...readObject(packageJson.dependencies),
     ...readObject(packageJson.devDependencies)
   }).sort();
   const packageManager = await detectPackageManager(root);
   const rootEntries = await safeReaddir(root);
-  const languages = detectLanguages(rootEntries, dependencyNames);
-  const frameworks = detectFrameworks(rootEntries, dependencyNames);
-  const domainTags = detectDomainTags(rootEntries, frameworks, dependencyNames, languages);
+  const languages = detectLanguages(rootEntries, dependencyNames2);
+  const frameworks = detectFrameworks(rootEntries, dependencyNames2);
+  const domainTags = detectDomainTags(rootEntries, frameworks, dependencyNames2, languages);
   return {
     projectId: input.project.projectId,
     displayName: input.project.displayName,
@@ -11459,7 +11459,7 @@ async function buildCodexProjectFingerprint(input) {
     packageManager,
     languages,
     frameworks,
-    dependencyNames,
+    dependencyNames: dependencyNames2,
     domainTags,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
@@ -11488,9 +11488,9 @@ async function safeReaddir(cwd) {
     return [];
   }
 }
-function detectLanguages(rootEntries, dependencyNames) {
+function detectLanguages(rootEntries, dependencyNames2) {
   const languages = /* @__PURE__ */ new Set();
-  const dependencies = new Set(dependencyNames);
+  const dependencies = new Set(dependencyNames2);
   if (rootEntries.includes("tsconfig.json") || rootEntries.some((entry) => entry.endsWith(".ts")) || dependencies.has("typescript")) {
     languages.add("typescript");
   }
@@ -11499,9 +11499,9 @@ function detectLanguages(rootEntries, dependencyNames) {
   }
   return [...languages].sort();
 }
-function detectFrameworks(rootEntries, dependencyNames) {
+function detectFrameworks(rootEntries, dependencyNames2) {
   const frameworks = /* @__PURE__ */ new Set();
-  const dependencies = new Set(dependencyNames);
+  const dependencies = new Set(dependencyNames2);
   if (dependencies.has("@modelcontextprotocol/sdk")) frameworks.add("mcp");
   if (dependencies.has("vite") || rootEntries.some((entry) => entry.startsWith("vite.config."))) {
     frameworks.add("vite");
@@ -11512,10 +11512,10 @@ function detectFrameworks(rootEntries, dependencyNames) {
   if (dependencies.has("tsx")) frameworks.add("tsx");
   return [...frameworks].sort();
 }
-function detectDomainTags(rootEntries, frameworks, dependencyNames, languages) {
+function detectDomainTags(rootEntries, frameworks, dependencyNames2, languages) {
   const tags = /* @__PURE__ */ new Set();
   const frameworkSet = new Set(frameworks);
-  const dependencySet = new Set(dependencyNames);
+  const dependencySet = new Set(dependencyNames2);
   if (rootEntries.includes("plugin") || dependencySet.has("@modelcontextprotocol/sdk")) {
     tags.add("codex-plugin");
   }
@@ -12657,17 +12657,17 @@ function readTomlBooleanValue(block, key) {
   return void 0;
 }
 function readTomlBlock(configText, heading) {
-  const lines = configText.split(/\r?\n/);
-  const start = lines.findIndex((line) => stripTomlInlineComment(line).trim() === heading);
+  const lines2 = configText.split(/\r?\n/);
+  const start = lines2.findIndex((line) => stripTomlInlineComment(line).trim() === heading);
   if (start < 0) {
     return void 0;
   }
   const body = [];
-  for (let index = start + 1; index < lines.length; index += 1) {
-    if (/^\s*\[/.test(stripTomlInlineComment(lines[index]))) {
+  for (let index = start + 1; index < lines2.length; index += 1) {
+    if (/^\s*\[/.test(stripTomlInlineComment(lines2[index]))) {
       break;
     }
-    body.push(lines[index]);
+    body.push(lines2[index]);
   }
   return body.join("\n");
 }
@@ -13774,20 +13774,20 @@ function formatModelProfile(entries) {
   for (const entry of entries) {
     grouped.set(entry.section, [...grouped.get(entry.section) ?? [], entry]);
   }
-  const lines = [GENERATED_HEADER, "", "# Cyrene Model Profile", ""];
+  const lines2 = [GENERATED_HEADER, "", "# Cyrene Model Profile", ""];
   for (const section of MODEL_PROFILE_SECTIONS) {
-    lines.push(`## ${section}`, "");
+    lines2.push(`## ${section}`, "");
     const sectionEntries = grouped.get(section) ?? [];
     if (sectionEntries.length === 0) {
-      lines.push("- None.");
+      lines2.push("- None.");
     } else {
       for (const entry of sectionEntries) {
-        lines.push(`- ${entry.content}`);
+        lines2.push(`- ${entry.content}`);
       }
     }
-    lines.push("");
+    lines2.push("");
   }
-  return `${lines.join("\n").trimEnd()}
+  return `${lines2.join("\n").trimEnd()}
 `;
 }
 
@@ -15514,9 +15514,9 @@ async function runCodexReleaseEval() {
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
-import { lstat as lstat11, readFile as readFile11, realpath as realpath6 } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join17, relative as relative5, resolve as resolve6 } from "node:path";
+import { randomUUID as randomUUID9 } from "node:crypto";
+import { lstat as lstat12, readFile as readFile13, realpath as realpath6 } from "node:fs/promises";
+import { isAbsolute as isAbsolute5, join as join19, relative as relative5, resolve as resolve6 } from "node:path";
 
 // src/llm-client.ts
 async function callModel(input) {
@@ -15569,112 +15569,10 @@ function mergeAbortSignals(timeoutSignal, inputSignal) {
   return inputSignal === void 0 ? timeoutSignal : AbortSignal.any([timeoutSignal, inputSignal]);
 }
 
-// src/codex/memory-propose.ts
-import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
-var DEFAULT_SCORES = {
-  evidenceStrength: 0.75,
-  stability: 0.65,
-  usefulness: 0.7,
-  safety: 0.9,
-  sensitivity: 0.2
-};
-async function proposeCodexMemoryCandidate(input) {
-  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const project = await identifyCodexProject(input.cwd);
-  const candidate = toPendingMemory(input.candidate, now);
-  const memoryRoot = candidate.scope === "global" ? await ensureCodexGlobalMemoryRoot() : await ensureCodexProjectMemoryRoot(project.projectId);
-  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
-  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
-    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
-    const [existingMemories, tombstones] = await Promise.all([
-      readActiveMemoriesFromRoot(lockedMemoryRoot),
-      readTombstonesFromRoot(lockedMemoryRoot)
-    ]);
-    const decision = validateMemoryCandidate({
-      candidate,
-      existingMemories,
-      tombstones,
-      now
-    });
-    if (decision.action === "reject") {
-      if (input.recordRejectedCandidate !== false) {
-        await appendTombstoneFromRoot(lockedMemoryRoot, decision.tombstone);
-        await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID6(),
-          action: "reject",
-          at: now,
-          reason: decision.reason,
-          candidateId: decision.tombstone.id
-        });
-      }
-      return {
-        project: { projectId: project.projectId, displayName: project.displayName },
-        result: { action: "reject", reason: decision.reason },
-        memoryRoot: lockedMemoryRoot
-      };
-    }
-    const pendingCandidate = decision.action === "pending" ? decision.candidate : candidate;
-    const merged = await upsertPendingMemoryFromRoot(lockedMemoryRoot, pendingCandidate);
-    await markDreamDueFailOpen(lockedMemoryRoot, now);
-    const reason = decision.action === "auto_write" ? `Pending-only Codex bridge downgraded auto-write: ${decision.reason}` : decision.reason;
-    await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID6(),
-      action: "pending",
-      at: now,
-      reason,
-      candidateId: merged.id
-    });
-    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
-    return {
-      project: { projectId: project.projectId, displayName: project.displayName },
-      result: { action: "pending", candidateId: merged.id, reason, review: summarizePendingMemory(merged) },
-      memoryRoot: lockedMemoryRoot
-    };
-  });
-}
-async function markDreamDueFailOpen(memoryRoot, now) {
-  try {
-    await markCodexMemoryDreamDue(memoryRoot, now);
-  } catch {
-  }
-}
-function toPendingMemory(input, now) {
-  const candidateKind = deriveMemoryCandidateKind({
-    candidateKind: input.candidateKind,
-    candidate_kind: input.candidate_kind,
-    tags: input.tags ?? [],
-    type: input.type
-  });
-  return {
-    id: randomUUID6(),
-    domain: input.domain,
-    type: input.type,
-    strength: input.strength ?? "soft",
-    scope: input.scope ?? "project",
-    status: "pending",
-    content: input.content,
-    normalizedKey: input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`),
-    evidence: input.evidence,
-    source: input.source ?? "assistant_observed",
-    scores: { ...DEFAULT_SCORES, ...input.scores },
-    seenCount: 1,
-    firstSeenAt: now,
-    lastSeenAt: now,
-    expiresAt: addDays2(now, 30),
-    userConfirmed: input.userConfirmed,
-    candidateKind,
-    tags: input.tags ?? []
-  };
-}
-function normalizeKey(value) {
-  const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  return slug.length > 0 ? slug : createHash5("sha256").update(value).digest("hex").slice(0, 16);
-}
-function addDays2(iso, days) {
-  const date3 = new Date(iso);
-  date3.setUTCDate(date3.getUTCDate() + days);
-  return date3.toISOString();
-}
+// src/codex/hook-trace-store.ts
+import { randomUUID as randomUUID6 } from "node:crypto";
+import { appendFile as appendFile2, readFile as readFile11 } from "node:fs/promises";
+import { join as join16 } from "node:path";
 
 // src/codex/review-redaction.ts
 var RULES = [
@@ -15767,18 +15665,951 @@ function redactReviewText(input) {
   return { text, counts };
 }
 
+// src/codex/hook-trace-store.ts
+var HOOK_TRACE_FILE = "hook-trace.jsonl";
+var DEFAULT_LIMIT = 100;
+var SUMMARY_MAX_LENGTH = 500;
+var SIGNAL_MAX_LENGTH = 240;
+var COMMAND_SUMMARY_MAX_LENGTH = 500;
+var OUTPUT_SUMMARY_MAX_LENGTH = 500;
+var MAX_TOUCHED_FILES = 50;
+var HOOK_TRACE_EVENTS = /* @__PURE__ */ new Set(["session_start", "user_prompt_submit", "post_tool_use", "stop"]);
+async function appendCodexHookTrace(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
+  const targetPath = join16(memoryRoot, HOOK_TRACE_FILE);
+  await assertSafeMemoryDataFileTarget(targetPath);
+  const record2 = {
+    id: randomUUID6(),
+    createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
+    event: input.event,
+    cwd: cleanString(project.cwd),
+    summary: cleanString(input.summary, SUMMARY_MAX_LENGTH),
+    signals: (input.signals ?? []).map((signal) => cleanString(signal, SIGNAL_MAX_LENGTH)),
+    ...input.sessionId === void 0 ? {} : { sessionId: cleanString(input.sessionId) },
+    ...input.turnId === void 0 ? {} : { turnId: cleanString(input.turnId) },
+    ...input.tool === void 0 ? {} : { tool: cleanTool(input.tool) }
+  };
+  await appendFile2(targetPath, `${JSON.stringify(record2)}
+`, "utf8");
+  return record2;
+}
+async function readRecentCodexHookTrace(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const memoryRoot = await getReadableCodexProjectMemoryRoot(project.projectId);
+  if (memoryRoot === null) {
+    return { records: [], warnings: [] };
+  }
+  const targetPath = join16(memoryRoot, HOOK_TRACE_FILE);
+  await assertSafeMemoryDataFileTarget(targetPath);
+  let content;
+  try {
+    content = await readFile11(targetPath, "utf8");
+  } catch (error2) {
+    if (isFileErrorCode9(error2, "ENOENT")) {
+      return { records: [], warnings: [] };
+    }
+    throw error2;
+  }
+  const warnings = [];
+  const records = [];
+  const lines2 = content.split(/\r?\n/);
+  for (const [index, line] of lines2.entries()) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    try {
+      const record2 = JSON.parse(trimmed);
+      if (!isCodexHookTraceRecord(record2)) {
+        warnings.push(`Malformed hook trace line ${index + 1} skipped.`);
+        continue;
+      }
+      records.push(record2);
+    } catch {
+      warnings.push(`Malformed hook trace line ${index + 1} skipped.`);
+    }
+  }
+  const newestLimit = Math.max(0, input.limit ?? DEFAULT_LIMIT);
+  if (newestLimit === 0) {
+    return { records: [], warnings };
+  }
+  return {
+    records: records.filter((record2) => isWithinMaxAge(record2, input.now, input.maxAgeDays)).sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)).slice(-newestLimit),
+    warnings
+  };
+}
+function cleanTool(tool) {
+  if (tool === void 0) {
+    return void 0;
+  }
+  return {
+    name: cleanString(tool.name),
+    ...tool.useId === void 0 ? {} : { useId: cleanString(tool.useId) },
+    ...tool.commandSummary === void 0 ? {} : { commandSummary: cleanString(tool.commandSummary, COMMAND_SUMMARY_MAX_LENGTH) },
+    ...tool.exitCode === void 0 ? {} : { exitCode: tool.exitCode },
+    ...tool.touchedFiles === void 0 ? {} : { touchedFiles: tool.touchedFiles.slice(0, MAX_TOUCHED_FILES).map((file) => cleanString(file)) },
+    ...tool.outputSummary === void 0 ? {} : { outputSummary: cleanString(tool.outputSummary, OUTPUT_SUMMARY_MAX_LENGTH) }
+  };
+}
+function cleanString(value, maxLength) {
+  const redacted = redactReviewText(value).text;
+  return maxLength === void 0 ? redacted : redacted.slice(0, maxLength);
+}
+function isCodexHookTraceRecord(value) {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return isNonemptyString(value.id) && isValidTimestamp(value.createdAt) && typeof value.event === "string" && HOOK_TRACE_EVENTS.has(value.event) && typeof value.cwd === "string" && typeof value.summary === "string" && isStringArray(value.signals) && isOptionalString(value.sessionId) && isOptionalString(value.turnId) && isOptionalHookTraceTool(value.tool);
+}
+function isOptionalHookTraceTool(value) {
+  if (value === void 0) {
+    return true;
+  }
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return typeof value.name === "string" && isOptionalString(value.useId) && isOptionalString(value.commandSummary) && (value.exitCode === void 0 || typeof value.exitCode === "number") && (value.touchedFiles === void 0 || isStringArray(value.touchedFiles)) && isOptionalString(value.outputSummary);
+}
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonemptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+function isValidTimestamp(value) {
+  return isNonemptyString(value) && Number.isFinite(Date.parse(value));
+}
+function isOptionalString(value) {
+  return value === void 0 || typeof value === "string";
+}
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+function isWithinMaxAge(record2, now, maxAgeDays) {
+  if (maxAgeDays === void 0) {
+    return true;
+  }
+  const createdAt = Date.parse(record2.createdAt);
+  const nowTime = Date.parse(now ?? (/* @__PURE__ */ new Date()).toISOString());
+  if (!Number.isFinite(createdAt) || !Number.isFinite(nowTime)) {
+    return false;
+  }
+  return createdAt >= nowTime - maxAgeDays * 24 * 60 * 60 * 1e3;
+}
+function isFileErrorCode9(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
+// src/codex/memory-propose.ts
+import { createHash as createHash5, randomUUID as randomUUID7 } from "node:crypto";
+var DEFAULT_SCORES = {
+  evidenceStrength: 0.75,
+  stability: 0.65,
+  usefulness: 0.7,
+  safety: 0.9,
+  sensitivity: 0.2
+};
+async function proposeCodexMemoryCandidate(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const project = await identifyCodexProject(input.cwd);
+  const candidate = toPendingMemory(input.candidate, now);
+  const memoryRoot = candidate.scope === "global" ? await ensureCodexGlobalMemoryRoot() : await ensureCodexProjectMemoryRoot(project.projectId);
+  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
+  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+    const [existingMemories, tombstones] = await Promise.all([
+      readActiveMemoriesFromRoot(lockedMemoryRoot),
+      readTombstonesFromRoot(lockedMemoryRoot)
+    ]);
+    const decision = validateMemoryCandidate({
+      candidate,
+      existingMemories,
+      tombstones,
+      now
+    });
+    if (decision.action === "reject") {
+      if (input.recordRejectedCandidate !== false) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, decision.tombstone);
+        await appendMemoryEventFromRoot(lockedMemoryRoot, {
+          id: randomUUID7(),
+          action: "reject",
+          at: now,
+          reason: decision.reason,
+          candidateId: decision.tombstone.id
+        });
+      }
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: { action: "reject", reason: decision.reason },
+        memoryRoot: lockedMemoryRoot
+      };
+    }
+    const pendingCandidate = decision.action === "pending" ? decision.candidate : candidate;
+    const merged = await upsertPendingMemoryFromRoot(lockedMemoryRoot, pendingCandidate);
+    await markDreamDueFailOpen(lockedMemoryRoot, now);
+    const reason = decision.action === "auto_write" ? `Pending-only Codex bridge downgraded auto-write: ${decision.reason}` : decision.reason;
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID7(),
+      action: "pending",
+      at: now,
+      reason,
+      candidateId: merged.id
+    });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      result: { action: "pending", candidateId: merged.id, reason, review: summarizePendingMemory(merged) },
+      memoryRoot: lockedMemoryRoot
+    };
+  });
+}
+async function markDreamDueFailOpen(memoryRoot, now) {
+  try {
+    await markCodexMemoryDreamDue(memoryRoot, now);
+  } catch {
+  }
+}
+function toPendingMemory(input, now) {
+  const candidateKind = deriveMemoryCandidateKind({
+    candidateKind: input.candidateKind,
+    candidate_kind: input.candidate_kind,
+    tags: input.tags ?? [],
+    type: input.type
+  });
+  return {
+    id: randomUUID7(),
+    domain: input.domain,
+    type: input.type,
+    strength: input.strength ?? "soft",
+    scope: input.scope ?? "project",
+    status: "pending",
+    content: input.content,
+    normalizedKey: input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`),
+    evidence: input.evidence,
+    source: input.source ?? "assistant_observed",
+    scores: { ...DEFAULT_SCORES, ...input.scores },
+    seenCount: 1,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    expiresAt: addDays2(now, 30),
+    userConfirmed: input.userConfirmed,
+    candidateKind,
+    tags: input.tags ?? []
+  };
+}
+function normalizeKey(value) {
+  const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return slug.length > 0 ? slug : createHash5("sha256").update(value).digest("hex").slice(0, 16);
+}
+function addDays2(iso, days) {
+  const date3 = new Date(iso);
+  date3.setUTCDate(date3.getUTCDate() + days);
+  return date3.toISOString();
+}
+
+// src/codex/project-memory-harvester.ts
+import { createHash as createHash6 } from "node:crypto";
+
+// src/codex/project-memory-signals.ts
+import { execFile as execFile2 } from "node:child_process";
+import { open as open2, readdir as readdir6, lstat as lstat11, readFile as readFile12 } from "node:fs/promises";
+import { join as join17 } from "node:path";
+import { promisify as promisify2 } from "node:util";
+var execFileAsync2 = promisify2(execFile2);
+var PROJECT_FILES = [
+  "package.json",
+  "tsconfig.json",
+  "plugin/.codex-plugin/plugin.json",
+  "plugin/.mcp.json",
+  "README.md",
+  "AGENTS.md"
+];
+var PROJECT_FILE_MAX_BYTES = 16 * 1024;
+var SUMMARY_MAX_LENGTH2 = 180;
+var EVIDENCE_MAX_LENGTH = 360;
+var MAX_SIGNAL_FILES = 50;
+var REVIEW_SUMMARIES_FILE2 = "review-summaries.jsonl";
+async function collectProjectMemorySignals(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const root = project.gitRoot ?? project.cwd;
+  const mode = input.mode ?? "default";
+  const git = await collectGitSignals(root, mode);
+  const changedFiles = new Set(git.changedFiles);
+  const warnings = [...git.warnings];
+  const signals = [...git.signals];
+  signals.push(...await collectProjectFileSignals(root, mode, changedFiles));
+  signals.push(...await collectTestSignals(root, mode, changedFiles));
+  if (mode !== "changed_files") {
+    const hookTrace = await readRecentCodexHookTrace({
+      cwd: input.cwd,
+      now: input.now,
+      limit: 20,
+      maxAgeDays: 7
+    });
+    warnings.push(...hookTrace.warnings);
+    signals.push(...hookTrace.records.map(toHookTraceSignal));
+    const reviewSummaries = await collectReviewSummarySignals(project.projectId);
+    warnings.push(...reviewSummaries.warnings);
+    signals.push(...reviewSummaries.signals);
+  }
+  return { signals, warnings };
+}
+async function collectGitSignals(cwd, mode) {
+  const warnings = [];
+  const signals = [];
+  const status = await tryGit2(cwd, ["status", "--porcelain=v1", "-z"]);
+  if (!status.ok) {
+    warnings.push(`git status unavailable: ${status.warning}`);
+    return { signals, warnings, changedFiles: [] };
+  }
+  const statusEvidence = clean(status.stdout.replace(/\0/g, "\n"), EVIDENCE_MAX_LENGTH);
+  const statusFiles = parseGitStatusFiles(status.stdout);
+  const diffNames = await tryGit2(cwd, ["diff", "--name-only"]);
+  if (!diffNames.ok) {
+    warnings.push(`git diff --name-only unavailable: ${diffNames.warning}`);
+  }
+  const diffFiles = diffNames.ok ? lines(diffNames.stdout) : [];
+  const changedFiles = uniqueSorted([...statusFiles, ...diffFiles]).slice(0, MAX_SIGNAL_FILES);
+  if (changedFiles.length > 0) {
+    signals.push({
+      kind: "git_changed_file",
+      source: "git",
+      summary: clean(`changed files: ${changedFiles.join(", ")}`, SUMMARY_MAX_LENGTH2),
+      files: changedFiles,
+      ...statusEvidence === "" ? {} : { evidence: statusEvidence }
+    });
+  }
+  if (mode === "changed_files") {
+    return { signals, warnings, changedFiles };
+  }
+  const diffStat = await tryGit2(cwd, ["diff", "--stat"]);
+  if (!diffStat.ok) {
+    warnings.push(`git diff --stat unavailable: ${diffStat.warning}`);
+    return { signals, warnings, changedFiles };
+  }
+  const diffStatEvidence = clean(diffStat.stdout, EVIDENCE_MAX_LENGTH);
+  if (diffStatEvidence !== "") {
+    signals.push({
+      kind: "git_changed_file",
+      source: "git",
+      summary: clean(`diff stat: ${firstLine(diffStatEvidence)}`, SUMMARY_MAX_LENGTH2),
+      ...changedFiles.length === 0 ? {} : { files: changedFiles },
+      evidence: diffStatEvidence
+    });
+  }
+  return { signals, warnings, changedFiles };
+}
+async function collectProjectFileSignals(root, mode, changedFiles) {
+  const signals = [];
+  for (const file of PROJECT_FILES) {
+    if (mode === "changed_files" && !changedFiles.has(file)) {
+      continue;
+    }
+    const text = await readBoundedRegularFile(join17(root, file));
+    if (text === void 0) {
+      continue;
+    }
+    signals.push(summarizeProjectFile(file, text));
+  }
+  return signals;
+}
+async function collectTestSignals(root, mode, changedFiles) {
+  let entries;
+  try {
+    entries = (await readdir6(join17(root, "tests"), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => `tests/${entry.name}`).sort();
+  } catch (error2) {
+    if (isErrorCode4(error2, "ENOENT")) {
+      return [];
+    }
+    throw error2;
+  }
+  const files = (mode === "changed_files" ? entries.filter((file) => changedFiles.has(file)) : entries).slice(
+    0,
+    MAX_SIGNAL_FILES
+  );
+  if (files.length === 0) {
+    return [];
+  }
+  return [{
+    kind: "test_signal",
+    source: "file",
+    summary: clean(`tests present: ${files.join(", ")}`, SUMMARY_MAX_LENGTH2),
+    files,
+    evidence: clean(`${files.length} test file${files.length === 1 ? "" : "s"} listed under tests/.`, EVIDENCE_MAX_LENGTH)
+  }];
+}
+async function collectReviewSummarySignals(projectId) {
+  const warnings = [];
+  const memoryRoot = await getReadableCodexProjectMemoryRoot(projectId);
+  if (memoryRoot === null) {
+    return { signals: [], warnings };
+  }
+  const targetPath = join17(memoryRoot, REVIEW_SUMMARIES_FILE2);
+  let content;
+  try {
+    await assertSafeMemoryDataFileTarget(targetPath);
+    content = await readFile12(targetPath, "utf8");
+  } catch (error2) {
+    if (isErrorCode4(error2, "ENOENT")) {
+      return { signals: [], warnings };
+    }
+    return {
+      signals: [],
+      warnings: [`review summaries unavailable: ${cleanError(error2)}`]
+    };
+  }
+  const records = [];
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!isReviewSummaryRecord(parsed)) {
+        warnings.push(`Malformed review summary line ${index + 1} skipped.`);
+        continue;
+      }
+      records.push(parsed);
+    } catch {
+      warnings.push(`Malformed review summary line ${index + 1} skipped.`);
+    }
+  }
+  const recent = records.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)).slice(-10);
+  return {
+    signals: recent.map(toReviewSummarySignal),
+    warnings
+  };
+}
+async function tryGit2(cwd, args) {
+  try {
+    const result2 = await execFileAsync2("git", args, { cwd });
+    return { ok: true, stdout: result2.stdout };
+  } catch (error2) {
+    return { ok: false, warning: cleanError(error2) };
+  }
+}
+async function readBoundedRegularFile(path) {
+  let stats;
+  try {
+    stats = await lstat11(path);
+  } catch (error2) {
+    if (isErrorCode4(error2, "ENOENT")) {
+      return void 0;
+    }
+    throw error2;
+  }
+  if (!stats.isFile()) {
+    return void 0;
+  }
+  const byteLength = Math.min(stats.size, PROJECT_FILE_MAX_BYTES);
+  const buffer = Buffer.alloc(byteLength);
+  const file = await open2(path, "r");
+  try {
+    const { bytesRead } = await file.read(buffer, 0, byteLength, 0);
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    return stats.size > PROJECT_FILE_MAX_BYTES ? `${text}
+[truncated]` : text;
+  } finally {
+    await file.close();
+  }
+}
+function summarizeProjectFile(file, text) {
+  if (file === "package.json") {
+    return {
+      kind: "project_manifest",
+      source: "file",
+      files: [file],
+      ...summarizeJsonFile(file, text, "package manifest")
+    };
+  }
+  if (file === "tsconfig.json") {
+    return {
+      kind: "project_manifest",
+      source: "file",
+      files: [file],
+      ...summarizeJsonFile(file, text, "TypeScript config")
+    };
+  }
+  if (file === "plugin/.codex-plugin/plugin.json" || file === "plugin/.mcp.json") {
+    return {
+      kind: "project_manifest",
+      source: "file",
+      files: [file],
+      ...summarizeJsonFile(file, text, "plugin manifest")
+    };
+  }
+  if (file === "AGENTS.md") {
+    const excerpt2 = markdownExcerpt(text);
+    return {
+      kind: "repository_policy",
+      source: "file",
+      files: [file],
+      summary: clean(`repository policy: ${firstLine(excerpt2)}`, SUMMARY_MAX_LENGTH2),
+      evidence: clean(excerpt2, EVIDENCE_MAX_LENGTH)
+    };
+  }
+  const excerpt = markdownExcerpt(text);
+  return {
+    kind: "documentation",
+    source: "file",
+    files: [file],
+    summary: clean(`documentation: ${firstLine(excerpt)}`, SUMMARY_MAX_LENGTH2),
+    evidence: clean(excerpt, EVIDENCE_MAX_LENGTH)
+  };
+}
+function summarizeJsonFile(file, text, label) {
+  try {
+    const parsed = JSON.parse(text);
+    if (isPlainRecord2(parsed)) {
+      const evidence = jsonFacts(parsed);
+      return {
+        summary: clean(`${label} ${file}: ${firstLine(evidence)}`, SUMMARY_MAX_LENGTH2),
+        evidence: clean(evidence, EVIDENCE_MAX_LENGTH)
+      };
+    }
+  } catch {
+    return {
+      summary: clean(`${label} ${file}: JSON parse failed`, SUMMARY_MAX_LENGTH2),
+      evidence: clean(text, EVIDENCE_MAX_LENGTH)
+    };
+  }
+  return {
+    summary: clean(`${label} ${file}: present`, SUMMARY_MAX_LENGTH2),
+    evidence: clean(text, EVIDENCE_MAX_LENGTH)
+  };
+}
+function jsonFacts(value) {
+  const facts = [];
+  if (typeof value.name === "string") facts.push(`name=${value.name}`);
+  if (typeof value.version === "string") facts.push(`version=${value.version}`);
+  if (typeof value.description === "string") facts.push(`description=${value.description}`);
+  if (isPlainRecord2(value.scripts)) facts.push(`scripts=${Object.keys(value.scripts).sort().slice(0, 8).join(",")}`);
+  const dependencies = dependencyNames(value);
+  if (dependencies.length > 0) facts.push(`dependencies=${dependencies.slice(0, 12).join(",")}`);
+  if (isPlainRecord2(value.compilerOptions)) {
+    const options = value.compilerOptions;
+    const compilerFacts = [
+      typeof options.target === "string" ? `target=${options.target}` : void 0,
+      typeof options.module === "string" ? `module=${options.module}` : void 0,
+      typeof options.strict === "boolean" ? `strict=${String(options.strict)}` : void 0
+    ].filter((item) => item !== void 0);
+    if (compilerFacts.length > 0) facts.push(`compilerOptions=${compilerFacts.join(",")}`);
+  }
+  if (isPlainRecord2(value.interface)) {
+    const pluginInterface = value.interface;
+    if (typeof pluginInterface.displayName === "string") facts.push(`displayName=${pluginInterface.displayName}`);
+    if (Array.isArray(pluginInterface.capabilities)) {
+      facts.push(`capabilities=${pluginInterface.capabilities.filter(isString).slice(0, 8).join(",")}`);
+    }
+  }
+  if (isPlainRecord2(value.mcpServers)) {
+    facts.push(`mcpServers=${Object.keys(value.mcpServers).sort().slice(0, 8).join(",")}`);
+  }
+  return facts.length === 0 ? "present" : facts.join("; ");
+}
+function dependencyNames(value) {
+  return Object.keys({
+    ...recordOrEmpty(value.dependencies),
+    ...recordOrEmpty(value.devDependencies),
+    ...recordOrEmpty(value.peerDependencies)
+  }).sort();
+}
+function recordOrEmpty(value) {
+  return isPlainRecord2(value) ? value : {};
+}
+function toHookTraceSignal(record2) {
+  const touchedFiles = record2.tool?.touchedFiles?.slice(0, MAX_SIGNAL_FILES);
+  const details = [
+    `createdAt=${record2.createdAt}`,
+    `event=${record2.event}`,
+    record2.tool?.name === void 0 ? void 0 : `tool=${record2.tool.name}`,
+    record2.signals.length === 0 ? void 0 : `signals=${record2.signals.join(", ")}`
+  ].filter((item) => item !== void 0);
+  return {
+    kind: "hook_trace",
+    source: "tool_trace",
+    summary: clean(`hook trace ${record2.event}: ${record2.summary}`, SUMMARY_MAX_LENGTH2),
+    ...touchedFiles === void 0 || touchedFiles.length === 0 ? {} : { files: touchedFiles },
+    evidence: clean(details.join("; "), EVIDENCE_MAX_LENGTH)
+  };
+}
+function toReviewSummarySignal(record2) {
+  const details = [
+    `createdAt=${record2.createdAt}`,
+    `status=${record2.status}`,
+    record2.candidateIds.length === 0 ? void 0 : `candidates=${record2.candidateIds.join(", ")}`,
+    record2.failureReason === void 0 ? void 0 : `failure=${record2.failureReason}`
+  ].filter((item) => item !== void 0);
+  return {
+    kind: "review_summary",
+    source: "review_summary",
+    summary: clean(`review summary ${record2.status}: ${record2.summary}`, SUMMARY_MAX_LENGTH2),
+    evidence: clean(details.join("; "), EVIDENCE_MAX_LENGTH)
+  };
+}
+function parseGitStatusFiles(output) {
+  const files = [];
+  const entries = output.split("\0").filter(Boolean);
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index] ?? "";
+    const status = entry.slice(0, 2);
+    const path = entry.length > 3 ? entry.slice(3) : entry.trim();
+    if (path !== "") {
+      files.push(path);
+    }
+    if (status.includes("R") || status.includes("C")) {
+      index += 1;
+    }
+  }
+  return uniqueSorted(files);
+}
+function markdownExcerpt(text) {
+  const meaningfulLines = text.split(/\r?\n/).map((line) => line.replace(/^#+\s*/, "").trim()).filter(Boolean).slice(0, 4);
+  return meaningfulLines.join(" ");
+}
+function lines(text) {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+function firstLine(text) {
+  return text.split(/\r?\n/)[0]?.trim() ?? "";
+}
+function uniqueSorted(values) {
+  return Array.from(new Set(values)).sort();
+}
+function clean(value, maxLength) {
+  const redacted = redactReviewText(value.replace(/\s+/g, " ").trim()).text;
+  return redacted.length <= maxLength ? redacted : `${redacted.slice(0, maxLength - 1)}...`;
+}
+function cleanError(error2) {
+  if (isErrorWithStderr(error2) && error2.stderr.trim() !== "") {
+    return clean(error2.stderr, SUMMARY_MAX_LENGTH2);
+  }
+  if (error2 instanceof Error) {
+    return clean(error2.message, SUMMARY_MAX_LENGTH2);
+  }
+  return "unknown error";
+}
+function isReviewSummaryRecord(value) {
+  if (!isPlainRecord2(value)) {
+    return false;
+  }
+  return isValidTimestamp2(value.createdAt) && (value.status === "ok" || value.status === "failed") && typeof value.summary === "string" && (value.id === void 0 || typeof value.id === "string") && (value.runId === void 0 || typeof value.runId === "string") && (value.failureReason === void 0 || typeof value.failureReason === "string") && isStringArray2(value.candidateIds);
+}
+function isValidTimestamp2(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function isPlainRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isString(value) {
+  return typeof value === "string";
+}
+function isStringArray2(value) {
+  return Array.isArray(value) && value.every(isString);
+}
+function isErrorCode4(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+function isErrorWithStderr(error2) {
+  return error2 instanceof Error && "stderr" in error2 && typeof error2.stderr === "string";
+}
+
+// src/codex/project-memory-harvester.ts
+var PROJECT_CANDIDATE_KINDS = [
+  "project_fact",
+  "project_decision",
+  "workflow_rule",
+  "known_pitfall",
+  "rejected_approach",
+  "open_question"
+];
+var SIGNAL_EVIDENCE_LIMIT = 6;
+var CONTENT_MAX_LENGTH = 500;
+var EVIDENCE_MAX_LENGTH2 = 320;
+var SENSITIVE_PROJECT_HARVEST_PATTERN = /\b(?:personal|private|family|medical|password|secret|token|api[_\s-]?key|bearer|sk-[a-z0-9_-]*)\b/i;
+async function runCodexProjectMemoryHarvest(input) {
+  const { signals, warnings } = await collectProjectMemorySignals({
+    cwd: input.cwd,
+    mode: input.mode,
+    now: input.now
+  });
+  if (signals.length === 0) {
+    return { action: "noop", reason: "No project memory signals collected.", signals, warnings };
+  }
+  const missingModelReason = missingModelConfigReason(input.config);
+  if (missingModelReason !== void 0) {
+    return { action: "needs_model_config", reason: missingModelReason, signals, warnings };
+  }
+  const response = await input.callModel({
+    config: input.config,
+    messages: [{ role: "user", content: buildCodexProjectMemoryHarvestPrompt(signals) }],
+    tools: [],
+    useCase: "memory_extraction",
+    signal: input.signal
+  });
+  const parsed = parseCodexProjectMemoryHarvestResponse(response.content);
+  const candidates = parsed.candidates.flatMap((candidate) => {
+    const sanitized = sanitizeProjectMemoryCandidate(candidate, signals, input.config);
+    return sanitized === void 0 ? [] : [sanitized];
+  });
+  if (input.dryRun === true) {
+    return { action: "preview", candidates, signals, warnings };
+  }
+  const candidateIds = [];
+  let memoryRoot;
+  for (const candidate of candidates) {
+    const result2 = await proposeCodexMemoryCandidate({
+      cwd: input.cwd,
+      candidate,
+      now: input.now,
+      recordRejectedCandidate: false
+    });
+    memoryRoot = result2.memoryRoot;
+    if (result2.result.action === "pending") {
+      candidateIds.push(result2.result.candidateId);
+    }
+  }
+  if (candidateIds.length === 0) {
+    return { action: "noop", reason: "No project memory candidates survived validation.", signals, warnings };
+  }
+  return { action: "pending", candidateIds, memoryRoot: memoryRoot ?? "", signals, warnings };
+}
+function buildCodexProjectMemoryHarvestPrompt(signals) {
+  return [
+    'Return JSON only with this shape: {"summary":"optional concise extraction summary","candidates":[]}.',
+    "Extract durable project memory candidates only from the collected project signals below.",
+    `Allowed candidate_kind values: ${PROJECT_CANDIDATE_KINDS.join(", ")}.`,
+    "Prefer no candidates over weak candidates.",
+    "Good candidates capture design decisions, confirmed workflows, rejected approaches, repeated pitfalls, project boundaries, and repository policies.",
+    "Reject one-time status, vague impressions, assistant self-praise, user psychology, private data, secrets, credentials, temporary output, and raw command dumps.",
+    "Each candidate should include candidateKind or candidate_kind, content, signalIndexes, and optional tags.",
+    "signalIndexes must be 1-based indexes of the collected signals that support that specific candidate.",
+    "Domain, type, scope, source, normalizedKey, and evidence will be normalized.",
+    "",
+    "Collected project signals:",
+    formatSignalsForPrompt(signals)
+  ].join("\n");
+}
+function parseCodexProjectMemoryHarvestResponse(content) {
+  const parsed = JSON.parse(extractJsonObject(content));
+  if (!isRecord2(parsed)) {
+    throw new Error("Project memory harvest response is not a JSON object.");
+  }
+  return {
+    candidates: Array.isArray(parsed.candidates) ? parsed.candidates : [],
+    ...typeof parsed.summary === "string" ? { summary: parsed.summary } : {}
+  };
+}
+function sanitizeProjectMemoryCandidate(value, signals, config2) {
+  if (!isRecord2(value)) {
+    return void 0;
+  }
+  const candidateKind = parseProjectCandidateKind(value.candidateKind) ?? parseProjectCandidateKind(value.candidate_kind);
+  if (candidateKind === void 0) {
+    return void 0;
+  }
+  const content = cleanString2(value.content, Math.min(config2.memorySingleContentMaxChars, CONTENT_MAX_LENGTH));
+  if (content === void 0) {
+    return void 0;
+  }
+  if (hasSensitiveProjectHarvestContent(value, content)) {
+    return void 0;
+  }
+  const selectedSignals = signalsForCandidate(value.signalIndexes, signals);
+  if (selectedSignals === void 0) {
+    return void 0;
+  }
+  const { domain, type } = domainTypeForCandidate(candidateKind, value);
+  const source = sourceForSignals(selectedSignals);
+  const tags = uniqueStrings2([
+    "project_harvest",
+    candidateKind,
+    ...parseTags(value.tags).map((tag) => cleanTag(tag)).filter((tag) => tag !== void 0)
+  ]);
+  return {
+    domain,
+    type,
+    strength: "soft",
+    scope: "project",
+    content,
+    candidateKind,
+    source,
+    evidence: evidenceFromSignals(selectedSignals, config2, source),
+    scores: {
+      evidenceStrength: 0.75,
+      stability: 0.7,
+      usefulness: 0.7,
+      safety: 0.9,
+      sensitivity: 0.2
+    },
+    tags
+  };
+}
+function domainTypeForCandidate(candidateKind, value) {
+  if (candidateKind === "project_fact" || candidateKind === "project_decision" || candidateKind === "open_question") {
+    return { domain: "project", type: "project_fact" };
+  }
+  if (value.domain === "project" && value.type === "project_fact") {
+    return { domain: "project", type: "project_fact" };
+  }
+  return { domain: "procedural", type: "procedural_rule" };
+}
+function evidenceFromSignals(signals, config2, fallbackSource) {
+  return signals.slice(0, SIGNAL_EVIDENCE_LIMIT).map((signal) => {
+    const sourceKind = sourceForSignal(signal) ?? fallbackSource;
+    const files = signal.files === void 0 || signal.files.length === 0 ? "" : ` files=${signal.files.join(", ")}`;
+    const evidence = signal.evidence === void 0 ? "" : ` evidence=${signal.evidence}`;
+    const summary = cleanRequiredString(
+      `${signal.kind} from ${signal.source}:${files} ${signal.summary}${evidence}`,
+      Math.min(config2.memorySingleEvidenceMaxChars, EVIDENCE_MAX_LENGTH2)
+    );
+    return {
+      summary,
+      sourceKind,
+      evidenceGroupId: stableEvidenceGroupId({ sourceKind, summary })
+    };
+  });
+}
+function sourceForSignals(signals) {
+  if (signals.some((signal) => signal.source === "file" || signal.source === "git" || signal.source === "review_summary")) {
+    return "file";
+  }
+  if (signals.some((signal) => signal.source === "tool_trace")) {
+    return "tool_trace";
+  }
+  return "assistant_observed";
+}
+function sourceForSignal(signal) {
+  if (signal.source === "tool_trace") {
+    return "tool_trace";
+  }
+  if (signal.source === "file" || signal.source === "git" || signal.source === "review_summary") {
+    return "file";
+  }
+  return void 0;
+}
+function missingModelConfigReason(config2) {
+  const routeModel = config2.model.cheapModel || config2.model.strongModel || config2.model.model;
+  const missing = [];
+  if (config2.model.baseUrl.trim() === "") {
+    missing.push("CYRENE_BASE_URL");
+  }
+  if (config2.model.model.trim() === "" || routeModel.trim() === "") {
+    missing.push("CYRENE_MODEL");
+  }
+  return missing.length === 0 ? void 0 : `Model config is incomplete: set ${missing.join(" and ")}.`;
+}
+function signalsForCandidate(value, signals) {
+  const indexes = Array.isArray(value) ? uniqueNumbers(value.filter((entry) => Number.isInteger(entry))) : [];
+  const selectedSignals = indexes.filter((index) => index >= 1 && index <= signals.length).map((index) => signals[index - 1]);
+  if (selectedSignals.length > 0) {
+    return selectedSignals;
+  }
+  return signals.length === 1 ? signals : void 0;
+}
+function hasSensitiveProjectHarvestContent(value, content) {
+  if (value.domain === "personal" || value.domain === "relationship" || value.domain === "affective") {
+    return true;
+  }
+  return [content, ...parseTags(value.tags)].some((entry) => SENSITIVE_PROJECT_HARVEST_PATTERN.test(entry));
+}
+function formatSignalsForPrompt(signals) {
+  return signals.map((signal, index) => {
+    const files = signal.files === void 0 || signal.files.length === 0 ? "" : `
+  files: ${signal.files.join(", ")}`;
+    const evidence = signal.evidence === void 0 ? "" : `
+  evidence: ${cleanRequiredString(signal.evidence, EVIDENCE_MAX_LENGTH2)}`;
+    return [
+      `${index + 1}. kind: ${signal.kind}`,
+      `  source: ${signal.source}`,
+      `  summary: ${cleanRequiredString(signal.summary, EVIDENCE_MAX_LENGTH2)}${files}${evidence}`
+    ].join("\n");
+  }).join("\n");
+}
+function cleanString2(value, maxLength) {
+  if (typeof value !== "string") {
+    return void 0;
+  }
+  const cleaned = cleanRequiredString(value, maxLength);
+  return cleaned === "" ? void 0 : cleaned;
+}
+function cleanRequiredString(value, maxLength) {
+  const redacted = redactReviewText(value.replace(/\s+/g, " ").trim()).text;
+  return redacted.length <= maxLength ? redacted : `${redacted.slice(0, Math.max(0, maxLength - 1))}...`;
+}
+function cleanTag(value) {
+  const cleaned = cleanRequiredString(value, 48).toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned === "" ? void 0 : cleaned;
+}
+function parseProjectCandidateKind(value) {
+  return typeof value === "string" && PROJECT_CANDIDATE_KINDS.includes(value) ? value : void 0;
+}
+function parseTags(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry) => typeof entry === "string" && entry.trim() !== "");
+}
+function uniqueStrings2(values) {
+  return Array.from(new Set(values));
+}
+function uniqueNumbers(values) {
+  return Array.from(new Set(values));
+}
+function stableEvidenceGroupId(input) {
+  return createHash6("sha256").update(JSON.stringify(input)).digest("hex");
+}
+function extractJsonObject(content) {
+  const start = content.indexOf("{");
+  if (start === -1) {
+    throw new Error("Project memory harvest response did not contain JSON.");
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < content.length; index += 1) {
+    const char = content[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return content.slice(start, index + 1);
+      }
+    }
+  }
+  throw new Error("Project memory harvest response JSON was incomplete.");
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash6, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID8 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
-import { appendFile as appendFile2 } from "node:fs/promises";
-import { join as join16 } from "node:path";
-var REVIEW_SUMMARIES_FILE2 = "review-summaries.jsonl";
+import { appendFile as appendFile3 } from "node:fs/promises";
+import { join as join18 } from "node:path";
+var REVIEW_SUMMARIES_FILE3 = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join16(root, REVIEW_SUMMARIES_FILE2);
+  const targetPath = join18(root, REVIEW_SUMMARIES_FILE3);
   await assertSafeMemoryDataFileTarget(targetPath);
-  await appendFile2(targetPath, `${JSON.stringify(record2)}
+  await appendFile3(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
 }
 
@@ -15799,8 +16630,8 @@ function recentTranscriptMessages(messages, limit = 40) {
   return messages.slice(-limit);
 }
 function parseTranscriptLine(value) {
-  const record2 = isRecord2(value) ? value : void 0;
-  const source = isRecord2(record2?.message) ? record2.message : record2;
+  const record2 = isRecord3(value) ? value : void 0;
+  const source = isRecord3(record2?.message) ? record2.message : record2;
   const role = asString(source?.role);
   const content = contentToString(source?.content);
   if (role === void 0 || content === void 0) {
@@ -15819,7 +16650,7 @@ function contentToString(value) {
     if (typeof entry === "string") {
       return [entry];
     }
-    if (isRecord2(entry) && typeof entry.text === "string") {
+    if (isRecord3(entry) && typeof entry.text === "string") {
       return [entry.text];
     }
     return [];
@@ -15829,7 +16660,7 @@ function contentToString(value) {
 function asString(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -15864,7 +16695,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID7();
+  const summaryId = randomUUID8();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -15946,9 +16777,9 @@ function buildCodexReviewSummaryPrompt(redactedTranscript) {
   ].join("\n");
 }
 function parseReviewSummaryResponse(content) {
-  const objectText = extractJsonObject(content);
+  const objectText = extractJsonObject2(content);
   const parsed = JSON.parse(objectText);
-  if (!isRecord3(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
+  if (!isRecord4(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
     throw new Error("Review summary response is missing summary.");
   }
   return {
@@ -15960,7 +16791,7 @@ function formatMessages(messages) {
   return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
 }
 function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
-  if (!isRecord3(value)) {
+  if (!isRecord4(value)) {
     return void 0;
   }
   const domain = parseEnum(value.domain, DOMAINS);
@@ -15970,9 +16801,11 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
     return void 0;
   }
   const source = parseEnum(value.source, SOURCES);
+  const candidateKind = isMemoryCandidateKind(value.candidateKind) ? value.candidateKind : isMemoryCandidateKind(value.candidate_kind) ? value.candidate_kind : void 0;
   const candidate = {
     domain,
     type,
+    ...candidateKind === void 0 ? {} : { candidateKind },
     strength: parseEnum(value.strength, STRENGTHS),
     scope: parseEnum(value.scope, SCOPES),
     content: redactor.redact(content),
@@ -15986,7 +16819,7 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
 }
 function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor) {
   const evidence = Array.isArray(value) ? value.flatMap((entry) => {
-    if (!isRecord3(entry)) {
+    if (!isRecord4(entry)) {
       return [];
     }
     const summary = redactOptionalString(entry.summary, redactor);
@@ -16001,8 +16834,8 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   }
   return [evidenceEntry({ runId, sessionId, summary: redactedSummary, sourceKind })];
 }
-function stableEvidenceGroupId(input) {
-  return createHash6("sha256").update(JSON.stringify({
+function stableEvidenceGroupId2(input) {
+  return createHash7("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -16016,7 +16849,7 @@ function evidenceEntry(input) {
     summary: input.summary,
     quote: input.quote,
     sourceKind: input.sourceKind,
-    evidenceGroupId: stableEvidenceGroupId(input)
+    evidenceGroupId: stableEvidenceGroupId2(input)
   };
 }
 function redactTags(value, redactor) {
@@ -16033,7 +16866,7 @@ function redactOptionalString(value, redactor) {
   return text === void 0 ? void 0 : redactor.redact(text);
 }
 function parseScores(value) {
-  if (!isRecord3(value)) {
+  if (!isRecord4(value)) {
     return void 0;
   }
   const scores = {};
@@ -16045,7 +16878,7 @@ function parseScores(value) {
   }
   return Object.keys(scores).length > 0 ? scores : void 0;
 }
-function extractJsonObject(content) {
+function extractJsonObject2(content) {
   const start = content.indexOf("{");
   if (start === -1) {
     throw new Error("Review summary response did not contain JSON.");
@@ -16094,7 +16927,7 @@ function parseEnum(value, allowed) {
 function parseString(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -16112,11 +16945,15 @@ async function handleCodexStopHookCommand() {
   }
   return formatCodexStopHookCommandOutput(result2);
 }
-function formatCodexStopHookCommandOutput(_result) {
+function formatCodexStopHookCommandOutput(result2) {
   const output = {
     continue: true,
     suppressOutput: true
   };
+  if (process.env.CYRENE_HOOK_VISIBLE === "1") {
+    output.suppressOutput = false;
+    output.systemMessage = visibleHookMessage(result2);
+  }
   return `${JSON.stringify(output)}
 `;
 }
@@ -16139,6 +16976,7 @@ async function handleCodexStopHookPayload(payload, deps = {}) {
 }
 async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   const config2 = deps.config ?? createDefaultConfig(cwd);
+  await appendStopHookTrace(cwd, payload);
   if (!config2.memoryAutoExtractEnabled) {
     return { action: "noop", reason: "Codex memory auto extraction is disabled." };
   }
@@ -16165,19 +17003,34 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   });
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages);
   const explicitResult = instruction === void 0 ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction);
+  const harvest = await runProjectMemoryHarvestFailOpen({
+    cwd,
+    config: config2,
+    callModel: deps.callModel ?? callModel,
+    signal: AbortSignal.timeout(2e4)
+  });
   const reviewCandidateIds = review.action === "pending" ? review.candidateIds : [];
   const explicitPending = explicitResult?.result.action === "pending" ? explicitResult.result : void 0;
   const explicitCandidateId = explicitPending?.candidateId;
-  const proposedCandidateIds = [...reviewCandidateIds, ...explicitCandidateId === void 0 ? [] : [explicitCandidateId]];
+  const harvestCandidateIds = harvest?.action === "pending" ? harvest.candidateIds : [];
+  const proposedCandidateIds = [
+    ...reviewCandidateIds,
+    ...explicitCandidateId === void 0 ? [] : [explicitCandidateId],
+    ...harvestCandidateIds
+  ];
   const candidateIds = proposedCandidateIds.length === 0 ? [] : await confirmPendingCandidateIds(deps.confirmPendingCandidateIds, cwd, proposedCandidateIds);
   const confirmedExplicitCandidateId = explicitCandidateId !== void 0 && candidateIds.includes(explicitCandidateId) ? explicitCandidateId : void 0;
+  const confirmedHarvestCandidateIds = harvestCandidateIds.filter((id) => candidateIds.includes(id));
   const summaryId = "summaryId" in review ? review.summaryId : void 0;
   if (candidateIds.length > 0) {
     return {
       action: "pending",
       candidateId: confirmedExplicitCandidateId,
       candidateIds,
-      reason: confirmedExplicitCandidateId === void 0 ? "Codex review summary proposed memory candidates." : explicitPending?.reason ?? "Codex review summary proposed memory candidates.",
+      reason: pendingReason({
+        hasHarvestCandidates: confirmedHarvestCandidateIds.length > 0,
+        explicitReason: confirmedExplicitCandidateId === void 0 ? void 0 : explicitPending?.reason
+      }),
       summaryId
     };
   }
@@ -16212,11 +17065,49 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   }
   return { action: "noop", reason: "Codex review summary proposed no memory candidates." };
 }
+async function appendStopHookTrace(cwd, payload) {
+  try {
+    const transcriptPath = asString2(payload.transcript_path) ?? asString2(payload.transcriptPath);
+    await appendCodexHookTrace({
+      cwd,
+      event: "stop",
+      sessionId: asString2(payload.session_id),
+      turnId: asString2(payload.turn_id),
+      summary: "Stop hook received.",
+      signals: [
+        transcriptPath === void 0 ? void 0 : "transcript path provided",
+        asString2(payload.last_assistant_message) === void 0 ? void 0 : "last assistant message provided"
+      ].filter((signal) => signal !== void 0)
+    });
+  } catch {
+  }
+}
+async function runProjectMemoryHarvestFailOpen(input) {
+  try {
+    return await runCodexProjectMemoryHarvest(input);
+  } catch {
+    return void 0;
+  }
+}
+function pendingReason(input) {
+  if (input.hasHarvestCandidates) {
+    if (input.explicitReason !== void 0) {
+      return `${input.explicitReason} Codex project memory harvest proposed pending candidates.`;
+    }
+    return "Codex review summary and project memory harvest proposed pending candidates.";
+  }
+  return input.explicitReason ?? "Codex review summary proposed memory candidates.";
+}
+function visibleHookMessage(result2) {
+  const summary = result2.action === "summary_failed" ? "failed" : result2.action === "noop" ? "none" : "ok";
+  const candidateIds = "candidateIds" in result2 && Array.isArray(result2.candidateIds) ? result2.candidateIds : "candidateId" in result2 && typeof result2.candidateId === "string" ? [result2.candidateId] : [];
+  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder2(candidateIds).length}. Review: cyrene-continuity codex memory review`;
+}
 async function recordStopHookFailureSummary(cwd, payload, error2) {
   try {
     const project = await identifyCodexProject(cwd);
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID8();
+    const summaryId = randomUUID9();
     const sessionId = asString2(payload.session_id);
     const turnId = asString2(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -16285,7 +17176,7 @@ async function proposeExplicitMemoryCandidate(payload, cwd, instruction) {
           runId,
           sessionId,
           sourceKind: "user_explicit",
-          evidenceGroupId: stableEvidenceGroupId({
+          evidenceGroupId: stableEvidenceGroupId2({
             runId,
             sessionId,
             quote: content,
@@ -16307,7 +17198,7 @@ function extractRecentExplicitMemoryInstructionFromMessages(messages) {
 async function readTranscriptText(cwd, transcriptPath) {
   try {
     const safePath = await resolveSafeTranscriptPath(cwd, transcriptPath);
-    return await readFile11(safePath, "utf8");
+    return await readFile13(safePath, "utf8");
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return void 0;
@@ -16317,7 +17208,7 @@ async function readTranscriptText(cwd, transcriptPath) {
 }
 async function resolveSafeTranscriptPath(cwd, transcriptPath) {
   const resolved = isAbsolute5(transcriptPath) ? transcriptPath : resolve6(cwd, transcriptPath);
-  const stats = await lstat11(resolved);
+  const stats = await lstat12(resolved);
   if (stats.isSymbolicLink()) {
     throw new Error("Transcript path is a symlink.");
   }
@@ -16355,7 +17246,7 @@ function codexHomePath() {
     return configured;
   }
   const home = process.env.HOME?.trim();
-  return home === void 0 || home === "" ? void 0 : join17(home, ".codex");
+  return home === void 0 || home === "" ? void 0 : join19(home, ".codex");
 }
 function isPathInside5(parent, child) {
   const path = relative5(parent, child);
@@ -16365,10 +17256,182 @@ function asString2(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
 
+// src/codex/codex-hook-trace.ts
+var DEFAULT_HOOK_OUTPUT = {
+  continue: true,
+  suppressOutput: true
+};
+async function handleCodexHookTraceCommand(event, rawInput) {
+  try {
+    const raw = rawInput ?? await readTextFromStdin();
+    const payload = parsePayload(raw);
+    if (payload !== void 0) {
+      await appendCodexHookTrace(toTraceInput(event, payload));
+    }
+  } catch {
+  }
+  return formatCodexHookTraceCommandOutput();
+}
+function formatCodexHookTraceCommandOutput() {
+  return `${JSON.stringify(DEFAULT_HOOK_OUTPUT)}
+`;
+}
+async function readTextFromStdin() {
+  process.stdin.setEncoding("utf8");
+  let text = "";
+  for await (const chunk of process.stdin) {
+    text += chunk;
+  }
+  return text;
+}
+function parsePayload(raw) {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return {};
+  }
+  const parsed = JSON.parse(trimmed);
+  return isRecord5(parsed) ? parsed : void 0;
+}
+function toTraceInput(event, payload) {
+  const cwd = asString3(payload.cwd) ?? process.cwd();
+  const prompt = firstString(payload.prompt, payload.text, payload.user_prompt, payload.userPrompt);
+  const tool = event === "post_tool_use" ? parseTool(payload) : void 0;
+  return {
+    cwd,
+    event,
+    sessionId: asString3(payload.session_id) ?? asString3(payload.sessionId),
+    turnId: asString3(payload.turn_id) ?? asString3(payload.turnId),
+    summary: summaryForEvent(event, prompt, tool),
+    signals: signalsForEvent(event, prompt, tool),
+    ...tool === void 0 ? {} : { tool }
+  };
+}
+function summaryForEvent(event, prompt, tool) {
+  if (event === "session_start") {
+    return "Session started.";
+  }
+  if (event === "user_prompt_submit") {
+    return prompt === void 0 ? "User prompt submitted." : `User prompt submitted: ${compact(prompt, 140)}`;
+  }
+  return `Tool used: ${tool?.name ?? "unknown"}`;
+}
+function signalsForEvent(event, prompt, tool) {
+  if (event === "user_prompt_submit" && prompt !== void 0) {
+    return [`prompt=${compact(prompt, 180)}`];
+  }
+  if (event === "post_tool_use") {
+    return [
+      tool?.commandSummary === void 0 ? void 0 : `command=${compact(tool.commandSummary, 180)}`,
+      tool?.outputSummary === void 0 ? void 0 : `output=${compact(tool.outputSummary, 180)}`,
+      tool?.touchedFiles === void 0 || tool.touchedFiles.length === 0 ? void 0 : `files=${tool.touchedFiles.join(", ")}`
+    ].filter((signal) => signal !== void 0);
+  }
+  return [];
+}
+function parseTool(payload) {
+  const nested = isRecord5(payload.tool) ? payload.tool : {};
+  const toolInput = isRecord5(payload.tool_input) ? payload.tool_input : isRecord5(payload.toolInput) ? payload.toolInput : {};
+  const name = firstString(
+    nested.name,
+    nested.tool_name,
+    nested.toolName,
+    payload.tool_name,
+    payload.toolName,
+    payload.name
+  ) ?? "unknown";
+  return {
+    name: compact(name, 80),
+    ...optionalField("useId", firstString(
+      nested.id,
+      nested.use_id,
+      nested.useId,
+      nested.tool_use_id,
+      nested.toolUseId,
+      payload.tool_use_id,
+      payload.toolUseId
+    )),
+    ...optionalField("commandSummary", firstString(nested.command, toolInput.command, payload.command)),
+    ...optionalField("outputSummary", firstString(
+      nested.output,
+      nested.result,
+      responseSummary(payload.tool_response),
+      responseSummary(payload.toolResponse),
+      payload.output,
+      payload.result
+    )),
+    ...optionalNumberField("exitCode", firstNumber(nested.exit_code, nested.exitCode, payload.exit_code, payload.exitCode)),
+    ...optionalStringArrayField("touchedFiles", firstStringArray(
+      nested.touched_files,
+      nested.touchedFiles,
+      nested.files,
+      payload.touched_files,
+      payload.touchedFiles,
+      payload.files
+    ))
+  };
+}
+function responseSummary(value) {
+  const direct = asString3(value);
+  if (direct !== void 0) {
+    return direct;
+  }
+  if (!isRecord5(value)) {
+    return void 0;
+  }
+  return firstString(value.output, value.result, value.content, value.text, value.stdout, value.stderr) ?? JSON.stringify(value);
+}
+function optionalField(key, value) {
+  return value === void 0 ? {} : { [key]: compact(value, 500) };
+}
+function optionalNumberField(key, value) {
+  return value === void 0 ? {} : { [key]: value };
+}
+function optionalStringArrayField(key, value) {
+  return value === void 0 ? {} : { [key]: value.map((entry) => compact(entry, 240)) };
+}
+function firstString(...values) {
+  for (const value of values) {
+    const parsed = asString3(value);
+    if (parsed !== void 0) {
+      return parsed;
+    }
+  }
+  return void 0;
+}
+function firstNumber(...values) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return void 0;
+}
+function firstStringArray(...values) {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const strings = value.filter((entry) => typeof entry === "string" && entry.trim() !== "");
+      if (strings.length > 0) {
+        return strings;
+      }
+    }
+  }
+  return void 0;
+}
+function asString3(value) {
+  return typeof value === "string" && value.trim() !== "" ? value : void 0;
+}
+function compact(value, maxLength) {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  return cleaned.length <= maxLength ? cleaned : `${cleaned.slice(0, Math.max(0, maxLength - 1))}...`;
+}
+function isRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/codex/codex-install.ts
-import { lstat as lstat12, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile7 } from "node:fs/promises";
+import { lstat as lstat13, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile7 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname9, join as join18, resolve as resolve7 } from "node:path";
+import { dirname as dirname9, join as join20, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -16380,13 +17443,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join18(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join20(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
   await mkdir9(dirname9(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
   await mkdir9(stateRoot, { recursive: true });
-  await writeFile7(join18(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await writeFile7(join20(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -16423,7 +17486,7 @@ async function installCodexPluginBridge(input) {
 }
 async function removeExistingSkillSymlink(path) {
   try {
-    const stats = await lstat12(path);
+    const stats = await lstat13(path);
     if (!stats.isSymbolicLink()) {
       throw new Error(`Refusing to replace existing non-symlink skill path: ${path}`);
     }
@@ -16437,10 +17500,10 @@ async function removeExistingSkillSymlink(path) {
 }
 
 // src/codex/codex-memory-dashboard.ts
-import { readFile as readFile12 } from "node:fs/promises";
+import { readFile as readFile14 } from "node:fs/promises";
 import { homedir as homedir6 } from "node:os";
-import { join as join19 } from "node:path";
-var REVIEW_SUMMARIES_FILE3 = "review-summaries.jsonl";
+import { join as join21 } from "node:path";
+var REVIEW_SUMMARIES_FILE4 = "review-summaries.jsonl";
 var STOP_HOOK_STALE_MS = 24 * 60 * 60 * 1e3;
 async function formatCodexMemoryDashboard(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -16454,7 +17517,7 @@ async function formatCodexMemoryDashboard(input) {
     readReviewSummaries(projectRoot),
     readDashboardDreamState(projectRoot),
     readModelProfileFromRootIfExists(projectRoot),
-    readOptional2(input.configPath ?? join19(homedir6(), ".codex", "config.toml"))
+    readOptional2(input.configPath ?? join21(homedir6(), ".codex", "config.toml"))
   ]);
   const pendingSummaries = pending.map((candidate) => summarizePendingMemory(candidate, now));
   const warnings = buildDashboardWarnings({
@@ -16495,12 +17558,12 @@ async function formatCodexMemoryDashboard(input) {
   ].filter((line) => line !== void 0).join("\n") + "\n";
 }
 async function readDashboardPendingMemories(roots) {
-  return (await Promise.all(uniqueStrings2(roots).map((root) => readPendingMemoriesFromRoot(root)))).flat();
+  return (await Promise.all(uniqueStrings3(roots).map((root) => readPendingMemoriesFromRoot(root)))).flat();
 }
 async function readReviewSummaries(root) {
   let content;
   try {
-    content = await readOptionalMemoryDataFile(join19(root, REVIEW_SUMMARIES_FILE3));
+    content = await readOptionalMemoryDataFile(join21(root, REVIEW_SUMMARIES_FILE4));
   } catch {
     return [];
   }
@@ -16536,65 +17599,65 @@ async function readDashboardDreamState(root) {
   }
 }
 function formatTopActiveMemories(memories) {
-  const lines = ["top active project memories:"];
+  const lines2 = ["top active project memories:"];
   const top = [...memories].sort(compareActiveMemory).slice(0, 5);
   if (top.length === 0) {
-    lines.push("- none");
-    return lines;
+    lines2.push("- none");
+    return lines2;
   }
   for (const memory of top) {
-    lines.push(`- ${memory.id} [${memory.domain}/${memory.type}] usefulness=${formatScore(memory.scores.usefulness)} ${truncate(memory.content)}`);
+    lines2.push(`- ${memory.id} [${memory.domain}/${memory.type}] usefulness=${formatScore(memory.scores.usefulness)} ${truncate(memory.content)}`);
   }
-  return lines;
+  return lines2;
 }
 function formatPendingReview(pending) {
-  const lines = ["pending review:"];
+  const lines2 = ["pending review:"];
   const top = [...pending].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt)).slice(0, 5);
   if (top.length === 0) {
-    lines.push("- none");
-    return lines;
+    lines2.push("- none");
+    return lines2;
   }
   for (const item of top) {
-    lines.push(`- ${item.id} recommendation=${item.recommendation} risk=${item.risk} reviewHash=${item.reviewHash}`);
-    lines.push(`  ${truncate(item.content)}`);
+    lines2.push(`- ${item.id} recommendation=${item.recommendation} risk=${item.risk} reviewHash=${item.reviewHash}`);
+    lines2.push(`  ${truncate(item.content)}`);
   }
-  return lines;
+  return lines2;
 }
 function formatReviewSummaries(summaries) {
-  const lines = ["review summaries:"];
+  const lines2 = ["review summaries:"];
   const top = summaries.slice(0, 3);
   if (top.length === 0) {
-    lines.push("- none");
-    return lines;
+    lines2.push("- none");
+    return lines2;
   }
   for (const summary of top) {
-    lines.push(`- ${summary.createdAt} (${summary.status}) candidates=${summary.candidateIds.join(", ") || "none"}`);
-    lines.push(`  ${truncate(summary.summary)}`);
+    lines2.push(`- ${summary.createdAt} (${summary.status}) candidates=${summary.candidateIds.join(", ") || "none"}`);
+    lines2.push(`  ${truncate(summary.summary)}`);
   }
-  return lines;
+  return lines2;
 }
 function formatTombstones(tombstones) {
-  const lines = ["rejected/tombstoned summaries:"];
+  const lines2 = ["rejected/tombstoned summaries:"];
   const top = [...tombstones].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 5);
   if (top.length === 0) {
-    lines.push("- none");
-    return lines;
+    lines2.push("- none");
+    return lines2;
   }
   for (const tombstone of top) {
-    lines.push(`- ${tombstone.id} reason=${tombstone.reason} normalizedKey=${tombstone.normalizedKey}`);
+    lines2.push(`- ${tombstone.id} reason=${tombstone.reason} normalizedKey=${tombstone.normalizedKey}`);
   }
-  return lines;
+  return lines2;
 }
 function formatWarnings(warnings) {
-  const lines = ["warnings:"];
+  const lines2 = ["warnings:"];
   if (warnings.length === 0) {
-    lines.push("- none");
-    return lines;
+    lines2.push("- none");
+    return lines2;
   }
   for (const warning of warnings) {
-    lines.push(`- ${warning.label}: ${warning.reason}`);
+    lines2.push(`- ${warning.label}: ${warning.reason}`);
   }
-  return lines;
+  return lines2;
 }
 function buildDashboardWarnings(input) {
   const warnings = [];
@@ -16656,17 +17719,17 @@ function readTomlAssignmentValue2(block, key) {
   return value === void 0 ? void 0 : stripTomlInlineComment2(value).trim();
 }
 function readTomlBlock2(configText, heading) {
-  const lines = configText.split(/\r?\n/);
-  const start = lines.findIndex((line) => stripTomlInlineComment2(line).trim() === heading);
+  const lines2 = configText.split(/\r?\n/);
+  const start = lines2.findIndex((line) => stripTomlInlineComment2(line).trim() === heading);
   if (start < 0) {
     return void 0;
   }
   const body = [];
-  for (let index = start + 1; index < lines.length; index += 1) {
-    if (/^\s*\[/.test(stripTomlInlineComment2(lines[index] ?? ""))) {
+  for (let index = start + 1; index < lines2.length; index += 1) {
+    if (/^\s*\[/.test(stripTomlInlineComment2(lines2[index] ?? ""))) {
       break;
     }
-    body.push(lines[index] ?? "");
+    body.push(lines2[index] ?? "");
   }
   return body.join("\n");
 }
@@ -16703,9 +17766,9 @@ function stripTomlInlineComment2(value) {
 }
 async function readOptional2(path) {
   try {
-    return await readFile12(path, "utf8");
+    return await readFile14(path, "utf8");
   } catch (error2) {
-    if (isErrorCode4(error2, "ENOENT")) {
+    if (isErrorCode5(error2, "ENOENT")) {
       return "";
     }
     throw error2;
@@ -16714,15 +17777,15 @@ async function readOptional2(path) {
 async function readOptionalMemoryDataFile(path) {
   try {
     await assertSafeMemoryDataFileTarget(path);
-    return await readFile12(path, "utf8");
+    return await readFile14(path, "utf8");
   } catch (error2) {
-    if (isErrorCode4(error2, "ENOENT")) {
+    if (isErrorCode5(error2, "ENOENT")) {
       return "";
     }
     throw error2;
   }
 }
-function uniqueStrings2(values) {
+function uniqueStrings3(values) {
   return Array.from(new Set(values));
 }
 function truncate(value, maxLength = 160) {
@@ -16732,7 +17795,7 @@ function truncate(value, maxLength = 160) {
 function formatScore(value) {
   return value.toFixed(2);
 }
-function isErrorCode4(error2, code) {
+function isErrorCode5(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 function errorMessage3(error2) {
@@ -16742,7 +17805,7 @@ function errorMessage3(error2) {
 // src/codex/codex-memory-review-cli.ts
 async function formatCodexMemoryReview(input) {
   const result2 = await listCodexPendingMemories(input);
-  const lines = [
+  const lines2 = [
     "Cyrene Pending Memory Review",
     `project: ${result2.project.displayName} (${result2.project.projectId})`,
     `memory root: ${result2.memoryRoot}`,
@@ -16750,12 +17813,12 @@ async function formatCodexMemoryReview(input) {
     ""
   ];
   if (result2.pending.length === 0) {
-    lines.push("No pending memory candidates.");
-    return `${lines.join("\n")}
+    lines2.push("No pending memory candidates.");
+    return `${lines2.join("\n")}
 `;
   }
   for (const item of result2.pending) {
-    lines.push(
+    lines2.push(
       `- id: ${item.id}`,
       `  recommendation: ${item.recommendation}`,
       `  type: ${item.type}`,
@@ -16770,7 +17833,7 @@ async function formatCodexMemoryReview(input) {
       `  suggested action: ${item.suggestedAction}`
     );
   }
-  return `${lines.join("\n")}
+  return `${lines2.join("\n")}
 `;
 }
 async function runCodexMemoryApprove(input) {
@@ -16791,21 +17854,21 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
-import { lstat as lstat13, mkdir as mkdir10, readFile as readFile13, realpath as realpath7, rename as rename4, writeFile as writeFile8 } from "node:fs/promises";
-import { join as join20 } from "node:path";
+import { randomUUID as randomUUID10 } from "node:crypto";
+import { lstat as lstat14, mkdir as mkdir10, readFile as readFile15, realpath as realpath7, rename as rename4, writeFile as writeFile8 } from "node:fs/promises";
+import { join as join22 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
 var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID9();
+  const proposalId = randomUUID10();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
-    reportPath: join20(previewDir, DREAM_REPORT_FILE),
-    proposedChangesPath: join20(previewDir, "proposed_changes.json"),
-    diffPath: join20(previewDir, "diff.json"),
-    evalResultsPath: join20(previewDir, "eval_results.json")
+    reportPath: join22(previewDir, DREAM_REPORT_FILE),
+    proposedChangesPath: join22(previewDir, "proposed_changes.json"),
+    diffPath: join22(previewDir, "diff.json"),
+    evalResultsPath: join22(previewDir, "eval_results.json")
   };
   await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
   await writeJsonAtomic(paths.proposedChangesPath, {
@@ -16829,11 +17892,11 @@ async function readDreamReport(input) {
   }
   try {
     const previewDir = await getExistingPreviewDir(memoryRoot);
-    const reportPath = join20(previewDir, DREAM_REPORT_FILE);
+    const reportPath = join22(previewDir, DREAM_REPORT_FILE);
     await assertSafeMemoryDataFileTarget(reportPath);
-    return { memoryRoot, report: await readFile13(reportPath, "utf8") };
+    return { memoryRoot, report: await readFile15(reportPath, "utf8") };
   } catch (error2) {
-    if (isFileErrorCode9(error2, "ENOENT")) {
+    if (isFileErrorCode10(error2, "ENOENT")) {
       throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
     }
     throw error2;
@@ -16844,7 +17907,7 @@ async function getReadableProjectMemoryRoot(cwd) {
   return getReadableCodexProjectMemoryRoot(project.projectId);
 }
 function renderDreamReport(input) {
-  const lines = [
+  const lines2 = [
     "# Cyrene Dream Preview",
     "",
     `- proposalId: ${input.proposalId}`,
@@ -16860,33 +17923,33 @@ function renderDreamReport(input) {
     ""
   ];
   if (input.proposal.proposedChanges.length === 0) {
-    lines.push("- none");
+    lines2.push("- none");
   } else {
     for (const change of input.proposal.proposedChanges) {
       if (change.action === "recommend_promote") {
-        lines.push(`- recommend_promote ${change.normalizedKey} (${change.candidateId}) -> ${change.recommendedMemoryId}: ${change.reason}`);
+        lines2.push(`- recommend_promote ${change.normalizedKey} (${change.candidateId}) -> ${change.recommendedMemoryId}: ${change.reason}`);
       } else if (change.action === "promote") {
-        lines.push(`- promote ${change.normalizedKey} (${change.candidateId}) -> ${change.memoryId}: ${change.reason}`);
+        lines2.push(`- promote ${change.normalizedKey} (${change.candidateId}) -> ${change.memoryId}: ${change.reason}`);
       } else if (change.action === "reject") {
-        lines.push(`- reject ${change.normalizedKey} (${change.candidateId}) as ${change.tombstoneReason}: ${change.reason}`);
+        lines2.push(`- reject ${change.normalizedKey} (${change.candidateId}) as ${change.tombstoneReason}: ${change.reason}`);
       } else {
-        lines.push(`- keep_pending ${change.normalizedKey} (${change.candidateId}): ${change.reason}`);
+        lines2.push(`- keep_pending ${change.normalizedKey} (${change.candidateId}): ${change.reason}`);
       }
     }
   }
-  lines.push(
+  lines2.push(
     "",
     "## Apply",
     "",
     "Use cyrene_memory_pending_list / cyrene_memory_pending_get and explicit cyrene_memory_promote approval to promote recommended candidates. deep-apply does not promote unapproved pending memory."
   );
-  return `${lines.join("\n")}
+  return `${lines2.join("\n")}
 `;
 }
 async function ensurePreviewDir(memoryRoot) {
-  const previewDir = join20(memoryRoot, DREAM_PREVIEW_DIR);
+  const previewDir = join22(memoryRoot, DREAM_PREVIEW_DIR);
   await mkdir10(previewDir, { recursive: true });
-  const stats = await lstat13(previewDir);
+  const stats = await lstat14(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
   }
@@ -16896,8 +17959,8 @@ async function ensurePreviewDir(memoryRoot) {
   return realpath7(previewDir);
 }
 async function getExistingPreviewDir(memoryRoot) {
-  const previewDir = join20(memoryRoot, DREAM_PREVIEW_DIR);
-  const stats = await lstat13(previewDir);
+  const previewDir = join22(memoryRoot, DREAM_PREVIEW_DIR);
+  const stats = await lstat14(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
   }
@@ -16912,21 +17975,21 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID9()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID10()}.tmp`;
   await writeFile8(tempPath, content, "utf8");
   await rename4(tempPath, filePath);
 }
-function isFileErrorCode9(error2, code) {
+function isFileErrorCode10(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
-import { lstat as lstat15, mkdir as mkdir11, readFile as readFile14, rm as rm4, writeFile as writeFile9 } from "node:fs/promises";
-import { join as join21 } from "node:path";
+import { randomUUID as randomUUID11 } from "node:crypto";
+import { lstat as lstat16, mkdir as mkdir11, readFile as readFile16, rm as rm4, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join23 } from "node:path";
 
 // src/codex/dream-proposal.ts
-import { lstat as lstat14, realpath as realpath8 } from "node:fs/promises";
+import { lstat as lstat15, realpath as realpath8 } from "node:fs/promises";
 async function buildDreamProposalForRoot(input) {
   const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot);
   const active = await readActiveMemoriesFromRoot(memoryRoot);
@@ -17061,7 +18124,7 @@ async function buildDreamProposalForRoot(input) {
 }
 async function resolveReadableMemoryRootPath(memoryRoot) {
   try {
-    const stats = await lstat14(memoryRoot);
+    const stats = await lstat15(memoryRoot);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use memory symlink: ${memoryRoot}`);
     }
@@ -17070,7 +18133,7 @@ async function resolveReadableMemoryRootPath(memoryRoot) {
     }
     return realpath8(memoryRoot);
   } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
       return memoryRoot;
     }
     throw error2;
@@ -17089,7 +18152,7 @@ function tombstoneForExpiredPending(candidate, now) {
     evidence: candidate.evidence
   };
 }
-function isFileErrorCode10(error2, code) {
+function isFileErrorCode11(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -17216,7 +18279,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID10(),
+      id: randomUUID11(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -17241,7 +18304,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID10(),
+        id: randomUUID11(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -17367,7 +18430,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID10(),
+        id: randomUUID11(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -17537,16 +18600,16 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join21(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID10();
+  const lockDir = join23(locksDir, DREAM_LOCK_DIR);
+  const token = randomUUID11();
   while (true) {
     try {
       await mkdir11(lockDir);
-      await writeFile9(join21(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await writeFile9(join23(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
-      if (!isFileErrorCode11(error2, "EEXIST")) {
+      if (!isFileErrorCode12(error2, "EEXIST")) {
         throw error2;
       }
       const owner = await readDreamLockOwner(lockDir);
@@ -17561,13 +18624,13 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join21(memoryRoot, DREAM_LOCKS_DIR);
+  const locksDir = join23(memoryRoot, DREAM_LOCKS_DIR);
   await mkdir11(locksDir).catch((error2) => {
-    if (!isFileErrorCode11(error2, "EEXIST")) {
+    if (!isFileErrorCode12(error2, "EEXIST")) {
       throw error2;
     }
   });
-  const stats = await lstat15(locksDir);
+  const stats = await lstat16(locksDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream locks path: ${locksDir}`);
   }
@@ -17576,9 +18639,9 @@ async function ensureDreamLocksDir(memoryRoot) {
 async function readDreamLockOwner(lockDir) {
   let stats;
   try {
-    stats = await lstat15(lockDir);
+    stats = await lstat16(lockDir);
   } catch (error2) {
-    if (isFileErrorCode11(error2, "ENOENT")) {
+    if (isFileErrorCode12(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -17587,7 +18650,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile14(join21(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile16(join23(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -17597,7 +18660,7 @@ async function readDreamLockOwner(lockDir) {
       ...typeof parsed.token === "string" ? { token: parsed.token } : {}
     };
   } catch (error2) {
-    if (isFileErrorCode11(error2, "ENOENT") || error2 instanceof SyntaxError) {
+    if (isFileErrorCode12(error2, "ENOENT") || error2 instanceof SyntaxError) {
       return void 0;
     }
     throw error2;
@@ -17618,7 +18681,7 @@ async function removeDreamLockIfOwner(lockDir, expectedOwner) {
   return true;
 }
 async function isDreamLockDirStale(lockDir, now, ttlMs) {
-  const stats = await lstat15(lockDir);
+  const stats = await lstat16(lockDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
@@ -17644,14 +18707,14 @@ async function releaseDreamLock(lock) {
     await rm4(lock.lockDir, { recursive: true, force: true });
   }
 }
-function isFileErrorCode11(error2, code) {
+function isFileErrorCode12(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash7, randomUUID as randomUUID11 } from "node:crypto";
-import { lstat as lstat16, readFile as readFile15, rename as rename5, writeFile as writeFile10 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { createHash as createHash8, randomUUID as randomUUID12 } from "node:crypto";
+import { lstat as lstat17, readFile as readFile17, rename as rename5, writeFile as writeFile10 } from "node:fs/promises";
+import { join as join24 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -17668,7 +18731,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash7("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash8("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -17779,7 +18842,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID11(),
+      id: randomUUID12(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -18010,13 +19073,13 @@ function upsertActiveMemory2(active, memory) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join22(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join24(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile15(targetPath, "utf8");
+    const content = await readFile17(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
-    if (isFileErrorCode12(error2, "ENOENT")) {
+    if (isFileErrorCode13(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -18024,9 +19087,9 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join22(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join24(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID11()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID12()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile10(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -18034,46 +19097,46 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join22(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join24(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID11()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID12()}.tmp`;
   await writeFile10(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename5(tempPath, targetPath);
 }
 function formatPendingProfilePatch(candidates) {
   const pending = candidates.filter((candidate) => candidate.status === "pending");
-  const lines = [
+  const lines2 = [
     "<!-- Generated by Cyrene Continuity. Review before applying. -->",
     "",
     "# Cyrene Model Profile Pending Patch",
     ""
   ];
   if (pending.length === 0) {
-    lines.push("No pending profile candidates.", "");
-    return lines.join("\n");
+    lines2.push("No pending profile candidates.", "");
+    return lines2.join("\n");
   }
   for (const candidate of pending) {
-    lines.push(`## ${candidate.id}`);
-    lines.push("");
-    lines.push(`- Section: ${candidate.proposedSection}`);
-    lines.push(`- Review hash: ${candidate.reviewHash}`);
-    lines.push(`- Scope: ${candidate.scope}`);
-    lines.push(`- Source memory ids: ${candidate.sourceMemoryIds.join(", ") || "none"}`);
-    lines.push(`- Evidence: ${candidate.evidenceSummary || "none"}`);
-    lines.push(`- Rationale: ${candidate.rationale}`);
-    lines.push("");
-    lines.push(candidate.content);
-    lines.push("");
-    lines.push("Next step:");
-    lines.push("");
-    lines.push(`Review ${candidate.id} in Codex chat before applying; review hash ${candidate.reviewHash}.`);
-    lines.push("");
+    lines2.push(`## ${candidate.id}`);
+    lines2.push("");
+    lines2.push(`- Section: ${candidate.proposedSection}`);
+    lines2.push(`- Review hash: ${candidate.reviewHash}`);
+    lines2.push(`- Scope: ${candidate.scope}`);
+    lines2.push(`- Source memory ids: ${candidate.sourceMemoryIds.join(", ") || "none"}`);
+    lines2.push(`- Evidence: ${candidate.evidenceSummary || "none"}`);
+    lines2.push(`- Rationale: ${candidate.rationale}`);
+    lines2.push("");
+    lines2.push(candidate.content);
+    lines2.push("");
+    lines2.push("Next step:");
+    lines2.push("");
+    lines2.push(`Review ${candidate.id} in Codex chat before applying; review hash ${candidate.reviewHash}.`);
+    lines2.push("");
   }
-  return lines.join("\n");
+  return lines2.join("\n");
 }
 async function assertSafeProfileFileTarget(targetPath, label) {
   try {
-    const stats = await lstat16(targetPath);
+    const stats = await lstat17(targetPath);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use ${label} symlink: ${targetPath}`);
     }
@@ -18081,20 +19144,20 @@ async function assertSafeProfileFileTarget(targetPath, label) {
       throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`);
     }
   } catch (error2) {
-    if (isFileErrorCode12(error2, "ENOENT")) {
+    if (isFileErrorCode13(error2, "ENOENT")) {
       return;
     }
     throw error2;
   }
 }
-function isFileErrorCode12(error2, code) {
+function isFileErrorCode13(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/project-registry.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
-import { mkdir as mkdir12, readFile as readFile16, rename as rename6, rm as rm5, writeFile as writeFile11 } from "node:fs/promises";
-import { basename as basename5, dirname as dirname10, join as join23 } from "node:path";
+import { randomUUID as randomUUID13 } from "node:crypto";
+import { mkdir as mkdir12, readFile as readFile18, rename as rename6, rm as rm5, writeFile as writeFile11 } from "node:fs/promises";
+import { basename as basename5, dirname as dirname10, join as join25 } from "node:path";
 var PROJECT_METADATA_FILE = "project.json";
 var MERGE_JSONL_FILES = [
   "index.jsonl",
@@ -18118,7 +19181,7 @@ async function addCodexProjectAlias(input) {
   await writeProjectMetadata(projectRoot, {
     ...metadata,
     projectId,
-    aliases: uniqueSorted([...metadata.aliases ?? [], alias]),
+    aliases: uniqueSorted2([...metadata.aliases ?? [], alias]),
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
   return registryEntryFromRoot(projectRoot);
@@ -18148,7 +19211,7 @@ async function mergeCodexProjects(input) {
   const mergedFiles = await withMemoryMaintenanceLockFromRoot(toMemoryRoot, async (lockedToMemoryRoot) => {
     const files = [];
     for (const fileName of MERGE_JSONL_FILES) {
-      const merged = await mergeJsonlFile(join23(fromMemoryRoot, fileName), join23(lockedToMemoryRoot, fileName));
+      const merged = await mergeJsonlFile(join25(fromMemoryRoot, fileName), join25(lockedToMemoryRoot, fileName));
       if (merged) {
         files.push(fileName);
       }
@@ -18167,15 +19230,15 @@ async function mergeCodexProjects(input) {
   await writeProjectMetadata(toProjectRoot, {
     ...toMetadata,
     projectId: toProjectId,
-    aliases: uniqueSorted([...toMetadata.aliases ?? [], ...fromMetadata.aliases ?? []]),
-    mergedFrom: uniqueSorted([...toMetadata.mergedFrom ?? [], fromProjectId, ...fromMetadata.mergedFrom ?? []]),
+    aliases: uniqueSorted2([...toMetadata.aliases ?? [], ...fromMetadata.aliases ?? []]),
+    mergedFrom: uniqueSorted2([...toMetadata.mergedFrom ?? [], fromProjectId, ...fromMetadata.mergedFrom ?? []]),
     updatedAt: now
   });
   return { fromProjectId, toProjectId, mergedFiles };
 }
 async function registryEntryFromRoot(root) {
   const projectId = basename5(root);
-  const memoryRoot = join23(root, "memory");
+  const memoryRoot = join25(root, "memory");
   const metadata = await readProjectMetadata(root);
   const [active, pending, tombstones] = await Promise.all([
     readActiveMemoriesFromRoot(memoryRoot),
@@ -18186,8 +19249,8 @@ async function registryEntryFromRoot(root) {
     projectId,
     root,
     memoryRoot,
-    aliases: uniqueSorted(metadata.aliases ?? []),
-    mergedFrom: uniqueSorted(metadata.mergedFrom ?? []),
+    aliases: uniqueSorted2(metadata.aliases ?? []),
+    mergedFrom: uniqueSorted2(metadata.mergedFrom ?? []),
     mergedInto: metadata.mergedInto,
     counts: {
       active: active.length,
@@ -18210,7 +19273,7 @@ async function mergeJsonlFile(sourcePath, targetPath) {
   return true;
 }
 async function assertMergeJsonlFilesSafe(memoryRoot, role) {
-  await Promise.all(MERGE_JSONL_FILES.map((fileName) => assertMergeJsonlFileSafe(join23(memoryRoot, fileName), role)));
+  await Promise.all(MERGE_JSONL_FILES.map((fileName) => assertMergeJsonlFileSafe(join25(memoryRoot, fileName), role)));
 }
 async function assertMergeJsonlFileSafe(filePath, role) {
   try {
@@ -18223,7 +19286,7 @@ async function assertMergeJsonlFileSafe(filePath, role) {
   }
 }
 async function writeJsonLinesAtomic2(filePath, values) {
-  const tempPath = join23(dirname10(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID12()}.tmp`);
+  const tempPath = join25(dirname10(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID13()}.tmp`);
   let renamed = false;
   try {
     await writeFile11(tempPath, `${values.join("\n")}
@@ -18262,9 +19325,9 @@ function jsonLineKey(line) {
 }
 async function readJsonLinesIfExists(path) {
   try {
-    return (await readFile16(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    return (await readFile18(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   } catch (error2) {
-    if (isFileErrorCode13(error2, "ENOENT")) {
+    if (isFileErrorCode14(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -18272,8 +19335,8 @@ async function readJsonLinesIfExists(path) {
 }
 async function readProjectMetadata(projectRoot) {
   try {
-    const parsed = JSON.parse(await readFile16(join23(projectRoot, PROJECT_METADATA_FILE), "utf8"));
-    if (!isRecord4(parsed)) {
+    const parsed = JSON.parse(await readFile18(join25(projectRoot, PROJECT_METADATA_FILE), "utf8"));
+    if (!isRecord6(parsed)) {
       return {};
     }
     return {
@@ -18284,7 +19347,7 @@ async function readProjectMetadata(projectRoot) {
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : void 0
     };
   } catch (error2) {
-    if (isFileErrorCode13(error2, "ENOENT")) {
+    if (isFileErrorCode14(error2, "ENOENT")) {
       return {};
     }
     throw error2;
@@ -18292,7 +19355,7 @@ async function readProjectMetadata(projectRoot) {
 }
 async function writeProjectMetadata(projectRoot, metadata) {
   await mkdir12(projectRoot, { recursive: true });
-  await writeFile11(join23(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
+  await writeFile11(join25(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
 `, "utf8");
 }
 function validateProjectId(value) {
@@ -18312,13 +19375,13 @@ function validateAlias(value) {
 function readStringArray(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim() !== "") : [];
 }
-function uniqueSorted(values) {
+function uniqueSorted2(values) {
   return Array.from(new Set(values)).sort();
 }
-function isRecord4(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null;
 }
-function isFileErrorCode13(error2, code) {
+function isFileErrorCode14(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -18405,7 +19468,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash8, randomUUID as randomUUID13 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID14 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -18422,7 +19485,7 @@ function reviewHashForSimilarHintMemory(memory) {
     updatedAt: memory.updatedAt,
     tags: memory.tags
   };
-  return createHash8("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash9("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -18520,7 +19583,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID13(),
+      id: randomUUID14(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -18619,6 +19682,18 @@ async function handleCodexCommand(input) {
     process.stdout.write(await handleCodexStopHookCommand());
     return;
   }
+  if (command === "hook" && input.args[1] === "session-start") {
+    process.stdout.write(await handleCodexHookTraceCommand("session_start"));
+    return;
+  }
+  if (command === "hook" && input.args[1] === "user-prompt-submit") {
+    process.stdout.write(await handleCodexHookTraceCommand("user_prompt_submit"));
+    return;
+  }
+  if (command === "hook" && input.args[1] === "post-tool-use") {
+    process.stdout.write(await handleCodexHookTraceCommand("post_tool_use"));
+    return;
+  }
   if (command === "project" && input.args[1] === "status") {
     process.stdout.write(await formatCodexProjectStatus({ cwd: input.cwd }));
     return;
@@ -18661,6 +19736,19 @@ async function handleCodexCommand(input) {
       cwd: input.cwd,
       stage: parseDreamStage(input.args)
     }), null, 2)}
+`);
+    return;
+  }
+  if (command === "memory" && input.args[1] === "harvest-project") {
+    const sinceWarning = harvestProjectSinceWarning(input.args);
+    const result2 = await runCodexProjectMemoryHarvest({
+      cwd: input.cwd,
+      config: createDefaultConfig(input.cwd),
+      callModel,
+      dryRun: input.args.includes("--dry-run"),
+      mode: parseHarvestProjectMode(input.args)
+    });
+    process.stdout.write(`${JSON.stringify(addHarvestProjectCompatibilityWarnings(result2, sinceWarning), null, 2)}
 `);
     return;
   }
@@ -18770,8 +19858,34 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
+}
+function parseHarvestProjectMode(args) {
+  return args.includes("--changed-files") ? "changed_files" : void 0;
+}
+function harvestProjectSinceWarning(args) {
+  const hasSinceOption = args.includes("--since") || args.some((arg) => arg.startsWith("--since="));
+  if (!hasSinceOption) {
+    return void 0;
+  }
+  const since = parseOptionalOption(args, "--since");
+  if (since === void 0) {
+    throw new Error("Invalid --since: missing value");
+  }
+  if (since !== "last-summary") {
+    throw new Error(`Invalid --since: ${since}. Expected last-summary`);
+  }
+  return "--since last-summary accepted for compatibility; current harvest uses default signal collection.";
+}
+function addHarvestProjectCompatibilityWarnings(result2, warning) {
+  if (warning === void 0) {
+    return result2;
+  }
+  return {
+    ...result2,
+    warnings: [...result2.warnings, warning]
+  };
 }
 function parseConfigPath(args) {
   const index = args.indexOf("--config");
@@ -24102,9 +25216,9 @@ var Doc = class {
       return;
     }
     const content = arg;
-    const lines = content.split("\n").filter((x) => x);
-    const minIndent = Math.min(...lines.map((x) => x.length - x.trimStart().length));
-    const dedented = lines.map((x) => x.slice(minIndent)).map((x) => " ".repeat(this.indent * 2) + x);
+    const lines2 = content.split("\n").filter((x) => x);
+    const minIndent = Math.min(...lines2.map((x) => x.length - x.trimStart().length));
+    const dedented = lines2.map((x) => x.slice(minIndent)).map((x) => " ".repeat(this.indent * 2) + x);
     for (const line of dedented) {
       this.content.push(line);
     }
@@ -24113,8 +25227,8 @@ var Doc = class {
     const F = Function;
     const args = this?.args;
     const content = this?.content ?? [``];
-    const lines = [...content.map((x) => `  ${x}`)];
-    return new F(...args, lines.join("\n"));
+    const lines2 = [...content.map((x) => `  ${x}`)];
+    return new F(...args, lines2.join("\n"));
   }
 };
 
@@ -33212,6 +34326,38 @@ async function handleMemoryPropose(input, fallbackCwd) {
   return jsonText(result2);
 }
 
+// src/mcp/tools/memory-harvest-project.ts
+var memoryHarvestProjectInputSchema = {
+  dryRun: external_exports.boolean().optional(),
+  changedFiles: external_exports.boolean().optional(),
+  since: external_exports.enum(["last-summary"]).optional()
+};
+async function handleMemoryHarvestProject(input, fallbackCwd) {
+  const result2 = await runCodexProjectMemoryHarvest({
+    cwd: fallbackCwd,
+    config: createDefaultConfig(fallbackCwd),
+    callModel,
+    dryRun: input.dryRun,
+    mode: harvestProjectMode(input)
+  });
+  return jsonText(withHarvestProjectCompatibilityWarnings(result2, input));
+}
+function harvestProjectMode(input) {
+  return input.changedFiles === true ? "changed_files" : void 0;
+}
+function withHarvestProjectCompatibilityWarnings(result2, input) {
+  if (input.since === void 0) {
+    return result2;
+  }
+  return {
+    ...result2,
+    warnings: [
+      ...result2.warnings,
+      "since=last-summary accepted for compatibility; current harvest uses default signal collection."
+    ]
+  };
+}
+
 // src/mcp/tools/memory-review.ts
 var memoryPendingListInputSchema = {
   limit: external_exports.number().int().positive().optional()
@@ -33329,6 +34475,14 @@ function createCyreneMcpServer(options) {
       inputSchema: memoryProposeInputSchema
     },
     async (input) => handleMemoryPropose(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_harvest_project",
+    {
+      description: "Harvest active project signals into pending-only Cyrene memory candidates; use dryRun to preview candidates without writing pending review items.",
+      inputSchema: memoryHarvestProjectInputSchema
+    },
+    async (input) => handleMemoryHarvestProject(input, options.cwd)
   );
   server.registerTool(
     "cyrene_memory_pending_list",

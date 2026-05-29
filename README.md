@@ -13,13 +13,19 @@ memory maintenance commands.
 - Stable executable shim at `~/.cyrene/codex/bin/cyrene-continuity`, written by
   `cyrene-continuity codex install --plugin`.
 - Codex skill at `plugin/skills/cyrene-continuity/SKILL.md`.
-- Optional Codex Stop hook that records review-safe continuity summaries and
-  pending memory candidates.
+- Bundled Codex lifecycle hooks at `plugin/hooks/hooks.json` for
+  `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`.
 
-The optional Codex Stop hook writes review-safe session summaries and may
-propose pending candidates. It is fail-open for Codex sessions, records failed
-summary runs in `review-summaries.jsonl`, and never promotes, rejects, or
-updates active memory/profile files from hook execution.
+The bundled lifecycle hooks capture project activity signals during a Codex
+session. The Stop hook writes review-safe session summaries and may propose
+pending candidates. It is fail-open for Codex sessions, records failed summary
+runs in `review-summaries.jsonl`, and never promotes, rejects, or updates active
+memory/profile files from hook execution.
+
+The older `codex install-hook --stop` and `codex hook stop` commands remain
+available as compatibility entrypoints for manual hook installs and existing
+configurations. New plugin installs should rely on the bundled
+`plugin/hooks/hooks.json` lifecycle config.
 
 ## MCP Tools
 
@@ -44,6 +50,10 @@ The plugin MCP server exposes:
   not promote unapproved pending memory.
 - `cyrene_memory_profile_get`: read the effective global and project
   `MODEL_PROFILE.md` context.
+- `cyrene_memory_harvest_project`: harvest current-project signals into
+  pending-only project memory candidates. Use `dryRun` to preview candidates
+  without writing pending review items. The tool uses the MCP server fallback
+  working directory and does not accept a `cwd` input.
 
 ## Install
 
@@ -95,6 +105,7 @@ npm run dev -- codex memory reject <candidateId> --review-hash <hash>
 npm run dev -- codex memory edit <candidateId> --review-hash <hash> --content <text>
 npm run dev -- codex memory defer <candidateId> --review-hash <hash> --days 7
 npm run dev -- codex memory db rebuild
+npm run dev -- codex memory harvest-project [--dry-run] [--changed-files] [--since last-summary]
 npm run dev -- codex memory dream --stage deep-preview
 npm run dev -- codex memory dream report --root project
 npm run dev -- codex memory dream --stage deep-apply
@@ -119,10 +130,31 @@ recommendations while preserving pending candidates. The older
 recommendation-generation compatibility; it no longer enables unapproved active
 promotion.
 
+`codex memory harvest-project` extracts durable project memory candidates from
+git changes, project files, lifecycle hook traces, and recent review summaries.
+It emits candidates such as project facts, decisions, workflow rules, known
+pitfalls, rejected approaches, and open questions. Normal runs write only
+pending review candidates. `--dry-run` previews the harvest without writing
+pending items, `--changed-files` limits signal collection to changed files, and
+`--since last-summary` is accepted as a compatibility selector.
+
+Project memory harvesting needs the existing Cyrene model configuration before
+it can run LLM extraction. Do not write API keys into this repository. Configure
+the model through the existing environment/config path, such as
+`CYRENE_BASE_URL`, `CYRENE_MODEL`, and the matching provider API key expected by
+that provider. If model configuration is missing, the command returns
+`needs_model_config` and does not write pending candidates; dry-run remains safe
+for diagnostics.
+
 Profile reflection writes reviewable candidates to `profile_candidates.jsonl`;
 applying a candidate requires the matching review hash and regenerates
 `MODEL_PROFILE.md` from structured memory. Similar-project memory must be
 explicitly marked transferable before it can appear in cross-project hints.
+Current always-on global/profile context still comes from approved active
+memory: profile reflection proposes profile candidates, and profile apply
+requires review-hash validation before rendering `MODEL_PROFILE.md`. The
+project harvester creates project-scope pending candidates by default; it does
+not create global active memory or mutate profiles directly.
 
 Embedding retrieval is disabled by default. Set `CYRENE_EMBEDDING_PROVIDER` only
 when a safe provider is configured; unsafe content or provider failures fall
