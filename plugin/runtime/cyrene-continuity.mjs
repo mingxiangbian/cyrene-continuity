@@ -14747,6 +14747,9 @@ async function editCodexPendingMemory(input) {
       ...lockedCandidate,
       content: input.content,
       normalizedKey: input.normalizedKey ?? lockedCandidate.normalizedKey,
+      ...input.candidateKind === void 0 ? {} : { candidateKind: input.candidateKind },
+      ...input.tags === void 0 ? {} : { tags: uniqueInOrder(input.tags) },
+      ...input.scores === void 0 ? {} : { scores: { ...lockedCandidate.scores, ...input.scores } },
       lastSeenAt: now
     };
     const [lockedActive, lockedTombstones] = await Promise.all([
@@ -17803,6 +17806,7 @@ function errorMessage3(error2) {
 }
 
 // src/codex/codex-ui-server.ts
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
@@ -17820,6 +17824,12 @@ var PROJECT_MEMORY_LABELS = [
 ];
 async function handleCodexUiApiRequest(input) {
   try {
+    if (input.pathname === "/api/session") {
+      if (input.method.toUpperCase() !== "GET") {
+        return methodNotAllowed();
+      }
+      return ok({ token: input.uiToken ?? "" });
+    }
     if (input.pathname === "/api/memory/harvest-project/dry-run") {
       if (input.method.toUpperCase() !== "POST") {
         return methodNotAllowed();
@@ -17832,6 +17842,13 @@ async function handleCodexUiApiRequest(input) {
         now: input.now
       });
       return ok({ result: result2 });
+    }
+    const writeRoute = parseMemoryWriteRoute(input.pathname);
+    if (writeRoute !== void 0) {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      return handleMemoryWriteRoute(input, writeRoute);
     }
     if (input.method.toUpperCase() !== "GET") {
       return methodNotAllowed();
@@ -17859,6 +17876,174 @@ async function handleCodexUiApiRequest(input) {
   } catch (error2) {
     return failure(500, "internal_error", errorMessage4(error2));
   }
+}
+function parseMemoryWriteRoute(pathname) {
+  const match = /^\/api\/memory\/([^/]+)\/(approve|reject|defer|edit)$/.exec(pathname);
+  if (match === null) return void 0;
+  return { id: decodeURIComponent(match[1]), action: match[2] };
+}
+async function handleMemoryWriteRoute(input, route) {
+  const body = input.body;
+  if (!isRecord6(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
+    return failure(400, "invalid_request", "Write requests require reviewHash.");
+  }
+  const reviewHash = body.reviewHash.trim();
+  if (route.action === "approve") {
+    return writeResultToApi(
+      await promoteCodexPendingMemory({ cwd: input.cwd, id: route.id, reviewHash, now: input.now }),
+      "approve",
+      reviewHash,
+      input.now
+    );
+  }
+  if (route.action === "reject") {
+    if (typeof body.reason !== "string" || body.reason.trim() === "") {
+      return failure(400, "invalid_request", "Reject requires a reason.");
+    }
+    return writeResultToApi(
+      await rejectCodexPendingMemory({
+        cwd: input.cwd,
+        id: route.id,
+        reviewHash,
+        reason: body.reason.trim(),
+        now: input.now
+      }),
+      "reject",
+      reviewHash,
+      input.now
+    );
+  }
+  if (route.action === "defer") {
+    if (typeof body.reason !== "string" || body.reason.trim() === "") {
+      return failure(400, "invalid_request", "Defer requires a reason.");
+    }
+    const days = optionalPositiveInteger(body.days, 7);
+    if (days === void 0) {
+      return failure(400, "invalid_request", "Defer days must be a positive integer.");
+    }
+    return writeResultToApi(
+      await deferCodexPendingMemory({
+        cwd: input.cwd,
+        id: route.id,
+        reviewHash,
+        reason: body.reason.trim(),
+        days,
+        now: input.now
+      }),
+      "defer",
+      reviewHash,
+      input.now
+    );
+  }
+  if (typeof body.changeNote !== "string" || body.changeNote.trim() === "") {
+    return failure(400, "invalid_request", "Edit requires a change note.");
+  }
+  if (!isRecord6(body.patch)) {
+    return failure(400, "invalid_request", "Edit requires a patch object.");
+  }
+  const patch = parseEditPatch(body.patch);
+  if ("error" in patch) return patch.error;
+  return writeResultToApi(
+    await editCodexPendingMemory({
+      cwd: input.cwd,
+      id: route.id,
+      reviewHash,
+      reason: body.changeNote.trim(),
+      now: input.now,
+      ...patch.value
+    }),
+    "edit",
+    reviewHash,
+    input.now
+  );
+}
+function parseEditPatch(value) {
+  if (typeof value.content !== "string" || value.content.trim() === "") {
+    return { error: failure(400, "invalid_request", "Edit patch requires content.") };
+  }
+  const patch = { content: value.content.trim() };
+  if (value.candidateKind !== void 0) {
+    if (!isMemoryCandidateKind(value.candidateKind)) {
+      return { error: failure(400, "invalid_request", "Edit patch candidateKind is invalid.") };
+    }
+    patch.candidateKind = value.candidateKind;
+  }
+  if (value.tags !== void 0) {
+    if (!Array.isArray(value.tags) || !value.tags.every((item) => typeof item === "string")) {
+      return { error: failure(400, "invalid_request", "Edit patch tags must be strings.") };
+    }
+    patch.tags = value.tags.map((item) => item.trim()).filter(Boolean);
+  }
+  if (value.scores !== void 0) {
+    if (!isRecord6(value.scores)) {
+      return { error: failure(400, "invalid_request", "Edit patch scores must be an object.") };
+    }
+    const scores = parseScorePatch(value.scores);
+    if ("error" in scores) return scores;
+    patch.scores = scores.value;
+  }
+  return { value: patch };
+}
+function parseScorePatch(value) {
+  const scoreFields = ["evidenceStrength", "stability", "usefulness", "safety", "sensitivity"];
+  const allowed = new Set(scoreFields);
+  const scores = {};
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      return { error: failure(400, "invalid_request", "Edit patch scores contain an unsupported field.") };
+    }
+  }
+  for (const key of scoreFields) {
+    const score = value[key];
+    if (score === void 0) continue;
+    if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > 1) {
+      return { error: failure(400, "invalid_request", "Edit patch scores must be numbers from 0 to 1.") };
+    }
+    scores[key] = score;
+  }
+  return { value: scores };
+}
+function optionalPositiveInteger(value, fallback) {
+  if (value === void 0) return fallback;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : void 0;
+}
+function writeResultToApi(reviewResult, action, reviewHash, now) {
+  const result2 = reviewResult.result;
+  if (result2.action === "not_found") {
+    return failure(404, "not_found", result2.reason);
+  }
+  if (result2.action === "conflict") {
+    return failure(409, "review_hash_mismatch", result2.reason, { latest: result2.latest });
+  }
+  if (result2.action === "normalized_key_conflict") {
+    return failure(409, "normalized_key_conflict", result2.reason, { result: result2 });
+  }
+  if (result2.action === "rejected_by_validator") {
+    return failure(400, "rejected_by_validator", result2.reason, { result: result2 });
+  }
+  const summary = summaryForWriteResult(action, result2.action);
+  const receipt = writeReceipt(action, result2.candidateId, reviewHash, summary, now);
+  if (result2.action === "promote") return ok({ receipt, memory: result2.memory });
+  if (result2.action === "reject_new") return ok({ receipt, tombstone: result2.tombstone });
+  if (result2.action === "reject") return ok({ receipt, tombstone: result2.tombstone });
+  if (result2.action === "defer") return ok({ receipt, candidate: result2.candidate });
+  return ok({ receipt, candidate: result2.candidate });
+}
+function summaryForWriteResult(action, resultAction) {
+  if (resultAction === "reject_new") return "Pending memory rejected by conflict resolution.";
+  if (action === "approve") return "Pending memory approved.";
+  if (action === "reject") return "Pending memory rejected.";
+  if (action === "defer") return "Pending memory deferred.";
+  return "Pending memory edited.";
+}
+function writeReceipt(action, id, reviewHash, summary, now) {
+  return {
+    action,
+    id,
+    reviewHash,
+    createdAt: now ?? (/* @__PURE__ */ new Date()).toISOString(),
+    summary
+  };
 }
 async function readActive(cwd) {
   const project = await identifyCodexProject(cwd);
@@ -17979,8 +18164,18 @@ function isRecord6(value) {
 function ok(data) {
   return { status: 200, body: { ok: true, data } };
 }
-function failure(status, code, message) {
-  return { status, body: { ok: false, error: { code, message } } };
+function failure(status, code, message, details) {
+  return {
+    status,
+    body: {
+      ok: false,
+      error: {
+        code,
+        message,
+        ...details === void 0 ? {} : { details }
+      }
+    }
+  };
 }
 function notFound() {
   return failure(404, "not_found", "API route not found.");
@@ -18003,11 +18198,759 @@ var CODEX_UI_STATIC_ASSETS = {
   },
   "/app.js": {
     "contentType": "text/javascript; charset=utf-8",
-    "body": "const WRITE_ACTION_DISABLED_COPY = 'Write actions disabled in v1. Use CLI with review hash.'\nconst DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'\nconst EMPTY_DASHBOARD = {\n  status: {},\n  pending: { pending: [], total: 0, project: {} },\n  active: { active: [], project: {} },\n  reviewSummaries: { summaries: [] },\n  projectMemory: { groups: [] },\n  dream: { dream: {} },\n  profile: { profile: '' },\n  signals: { signals: [] }\n}\n\nconst TABS = [\n  { id: 'overview', label: 'Overview' },\n  { id: 'inbox', label: 'Inbox' },\n  { id: 'timeline', label: 'Timeline' },\n  { id: 'project-memory', label: 'Project Memory' },\n  { id: 'harvester', label: 'Harvester' },\n  { id: 'dream', label: 'Dream' },\n  { id: 'profile', label: 'Profile' }\n]\n\nconst state = {\n  activeTab: 'overview',\n  dashboard: EMPTY_DASHBOARD,\n  error: '',\n  harvester: { loading: false, result: null, error: '' }\n}\n\nconst app = document.querySelector('[data-app]')\nconst nav = document.querySelector('[data-nav]')\nconst topbar = document.querySelector('[data-topbar]')\nconst workspace = document.querySelector('[data-workspace]')\nconst detailRail = document.querySelector('[data-detail-rail]')\n\nif (app && nav && topbar && workspace && detailRail) {\n  app.dataset.ready = 'true'\n  render()\n  loadDashboard()\n}\n\nasync function loadDashboard() {\n  try {\n    const response = await fetch('/api/dashboard', { headers: { accept: 'application/json' } })\n    const payload = await response.json()\n    if (!payload.ok) {\n      throw new Error(payload.error?.message || 'Dashboard API returned an error.')\n    }\n    state.dashboard = mergeDashboard(payload.data)\n    state.error = ''\n  } catch (error) {\n    state.dashboard = EMPTY_DASHBOARD\n    state.error = errorMessage(error)\n  }\n  render()\n}\n\nfunction mergeDashboard(data) {\n  return {\n    ...EMPTY_DASHBOARD,\n    ...(data || {}),\n    pending: { ...EMPTY_DASHBOARD.pending, ...(data?.pending || {}) },\n    active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },\n    reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },\n    projectMemory: { ...EMPTY_DASHBOARD.projectMemory, ...(data?.projectMemory || {}) },\n    dream: { ...EMPTY_DASHBOARD.dream, ...(data?.dream || {}) },\n    profile: { ...EMPTY_DASHBOARD.profile, ...(data?.profile || {}) },\n    signals: { ...EMPTY_DASHBOARD.signals, ...(data?.signals || {}) }\n  }\n}\n\nfunction render() {\n  renderNav()\n  renderTopbar()\n  renderWorkspace()\n  renderDetailRail()\n}\n\nfunction renderNav() {\n  nav.innerHTML = TABS.map((tab) => `\n    <button class=\"nav-button\" type=\"button\" data-tab=\"${escapeHtml(tab.id)}\" aria-current=\"${tab.id === state.activeTab ? 'page' : 'false'}\">\n      <span>${escapeHtml(tab.label)}</span>\n    </button>\n  `).join('')\n  nav.querySelectorAll('[data-tab]').forEach((button) => {\n    button.addEventListener('click', () => {\n      state.activeTab = button.dataset.tab || 'overview'\n      render()\n    })\n  })\n}\n\nfunction renderTopbar() {\n  const dashboard = state.dashboard\n  const project = projectInfo(dashboard)\n  const pendingCount = listPending().length\n  const status = dashboard.status || {}\n  const sqliteStatus = text(status.index?.status || status.sqlite?.status || status.fallbackMode || 'read-only')\n  const modelStatus = modelLabel(status)\n  const stopHook = text(status.lastStopHook?.status || status.stopHook?.status || 'visible')\n\n  topbar.innerHTML = `\n    <div>\n      <p class=\"eyebrow\">Local read-only console</p>\n      <h2>${escapeHtml(project.displayName || 'Project Memory')}</h2>\n    </div>\n    <div class=\"chip-row\" aria-label=\"Runtime status\">\n      ${statusChip('Project', project.projectId || 'unknown', 'muted')}\n      ${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}\n      ${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}\n      ${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}\n      ${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}\n    </div>\n  `\n}\n\nfunction projectInfo(dashboard) {\n  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {\n    if (candidate?.projectId || candidate?.displayName) return candidate\n  }\n  return {}\n}\n\nfunction modelLabel(status) {\n  const model = status.model || status.modelConfig || status.config?.model\n  if (typeof model === 'string' && model.trim()) return 'configured'\n  if (model && typeof model === 'object') {\n    return model.configured || model.baseUrl || model.model ? 'configured' : 'needs config'\n  }\n  return 'unknown'\n}\n\nfunction renderWorkspace() {\n  const warning = state.error ? panel('Dashboard unavailable', escapeHtml(state.error), 'error') : ''\n  workspace.innerHTML = warning + pageHtml(state.activeTab)\n  const dryRunButton = workspace.querySelector('[data-harvest-dry-run]')\n  if (dryRunButton) {\n    dryRunButton.addEventListener('click', runHarvesterDryRun)\n  }\n}\n\nfunction pageHtml(tabId) {\n  if (tabId === 'inbox') return renderInbox()\n  if (tabId === 'timeline') return renderTimeline()\n  if (tabId === 'project-memory') return renderProjectMemory()\n  if (tabId === 'harvester') return renderHarvester()\n  if (tabId === 'dream') return renderDream()\n  if (tabId === 'profile') return renderProfile()\n  return renderOverview()\n}\n\nfunction renderOverview() {\n  const pending = listPending()\n  const active = listActive()\n  const summaries = listSummaries()\n  const signals = listSignals()\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Overview', 'Read-only visibility for the memory pipeline.')}\n      <div class=\"metric-grid\">\n        ${metric('Pending', pending.length, 'Awaiting CLI review')}\n        ${metric('Active', active.length, 'Project memories')}\n        ${metric('Summaries', summaries.length, 'Stop Hook records')}\n        ${metric('Signals', signals.length, 'Harvester inputs')}\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Recent pending candidates</h3>\n        ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Recent timeline</h3>\n        ${summaries.slice(0, 4).map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}\n      </div>\n    </section>\n  `\n}\n\nfunction renderInbox() {\n  const pending = listPending()\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}\n      <div class=\"soft-inset boundary-copy\">${escapeHtml(WRITE_ACTION_DISABLED_COPY)}</div>\n      <div class=\"soft-panel\">\n        <h3>Pending candidates</h3>\n        ${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}\n      </div>\n    </section>\n  `\n}\n\nfunction renderCandidateRow(candidate) {\n  const actions = ['Approve', 'Reject', 'Edit', 'Defer'].map((label) => `\n    <button class=\"soft-button compact\" type=\"button\" disabled title=\"${escapeHtml(WRITE_ACTION_DISABLED_COPY)}\">${escapeHtml(label)}</button>\n  `).join('')\n  return `\n    <article class=\"data-row candidate-row\">\n      <div>\n        <div class=\"row-title\">${escapeHtml(candidate.content || candidate.id || 'Pending candidate')}</div>\n        <div class=\"row-meta\">\n          ${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}\n          ${candidate.reviewHash ? ` \xB7 review ${escapeHtml(shortHash(candidate.reviewHash))}` : ''}\n        </div>\n      </div>\n      <div class=\"action-strip\" aria-label=\"${escapeHtml(WRITE_ACTION_DISABLED_COPY)}\">${actions}</div>\n    </article>\n  `\n}\n\nfunction renderTimeline() {\n  const summaries = listSummaries()\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}\n      <div class=\"soft-panel\">\n        <h3>Review summaries</h3>\n        ${summaries.map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}\n      </div>\n    </section>\n  `\n}\n\nfunction renderSummaryRow(summary) {\n  const ids = Array.isArray(summary.candidateIds) ? summary.candidateIds.join(', ') : 'none'\n  return `\n    <article class=\"data-row\">\n      <div>\n        <div class=\"row-title\">${escapeHtml(summary.summary || summary.id || 'Review summary')}</div>\n        <div class=\"row-meta\">${escapeHtml(summary.createdAt || 'unknown time')} \xB7 candidates ${escapeHtml(ids)}</div>\n      </div>\n      ${statusChip(summary.status || 'unknown', summary.status || 'unknown', summary.status === 'failed' ? 'error' : 'ok')}\n    </article>\n  `\n}\n\nfunction renderProjectMemory() {\n  const groups = Array.isArray(state.dashboard.projectMemory.groups) ? state.dashboard.projectMemory.groups : []\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Project Memory', 'Active project memory grouped by kind.')}\n      ${groups.length > 0 ? groups.map((group) => `\n        <div class=\"soft-panel\">\n          <h3>${escapeHtml(group.label || 'Project memory')}</h3>\n          ${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No active memories in this group.')}\n        </div>\n      `).join('') : panel('Project memory unavailable', 'No grouped project memory returned yet.', 'muted')}\n    </section>\n  `\n}\n\nfunction renderMemoryRow(memory) {\n  return `\n    <article class=\"data-row\">\n      <div>\n        <div class=\"row-title\">${escapeHtml(memory.content || memory.id || 'Memory')}</div>\n        <div class=\"row-meta\">${escapeHtml(memory.candidateKind || memory.type || 'memory')} \xB7 ${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>\n      </div>\n      ${statusChip('active', memory.status || 'active', 'ok')}\n    </article>\n  `\n}\n\nfunction renderPreviewCandidateRow(candidate) {\n  return `\n    <article class=\"data-row\">\n      <div>\n        <div class=\"row-title\">${escapeHtml(candidate.content || candidate.id || 'Dry-run preview candidate')}</div>\n        <div class=\"row-meta\">${escapeHtml(candidate.candidateKind || candidate.type || 'memory')} \xB7 preview \xB7 dry-run only</div>\n      </div>\n      ${statusChip('preview', 'dry-run only', 'warn')}\n    </article>\n  `\n}\n\nfunction renderHarvester() {\n  const result = state.harvester.result\n  const resultHtml = state.harvester.error\n    ? panel('Harvester dry-run failed', escapeHtml(state.harvester.error), 'error')\n    : result\n      ? renderHarvesterResult(result)\n      : panel('Dry-run ready', 'Preview project-scope candidates without writing pending memory.', 'muted')\n\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Harvester', 'Run a project-memory dry-run preview.')}\n      <div class=\"soft-panel action-panel\">\n        <div>\n          <h3>Project harvester</h3>\n          <p>No pending memory was written.</p>\n        </div>\n        <button class=\"soft-button primary\" type=\"button\" data-harvest-dry-run ${state.harvester.loading ? 'disabled' : ''}>\n          ${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}\n        </button>\n      </div>\n      ${resultHtml}\n    </section>\n  `\n}\n\nasync function runHarvesterDryRun() {\n  state.harvester = { loading: true, result: null, error: '' }\n  render()\n  try {\n    const response = await fetch(DRY_RUN_ENDPOINT, {\n      method: 'POST',\n      headers: { 'content-type': 'application/json' },\n      body: '{}'\n    })\n    const payload = await response.json()\n    if (!payload.ok) {\n      throw new Error(payload.error?.message || 'Harvester API returned an error.')\n    }\n    state.harvester = { loading: false, result: payload.data?.result || payload.data, error: '' }\n  } catch (error) {\n    state.harvester = { loading: false, result: null, error: errorMessage(error) }\n  }\n  render()\n}\n\nfunction renderHarvesterResult(result) {\n  const candidates = Array.isArray(result.candidates) ? result.candidates : []\n  const warnings = Array.isArray(result.warnings) ? result.warnings : []\n  const reason = typeof result.reason === 'string' && result.reason.trim()\n    ? `<p class=\"notice ${result.action === 'needs_model_config' ? 'warn' : 'muted'}\">${escapeHtml(result.reason.trim())}</p>`\n    : ''\n  const emptyCopy = result.action === 'needs_model_config' || result.action === 'noop'\n    ? 'No preview candidates were produced.'\n    : 'No preview candidates returned.'\n  return `\n    <div class=\"soft-panel\">\n      <h3>Dry-run result</h3>\n      <div class=\"soft-inset\">Action: ${escapeHtml(result.action || 'preview')} \xB7 No pending memory was written.</div>\n      ${reason}\n      ${warnings.map((warning) => `<p class=\"notice warn\">${escapeHtml(warning)}</p>`).join('')}\n      ${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}\n    </div>\n  `\n}\n\nfunction renderDream() {\n  const dream = state.dashboard.dream.dream || {}\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Dream', 'Read-only dream pass state.')}\n      <div class=\"soft-panel\">\n        <h3>Dream status</h3>\n        <div class=\"soft-inset\">\n          Due: ${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>\n          Last run: ${escapeHtml(dream.lastDreamAt || 'never')}<br>\n          Status: ${escapeHtml(dream.lastDreamStatus || 'unknown')}\n        </div>\n      </div>\n    </section>\n  `\n}\n\nfunction renderProfile() {\n  const profile = state.dashboard.profile.profile || ''\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Profile', 'Current project model profile preview.')}\n      <div class=\"soft-panel\">\n        <h3>MODEL_PROFILE.md</h3>\n        <pre class=\"profile-preview\">${escapeHtml(profile || 'No project profile text found.')}</pre>\n      </div>\n    </section>\n  `\n}\n\nfunction renderDetailRail() {\n  const pending = listPending()\n  const signals = listSignals()\n  detailRail.innerHTML = `\n    <div class=\"rail-stack\">\n      <div class=\"soft-panel\">\n        <h3>Boundary</h3>\n        <p>${escapeHtml(WRITE_ACTION_DISABLED_COPY)}</p>\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Project signals</h3>\n        ${signals.slice(0, 5).map((signal) => `\n          <div class=\"soft-inset rail-item\">\n            <strong>${escapeHtml(signal.kind || 'signal')}</strong>\n            <span>${escapeHtml((signal.files || signal.paths || []).slice(0, 2).join(', ') || 'detected')}</span>\n          </div>\n        `).join('') || emptyState('No signals found.')}\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Review queue</h3>\n        <p>${escapeHtml(String(pending.length))} pending candidates</p>\n      </div>\n    </div>\n  `\n}\n\nfunction sectionHeader(title, subtitle) {\n  return `\n    <header class=\"section-header\">\n      <p class=\"eyebrow\">${escapeHtml(subtitle)}</p>\n      <h2>${escapeHtml(title)}</h2>\n    </header>\n  `\n}\n\nfunction metric(label, value, note) {\n  return `\n    <div class=\"soft-panel metric-card\">\n      <span>${escapeHtml(label)}</span>\n      <strong>${escapeHtml(String(value))}</strong>\n      <small>${escapeHtml(note)}</small>\n    </div>\n  `\n}\n\nfunction panel(title, body, tone) {\n  return `\n    <div class=\"soft-panel notice ${escapeHtml(tone || 'muted')}\">\n      <h3>${escapeHtml(title)}</h3>\n      <p>${body}</p>\n    </div>\n  `\n}\n\nfunction statusChip(label, value, tone) {\n  return `<span class=\"status-chip ${escapeHtml(tone || 'muted')}\"><b>${escapeHtml(label)}</b>${escapeHtml(value)}</span>`\n}\n\nfunction emptyState(textValue) {\n  return `<div class=\"soft-inset empty-state\">${escapeHtml(textValue)}</div>`\n}\n\nfunction listPending() {\n  return Array.isArray(state.dashboard.pending.pending) ? state.dashboard.pending.pending : []\n}\n\nfunction listActive() {\n  return Array.isArray(state.dashboard.active.active) ? state.dashboard.active.active : []\n}\n\nfunction listSummaries() {\n  return Array.isArray(state.dashboard.reviewSummaries.summaries) ? state.dashboard.reviewSummaries.summaries : []\n}\n\nfunction listSignals() {\n  return Array.isArray(state.dashboard.signals.signals) ? state.dashboard.signals.signals : []\n}\n\nfunction shortHash(value) {\n  return String(value).slice(0, 10)\n}\n\nfunction text(value) {\n  return String(value || 'unknown')\n}\n\nfunction errorMessage(error) {\n  return error instanceof Error ? error.message : String(error)\n}\n\nfunction escapeHtml(value) {\n  return String(value)\n    .replaceAll('&', '&amp;')\n    .replaceAll('<', '&lt;')\n    .replaceAll('>', '&gt;')\n    .replaceAll('\"', '&quot;')\n    .replaceAll(\"'\", '&#039;')\n}\n\nexport { TABS, WRITE_ACTION_DISABLED_COPY, escapeHtml }\n"
+    "body": `const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
+const SESSION_ENDPOINT = '/api/session'
+const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
+const EMPTY_DASHBOARD = {
+  status: {},
+  pending: { pending: [], total: 0, project: {} },
+  active: { active: [], project: {} },
+  reviewSummaries: { summaries: [] },
+  projectMemory: { groups: [] },
+  dream: { dream: {} },
+  profile: { profile: '' },
+  signals: { signals: [] }
+}
+
+const TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'inbox', label: 'Inbox' },
+  { id: 'timeline', label: 'Timeline' },
+  { id: 'project-memory', label: 'Project Memory' },
+  { id: 'harvester', label: 'Harvester' },
+  { id: 'dream', label: 'Dream' },
+  { id: 'profile', label: 'Profile' }
+]
+
+const CONFIRM_LABELS = {
+  approve: 'Confirm approve',
+  reject: 'Confirm reject',
+  defer: 'Confirm defer',
+  edit: 'Confirm edit'
+}
+
+const state = {
+  activeTab: 'overview',
+  dashboard: EMPTY_DASHBOARD,
+  error: '',
+  sessionToken: '',
+  selectedPendingId: '',
+  pendingAction: null,
+  receipt: null,
+  actionError: '',
+  harvester: { loading: false, result: null, error: '' }
+}
+
+const app = document.querySelector('[data-app]')
+const nav = document.querySelector('[data-nav]')
+const topbar = document.querySelector('[data-topbar]')
+const workspace = document.querySelector('[data-workspace]')
+const detailRail = document.querySelector('[data-detail-rail]')
+
+if (app && nav && topbar && workspace && detailRail) {
+  app.dataset.ready = 'true'
+  render()
+  loadApp()
+}
+
+async function loadApp() {
+  try {
+    await loadSession()
+  } catch (error) {
+    state.error = errorMessage(error)
+    render()
+  }
+  await loadDashboard()
+}
+
+async function loadSession() {
+  const response = await fetch(SESSION_ENDPOINT, { headers: { accept: 'application/json' } })
+  const payload = await response.json()
+  if (!payload.ok) {
+    throw new Error(payload.error?.message || 'Session API returned an error.')
+  }
+  state.sessionToken = payload.data?.token || ''
+}
+
+async function apiFetch(pathname, options = {}) {
+  const method = options.method || 'GET'
+  const headers = {
+    accept: 'application/json',
+    ...(options.headers || {})
+  }
+  if (method.toUpperCase() !== 'GET') {
+    headers['content-type'] = 'application/json'
+    headers['x-cyrene-ui-token'] = state.sessionToken
+  }
+  return fetch(pathname, { ...options, method, headers })
+}
+
+async function loadDashboard(options = {}) {
+  const renderAfter = options.renderAfter !== false
+  try {
+    const response = await apiFetch('/api/dashboard')
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Dashboard API returned an error.')
+    }
+    state.dashboard = mergeDashboard(payload.data)
+    state.error = ''
+  } catch (error) {
+    state.dashboard = EMPTY_DASHBOARD
+    state.error = errorMessage(error)
+  }
+  if (renderAfter) render()
+}
+
+function mergeDashboard(data) {
+  return {
+    ...EMPTY_DASHBOARD,
+    ...(data || {}),
+    pending: { ...EMPTY_DASHBOARD.pending, ...(data?.pending || {}) },
+    active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },
+    reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },
+    projectMemory: { ...EMPTY_DASHBOARD.projectMemory, ...(data?.projectMemory || {}) },
+    dream: { ...EMPTY_DASHBOARD.dream, ...(data?.dream || {}) },
+    profile: { ...EMPTY_DASHBOARD.profile, ...(data?.profile || {}) },
+    signals: { ...EMPTY_DASHBOARD.signals, ...(data?.signals || {}) }
+  }
+}
+
+function render() {
+  renderNav()
+  renderTopbar()
+  renderWorkspace()
+  renderDetailRail()
+}
+
+function renderNav() {
+  nav.innerHTML = TABS.map((tab) => \`
+    <button class="nav-button" type="button" data-tab="\${escapeHtml(tab.id)}" aria-current="\${tab.id === state.activeTab ? 'page' : 'false'}">
+      <span>\${escapeHtml(tab.label)}</span>
+    </button>
+  \`).join('')
+  nav.querySelectorAll('[data-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeTab = button.dataset.tab || 'overview'
+      state.pendingAction = null
+      state.actionError = ''
+      render()
+    })
+  })
+}
+
+function renderTopbar() {
+  const dashboard = state.dashboard
+  const project = projectInfo(dashboard)
+  const pendingCount = listPending().length
+  const status = dashboard.status || {}
+  const sqliteStatus = text(status.index?.status || status.sqlite?.status || status.fallbackMode || 'read-only')
+  const modelStatus = modelLabel(status)
+  const stopHook = text(status.lastStopHook?.status || status.stopHook?.status || 'visible')
+
+  topbar.innerHTML = \`
+    <div>
+      <p class="eyebrow">Local review console</p>
+      <h2>\${escapeHtml(project.displayName || 'Project Memory')}</h2>
+    </div>
+    <div class="chip-row" aria-label="Runtime status">
+      \${statusChip('Project', project.projectId || 'unknown', 'muted')}
+      \${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
+      \${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
+      \${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
+      \${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
+    </div>
+  \`
+}
+
+function projectInfo(dashboard) {
+  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {
+    if (candidate?.projectId || candidate?.displayName) return candidate
+  }
+  return {}
+}
+
+function modelLabel(status) {
+  const model = status.model || status.modelConfig || status.config?.model
+  if (typeof model === 'string' && model.trim()) return 'configured'
+  if (model && typeof model === 'object') {
+    return model.configured || model.baseUrl || model.model ? 'configured' : 'needs config'
+  }
+  return 'unknown'
+}
+
+function renderWorkspace() {
+  const warning = state.error ? panel('Dashboard unavailable', escapeHtml(state.error), 'error') : ''
+  workspace.innerHTML = warning + pageHtml(state.activeTab)
+  const dryRunButton = workspace.querySelector('[data-harvest-dry-run]')
+  if (dryRunButton) {
+    dryRunButton.addEventListener('click', runHarvesterDryRun)
+  }
+  workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
+    row.addEventListener('click', () => {
+      state.activeTab = 'inbox'
+      state.selectedPendingId = row.dataset.pendingId || ''
+      state.pendingAction = null
+      state.receipt = null
+      state.actionError = ''
+      render()
+    })
+  })
+}
+
+function pageHtml(tabId) {
+  if (tabId === 'inbox') return renderInbox()
+  if (tabId === 'timeline') return renderTimeline()
+  if (tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'harvester') return renderHarvester()
+  if (tabId === 'dream') return renderDream()
+  if (tabId === 'profile') return renderProfile()
+  return renderOverview()
+}
+
+function renderOverview() {
+  const pending = listPending()
+  const active = listActive()
+  const summaries = listSummaries()
+  const signals = listSignals()
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Overview', 'Visibility for the memory pipeline.')}
+      <div class="metric-grid">
+        \${metric('Pending', pending.length, 'Awaiting review')}
+        \${metric('Active', active.length, 'Project memories')}
+        \${metric('Summaries', summaries.length, 'Stop Hook records')}
+        \${metric('Signals', signals.length, 'Harvester inputs')}
+      </div>
+      <div class="soft-panel">
+        <h3>Recent pending candidates</h3>
+        \${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+      </div>
+      <div class="soft-panel">
+        <h3>Recent timeline</h3>
+        \${summaries.slice(0, 4).map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}
+      </div>
+    </section>
+  \`
+}
+
+function renderInbox() {
+  const pending = listPending()
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}
+      <div class="soft-inset boundary-copy">\${escapeHtml(WRITE_ACTION_COPY)}</div>
+      <div class="soft-panel">
+        <h3>Pending candidates</h3>
+        \${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+      </div>
+    </section>
+  \`
+}
+
+function renderCandidateRow(candidate) {
+  const selected = state.selectedPendingId === candidate.id
+  return \`
+    <article class="data-row candidate-row selectable-row \${selected ? 'selected' : ''}" data-pending-id="\${escapeHtml(candidate.id)}">
+      <div>
+        <div class="row-title">\${escapeHtml(candidate.content || candidate.id || 'Pending candidate')}</div>
+        <div class="row-meta">
+          \${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
+          \${candidate.reviewHash ? \` \xB7 review \${escapeHtml(shortHash(candidate.reviewHash))}\` : ''}
+        </div>
+      </div>
+      \${statusChip(candidate.recommendation || 'review', candidate.risk || 'pending', candidate.risk === 'high' ? 'error' : 'warn')}
+    </article>
+  \`
+}
+
+function renderTimeline() {
+  const summaries = listSummaries()
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}
+      <div class="soft-panel">
+        <h3>Review summaries</h3>
+        \${summaries.map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}
+      </div>
+    </section>
+  \`
+}
+
+function renderSummaryRow(summary) {
+  const ids = Array.isArray(summary.candidateIds) ? summary.candidateIds.join(', ') : 'none'
+  return \`
+    <article class="data-row">
+      <div>
+        <div class="row-title">\${escapeHtml(summary.summary || summary.id || 'Review summary')}</div>
+        <div class="row-meta">\${escapeHtml(summary.createdAt || 'unknown time')} \xB7 candidates \${escapeHtml(ids)}</div>
+      </div>
+      \${statusChip(summary.status || 'unknown', summary.status || 'unknown', summary.status === 'failed' ? 'error' : 'ok')}
+    </article>
+  \`
+}
+
+function renderProjectMemory() {
+  const groups = Array.isArray(state.dashboard.projectMemory.groups) ? state.dashboard.projectMemory.groups : []
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Project Memory', 'Active project memory grouped by kind.')}
+      \${groups.length > 0 ? groups.map((group) => \`
+        <div class="soft-panel">
+          <h3>\${escapeHtml(group.label || 'Project memory')}</h3>
+          \${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No active memories in this group.')}
+        </div>
+      \`).join('') : panel('Project memory unavailable', 'No grouped project memory returned yet.', 'muted')}
+    </section>
+  \`
+}
+
+function renderMemoryRow(memory) {
+  return \`
+    <article class="data-row">
+      <div>
+        <div class="row-title">\${escapeHtml(memory.content || memory.id || 'Memory')}</div>
+        <div class="row-meta">\${escapeHtml(memory.candidateKind || memory.type || 'memory')} \xB7 \${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
+      </div>
+      \${statusChip('active', memory.status || 'active', 'ok')}
+    </article>
+  \`
+}
+
+function renderPreviewCandidateRow(candidate) {
+  return \`
+    <article class="data-row">
+      <div>
+        <div class="row-title">\${escapeHtml(candidate.content || candidate.id || 'Dry-run preview candidate')}</div>
+        <div class="row-meta">\${escapeHtml(candidate.candidateKind || candidate.type || 'memory')} \xB7 preview \xB7 dry-run only</div>
+      </div>
+      \${statusChip('preview', 'dry-run only', 'warn')}
+    </article>
+  \`
+}
+
+function renderHarvester() {
+  const result = state.harvester.result
+  const resultHtml = state.harvester.error
+    ? panel('Harvester dry-run failed', escapeHtml(state.harvester.error), 'error')
+    : result
+      ? renderHarvesterResult(result)
+      : panel('Dry-run ready', 'Preview project-scope candidates without writing pending memory.', 'muted')
+
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Harvester', 'Run a project-memory dry-run preview.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Project harvester</h3>
+          <p>No pending memory was written.</p>
+        </div>
+        <button class="soft-button primary" type="button" data-harvest-dry-run \${state.harvester.loading ? 'disabled' : ''}>
+          \${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}
+        </button>
+      </div>
+      \${resultHtml}
+    </section>
+  \`
+}
+
+async function runHarvesterDryRun() {
+  state.harvester = { loading: true, result: null, error: '' }
+  render()
+  try {
+    const response = await apiFetch(DRY_RUN_ENDPOINT, {
+      method: 'POST',
+      body: '{}'
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Harvester API returned an error.')
+    }
+    state.harvester = { loading: false, result: payload.data?.result || payload.data, error: '' }
+  } catch (error) {
+    state.harvester = { loading: false, result: null, error: errorMessage(error) }
+  }
+  render()
+}
+
+function renderHarvesterResult(result) {
+  const candidates = Array.isArray(result.candidates) ? result.candidates : []
+  const warnings = Array.isArray(result.warnings) ? result.warnings : []
+  const reason = typeof result.reason === 'string' && result.reason.trim()
+    ? \`<p class="notice \${result.action === 'needs_model_config' ? 'warn' : 'muted'}">\${escapeHtml(result.reason.trim())}</p>\`
+    : ''
+  const emptyCopy = result.action === 'needs_model_config' || result.action === 'noop'
+    ? 'No preview candidates were produced.'
+    : 'No preview candidates returned.'
+  return \`
+    <div class="soft-panel">
+      <h3>Dry-run result</h3>
+      <div class="soft-inset">Action: \${escapeHtml(result.action || 'preview')} \xB7 No pending memory was written.</div>
+      \${reason}
+      \${warnings.map((warning) => \`<p class="notice warn">\${escapeHtml(warning)}</p>\`).join('')}
+      \${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}
+    </div>
+  \`
+}
+
+function renderDream() {
+  const dream = state.dashboard.dream.dream || {}
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Dream', 'Read-only dream pass state.')}
+      <div class="soft-panel">
+        <h3>Dream status</h3>
+        <div class="soft-inset">
+          Due: \${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
+          Last run: \${escapeHtml(dream.lastDreamAt || 'never')}<br>
+          Status: \${escapeHtml(dream.lastDreamStatus || 'unknown')}
+        </div>
+      </div>
+    </section>
+  \`
+}
+
+function renderProfile() {
+  const profile = state.dashboard.profile.profile || ''
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Profile', 'Current project model profile preview.')}
+      <div class="soft-panel">
+        <h3>MODEL_PROFILE.md</h3>
+        <pre class="profile-preview">\${escapeHtml(profile || 'No project profile text found.')}</pre>
+      </div>
+    </section>
+  \`
+}
+
+function renderDetailRail() {
+  const selected = selectedPending()
+  if (state.activeTab === 'inbox' && state.receipt) {
+    detailRail.innerHTML = renderReceipt()
+    bindDetailRailActions(selected)
+    return
+  }
+  if (state.activeTab === 'inbox' && selected) {
+    detailRail.innerHTML = renderPendingDetail(selected)
+    bindDetailRailActions(selected)
+    return
+  }
+
+  const pending = listPending()
+  const signals = listSignals()
+  detailRail.innerHTML = \`
+    <div class="rail-stack">
+      <div class="soft-panel">
+        <h3>Boundary</h3>
+        <p>\${escapeHtml(WRITE_ACTION_COPY)}</p>
+      </div>
+      <div class="soft-panel">
+        <h3>Project signals</h3>
+        \${signals.slice(0, 5).map((signal) => \`
+          <div class="soft-inset rail-item">
+            <strong>\${escapeHtml(signal.kind || 'signal')}</strong>
+            <span>\${escapeHtml((signal.files || signal.paths || []).slice(0, 2).join(', ') || 'detected')}</span>
+          </div>
+        \`).join('') || emptyState('No signals found.')}
+      </div>
+      <div class="soft-panel">
+        <h3>Review queue</h3>
+        <p>\${escapeHtml(String(pending.length))} pending candidates</p>
+      </div>
+    </div>
+  \`
+}
+
+function renderPendingDetail(candidate) {
+  if (state.pendingAction) return renderConfirmForm(candidate, state.pendingAction)
+  return \`
+    <div class="rail-stack">
+      <div class="soft-panel">
+        <h3>Pending detail</h3>
+        <p>\${escapeHtml(candidate.content)}</p>
+        <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
+        \${renderEvidence(candidate)}
+      </div>
+      <div class="soft-panel">
+        <h3>Actions</h3>
+        <p>\${escapeHtml(WRITE_ACTION_COPY)}</p>
+        <div class="detail-actions">
+          \${['approve', 'reject', 'defer', 'edit'].map((action) => \`
+            <button class="soft-button compact" type="button" data-action="\${action}">\${escapeHtml(actionLabel(action))}</button>
+          \`).join('')}
+        </div>
+        \${state.actionError ? \`<p class="notice error">\${escapeHtml(state.actionError)}</p>\` : ''}
+      </div>
+    </div>
+  \`
+}
+
+function renderEvidence(candidate) {
+  const evidence = Array.isArray(candidate.evidenceSummary) ? candidate.evidenceSummary : []
+  return \`
+    <div class="evidence-list">
+      <h3>Evidence</h3>
+      \${evidence.slice(0, 4).map((item) => \`<div class="soft-inset rail-item">\${escapeHtml(item)}</div>\`).join('') || emptyState('No evidence summary returned.')}
+    </div>
+  \`
+}
+
+function renderConfirmForm(candidate, action) {
+  const confirmTitle = CONFIRM_LABELS[action] || 'Confirm action'
+  const reasonField = action === 'reject' || action === 'defer'
+    ? \`
+      <label>Reason
+        <textarea name="reason" rows="3" required placeholder="Required review reason"></textarea>
+      </label>
+    \`
+    : ''
+  const deferField = action === 'defer'
+    ? \`
+      <label>Days
+        <input name="days" type="number" min="1" step="1" value="7">
+      </label>
+    \`
+    : ''
+  const editFields = action === 'edit'
+    ? \`
+      <label>Content
+        <textarea name="content" rows="5" required>\${escapeHtml(candidate.content || '')}</textarea>
+      </label>
+      <label>Candidate kind
+        <input name="candidateKind" value="\${escapeHtml(candidate.candidateKind || '')}" placeholder="workflow_rule">
+      </label>
+      <label>Tags
+        <input name="tags" value="\${escapeHtml(Array.isArray(candidate.tags) ? candidate.tags.join(', ') : '')}" placeholder="web_ui, reviewed">
+      </label>
+      <label>Usefulness
+        <input name="usefulness" type="number" min="0" max="1" step="0.01" value="\${escapeHtml(candidate.scores?.usefulness ?? '')}">
+      </label>
+      <label>Change note
+        <textarea name="changeNote" rows="3" required placeholder="Required edit note"></textarea>
+      </label>
+    \`
+    : ''
+
+  return \`
+    <div class="rail-stack">
+      <div class="soft-panel">
+        <h3>\${escapeHtml(confirmTitle)}</h3>
+        <p>\${escapeHtml(WRITE_ACTION_COPY)}</p>
+        <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
+        <form class="confirm-form" data-confirm-form aria-label="\${escapeHtml(confirmTitle)}">
+          \${reasonField}
+          \${deferField}
+          \${editFields}
+          <div class="detail-actions">
+            <button class="soft-button primary compact" type="submit">\${escapeHtml(confirmTitle)}</button>
+            <button class="soft-button compact" type="button" data-cancel-action>Cancel</button>
+          </div>
+        </form>
+        \${state.actionError ? \`<p class="notice error">\${escapeHtml(state.actionError)}</p>\` : ''}
+      </div>
+    </div>
+  \`
+}
+
+function renderReceipt() {
+  const receipt = state.receipt || {}
+  return \`
+    <div class="rail-stack">
+      <div class="soft-panel receipt-panel">
+        <p class="eyebrow">decision receipt</p>
+        <h3>\${escapeHtml(actionLabel(receipt.action || 'review'))}</h3>
+        <div class="soft-inset rail-item"><strong>\${escapeHtml(receipt.id || 'memory')}</strong><span>\${escapeHtml(receipt.summary || 'Action completed.')}</span></div>
+        <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(receipt.reviewHash || ''))}</span></div>
+        <button class="soft-button compact" type="button" data-clear-receipt>Back to queue</button>
+      </div>
+    </div>
+  \`
+}
+
+function bindDetailRailActions(candidate) {
+  detailRail.querySelectorAll('[data-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.pendingAction = button.dataset.action || null
+      state.receipt = null
+      state.actionError = ''
+      render()
+    })
+  })
+  const clearReceipt = detailRail.querySelector('[data-clear-receipt]')
+  if (clearReceipt) {
+    clearReceipt.addEventListener('click', () => {
+      state.receipt = null
+      state.actionError = ''
+      render()
+    })
+  }
+  const cancel = detailRail.querySelector('[data-cancel-action]')
+  if (cancel) {
+    cancel.addEventListener('click', () => {
+      state.pendingAction = null
+      state.actionError = ''
+      render()
+    })
+  }
+  const form = detailRail.querySelector('[data-confirm-form]')
+  if (form && candidate) {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      submitPendingAction(candidate, new FormData(form))
+    })
+  }
+}
+
+async function submitPendingAction(candidate, formData) {
+  const action = state.pendingAction
+  if (!action) return
+  const body = actionBody(action, candidate, formData)
+  try {
+    const response = await apiFetch(\`/api/memory/\${encodeURIComponent(candidate.id)}/\${action}\`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Write action failed.')
+    }
+    const receipt = payload.data?.receipt || {
+      action,
+      id: candidate.id,
+      reviewHash: candidate.reviewHash,
+      summary: 'Action completed.'
+    }
+    await loadDashboard({ renderAfter: false })
+    state.receipt = receipt
+    state.pendingAction = null
+    state.actionError = ''
+    state.selectedPendingId = action === 'edit' && payload.data?.candidate?.id ? payload.data.candidate.id : ''
+  } catch (error) {
+    state.actionError = errorMessage(error)
+  }
+  render()
+}
+
+function actionBody(action, candidate, formData) {
+  const body = { reviewHash: candidate.reviewHash || '' }
+  if (action === 'reject' || action === 'defer') {
+    body.reason = String(formData.get('reason') || '').trim()
+  }
+  if (action === 'defer') {
+    const days = Number(formData.get('days') || 7)
+    body.days = Number.isFinite(days) ? days : 7
+  }
+  if (action === 'edit') {
+    const candidateKind = String(formData.get('candidateKind') || '').trim()
+    const tags = String(formData.get('tags') || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    const usefulnessText = String(formData.get('usefulness') || '').trim()
+    const usefulness = Number(usefulnessText)
+    const patch = {
+      content: String(formData.get('content') || '').trim()
+    }
+    if (candidateKind) patch.candidateKind = candidateKind
+    if (tags.length > 0) patch.tags = tags
+    if (usefulnessText !== '' && Number.isFinite(usefulness)) patch.scores = { usefulness }
+    body.changeNote = String(formData.get('changeNote') || '').trim()
+    body.patch = patch
+  }
+  return body
+}
+
+function selectedPending() {
+  return listPending().find((candidate) => candidate.id === state.selectedPendingId)
+}
+
+function actionLabel(action) {
+  if (action === 'approve') return 'Approve'
+  if (action === 'reject') return 'Reject'
+  if (action === 'defer') return 'Defer'
+  if (action === 'edit') return 'Edit'
+  return 'Review'
+}
+
+function sectionHeader(title, subtitle) {
+  return \`
+    <header class="section-header">
+      <p class="eyebrow">\${escapeHtml(subtitle)}</p>
+      <h2>\${escapeHtml(title)}</h2>
+    </header>
+  \`
+}
+
+function metric(label, value, note) {
+  return \`
+    <div class="soft-panel metric-card">
+      <span>\${escapeHtml(label)}</span>
+      <strong>\${escapeHtml(String(value))}</strong>
+      <small>\${escapeHtml(note)}</small>
+    </div>
+  \`
+}
+
+function panel(title, body, tone) {
+  return \`
+    <div class="soft-panel notice \${escapeHtml(tone || 'muted')}">
+      <h3>\${escapeHtml(title)}</h3>
+      <p>\${body}</p>
+    </div>
+  \`
+}
+
+function statusChip(label, value, tone) {
+  return \`<span class="status-chip \${escapeHtml(tone || 'muted')}"><b>\${escapeHtml(label)}</b>\${escapeHtml(value)}</span>\`
+}
+
+function emptyState(textValue) {
+  return \`<div class="soft-inset empty-state">\${escapeHtml(textValue)}</div>\`
+}
+
+function listPending() {
+  return Array.isArray(state.dashboard.pending.pending) ? state.dashboard.pending.pending : []
+}
+
+function listActive() {
+  return Array.isArray(state.dashboard.active.active) ? state.dashboard.active.active : []
+}
+
+function listSummaries() {
+  return Array.isArray(state.dashboard.reviewSummaries.summaries) ? state.dashboard.reviewSummaries.summaries : []
+}
+
+function listSignals() {
+  return Array.isArray(state.dashboard.signals.signals) ? state.dashboard.signals.signals : []
+}
+
+function shortHash(value) {
+  return String(value).slice(0, 10)
+}
+
+function text(value) {
+  return String(value || 'unknown')
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+export { TABS, WRITE_ACTION_COPY, escapeHtml }
+`
   },
   "/styles.css": {
     "contentType": "text/css; charset=utf-8",
-    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
+    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
   }
 };
 
@@ -18043,8 +18986,12 @@ async function listenWithFallback(input, requestedPort) {
 }
 function listen(input, port) {
   return new Promise((resolve8, reject2) => {
+    const context = {
+      ...input,
+      uiToken: input.uiToken ?? createUiToken()
+    };
     const server = createServer((request, response) => {
-      handleRequest(input, request, response).catch((error2) => {
+      handleRequest(context, request, response).catch((error2) => {
         handleUnhandledRequestError(request, response, error2);
       });
     });
@@ -18111,12 +19058,17 @@ async function handleApiRequest(input, request, response, pathname) {
       writeJson(response, 403, failure2("cross_origin_forbidden", "Cross-origin non-GET API requests are not allowed."));
       return;
     }
+    if (isNonGetMethod(method) && !hasValidUiToken(request, input.uiToken)) {
+      writeJson(response, 403, failure2("csrf_forbidden", "Missing or invalid Cyrene UI session token."));
+      return;
+    }
     const body = needsBody(method) ? await readJsonBody(request) : void 0;
     const result2 = await handleCodexUiApiRequest({
       cwd: input.cwd,
       method,
       pathname,
       body,
+      uiToken: input.uiToken,
       callModel: input.callModel
     });
     writeJson(response, result2.status, result2.body);
@@ -18216,6 +19168,12 @@ function isCrossOriginRequest(request) {
   } catch {
     return true;
   }
+}
+function createUiToken() {
+  return randomBytes(32).toString("hex");
+}
+function hasValidUiToken(request, expectedToken) {
+  return singleHeaderValue(request.headers["x-cyrene-ui-token"]) === expectedToken;
 }
 function singleHeaderValue(value) {
   return Array.isArray(value) ? value[0] : value;

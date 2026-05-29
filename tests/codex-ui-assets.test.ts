@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('Codex UI source assets', () => {
-  it('contains the Warm Cream Coral console shell and v1 read-only labels', async () => {
+  it('contains the Warm Cream Coral console shell and write-confirm review labels', async () => {
     const [html, js, css] = await Promise.all([
       readFile(new URL('../src/ui/static/index.html', import.meta.url), 'utf8'),
       readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8'),
@@ -14,8 +14,22 @@ describe('Codex UI source assets', () => {
     for (const label of ['Overview', 'Inbox', 'Timeline', 'Project Memory', 'Harvester', 'Dream', 'Profile']) {
       expect(js).toContain(label)
     }
-    expect(js).toContain('Write actions disabled in v1')
+    expect(js).toContain('Write actions require confirmation and review hash')
     expect(js).toContain('No pending memory was written')
+    expect(js).toContain('/api/session')
+    expect(js).toContain('x-cyrene-ui-token')
+    expect(js).toContain('selectedPendingId')
+    expect(js).toContain('pendingAction')
+    expect(js).toContain('renderPendingDetail')
+    expect(js).toContain('Confirm approve')
+    expect(js).toContain('Confirm reject')
+    expect(js).toContain('Confirm defer')
+    expect(js).toContain('Confirm edit')
+    expect(js).toContain('changeNote')
+    expect(js).toContain('reviewHash')
+    expect(js).toContain('decision receipt')
+    expect(js).not.toContain('Approve selected')
+    expect(js).not.toContain('Reject selected')
     expect(js).toContain('/api/memory/harvest-project/dry-run')
     expect(js).toContain("result.action === 'needs_model_config'")
     expect(js).toContain("result.action === 'noop'")
@@ -27,10 +41,6 @@ describe('Codex UI source assets', () => {
     expect(js).toContain('preview · dry-run only')
 
     for (const unsafeRoute of [
-      '/api/memory/approve',
-      '/api/memory/reject',
-      '/api/memory/edit',
-      '/api/memory/defer',
       'deep-apply',
       'profile apply'
     ]) {
@@ -49,7 +59,16 @@ describe('Codex UI source assets', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain(':focus-visible')
 
-    for (const className of ['.soft-panel', '.soft-inset', '.soft-button', '.status-chip']) {
+    for (const className of [
+      '.soft-panel',
+      '.soft-inset',
+      '.soft-button',
+      '.status-chip',
+      '.selectable-row',
+      '.detail-actions',
+      '.confirm-form',
+      '.receipt-panel'
+    ]) {
       expect(css).toContain(className)
     }
   })

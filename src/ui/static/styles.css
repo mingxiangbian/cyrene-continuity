@@ -12,6 +12,7 @@
   --line: rgba(118, 91, 70, 0.16);
   --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);
   --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);
+  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);
   --radius: 8px;
   --sidebar-width: 276px;
   --rail-width: 320px;
@@ -340,6 +341,21 @@ p {
   align-items: start;
 }
 
+.selectable-row {
+  cursor: pointer;
+}
+
+.selectable-row:hover {
+  background: rgba(255, 250, 242, 0.48);
+}
+
+.selectable-row.selected {
+  padding-inline: 12px;
+  border-color: rgba(204, 120, 92, 0.28);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pressed);
+}
+
 .row-title {
   color: var(--ink);
   font-weight: 650;
@@ -356,6 +372,40 @@ p {
   justify-content: flex-end;
   gap: 8px;
   max-width: 340px;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.confirm-form {
+  display: grid;
+  gap: 10px;
+}
+
+.confirm-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--body);
+  font-size: 0.86rem;
+}
+
+.confirm-form textarea,
+.confirm-form input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-pressed);
+  color: var(--ink);
+  font: inherit;
+}
+
+.receipt-panel {
+  border-color: rgba(93, 184, 166, 0.42);
 }
 
 .boundary-copy {
