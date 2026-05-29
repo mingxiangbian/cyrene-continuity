@@ -47,6 +47,7 @@ describe('llm client', () => {
       model: {
         baseUrl: 'https://llm.example.test',
         model: 'strong',
+        apiKey: 'test-key',
         temperature: 0,
         strongModel: 'strong',
         cheapModel: 'cheap'
@@ -92,5 +93,27 @@ describe('llm client', () => {
     ])
     expect(body.tools).toEqual([tool])
     expect(result.toolCalls).toEqual([toolCall])
+  })
+
+  it('rejects hosted endpoints without an API key before fetch', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const config = {
+      ...createDefaultConfig(process.cwd()),
+      model: {
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-v4-flash',
+        temperature: 0,
+        strongModel: 'deepseek-v4-pro',
+        cheapModel: 'deepseek-v4-flash'
+      }
+    }
+
+    await expect(callModel({
+      config,
+      messages: [{ role: 'user', content: 'Summarize.' }],
+      tools: []
+    })).rejects.toThrow('CYRENE_API_KEY')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

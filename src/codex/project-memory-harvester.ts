@@ -5,9 +5,11 @@ import {
   type CodexProjectHarvestMode,
   type ProjectMemorySignal
 } from './project-memory-signals.js'
+import { identifyCodexProject } from './project-id.js'
+import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import { redactReviewText } from './review-redaction.js'
 import type { AppConfig } from '../config.js'
-import type { CallModelInput, ModelResponse } from '../llm-client.js'
+import { modelBaseUrlRequiresApiKey, type CallModelInput, type ModelResponse } from '../llm-client.js'
 import type { MemoryDomain, MemoryEvidence, MemorySource, MemoryType } from '../memory/types.js'
 
 export type ProjectMemoryHarvesterCandidateKind =
@@ -58,6 +60,16 @@ const SENSITIVE_PROJECT_HARVEST_PATTERN =
 export async function runCodexProjectMemoryHarvest(
   input: RunCodexProjectMemoryHarvestInput
 ): Promise<CodexProjectMemoryHarvestResult> {
+  const project = await identifyCodexProject(input.cwd)
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      action: 'noop',
+      reason: 'Project memory is disabled for this project.',
+      signals: [],
+      warnings: []
+    }
+  }
+
   const { signals, warnings } = await collectProjectMemorySignals({
     cwd: input.cwd,
     mode: input.mode,
@@ -261,6 +273,9 @@ function missingModelConfigReason(config: AppConfig): string | undefined {
   }
   if (config.model.model.trim() === '' || routeModel.trim() === '') {
     missing.push('CYRENE_MODEL')
+  }
+  if (modelBaseUrlRequiresApiKey(config.model.baseUrl) && !config.model.apiKey?.trim()) {
+    missing.push('CYRENE_API_KEY')
   }
   return missing.length === 0 ? undefined : `Model config is incomplete: set ${missing.join(' and ')}.`
 }

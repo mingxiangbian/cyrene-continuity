@@ -126,8 +126,11 @@ local port.
 
 The local Web UI is a review console for Overview, Inbox, Timeline, Project
 Memory, Harvester, Dream, and Profile views. It shows pending review candidates,
-review summaries, active project memory, project harvester signals, Dream state,
-and profile text from the local Cyrene data store. It supports hash-checked
+review summaries, active project/global memory, project harvester signals,
+Dream state, and profile text from the local Cyrene data store. Use the
+Project/Global scope controls to inspect the selected project memory root or
+global memory.
+It supports hash-checked
 single-candidate pending review actions: approve, reject, defer, and edit. Every
 write action requires the current review hash and an in-session UI token.
 Reject/defer require a reason; edit requires a change note. The UI does not
@@ -158,10 +161,18 @@ pending items, `--changed-files` limits signal collection to changed files, and
 `--since last-summary` is accepted as a compatibility selector.
 
 Project memory harvesting needs the existing Cyrene model configuration before
-it can run LLM extraction. Do not write API keys into this repository. Configure
-the model through the existing environment/config path, such as
-`CYRENE_BASE_URL`, `CYRENE_MODEL`, and the matching provider API key expected by
-that provider. If model configuration is missing, the command returns
+it can run LLM extraction. Reviewing existing memory does not require a model or
+API key. Do not write API keys into this repository. Configure the model through
+process environment variables or a local `.env` file outside version control:
+
+```env
+CYRENE_BASE_URL=https://api.openai.com/v1
+CYRENE_MODEL=<model-name>
+CYRENE_API_KEY=<provider-api-key>
+```
+
+`CYRENE_API_KEY` is sent as a bearer token when present. If model configuration
+is missing, the command returns
 `needs_model_config` and does not write pending candidates; dry-run remains safe
 for diagnostics.
 

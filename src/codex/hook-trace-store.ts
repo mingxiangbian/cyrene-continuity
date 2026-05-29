@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { assertSafeMemoryDataFileTarget } from '../memory/memory-store.js'
 import { ensureCodexProjectMemoryRoot, getReadableCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { identifyCodexProject } from './project-id.js'
+import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import { redactReviewText } from './review-redaction.js'
 
 const HOOK_TRACE_FILE = 'hook-trace.jsonl'
@@ -49,24 +50,46 @@ export async function appendCodexHookTrace(input: {
   now?: string
 }): Promise<CodexHookTraceRecord> {
   const project = await identifyCodexProject(input.cwd)
+  const record = createHookTraceRecord(input, project.cwd)
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      ...record,
+      summary: 'Project memory is disabled; hook trace was not persisted.',
+      signals: []
+    }
+  }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId)
   const targetPath = join(memoryRoot, HOOK_TRACE_FILE)
   await assertSafeMemoryDataFileTarget(targetPath)
 
-  const record: CodexHookTraceRecord = {
+  await appendFile(targetPath, `${JSON.stringify(record)}\n`, 'utf8')
+  return record
+}
+
+function createHookTraceRecord(
+  input: {
+    cwd: string
+    event: CodexHookTraceEventName
+    sessionId?: string
+    turnId?: string
+    summary: string
+    signals?: string[]
+    tool?: CodexHookTraceTool
+    now?: string
+  },
+  cwd: string
+): CodexHookTraceRecord {
+  return {
     id: randomUUID(),
     createdAt: cleanString(input.now ?? new Date().toISOString()),
     event: input.event,
-    cwd: cleanString(project.cwd),
+    cwd: cleanString(cwd),
     summary: cleanString(input.summary, SUMMARY_MAX_LENGTH),
     signals: (input.signals ?? []).map((signal) => cleanString(signal, SIGNAL_MAX_LENGTH)),
     ...(input.sessionId === undefined ? {} : { sessionId: cleanString(input.sessionId) }),
     ...(input.turnId === undefined ? {} : { turnId: cleanString(input.turnId) }),
     ...(input.tool === undefined ? {} : { tool: cleanTool(input.tool) })
   }
-
-  await appendFile(targetPath, `${JSON.stringify(record)}\n`, 'utf8')
-  return record
 }
 
 export async function readRecentCodexHookTrace(input: {

@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexProjectMemoryRoot, ensureCodexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import {
   addCodexProjectAlias,
+  deleteCodexProjectMemory,
+  isCodexProjectMemoryDisabled,
   listCodexProjects,
   mergeCodexProjects
 } from '../src/codex/project-registry.js'
@@ -64,6 +66,50 @@ describe('Codex project tools', () => {
       expect.objectContaining({
         projectId,
         aliases: ['repo-renamed'],
+        counts: expect.objectContaining({ active: 0, pending: 0, tombstones: 0 })
+      })
+    ])
+  })
+
+  it('deletes project memory while keeping the project disabled for future capture', async () => {
+    const home = await createTempDir('cyrene-project-tools-delete-home-')
+    vi.stubEnv('HOME', home)
+    const projectId = 'disabled-project'
+    const memoryRoot = await ensureCodexProjectMemoryRoot(projectId)
+    const tracedCwd = await createTempDir('cyrene-project-tools-disabled-repo-')
+    await writeFile(join(tracedCwd, 'package.json'), '{"name":"disabled-repo"}\n')
+    await writeFile(
+      join(memoryRoot, 'hook-trace.jsonl'),
+      `${JSON.stringify({
+        id: 'trace-1',
+        createdAt: '2026-05-29T00:00:00.000Z',
+        event: 'stop',
+        cwd: tracedCwd,
+        summary: 'Stop hook received.',
+        signals: []
+      })}\n`
+    )
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+
+    const result = await deleteCodexProjectMemory({
+      projectId,
+      reason: 'Do not capture memory for this repository.',
+      now: '2026-05-29T00:00:00.000Z'
+    })
+
+    expect(result).toMatchObject({
+      projectId,
+      disabled: true,
+      memoryDeleted: true
+    })
+    expect(await isCodexProjectMemoryDisabled(projectId)).toBe(true)
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await listCodexProjects()).toEqual([
+      expect.objectContaining({
+        projectId,
+        displayName: 'disabled-repo',
+        disabled: true,
+        disabledReason: 'Do not capture memory for this repository.',
         counts: expect.objectContaining({ active: 0, pending: 0, tombstones: 0 })
       })
     ])

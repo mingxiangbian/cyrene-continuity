@@ -183,6 +183,56 @@ p {
   gap: 8px;
 }
 
+.topbar-actions {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.scope-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.soft-select {
+  min-width: 220px;
+  max-width: 320px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-inset);
+}
+
+.segmented-control {
+  display: inline-flex;
+  min-height: 38px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-inset);
+}
+
+.segmented-control button {
+  min-width: 72px;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--body);
+  cursor: pointer;
+}
+
+.segmented-control button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--coral);
+  box-shadow: var(--shadow-soft);
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));
@@ -244,6 +294,11 @@ p {
   border-color: rgba(204, 120, 92, 0.42);
   background: var(--coral);
   color: #fffaf2;
+}
+
+.soft-button.danger {
+  border-color: rgba(198, 69, 69, 0.38);
+  color: var(--red);
 }
 
 .soft-button.compact {
@@ -408,6 +463,10 @@ p {
   border-color: rgba(93, 184, 166, 0.42);
 }
 
+.danger-panel {
+  border-color: rgba(198, 69, 69, 0.24);
+}
+
 .boundary-copy {
   border-left: 4px solid var(--coral);
   color: var(--ink);
@@ -502,7 +561,16 @@ p {
     flex-direction: column;
   }
 
+  .topbar-actions {
+    justify-items: start;
+    width: 100%;
+  }
+
   .chip-row {
+    justify-content: flex-start;
+  }
+
+  .scope-controls {
     justify-content: flex-start;
   }
 

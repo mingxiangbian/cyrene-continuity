@@ -1,8 +1,11 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { startCodexUiServer, type CodexUiServer } from '../src/codex/codex-ui-server.js'
+import { identifyCodexProject } from '../src/codex/project-id.js'
+import type { CyreneMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -49,6 +52,36 @@ async function fetchSessionToken(localServer: CodexUiServer): Promise<string> {
   expect(body.ok).toBe(true)
   expect(body.data.token).toMatch(/^[a-f0-9]{64}$/)
   return body.data.token
+}
+
+function createActiveMemory(id: string, content: string, scope: CyreneMemory['scope']): CyreneMemory {
+  return {
+    id,
+    domain: scope === 'global' ? 'procedural' : 'project',
+    type: scope === 'global' ? 'procedural_rule' : 'project_fact',
+    strength: 'hard',
+    scope,
+    status: 'active',
+    content,
+    normalizedKey: id,
+    evidence: [{ runId: `${id}-run`, summary: `${id} seed.` }],
+    source: 'user_explicit',
+    scores: {
+      evidenceStrength: 0.95,
+      stability: 0.9,
+      usefulness: 0.9,
+      safety: 0.95,
+      sensitivity: 0.1
+    },
+    createdAt: '2026-05-29T00:00:00.000Z',
+    updatedAt: '2026-05-29T00:00:00.000Z',
+    tags: []
+  }
+}
+
+async function seedActiveMemoryRoot(memoryRoot: string, memories: CyreneMemory[]): Promise<void> {
+  await mkdir(memoryRoot, { recursive: true })
+  await writeFile(join(memoryRoot, 'index.jsonl'), memories.map((memory) => JSON.stringify(memory)).join('\n') + '\n')
 }
 
 describe('startCodexUiServer', () => {
@@ -324,5 +357,71 @@ describe('startCodexUiServer', () => {
       ok: false,
       error: { code: 'request_body_too_large' }
     })
+  })
+
+  it('serves projects and scoped dashboard data without exposing API keys', async () => {
+    const home = await createTempDir('cyrene-ui-server-scope-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', 'https://api.openai.com/v1')
+    vi.stubEnv('CYRENE_MODEL', 'gpt-4.1-mini')
+    vi.stubEnv('CYRENE_API_KEY', 'secret-key-value')
+    const cwd = await createProject()
+    const current = await identifyCodexProject(cwd)
+    await seedActiveMemoryRoot(codexGlobalMemoryRoot(), [
+      createActiveMemory('global-rule', 'Global memory applies across projects.', 'global')
+    ])
+    await seedActiveMemoryRoot(codexProjectMemoryRoot(current.projectId), [
+      createActiveMemory('current-fact', 'Current project memory stays local.', 'project')
+    ])
+    await seedActiveMemoryRoot(codexProjectMemoryRoot('other-project'), [
+      createActiveMemory('other-fact', 'Other project memory can be inspected.', 'project')
+    ])
+    await writeFile(
+      join(home, '.cyrene', 'codex', 'projects', 'other-project', 'project.json'),
+      '{"projectId":"other-project","aliases":["Other Project"]}\n'
+    )
+    server = await startCodexUiServer({ cwd, port: 0 })
+
+    const projectsResponse = await fetch(`${server.url}/api/projects`)
+    const projectsBody = await readJson(projectsResponse) as {
+      ok: true
+      data: { currentProjectId: string; projects: Array<{ projectId: string; displayName: string }>; global: { counts: { active: number } } }
+    }
+    expect(projectsResponse.status).toBe(200)
+    expect(projectsBody.ok).toBe(true)
+    expect(projectsBody.data.currentProjectId).toBe(current.projectId)
+    expect(projectsBody.data.global.counts.active).toBe(1)
+    expect(projectsBody.data.projects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ projectId: current.projectId, displayName: current.displayName }),
+      expect.objectContaining({ projectId: 'other-project', displayName: 'Other Project' })
+    ]))
+
+    const globalDashboardResponse = await fetch(`${server.url}/api/dashboard?scope=global`)
+    const globalDashboard = await readJson(globalDashboardResponse) as {
+      ok: true
+      data: {
+        selection: { scope: string; label: string }
+        active: { active: CyreneMemory[] }
+        modelConfig: { configured: boolean; apiKeyConfigured: boolean; apiKeyPreview?: string }
+      }
+    }
+    expect(globalDashboardResponse.status).toBe(200)
+    expect(globalDashboard.data.selection).toMatchObject({ scope: 'global', label: 'Global' })
+    expect(globalDashboard.data.active.active.map((memory) => memory.content)).toEqual(['Global memory applies across projects.'])
+    expect(globalDashboard.data.modelConfig).toMatchObject({ configured: true, apiKeyConfigured: true })
+    expect(JSON.stringify(globalDashboard.data.modelConfig)).not.toContain('secret-key-value')
+
+    const otherDashboardResponse = await fetch(`${server.url}/api/dashboard?scope=project&projectId=other-project`)
+    const otherDashboard = await readJson(otherDashboardResponse) as {
+      ok: true
+      data: { selection: { scope: string; projectId: string; label: string }; active: { active: CyreneMemory[] } }
+    }
+    expect(otherDashboardResponse.status).toBe(200)
+    expect(otherDashboard.data.selection).toMatchObject({
+      scope: 'project',
+      projectId: 'other-project',
+      label: 'Other Project'
+    })
+    expect(otherDashboard.data.active.active.map((memory) => memory.content)).toEqual(['Other project memory can be inspected.'])
   })
 })

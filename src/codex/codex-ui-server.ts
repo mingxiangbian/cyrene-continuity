@@ -120,19 +120,20 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> {
-  const pathname = requestPathname(request)
-  if (pathname.startsWith('/api/')) {
-    await handleApiRequest(input, request, response, pathname)
+  const url = requestUrl(request)
+  if (url.pathname.startsWith('/api/')) {
+    await handleApiRequest(input, request, response, url.pathname, url.searchParams)
     return
   }
-  handleStaticRequest(response, pathname)
+  handleStaticRequest(response, url.pathname)
 }
 
 async function handleApiRequest(
   input: CodexUiServerContext,
   request: IncomingMessage,
   response: ServerResponse,
-  pathname: string
+  pathname: string,
+  searchParams: URLSearchParams
 ): Promise<void> {
   try {
     const method = request.method ?? 'GET'
@@ -149,6 +150,7 @@ async function handleApiRequest(
       cwd: input.cwd,
       method,
       pathname,
+      searchParams,
       body,
       uiToken: input.uiToken,
       callModel: input.callModel
@@ -235,7 +237,11 @@ function writeNoContent(response: ServerResponse): void {
 }
 
 function requestPathname(request: IncomingMessage): string {
-  return new URL(request.url ?? '/', `http://${HOST}`).pathname
+  return requestUrl(request).pathname
+}
+
+function requestUrl(request: IncomingMessage): URL {
+  return new URL(request.url ?? '/', `http://${HOST}`)
 }
 
 function safeRequestPathname(request: IncomingMessage): string | undefined {

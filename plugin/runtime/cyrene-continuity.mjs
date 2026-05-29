@@ -13042,7 +13042,7 @@ function overlapScore(label, sourceValues, targetValues, weight, reason) {
 }
 
 // src/codex/memory-review.ts
-import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash4, randomUUID as randomUUID6 } from "node:crypto";
 
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
@@ -14277,6 +14277,383 @@ function isFileErrorCode8(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/project-registry.ts
+import { randomUUID as randomUUID5 } from "node:crypto";
+import { execFile as execFile2 } from "node:child_process";
+import { mkdir as mkdir9, readFile as readFile11, rename as rename4, rm as rm3, writeFile as writeFile7 } from "node:fs/promises";
+import { basename as basename5, dirname as dirname9, join as join16 } from "node:path";
+import { promisify as promisify2 } from "node:util";
+var PROJECT_METADATA_FILE = "project.json";
+var MERGE_JSONL_FILES = [
+  "index.jsonl",
+  "pending.jsonl",
+  "tombstones.jsonl",
+  "events.jsonl",
+  "profile_candidates.jsonl",
+  "review-summaries.jsonl"
+];
+var HOOK_TRACE_FILE = "hook-trace.jsonl";
+var execFileAsync2 = promisify2(execFile2);
+async function listCodexProjects() {
+  const projectRoots = await getReadableCodexProjectRoots();
+  const entries = await Promise.all(projectRoots.map((root) => registryEntryFromRoot(root)));
+  return entries.sort((left, right) => left.projectId.localeCompare(right.projectId));
+}
+async function addCodexProjectAlias(input) {
+  const projectId = validateProjectId(input.projectId);
+  const alias = validateAlias(input.alias);
+  const memoryRoot = await ensureCodexProjectMemoryRoot(projectId);
+  const projectRoot = dirname9(memoryRoot);
+  const metadata = await readProjectMetadata(projectRoot);
+  await writeProjectMetadata(projectRoot, {
+    ...metadata,
+    projectId,
+    aliases: uniqueSorted([...metadata.aliases ?? [], alias]),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  return registryEntryFromRoot(projectRoot);
+}
+async function deleteCodexProjectMemory(input) {
+  const projectId = validateProjectId(input.projectId);
+  const projectRoot = await ensureCodexProjectRoot(projectId);
+  const memoryRoot = codexProjectMemoryRoot(projectId);
+  const metadata = await readProjectMetadata(projectRoot);
+  const displayName = await displayNameForProjectEntry(projectId, memoryRoot, metadata);
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const reason = input.reason?.trim() || void 0;
+  const memoryDeleted = await rmDirectoryIfExists(memoryRoot);
+  await writeProjectMetadata(projectRoot, {
+    ...metadata,
+    projectId,
+    displayName,
+    disabled: true,
+    disabledAt: now,
+    disabledReason: reason,
+    updatedAt: now
+  });
+  return {
+    projectId,
+    memoryRoot,
+    disabled: true,
+    memoryDeleted,
+    disabledAt: now,
+    ...reason === void 0 ? {} : { disabledReason: reason }
+  };
+}
+async function isCodexProjectMemoryDisabled(projectIdInput) {
+  const projectId = validateProjectId(projectIdInput);
+  const projectRoot = await getReadableCodexProjectRoot(projectId);
+  if (projectRoot === null) {
+    return false;
+  }
+  const metadata = await readProjectMetadata(projectRoot);
+  return metadata.disabled === true;
+}
+async function mergeCodexProjects(input) {
+  const fromProjectId = validateProjectId(input.fromProjectId);
+  const toProjectId = validateProjectId(input.toProjectId);
+  if (fromProjectId === toProjectId) {
+    throw new Error("Cannot merge a project into itself.");
+  }
+  const fromMemoryRoot = await getReadableCodexProjectMemoryRoot(fromProjectId);
+  if (fromMemoryRoot === null) {
+    throw new Error(`Project memory root not found: ${fromProjectId}`);
+  }
+  const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId);
+  await assertMergeJsonlFilesSafe(fromMemoryRoot, "source");
+  const gate2 = runMemoryMigrationEvalGate({
+    fromProjectId,
+    toProjectId,
+    activeMemories: await readActiveMemoriesFromRoot(fromMemoryRoot)
+  });
+  if (!gate2.passed) {
+    throw new Error(`Project merge blocked by eval gate: ${gate2.failedChecks.join(", ")}`);
+  }
+  const fromProjectRoot = dirname9(fromMemoryRoot);
+  const toProjectRoot = dirname9(toMemoryRoot);
+  const mergedFiles = await withMemoryMaintenanceLockFromRoot(toMemoryRoot, async (lockedToMemoryRoot) => {
+    const files = [];
+    for (const fileName of MERGE_JSONL_FILES) {
+      const merged = await mergeJsonlFile(join16(fromMemoryRoot, fileName), join16(lockedToMemoryRoot, fileName));
+      if (merged) {
+        files.push(fileName);
+      }
+    }
+    return files;
+  });
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const fromMetadata = await readProjectMetadata(fromProjectRoot);
+  const toMetadata = await readProjectMetadata(toProjectRoot);
+  await writeProjectMetadata(fromProjectRoot, {
+    ...fromMetadata,
+    projectId: fromProjectId,
+    mergedInto: toProjectId,
+    updatedAt: now
+  });
+  await writeProjectMetadata(toProjectRoot, {
+    ...toMetadata,
+    projectId: toProjectId,
+    aliases: uniqueSorted([...toMetadata.aliases ?? [], ...fromMetadata.aliases ?? []]),
+    mergedFrom: uniqueSorted([...toMetadata.mergedFrom ?? [], fromProjectId, ...fromMetadata.mergedFrom ?? []]),
+    updatedAt: now
+  });
+  return { fromProjectId, toProjectId, mergedFiles };
+}
+async function registryEntryFromRoot(root) {
+  const projectId = basename5(root);
+  const memoryRoot = join16(root, "memory");
+  const metadata = await readProjectMetadata(root);
+  const displayName = await displayNameForProjectEntry(projectId, memoryRoot, metadata);
+  const [active, pending, tombstones] = await Promise.all([
+    readActiveMemoriesFromRoot(memoryRoot),
+    readPendingMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ]);
+  return {
+    projectId,
+    displayName,
+    root,
+    memoryRoot,
+    aliases: uniqueSorted(metadata.aliases ?? []),
+    mergedFrom: uniqueSorted(metadata.mergedFrom ?? []),
+    mergedInto: metadata.mergedInto,
+    disabled: metadata.disabled === true,
+    ...metadata.disabledAt === void 0 ? {} : { disabledAt: metadata.disabledAt },
+    ...metadata.disabledReason === void 0 ? {} : { disabledReason: metadata.disabledReason },
+    counts: {
+      active: active.length,
+      pending: pending.length,
+      tombstones: tombstones.length
+    }
+  };
+}
+async function displayNameForProjectEntry(projectId, memoryRoot, metadata) {
+  const alias = metadata.aliases?.find((value) => value.trim() !== "");
+  if (alias !== void 0) {
+    return alias;
+  }
+  const metadataDisplayName = cleanDisplayName(metadata.displayName);
+  if (metadataDisplayName !== void 0 && metadataDisplayName !== projectId) {
+    return metadataDisplayName;
+  }
+  const tracedCwd = await latestHookTraceCwd(memoryRoot);
+  if (tracedCwd !== void 0) {
+    const inferred = await inferProjectDisplayNameFromCwd(tracedCwd);
+    if (inferred !== void 0 && inferred !== projectId) {
+      return inferred;
+    }
+  }
+  return projectId;
+}
+async function latestHookTraceCwd(memoryRoot) {
+  let content;
+  try {
+    content = await readFile11(join16(memoryRoot, HOOK_TRACE_FILE), "utf8");
+  } catch (error2) {
+    if (isFileErrorCode9(error2, "ENOENT")) {
+      return void 0;
+    }
+    throw error2;
+  }
+  const lines2 = content.split(/\r?\n/).filter((line) => line.trim() !== "").reverse();
+  for (const line of lines2) {
+    try {
+      const parsed = JSON.parse(line);
+      if (isRecord2(parsed) && typeof parsed.cwd === "string" && parsed.cwd.trim() !== "") {
+        return parsed.cwd.trim();
+      }
+    } catch {
+    }
+  }
+  return void 0;
+}
+async function inferProjectDisplayNameFromCwd(cwd) {
+  const gitRoot = (await tryGit2(["rev-parse", "--show-toplevel"], cwd))?.trim();
+  const remote = (await tryGit2(["config", "--get", "remote.origin.url"], gitRoot ?? cwd))?.trim();
+  const remoteDisplayName = cleanDisplayName(remote === void 0 ? void 0 : repoNameFromRemote(remote));
+  if (remoteDisplayName !== void 0) {
+    return remoteDisplayName;
+  }
+  const packageNameDisplay = await packageDisplayName(cwd);
+  if (packageNameDisplay !== void 0) {
+    return packageNameDisplay;
+  }
+  return cleanDisplayName(basename5(gitRoot ?? cwd));
+}
+async function packageDisplayName(cwd) {
+  try {
+    const parsed = JSON.parse(await readFile11(join16(cwd, "package.json"), "utf8"));
+    if (!isRecord2(parsed) || typeof parsed.name !== "string") {
+      return void 0;
+    }
+    const unscoped = parsed.name.startsWith("@") ? parsed.name.split("/").slice(1).join("/") : parsed.name;
+    return cleanDisplayName(unscoped);
+  } catch (error2) {
+    if (isFileErrorCode9(error2, "ENOENT")) {
+      return void 0;
+    }
+    return void 0;
+  }
+}
+function repoNameFromRemote(remote) {
+  const trimmed = remote.trim().replace(/\/+$/, "");
+  const match = /([^/:]+?)(?:\.git)?$/.exec(trimmed);
+  return match?.[1];
+}
+async function tryGit2(args, cwd) {
+  try {
+    const result2 = await execFileAsync2("git", args, { cwd });
+    const text = result2.stdout.trim();
+    return text === "" ? void 0 : text;
+  } catch {
+    return void 0;
+  }
+}
+function cleanDisplayName(value) {
+  const cleaned = value?.trim().replace(/\.git$/i, "");
+  return cleaned === void 0 || cleaned === "" ? void 0 : cleaned;
+}
+async function rmDirectoryIfExists(path) {
+  try {
+    await rm3(path, { recursive: true });
+    return true;
+  } catch (error2) {
+    if (isFileErrorCode9(error2, "ENOENT")) {
+      return false;
+    }
+    throw error2;
+  }
+}
+async function mergeJsonlFile(sourcePath, targetPath) {
+  await assertMergeJsonlFileSafe(sourcePath, "source");
+  const sourceLines = await readJsonLinesIfExists(sourcePath);
+  if (sourceLines.length === 0) {
+    return false;
+  }
+  await assertMergeJsonlFileSafe(targetPath, "target");
+  const targetLines = await readJsonLinesIfExists(targetPath);
+  const merged = mergeJsonLines(targetLines, sourceLines);
+  await mkdir9(dirname9(targetPath), { recursive: true });
+  await writeJsonLinesAtomic2(targetPath, merged);
+  return true;
+}
+async function assertMergeJsonlFilesSafe(memoryRoot, role) {
+  await Promise.all(MERGE_JSONL_FILES.map((fileName) => assertMergeJsonlFileSafe(join16(memoryRoot, fileName), role)));
+}
+async function assertMergeJsonlFileSafe(filePath, role) {
+  try {
+    await assertSafeMemoryDataFileTarget(filePath);
+  } catch (error2) {
+    if (error2 instanceof Error) {
+      throw new Error(`Unsafe project merge ${role} JSONL file: ${error2.message}`);
+    }
+    throw error2;
+  }
+}
+async function writeJsonLinesAtomic2(filePath, values) {
+  const tempPath = join16(dirname9(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID5()}.tmp`);
+  let renamed = false;
+  try {
+    await writeFile7(tempPath, `${values.join("\n")}
+`, "utf8");
+    await assertMergeJsonlFileSafe(filePath, "target");
+    await rename4(tempPath, filePath);
+    renamed = true;
+  } finally {
+    if (!renamed) {
+      await rm3(tempPath, { force: true });
+    }
+  }
+}
+function mergeJsonLines(targetLines, sourceLines) {
+  const seen = /* @__PURE__ */ new Set();
+  const result2 = [];
+  for (const line of [...targetLines, ...sourceLines]) {
+    const key = jsonLineKey(line);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result2.push(line);
+  }
+  return result2;
+}
+function jsonLineKey(line) {
+  try {
+    const parsed = JSON.parse(line);
+    if (typeof parsed.id === "string" && parsed.id.trim() !== "") {
+      return `id:${parsed.id}`;
+    }
+  } catch {
+  }
+  return `line:${line}`;
+}
+async function readJsonLinesIfExists(path) {
+  try {
+    return (await readFile11(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } catch (error2) {
+    if (isFileErrorCode9(error2, "ENOENT")) {
+      return [];
+    }
+    throw error2;
+  }
+}
+async function readProjectMetadata(projectRoot) {
+  try {
+    const parsed = JSON.parse(await readFile11(join16(projectRoot, PROJECT_METADATA_FILE), "utf8"));
+    if (!isRecord2(parsed)) {
+      return {};
+    }
+    return {
+      projectId: typeof parsed.projectId === "string" ? parsed.projectId : void 0,
+      displayName: typeof parsed.displayName === "string" ? parsed.displayName : void 0,
+      aliases: readStringArray(parsed.aliases),
+      mergedFrom: readStringArray(parsed.mergedFrom),
+      mergedInto: typeof parsed.mergedInto === "string" ? parsed.mergedInto : void 0,
+      disabled: typeof parsed.disabled === "boolean" ? parsed.disabled : void 0,
+      disabledAt: typeof parsed.disabledAt === "string" ? parsed.disabledAt : void 0,
+      disabledReason: typeof parsed.disabledReason === "string" ? parsed.disabledReason : void 0,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : void 0
+    };
+  } catch (error2) {
+    if (isFileErrorCode9(error2, "ENOENT")) {
+      return {};
+    }
+    throw error2;
+  }
+}
+async function writeProjectMetadata(projectRoot, metadata) {
+  await mkdir9(projectRoot, { recursive: true });
+  await writeFile7(join16(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
+`, "utf8");
+}
+function validateProjectId(value) {
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed) || /^\.+$/.test(trimmed)) {
+    throw new Error(`Invalid projectId: ${value}`);
+  }
+  return trimmed;
+}
+function validateAlias(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    throw new Error("Invalid project alias: missing value");
+  }
+  return trimmed;
+}
+function readStringArray(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim() !== "") : [];
+}
+function uniqueSorted(values) {
+  return Array.from(new Set(values)).sort();
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null;
+}
+function isFileErrorCode9(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
 // src/codex/memory-review.ts
 var NORMALIZED_KEY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
 function reviewHashForPendingMemory(candidate) {
@@ -14372,7 +14749,7 @@ function suggestedReviewAction(candidateId, reviewHash, recommendation) {
   return `Review ${candidateId} in Codex chat before any ${recommendation} action; review hash ${reviewHash}.`;
 }
 async function listCodexPendingMemories(input) {
-  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd);
+  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd, input.projectId);
   const pending = sortPendingNewestFirst2((await Promise.all(readableRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat());
   const summaries = pending.map((candidate) => summarizePendingMemory(candidate));
   return {
@@ -14383,7 +14760,7 @@ async function listCodexPendingMemories(input) {
   };
 }
 async function getCodexPendingMemory(input) {
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id);
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId);
   if (candidate === void 0) {
     return {
       project,
@@ -14407,7 +14784,7 @@ async function getCodexPendingMemory(input) {
 }
 async function promoteCodexPendingMemory(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id);
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId);
   if (candidate === void 0) {
     return {
       project,
@@ -14526,7 +14903,7 @@ async function promoteCodexPendingMemory(input) {
       await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending2);
       await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID5(),
+        id: randomUUID6(),
         action: "reject",
         at: now,
         reason: input.reason ?? "Rejected by normalizedKey conflict resolution",
@@ -14534,7 +14911,7 @@ async function promoteCodexPendingMemory(input) {
         details: conflictResolutionDetails("reject_new", lockedCandidate.normalizedKey, normalizedKeyConflicts)
       });
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID5(),
+        id: randomUUID6(),
         action: "audit",
         at: now,
         reason: "NormalizedKey conflict resolved by rejecting the new candidate",
@@ -14577,7 +14954,7 @@ async function promoteCodexPendingMemory(input) {
         await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForSupersededMemory(conflict, lockedMemory, now));
       }
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID5(),
+        id: randomUUID6(),
         action: "supersede",
         at: now,
         reason: input.reason ?? "NormalizedKey conflict resolved by superseding active memory",
@@ -14587,7 +14964,7 @@ async function promoteCodexPendingMemory(input) {
       });
     } else if (input.conflictResolution === "keep_both") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID5(),
+        id: randomUUID6(),
         action: "audit",
         at: now,
         reason: input.reason ?? "NormalizedKey conflict resolved by keeping both memories",
@@ -14597,7 +14974,7 @@ async function promoteCodexPendingMemory(input) {
       });
     }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID5(),
+      id: randomUUID6(),
       action: "promote",
       at: now,
       reason: input.reason ?? "Approved by Codex pending memory review",
@@ -14635,7 +15012,7 @@ function memoryForPromotedDecision(decision, now) {
 }
 async function rejectCodexPendingMemory(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id);
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId);
   if (candidate === void 0) {
     return {
       project,
@@ -14681,7 +15058,7 @@ async function rejectCodexPendingMemory(input) {
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID5(),
+      id: randomUUID6(),
       action: "reject",
       at: now,
       reason: input.reason ?? "Rejected by Codex pending memory review",
@@ -14702,7 +15079,7 @@ async function rejectCodexPendingMemory(input) {
 }
 async function editCodexPendingMemory(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id);
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId);
   if (candidate === void 0) {
     return {
       project,
@@ -14780,7 +15157,7 @@ async function editCodexPendingMemory(input) {
     );
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID5(),
+      id: randomUUID6(),
       action: "pending",
       at: now,
       reason: input.reason ?? "Edited by Codex pending memory review",
@@ -14803,7 +15180,7 @@ async function editCodexPendingMemory(input) {
 async function deferCodexPendingMemory(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const days = input.days ?? 7;
-  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id);
+  const { project, memoryRoot, candidate } = await findPendingCandidateInCodexRoots(input.cwd, input.id, input.projectId);
   if (candidate === void 0) {
     return {
       project,
@@ -14853,7 +15230,7 @@ async function deferCodexPendingMemory(input) {
     );
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID5(),
+      id: randomUUID6(),
       action: "pending",
       at: now,
       reason: input.reason ?? "Deferred by Codex pending memory review",
@@ -14874,7 +15251,7 @@ async function deferCodexPendingMemory(input) {
   });
 }
 async function getCodexPendingReviewNotice(input) {
-  const { readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd);
+  const { readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd, input.projectId);
   const pending = sortPendingNewestFirst2((await Promise.all(readableRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat());
   const newest = pending[0];
   return {
@@ -14959,16 +15336,29 @@ function tombstoneForSupersededMemory(memory, replacementMemory, now) {
     evidence: memory.evidence
   };
 }
-async function getProjectAndMemoryRoot(cwd) {
-  const identity = await identifyCodexProject(cwd);
+async function getProjectAndMemoryRoot(cwd, projectId) {
+  const identity = projectId === void 0 ? await identifyCodexProject(cwd) : await identifyCodexProjectById(cwd, projectId);
   const memoryRoot = await getReadableCodexProjectMemoryRoot(identity.projectId) ?? codexProjectMemoryRoot(identity.projectId);
   return {
     project: { projectId: identity.projectId, displayName: identity.displayName },
     memoryRoot
   };
 }
-async function getProjectAndReadableMemoryRoots(cwd) {
-  const { project, memoryRoot } = await getProjectAndMemoryRoot(cwd);
+async function identifyCodexProjectById(cwd, projectId) {
+  const validProjectId = validateProjectId2(projectId);
+  const current = await identifyCodexProject(cwd);
+  if (current.projectId === validProjectId) {
+    return { projectId: current.projectId, displayName: current.displayName };
+  }
+  const projects = await listCodexProjects().catch(() => []);
+  const project = projects.find((entry) => entry.projectId === validProjectId);
+  return {
+    projectId: validProjectId,
+    displayName: project?.aliases[0] ?? validProjectId
+  };
+}
+async function getProjectAndReadableMemoryRoots(cwd, projectId) {
+  const { project, memoryRoot } = await getProjectAndMemoryRoot(cwd, projectId);
   const globalRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
   return {
     project,
@@ -14976,8 +15366,8 @@ async function getProjectAndReadableMemoryRoots(cwd) {
     readableRoots: uniqueInOrder([globalRoot, memoryRoot])
   };
 }
-async function findPendingCandidateInCodexRoots(cwd, id) {
-  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(cwd);
+async function findPendingCandidateInCodexRoots(cwd, id, projectId) {
+  const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(cwd, projectId);
   for (const root of readableRoots) {
     const pending = await readPendingMemoriesFromRoot(root);
     const candidate = pending.find((memory) => memory.id === id);
@@ -15002,6 +15392,13 @@ function uniqueInOrder(values) {
     seen.add(value);
     return true;
   });
+}
+function validateProjectId2(value) {
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed) || /^\.+$/.test(trimmed)) {
+    throw new Error(`Invalid projectId: ${value}`);
+  }
+  return trimmed;
 }
 function previewContent(content) {
   return content.length <= 160 ? content : `${content.slice(0, 157)}...`;
@@ -15517,9 +15914,9 @@ async function runCodexReleaseEval() {
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
-import { lstat as lstat12, readFile as readFile13, realpath as realpath6 } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join19, relative as relative5, resolve as resolve6 } from "node:path";
+import { randomUUID as randomUUID10 } from "node:crypto";
+import { lstat as lstat12, open as open3, readFile as readFile14, realpath as realpath6 } from "node:fs/promises";
+import { isAbsolute as isAbsolute5, join as join20, relative as relative5, resolve as resolve6 } from "node:path";
 
 // src/llm-client.ts
 async function callModel(input) {
@@ -15566,16 +15963,31 @@ function validateModelConfig(config2, routeModel) {
   const missing = [];
   if (config2.model.baseUrl.trim() === "") missing.push("CYRENE_BASE_URL");
   if (config2.model.model.trim() === "" || routeModel.trim() === "") missing.push("CYRENE_MODEL");
+  if (modelBaseUrlRequiresApiKey(config2.model.baseUrl) && !config2.model.apiKey?.trim()) {
+    missing.push("CYRENE_API_KEY");
+  }
   if (missing.length > 0) throw new Error(`Model config is incomplete: set ${missing.join(" and ")}.`);
+}
+function modelBaseUrlRequiresApiKey(baseUrl) {
+  const trimmed = baseUrl.trim();
+  if (trimmed === "") return false;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    return !["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].includes(host);
+  } catch {
+    return false;
+  }
 }
 function mergeAbortSignals(timeoutSignal, inputSignal) {
   return inputSignal === void 0 ? timeoutSignal : AbortSignal.any([timeoutSignal, inputSignal]);
 }
 
 // src/codex/hook-trace-store.ts
-import { randomUUID as randomUUID6 } from "node:crypto";
-import { appendFile as appendFile2, readFile as readFile11 } from "node:fs/promises";
-import { join as join16 } from "node:path";
+import { randomUUID as randomUUID7 } from "node:crypto";
+import { appendFile as appendFile2, readFile as readFile12 } from "node:fs/promises";
+import { join as join17 } from "node:path";
 
 // src/codex/review-redaction.ts
 var RULES = [
@@ -15669,7 +16081,7 @@ function redactReviewText(input) {
 }
 
 // src/codex/hook-trace-store.ts
-var HOOK_TRACE_FILE = "hook-trace.jsonl";
+var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
 var DEFAULT_LIMIT = 100;
 var SUMMARY_MAX_LENGTH = 500;
 var SIGNAL_MAX_LENGTH = 240;
@@ -15679,23 +16091,33 @@ var MAX_TOUCHED_FILES = 50;
 var HOOK_TRACE_EVENTS = /* @__PURE__ */ new Set(["session_start", "user_prompt_submit", "post_tool_use", "stop"]);
 async function appendCodexHookTrace(input) {
   const project = await identifyCodexProject(input.cwd);
+  const record2 = createHookTraceRecord(input, project.cwd);
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      ...record2,
+      summary: "Project memory is disabled; hook trace was not persisted.",
+      signals: []
+    };
+  }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const targetPath = join16(memoryRoot, HOOK_TRACE_FILE);
+  const targetPath = join17(memoryRoot, HOOK_TRACE_FILE2);
   await assertSafeMemoryDataFileTarget(targetPath);
-  const record2 = {
-    id: randomUUID6(),
+  await appendFile2(targetPath, `${JSON.stringify(record2)}
+`, "utf8");
+  return record2;
+}
+function createHookTraceRecord(input, cwd) {
+  return {
+    id: randomUUID7(),
     createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
     event: input.event,
-    cwd: cleanString(project.cwd),
+    cwd: cleanString(cwd),
     summary: cleanString(input.summary, SUMMARY_MAX_LENGTH),
     signals: (input.signals ?? []).map((signal) => cleanString(signal, SIGNAL_MAX_LENGTH)),
     ...input.sessionId === void 0 ? {} : { sessionId: cleanString(input.sessionId) },
     ...input.turnId === void 0 ? {} : { turnId: cleanString(input.turnId) },
     ...input.tool === void 0 ? {} : { tool: cleanTool(input.tool) }
   };
-  await appendFile2(targetPath, `${JSON.stringify(record2)}
-`, "utf8");
-  return record2;
 }
 async function readRecentCodexHookTrace(input) {
   const project = await identifyCodexProject(input.cwd);
@@ -15703,13 +16125,13 @@ async function readRecentCodexHookTrace(input) {
   if (memoryRoot === null) {
     return { records: [], warnings: [] };
   }
-  const targetPath = join16(memoryRoot, HOOK_TRACE_FILE);
+  const targetPath = join17(memoryRoot, HOOK_TRACE_FILE2);
   await assertSafeMemoryDataFileTarget(targetPath);
   let content;
   try {
-    content = await readFile11(targetPath, "utf8");
+    content = await readFile12(targetPath, "utf8");
   } catch (error2) {
-    if (isFileErrorCode9(error2, "ENOENT")) {
+    if (isFileErrorCode10(error2, "ENOENT")) {
       return { records: [], warnings: [] };
     }
     throw error2;
@@ -15800,12 +16222,12 @@ function isWithinMaxAge(record2, now, maxAgeDays) {
   }
   return createdAt >= nowTime - maxAgeDays * 24 * 60 * 60 * 1e3;
 }
-function isFileErrorCode9(error2, code) {
+function isFileErrorCode10(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/memory-propose.ts
-import { createHash as createHash5, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID8 } from "node:crypto";
 var DEFAULT_SCORES = {
   evidenceStrength: 0.75,
   stability: 0.65,
@@ -15817,6 +16239,13 @@ async function proposeCodexMemoryCandidate(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const project = await identifyCodexProject(input.cwd);
   const candidate = toPendingMemory(input.candidate, now);
+  if (candidate.scope !== "global" && await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      result: { action: "reject", reason: "Project memory is disabled for this project." },
+      memoryRoot: codexProjectMemoryRoot(project.projectId)
+    };
+  }
   const memoryRoot = candidate.scope === "global" ? await ensureCodexGlobalMemoryRoot() : await ensureCodexProjectMemoryRoot(project.projectId);
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
   return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
@@ -15835,7 +16264,7 @@ async function proposeCodexMemoryCandidate(input) {
       if (input.recordRejectedCandidate !== false) {
         await appendTombstoneFromRoot(lockedMemoryRoot, decision.tombstone);
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID7(),
+          id: randomUUID8(),
           action: "reject",
           at: now,
           reason: decision.reason,
@@ -15853,7 +16282,7 @@ async function proposeCodexMemoryCandidate(input) {
     await markDreamDueFailOpen(lockedMemoryRoot, now);
     const reason = decision.action === "auto_write" ? `Pending-only Codex bridge downgraded auto-write: ${decision.reason}` : decision.reason;
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID7(),
+      id: randomUUID8(),
       action: "pending",
       at: now,
       reason,
@@ -15881,7 +16310,7 @@ function toPendingMemory(input, now) {
     type: input.type
   });
   return {
-    id: randomUUID7(),
+    id: randomUUID8(),
     domain: input.domain,
     type: input.type,
     strength: input.strength ?? "soft",
@@ -15915,11 +16344,11 @@ function addDays2(iso, days) {
 import { createHash as createHash6 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
-import { execFile as execFile2 } from "node:child_process";
-import { open as open2, readdir as readdir6, lstat as lstat11, readFile as readFile12 } from "node:fs/promises";
-import { join as join17 } from "node:path";
-import { promisify as promisify2 } from "node:util";
-var execFileAsync2 = promisify2(execFile2);
+import { execFile as execFile3 } from "node:child_process";
+import { open as open2, readdir as readdir6, lstat as lstat11, readFile as readFile13 } from "node:fs/promises";
+import { join as join18 } from "node:path";
+import { promisify as promisify3 } from "node:util";
+var execFileAsync3 = promisify3(execFile3);
 var PROJECT_FILES = [
   "package.json",
   "tsconfig.json",
@@ -15961,19 +16390,19 @@ async function collectProjectMemorySignals(input) {
 async function collectGitSignals(cwd, mode) {
   const warnings = [];
   const signals = [];
-  const status = await tryGit2(cwd, ["status", "--porcelain=v1", "-z"]);
+  const status = await tryGit3(cwd, ["status", "--porcelain=v1", "-z"]);
   if (!status.ok) {
     warnings.push(`git status unavailable: ${status.warning}`);
     return { signals, warnings, changedFiles: [] };
   }
   const statusEvidence = clean(status.stdout.replace(/\0/g, "\n"), EVIDENCE_MAX_LENGTH);
   const statusFiles = parseGitStatusFiles(status.stdout);
-  const diffNames = await tryGit2(cwd, ["diff", "--name-only"]);
+  const diffNames = await tryGit3(cwd, ["diff", "--name-only"]);
   if (!diffNames.ok) {
     warnings.push(`git diff --name-only unavailable: ${diffNames.warning}`);
   }
   const diffFiles = diffNames.ok ? lines(diffNames.stdout) : [];
-  const changedFiles = uniqueSorted([...statusFiles, ...diffFiles]).slice(0, MAX_SIGNAL_FILES);
+  const changedFiles = uniqueSorted2([...statusFiles, ...diffFiles]).slice(0, MAX_SIGNAL_FILES);
   if (changedFiles.length > 0) {
     signals.push({
       kind: "git_changed_file",
@@ -15986,7 +16415,7 @@ async function collectGitSignals(cwd, mode) {
   if (mode === "changed_files") {
     return { signals, warnings, changedFiles };
   }
-  const diffStat = await tryGit2(cwd, ["diff", "--stat"]);
+  const diffStat = await tryGit3(cwd, ["diff", "--stat"]);
   if (!diffStat.ok) {
     warnings.push(`git diff --stat unavailable: ${diffStat.warning}`);
     return { signals, warnings, changedFiles };
@@ -16009,7 +16438,7 @@ async function collectProjectFileSignals(root, mode, changedFiles) {
     if (mode === "changed_files" && !changedFiles.has(file)) {
       continue;
     }
-    const text = await readBoundedRegularFile(join17(root, file));
+    const text = await readBoundedRegularFile(join18(root, file));
     if (text === void 0) {
       continue;
     }
@@ -16020,7 +16449,7 @@ async function collectProjectFileSignals(root, mode, changedFiles) {
 async function collectTestSignals(root, mode, changedFiles) {
   let entries;
   try {
-    entries = (await readdir6(join17(root, "tests"), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => `tests/${entry.name}`).sort();
+    entries = (await readdir6(join18(root, "tests"), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => `tests/${entry.name}`).sort();
   } catch (error2) {
     if (isErrorCode4(error2, "ENOENT")) {
       return [];
@@ -16048,11 +16477,11 @@ async function collectReviewSummarySignals(projectId) {
   if (memoryRoot === null) {
     return { signals: [], warnings };
   }
-  const targetPath = join17(memoryRoot, REVIEW_SUMMARIES_FILE2);
+  const targetPath = join18(memoryRoot, REVIEW_SUMMARIES_FILE2);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
-    content = await readFile12(targetPath, "utf8");
+    content = await readFile13(targetPath, "utf8");
   } catch (error2) {
     if (isErrorCode4(error2, "ENOENT")) {
       return { signals: [], warnings };
@@ -16085,9 +16514,9 @@ async function collectReviewSummarySignals(projectId) {
     warnings
   };
 }
-async function tryGit2(cwd, args) {
+async function tryGit3(cwd, args) {
   try {
-    const result2 = await execFileAsync2("git", args, { cwd });
+    const result2 = await execFileAsync3("git", args, { cwd });
     return { ok: true, stdout: result2.stdout };
   } catch (error2) {
     return { ok: false, warning: cleanError(error2) };
@@ -16266,7 +16695,7 @@ function parseGitStatusFiles(output) {
       index += 1;
     }
   }
-  return uniqueSorted(files);
+  return uniqueSorted2(files);
 }
 function markdownExcerpt(text) {
   const meaningfulLines = text.split(/\r?\n/).map((line) => line.replace(/^#+\s*/, "").trim()).filter(Boolean).slice(0, 4);
@@ -16278,7 +16707,7 @@ function lines(text) {
 function firstLine(text) {
   return text.split(/\r?\n/)[0]?.trim() ?? "";
 }
-function uniqueSorted(values) {
+function uniqueSorted2(values) {
   return Array.from(new Set(values)).sort();
 }
 function clean(value, maxLength) {
@@ -16333,6 +16762,15 @@ var CONTENT_MAX_LENGTH = 500;
 var EVIDENCE_MAX_LENGTH2 = 320;
 var SENSITIVE_PROJECT_HARVEST_PATTERN = /\b(?:personal|private|family|medical|password|secret|token|api[_\s-]?key|bearer|sk-[a-z0-9_-]*)\b/i;
 async function runCodexProjectMemoryHarvest(input) {
+  const project = await identifyCodexProject(input.cwd);
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      action: "noop",
+      reason: "Project memory is disabled for this project.",
+      signals: [],
+      warnings: []
+    };
+  }
   const { signals, warnings } = await collectProjectMemorySignals({
     cwd: input.cwd,
     mode: input.mode,
@@ -16397,7 +16835,7 @@ function buildCodexProjectMemoryHarvestPrompt(signals) {
 }
 function parseCodexProjectMemoryHarvestResponse(content) {
   const parsed = JSON.parse(extractJsonObject(content));
-  if (!isRecord2(parsed)) {
+  if (!isRecord3(parsed)) {
     throw new Error("Project memory harvest response is not a JSON object.");
   }
   return {
@@ -16406,7 +16844,7 @@ function parseCodexProjectMemoryHarvestResponse(content) {
   };
 }
 function sanitizeProjectMemoryCandidate(value, signals, config2) {
-  if (!isRecord2(value)) {
+  if (!isRecord3(value)) {
     return void 0;
   }
   const candidateKind = parseProjectCandidateKind(value.candidateKind) ?? parseProjectCandidateKind(value.candidate_kind);
@@ -16501,6 +16939,9 @@ function missingModelConfigReason(config2) {
   }
   if (config2.model.model.trim() === "" || routeModel.trim() === "") {
     missing.push("CYRENE_MODEL");
+  }
+  if (modelBaseUrlRequiresApiKey(config2.model.baseUrl) && !config2.model.apiKey?.trim()) {
+    missing.push("CYRENE_API_KEY");
   }
   return missing.length === 0 ? void 0 : `Model config is incomplete: set ${missing.join(" and ")}.`;
 }
@@ -16597,20 +17038,20 @@ function extractJsonObject(content) {
   }
   throw new Error("Project memory harvest response JSON was incomplete.");
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash7, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID9 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile3 } from "node:fs/promises";
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 var REVIEW_SUMMARIES_FILE3 = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join18(root, REVIEW_SUMMARIES_FILE3);
+  const targetPath = join19(root, REVIEW_SUMMARIES_FILE3);
   await assertSafeMemoryDataFileTarget(targetPath);
   await appendFile3(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
@@ -16633,8 +17074,8 @@ function recentTranscriptMessages(messages, limit = 40) {
   return messages.slice(-limit);
 }
 function parseTranscriptLine(value) {
-  const record2 = isRecord3(value) ? value : void 0;
-  const source = isRecord3(record2?.message) ? record2.message : record2;
+  const record2 = isRecord4(value) ? value : void 0;
+  const source = isRecord4(record2?.message) ? record2.message : record2;
   const role = asString(source?.role);
   const content = contentToString(source?.content);
   if (role === void 0 || content === void 0) {
@@ -16653,7 +17094,7 @@ function contentToString(value) {
     if (typeof entry === "string") {
       return [entry];
     }
-    if (isRecord3(entry) && typeof entry.text === "string") {
+    if (isRecord4(entry) && typeof entry.text === "string") {
       return [entry.text];
     }
     return [];
@@ -16663,7 +17104,7 @@ function contentToString(value) {
 function asString(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -16698,7 +17139,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID8();
+  const summaryId = randomUUID9();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -16782,7 +17223,7 @@ function buildCodexReviewSummaryPrompt(redactedTranscript) {
 function parseReviewSummaryResponse(content) {
   const objectText = extractJsonObject2(content);
   const parsed = JSON.parse(objectText);
-  if (!isRecord4(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
+  if (!isRecord5(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
     throw new Error("Review summary response is missing summary.");
   }
   return {
@@ -16794,7 +17235,7 @@ function formatMessages(messages) {
   return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
 }
 function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
-  if (!isRecord4(value)) {
+  if (!isRecord5(value)) {
     return void 0;
   }
   const domain = parseEnum(value.domain, DOMAINS);
@@ -16822,7 +17263,7 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
 }
 function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor) {
   const evidence = Array.isArray(value) ? value.flatMap((entry) => {
-    if (!isRecord4(entry)) {
+    if (!isRecord5(entry)) {
       return [];
     }
     const summary = redactOptionalString(entry.summary, redactor);
@@ -16869,7 +17310,7 @@ function redactOptionalString(value, redactor) {
   return text === void 0 ? void 0 : redactor.redact(text);
 }
 function parseScores(value) {
-  if (!isRecord4(value)) {
+  if (!isRecord5(value)) {
     return void 0;
   }
   const scores = {};
@@ -16930,7 +17371,7 @@ function parseEnum(value, allowed) {
 function parseString(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord4(value) {
+function isRecord5(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -16979,6 +17420,10 @@ async function handleCodexStopHookPayload(payload, deps = {}) {
 }
 async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   const config2 = deps.config ?? createDefaultConfig(cwd);
+  const project = await identifyCodexProject(cwd);
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return { action: "noop", reason: "Project memory is disabled for this project." };
+  }
   await appendStopHookTrace(cwd, payload);
   if (!config2.memoryAutoExtractEnabled) {
     return { action: "noop", reason: "Codex memory auto extraction is disabled." };
@@ -16995,14 +17440,12 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (messages.length === 0) {
     return { action: "noop", reason: "No transcript messages found." };
   }
-  const review = await runCodexReviewSummary({
+  const review = await runReviewSummaryOrSkip({
+    payload,
     cwd,
-    sessionId: asString2(payload.session_id),
-    turnId: asString2(payload.turn_id),
     messages,
     config: config2,
-    callModel: deps.callModel ?? callModel,
-    signal: AbortSignal.timeout(2e4)
+    deps
   });
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages);
   const explicitResult = instruction === void 0 ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction);
@@ -17058,7 +17501,11 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
     return { action: "noop", reason: "Pending memory candidates were not confirmed in memory storage." };
   }
   if (review.action === "summary") {
-    return { action: "summary", summaryId: review.summaryId, reason: "Codex review summary written." };
+    return {
+      action: "summary",
+      summaryId: review.summaryId,
+      reason: "reason" in review ? review.reason : "Codex review summary written."
+    };
   }
   if (review.action === "summary_failed") {
     return { action: "summary_failed", summaryId: review.summaryId, reason: review.reason };
@@ -17092,6 +17539,24 @@ async function runProjectMemoryHarvestFailOpen(input) {
     return void 0;
   }
 }
+async function runReviewSummaryOrSkip(input) {
+  if (input.deps.callModel === void 0 && !isMemoryExtractionModelConfigured(input.config)) {
+    return recordModelConfigSkippedSummary(input.cwd, input.payload);
+  }
+  return runCodexReviewSummary({
+    cwd: input.cwd,
+    sessionId: asString2(input.payload.session_id),
+    turnId: asString2(input.payload.turn_id),
+    messages: input.messages,
+    config: input.config,
+    callModel: input.deps.callModel ?? callModel,
+    signal: AbortSignal.timeout(2e4)
+  });
+}
+function isMemoryExtractionModelConfigured(config2) {
+  const routeModel = config2.model.cheapModel || config2.model.strongModel || config2.model.model;
+  return config2.model.baseUrl.trim() !== "" && config2.model.model.trim() !== "" && routeModel.trim() !== "" && (!modelBaseUrlRequiresApiKey(config2.model.baseUrl) || Boolean(config2.model.apiKey?.trim()));
+}
 function pendingReason(input) {
   if (input.hasHarvestCandidates) {
     if (input.explicitReason !== void 0) {
@@ -17109,8 +17574,11 @@ function visibleHookMessage(result2) {
 async function recordStopHookFailureSummary(cwd, payload, error2) {
   try {
     const project = await identifyCodexProject(cwd);
+    if (await isCodexProjectMemoryDisabled(project.projectId)) {
+      return { action: "noop", reason: "Project memory is disabled for this project." };
+    }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID9();
+    const summaryId = randomUUID10();
     const sessionId = asString2(payload.session_id);
     const turnId = asString2(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -17132,6 +17600,44 @@ async function recordStopHookFailureSummary(cwd, payload, error2) {
   } catch {
     return { action: "summary_failed", reason: "Stop hook command failed." };
   }
+}
+async function recordModelConfigSkippedSummary(cwd, payload) {
+  const project = await identifyCodexProject(cwd);
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      action: "summary",
+      summaryId: "",
+      memoryRoot: codexDisabledMemoryRoot(project.projectId),
+      candidateIds: [],
+      reason: "Project memory is disabled for this project."
+    };
+  }
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
+  const summaryId = randomUUID10();
+  const sessionId = asString2(payload.session_id);
+  const turnId = asString2(payload.turn_id);
+  const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
+  await appendCodexReviewSummary(memoryRoot, {
+    id: summaryId,
+    runId,
+    sessionId,
+    turnId,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    status: "ok",
+    summary: "Codex Stop hook skipped LLM review summary because model config is incomplete.",
+    redaction: { input: {}, output: {} },
+    candidateIds: []
+  });
+  return {
+    action: "summary",
+    summaryId,
+    memoryRoot,
+    candidateIds: [],
+    reason: "Codex review summary skipped because model config is incomplete."
+  };
+}
+function codexDisabledMemoryRoot(projectId) {
+  return `disabled:${projectId}`;
 }
 async function confirmPendingCandidateIds(confirm, cwd, candidateIds) {
   try {
@@ -17201,7 +17707,10 @@ function extractRecentExplicitMemoryInstructionFromMessages(messages) {
 async function readTranscriptText(cwd, transcriptPath) {
   try {
     const safePath = await resolveSafeTranscriptPath(cwd, transcriptPath);
-    return await readFile13(safePath, "utf8");
+    if (safePath.size > MAX_TRANSCRIPT_BYTES) {
+      return readTranscriptTail(safePath);
+    }
+    return await readFile14(safePath.path, "utf8");
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return void 0;
@@ -17218,15 +17727,29 @@ async function resolveSafeTranscriptPath(cwd, transcriptPath) {
   if (!stats.isFile()) {
     throw new Error("Transcript path is not a regular file.");
   }
-  if (stats.size > MAX_TRANSCRIPT_BYTES) {
-    throw new Error("Transcript path exceeds the maximum readable size.");
-  }
   const safePath = await realpath6(resolved);
   const allowedRoots = await allowedTranscriptRoots(cwd);
   if (!allowedRoots.some((root) => isPathInside5(root, safePath))) {
     throw new Error("Transcript path must be inside the project cwd or Codex home.");
   }
-  return safePath;
+  return { path: safePath, size: stats.size };
+}
+async function readTranscriptTail(target) {
+  const length = Math.min(target.size, MAX_TRANSCRIPT_BYTES);
+  const start = Math.max(0, target.size - length);
+  const file = await open3(target.path, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const result2 = await file.read(buffer, 0, length, start);
+    let text = buffer.subarray(0, result2.bytesRead).toString("utf8");
+    if (start > 0) {
+      const firstNewline = text.indexOf("\n");
+      text = firstNewline === -1 ? "" : text.slice(firstNewline + 1);
+    }
+    return text.trim() === "" ? void 0 : text;
+  } finally {
+    await file.close();
+  }
 }
 async function allowedTranscriptRoots(cwd) {
   const roots = [cwd, codexHomePath()].filter((root) => root !== void 0);
@@ -17249,7 +17772,7 @@ function codexHomePath() {
     return configured;
   }
   const home = process.env.HOME?.trim();
-  return home === void 0 || home === "" ? void 0 : join19(home, ".codex");
+  return home === void 0 || home === "" ? void 0 : join20(home, ".codex");
 }
 function isPathInside5(parent, child) {
   const path = relative5(parent, child);
@@ -17293,7 +17816,7 @@ function parsePayload(raw) {
     return {};
   }
   const parsed = JSON.parse(trimmed);
-  return isRecord5(parsed) ? parsed : void 0;
+  return isRecord6(parsed) ? parsed : void 0;
 }
 function toTraceInput(event, payload) {
   const cwd = asString3(payload.cwd) ?? process.cwd();
@@ -17332,8 +17855,8 @@ function signalsForEvent(event, prompt, tool) {
   return [];
 }
 function parseTool(payload) {
-  const nested = isRecord5(payload.tool) ? payload.tool : {};
-  const toolInput = isRecord5(payload.tool_input) ? payload.tool_input : isRecord5(payload.toolInput) ? payload.toolInput : {};
+  const nested = isRecord6(payload.tool) ? payload.tool : {};
+  const toolInput = isRecord6(payload.tool_input) ? payload.tool_input : isRecord6(payload.toolInput) ? payload.toolInput : {};
   const name = firstString(
     nested.name,
     nested.tool_name,
@@ -17378,7 +17901,7 @@ function responseSummary(value) {
   if (direct !== void 0) {
     return direct;
   }
-  if (!isRecord5(value)) {
+  if (!isRecord6(value)) {
     return void 0;
   }
   return firstString(value.output, value.result, value.content, value.text, value.stdout, value.stderr) ?? JSON.stringify(value);
@@ -17427,14 +17950,14 @@ function compact(value, maxLength) {
   const cleaned = value.replace(/\s+/g, " ").trim();
   return cleaned.length <= maxLength ? cleaned : `${cleaned.slice(0, Math.max(0, maxLength - 1))}...`;
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/codex/codex-install.ts
-import { lstat as lstat13, mkdir as mkdir9, rm as rm3, symlink, writeFile as writeFile7 } from "node:fs/promises";
+import { lstat as lstat13, mkdir as mkdir10, rm as rm4, symlink, writeFile as writeFile8 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname9, join as join20, resolve as resolve7 } from "node:path";
+import { dirname as dirname10, join as join21, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -17446,13 +17969,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join20(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join21(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
-  await mkdir9(dirname9(skillTarget), { recursive: true });
+  await mkdir10(dirname10(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
-  await mkdir9(stateRoot, { recursive: true });
-  await writeFile7(join20(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await mkdir10(stateRoot, { recursive: true });
+  await writeFile8(join21(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -17493,7 +18016,7 @@ async function removeExistingSkillSymlink(path) {
     if (!stats.isSymbolicLink()) {
       throw new Error(`Refusing to replace existing non-symlink skill path: ${path}`);
     }
-    await rm3(path);
+    await rm4(path);
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return;
@@ -17503,9 +18026,9 @@ async function removeExistingSkillSymlink(path) {
 }
 
 // src/codex/codex-memory-dashboard.ts
-import { readFile as readFile14 } from "node:fs/promises";
+import { readFile as readFile15 } from "node:fs/promises";
 import { homedir as homedir6 } from "node:os";
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 var REVIEW_SUMMARIES_FILE4 = "review-summaries.jsonl";
 var STOP_HOOK_STALE_MS = 24 * 60 * 60 * 1e3;
 async function formatCodexMemoryDashboard(input) {
@@ -17520,7 +18043,7 @@ async function formatCodexMemoryDashboard(input) {
     readReviewSummaries(projectRoot),
     readDashboardDreamState(projectRoot),
     readModelProfileFromRootIfExists(projectRoot),
-    readOptional2(input.configPath ?? join21(homedir6(), ".codex", "config.toml"))
+    readOptional2(input.configPath ?? join22(homedir6(), ".codex", "config.toml"))
   ]);
   const pendingSummaries = pending.map((candidate) => summarizePendingMemory(candidate, now));
   const warnings = buildDashboardWarnings({
@@ -17566,7 +18089,7 @@ async function readDashboardPendingMemories(roots) {
 async function readReviewSummaries(root) {
   let content;
   try {
-    content = await readOptionalMemoryDataFile(join21(root, REVIEW_SUMMARIES_FILE4));
+    content = await readOptionalMemoryDataFile(join22(root, REVIEW_SUMMARIES_FILE4));
   } catch {
     return [];
   }
@@ -17769,7 +18292,7 @@ function stripTomlInlineComment2(value) {
 }
 async function readOptional2(path) {
   try {
-    return await readFile14(path, "utf8");
+    return await readFile15(path, "utf8");
   } catch (error2) {
     if (isErrorCode5(error2, "ENOENT")) {
       return "";
@@ -17780,7 +18303,7 @@ async function readOptional2(path) {
 async function readOptionalMemoryDataFile(path) {
   try {
     await assertSafeMemoryDataFileTarget(path);
-    return await readFile14(path, "utf8");
+    return await readFile15(path, "utf8");
   } catch (error2) {
     if (isErrorCode5(error2, "ENOENT")) {
       return "";
@@ -17810,8 +18333,8 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
-import { readFile as readFile15 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { readFile as readFile16 } from "node:fs/promises";
+import { join as join23 } from "node:path";
 var REVIEW_SUMMARIES_FILE5 = "review-summaries.jsonl";
 var PROJECT_MEMORY_LABELS = [
   "Project Facts",
@@ -17821,6 +18344,18 @@ var PROJECT_MEMORY_LABELS = [
   "Rejected Approaches",
   "Open Questions",
   "Other Project Memory"
+];
+var GLOBAL_MEMORY_LABELS = [
+  "User Preferences",
+  "Interaction Style",
+  "Relationship Boundaries",
+  "Affective Patterns",
+  "Workflow Rules",
+  "System Policies",
+  "References",
+  "Episodes",
+  "Project Facts",
+  "Other Global Memory"
 ];
 async function handleCodexUiApiRequest(input) {
   try {
@@ -17848,28 +18383,60 @@ async function handleCodexUiApiRequest(input) {
       if (input.method.toUpperCase() !== "POST") {
         return methodNotAllowed();
       }
-      return handleMemoryWriteRoute(input, writeRoute);
+      const selection = parseSelectionRequest(input.searchParams);
+      if ("error" in selection) return selection.error;
+      return handleMemoryWriteRoute(input, writeRoute, selection.value);
+    }
+    const projectDeleteRoute = parseProjectDeleteRoute(input.pathname);
+    if (projectDeleteRoute !== void 0) {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      return handleProjectDeleteRoute(input, projectDeleteRoute);
     }
     if (input.method.toUpperCase() !== "GET") {
       return methodNotAllowed();
     }
     switch (input.pathname) {
+      case "/api/projects":
+        return ok(await readProjects(input.cwd));
       case "/api/status":
         return ok(await readCodexMemoryStatus({ cwd: input.cwd }));
-      case "/api/dashboard":
-        return ok(await readDashboard(input.cwd, input.now));
-      case "/api/memory/pending":
-        return ok(await listCodexPendingMemories({ cwd: input.cwd }));
-      case "/api/memory/active":
-        return ok(await readActive(input.cwd));
-      case "/api/review-summaries":
-        return ok(await readReviewSummaries2(input.cwd));
-      case "/api/project-memory":
-        return ok(await readProjectMemory(input.cwd));
-      case "/api/dream":
-        return ok(await readDream(input.cwd));
-      case "/api/profile":
-        return ok(await readProfile(input.cwd));
+      case "/api/dashboard": {
+        const selection = parseSelectionRequest(input.searchParams);
+        if ("error" in selection) return selection.error;
+        return ok(await readDashboard(input.cwd, input.now, selection.value));
+      }
+      case "/api/memory/pending": {
+        const selection = parseSelectionRequest(input.searchParams);
+        if ("error" in selection) return selection.error;
+        return ok(await readPending(input.cwd, selection.value));
+      }
+      case "/api/memory/active": {
+        const selection = parseSelectionRequest(input.searchParams);
+        if ("error" in selection) return selection.error;
+        return ok(await readActive(input.cwd, selection.value));
+      }
+      case "/api/review-summaries": {
+        const selection = parseSelectionRequest(input.searchParams);
+        if ("error" in selection) return selection.error;
+        return ok(await readReviewSummaries2(input.cwd, selection.value));
+      }
+      case "/api/project-memory": {
+        const selection = parseSelectionRequest(input.searchParams);
+        if ("error" in selection) return selection.error;
+        return ok(await readProjectMemory(input.cwd, selection.value));
+      }
+      case "/api/dream": {
+        const selection = parseSelectionRequest(input.searchParams);
+        if ("error" in selection) return selection.error;
+        return ok(await readDream(input.cwd, selection.value));
+      }
+      case "/api/profile": {
+        const selection = parseSelectionRequest(input.searchParams);
+        if ("error" in selection) return selection.error;
+        return ok(await readProfile(input.cwd, selection.value));
+      }
       default:
         return notFound();
     }
@@ -17882,15 +18449,43 @@ function parseMemoryWriteRoute(pathname) {
   if (match === null) return void 0;
   return { id: decodeURIComponent(match[1]), action: match[2] };
 }
-async function handleMemoryWriteRoute(input, route) {
+function parseProjectDeleteRoute(pathname) {
+  const match = /^\/api\/projects\/([^/]+)\/delete-memory$/.exec(pathname);
+  if (match === null) return void 0;
+  const projectId = decodeURIComponent(match[1]);
+  return isValidProjectId(projectId) ? { projectId } : void 0;
+}
+async function handleProjectDeleteRoute(input, route) {
   const body = input.body;
-  if (!isRecord6(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
+  if (!isRecord7(body) || typeof body.confirmProjectId !== "string") {
+    return failure(400, "invalid_request", "Project memory deletion requires confirmProjectId.");
+  }
+  if (body.confirmProjectId.trim() !== route.projectId) {
+    return failure(400, "invalid_request", "Project memory deletion confirmation must match projectId.");
+  }
+  const result2 = await deleteCodexProjectMemory({
+    projectId: route.projectId,
+    reason: typeof body.reason === "string" ? body.reason : void 0,
+    now: input.now
+  });
+  return ok({
+    receipt: {
+      action: "delete_project_memory",
+      ...result2,
+      createdAt: result2.disabledAt,
+      summary: "Project memory deleted and future project memory capture disabled."
+    }
+  });
+}
+async function handleMemoryWriteRoute(input, route, selection) {
+  const body = input.body;
+  if (!isRecord7(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
     return failure(400, "invalid_request", "Write requests require reviewHash.");
   }
   const reviewHash = body.reviewHash.trim();
   if (route.action === "approve") {
     return writeResultToApi(
-      await promoteCodexPendingMemory({ cwd: input.cwd, id: route.id, reviewHash, now: input.now }),
+      await promoteCodexPendingMemory({ cwd: input.cwd, projectId: selection.projectId, id: route.id, reviewHash, now: input.now }),
       "approve",
       reviewHash,
       input.now
@@ -17903,6 +18498,7 @@ async function handleMemoryWriteRoute(input, route) {
     return writeResultToApi(
       await rejectCodexPendingMemory({
         cwd: input.cwd,
+        projectId: selection.projectId,
         id: route.id,
         reviewHash,
         reason: body.reason.trim(),
@@ -17924,6 +18520,7 @@ async function handleMemoryWriteRoute(input, route) {
     return writeResultToApi(
       await deferCodexPendingMemory({
         cwd: input.cwd,
+        projectId: selection.projectId,
         id: route.id,
         reviewHash,
         reason: body.reason.trim(),
@@ -17938,7 +18535,7 @@ async function handleMemoryWriteRoute(input, route) {
   if (typeof body.changeNote !== "string" || body.changeNote.trim() === "") {
     return failure(400, "invalid_request", "Edit requires a change note.");
   }
-  if (!isRecord6(body.patch)) {
+  if (!isRecord7(body.patch)) {
     return failure(400, "invalid_request", "Edit requires a patch object.");
   }
   const patch = parseEditPatch(body.patch);
@@ -17946,6 +18543,7 @@ async function handleMemoryWriteRoute(input, route) {
   return writeResultToApi(
     await editCodexPendingMemory({
       cwd: input.cwd,
+      projectId: selection.projectId,
       id: route.id,
       reviewHash,
       reason: body.changeNote.trim(),
@@ -17975,7 +18573,7 @@ function parseEditPatch(value) {
     patch.tags = value.tags.map((item) => item.trim()).filter(Boolean);
   }
   if (value.scores !== void 0) {
-    if (!isRecord6(value.scores)) {
+    if (!isRecord7(value.scores)) {
       return { error: failure(400, "invalid_request", "Edit patch scores must be an object.") };
     }
     const scores = parseScorePatch(value.scores);
@@ -18045,24 +18643,57 @@ function writeReceipt(action, id, reviewHash, summary, now) {
     summary
   };
 }
-async function readActive(cwd) {
-  const project = await identifyCodexProject(cwd);
-  const memoryRoot = codexProjectMemoryRoot(project.projectId);
-  const active = await readActiveMemoriesFromRoot(memoryRoot);
-  return { project, active, memoryRoot };
+async function readProjects(cwd) {
+  const currentProject = await identifyCodexProject(cwd);
+  const [entries, globalCounts, indexedProjectNames] = await Promise.all([
+    safeListCodexProjects(),
+    readCountsFromRoot(codexGlobalMemoryRoot()),
+    safeListIndexedProjectDisplayNames()
+  ]);
+  const projects = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    projects.set(entry.projectId, projectOptionFromRegistryEntry(entry, currentProject, indexedProjectNames.get(entry.projectId)));
+  }
+  if (!projects.has(currentProject.projectId)) {
+    const memoryRoot = codexProjectMemoryRoot(currentProject.projectId);
+    projects.set(currentProject.projectId, {
+      projectId: currentProject.projectId,
+      displayName: currentProject.displayName,
+      aliases: [],
+      disabled: false,
+      memoryRoot,
+      counts: await readCountsFromRoot(memoryRoot),
+      current: true
+    });
+  }
+  return {
+    currentProjectId: currentProject.projectId,
+    currentProject,
+    global: {
+      label: "Global",
+      memoryRoot: codexGlobalMemoryRoot(),
+      counts: globalCounts
+    },
+    projects: Array.from(projects.values()).sort(compareProjectOptions)
+  };
 }
-async function readDashboard(cwd, now) {
-  const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals] = await Promise.all([
+async function readDashboard(cwd, now, request) {
+  const selection = await resolveSelection(cwd, request);
+  const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals, projects] = await Promise.all([
     readCodexMemoryStatus({ cwd }),
-    listCodexPendingMemories({ cwd }),
-    readActive(cwd),
-    readReviewSummaries2(cwd),
-    readProjectMemory(cwd),
-    readDream(cwd),
-    readProfile(cwd),
-    collectProjectMemorySignals({ cwd, now, mode: "default" })
+    readPendingFromSelection(selection),
+    readActiveFromSelection(selection),
+    readReviewSummariesFromSelection(selection),
+    readProjectMemoryFromSelection(selection),
+    readDreamFromSelection(selection),
+    readProfileFromSelection(selection),
+    collectProjectMemorySignals({ cwd, now, mode: "default" }),
+    readProjects(cwd)
   ]);
   return {
+    selection: publicSelection(selection),
+    projects,
+    modelConfig: readModelConfigDiagnostic(cwd),
     status,
     pending,
     active,
@@ -18073,39 +18704,239 @@ async function readDashboard(cwd, now) {
     signals
   };
 }
-async function readProjectMemory(cwd) {
-  const active = await readActive(cwd);
+async function readActive(cwd, request) {
+  return readActiveFromSelection(await resolveSelection(cwd, request));
+}
+async function readPending(cwd, request) {
+  return readPendingFromSelection(await resolveSelection(cwd, request));
+}
+async function readProjectMemory(cwd, request) {
+  return readProjectMemoryFromSelection(await resolveSelection(cwd, request));
+}
+async function readProjectMemoryFromSelection(selection) {
+  const active = await readActiveFromSelection(selection);
   return {
     ...active,
-    groups: groupProjectMemories(active.active)
+    selection: publicSelection(selection),
+    groups: groupMemoriesForSelection(active.active, selection.scope)
   };
 }
-async function readReviewSummaries2(cwd) {
-  const project = await identifyCodexProject(cwd);
-  const memoryRoot = codexProjectMemoryRoot(project.projectId);
-  const summaries = await readReviewSummaryRecordsForUi(memoryRoot);
-  return { project, memoryRoot, summaries };
+async function readReviewSummaries2(cwd, request) {
+  return readReviewSummariesFromSelection(await resolveSelection(cwd, request));
 }
-async function readProfile(cwd) {
-  const project = await identifyCodexProject(cwd);
-  const memoryRoot = codexProjectMemoryRoot(project.projectId);
-  const profile = await readModelProfileFromRootIfExists(memoryRoot);
-  return { project, memoryRoot, profile: profile ?? "" };
+async function readReviewSummariesFromSelection(selection) {
+  const summaries = (await Promise.all(selection.memoryRoots.map((root) => readReviewSummaryRecordsForUi(root)))).flat();
+  return {
+    project: selection.project,
+    selection: publicSelection(selection),
+    memoryRoot: selection.memoryRoot,
+    memoryRoots: selection.memoryRoots,
+    summaries: summaries.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+  };
 }
-async function readDream(cwd) {
-  const project = await identifyCodexProject(cwd);
-  const memoryRoot = codexProjectMemoryRoot(project.projectId);
+async function readProfile(cwd, request) {
+  return readProfileFromSelection(await resolveSelection(cwd, request));
+}
+async function readProfileFromSelection(selection) {
+  const profile = await readModelProfileFromRootIfExists(selection.memoryRoot);
+  return { project: selection.project, selection: publicSelection(selection), memoryRoot: selection.memoryRoot, profile: profile ?? "" };
+}
+async function readDream(cwd, request) {
+  return readDreamFromSelection(await resolveSelection(cwd, request));
+}
+async function readDreamFromSelection(selection) {
+  const memoryRoot = selection.memoryRoot;
   const dream = await readCodexMemoryDreamState(memoryRoot);
-  return { project, memoryRoot, dream };
+  return { project: selection.project, selection: publicSelection(selection), memoryRoot, dream };
+}
+async function readActiveFromSelection(selection) {
+  const active = (await Promise.all(selection.memoryRoots.map((root) => readActiveMemoriesFromRoot(root)))).flat();
+  return { project: selection.project, active: sortMemoriesNewestFirst(active), memoryRoot: selection.memoryRoot };
+}
+async function readPendingFromSelection(selection) {
+  const pending = (await Promise.all(selection.memoryRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat();
+  const summaries = sortPendingNewestFirst3(pending.map((candidate) => summarizePendingMemory(candidate)));
+  return {
+    project: selection.project,
+    selection: publicSelection(selection),
+    pending: summaries,
+    total: summaries.length,
+    memoryRoot: selection.memoryRoot,
+    memoryRoots: selection.memoryRoots
+  };
+}
+async function resolveSelection(cwd, request) {
+  const projects = await readProjects(cwd);
+  const projectId = request.projectId ?? projects.currentProjectId;
+  const projectOption = projects.projects.find((project2) => project2.projectId === projectId);
+  const project = projectOption === void 0 ? { projectId, displayName: unlabeledProjectName(projectId) } : { projectId, displayName: projectOption.displayName };
+  const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
+  const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(projectId) ?? codexProjectMemoryRoot(projectId);
+  const memoryRoots = request.scope === "global" ? [globalMemoryRoot] : request.scope === "all" ? uniqueInOrder3([globalMemoryRoot, projectMemoryRoot]) : [projectMemoryRoot];
+  const memoryRoot = request.scope === "global" ? globalMemoryRoot : projectMemoryRoot;
+  return {
+    scope: request.scope,
+    projectId,
+    label: selectionLabel(request.scope, project.displayName),
+    project,
+    memoryRoot,
+    memoryRoots,
+    globalMemoryRoot,
+    projectMemoryRoot
+  };
+}
+function parseSelectionRequest(params) {
+  const scopeValue = params?.get("scope")?.trim() || "project";
+  if (!isCodexUiMemoryScope(scopeValue)) {
+    return { error: failure(400, "invalid_request", "scope must be project, global, or all.") };
+  }
+  const projectId = params?.get("projectId")?.trim() || void 0;
+  if (projectId !== void 0 && !isValidProjectId(projectId)) {
+    return { error: failure(400, "invalid_request", "projectId is invalid.") };
+  }
+  return {
+    value: {
+      scope: scopeValue,
+      ...projectId === void 0 ? {} : { projectId }
+    }
+  };
+}
+function publicSelection(selection) {
+  return {
+    scope: selection.scope,
+    projectId: selection.projectId,
+    label: selection.label,
+    memoryRoot: selection.memoryRoot,
+    memoryRoots: selection.memoryRoots,
+    globalMemoryRoot: selection.globalMemoryRoot,
+    projectMemoryRoot: selection.projectMemoryRoot
+  };
+}
+function readModelConfigDiagnostic(cwd) {
+  const config2 = createDefaultConfig(cwd);
+  const routeModel = config2.model.cheapModel || config2.model.strongModel || config2.model.model;
+  const apiKeyRequired = modelBaseUrlRequiresApiKey(config2.model.baseUrl);
+  const apiKeyConfigured = Boolean(config2.model.apiKey?.trim());
+  const missing = [];
+  if (config2.model.baseUrl.trim() === "") missing.push("CYRENE_BASE_URL");
+  if (config2.model.model.trim() === "" || routeModel.trim() === "") missing.push("CYRENE_MODEL");
+  if (apiKeyRequired && !apiKeyConfigured) missing.push("CYRENE_API_KEY");
+  return {
+    configured: missing.length === 0,
+    missing,
+    baseUrlConfigured: config2.model.baseUrl.trim() !== "",
+    modelConfigured: config2.model.model.trim() !== "" && routeModel.trim() !== "",
+    apiKeyConfigured,
+    apiKeyRequired,
+    baseUrl: config2.model.baseUrl,
+    model: config2.model.model,
+    strongModel: config2.model.strongModel,
+    cheapModel: config2.model.cheapModel,
+    apiKeyEnv: "CYRENE_API_KEY",
+    apiKeyPreview: config2.model.apiKey?.trim() ? "set" : "not set",
+    help: "Set CYRENE_BASE_URL, CYRENE_MODEL, and CYRENE_API_KEY when your OpenAI-compatible provider requires bearer auth."
+  };
+}
+async function safeListCodexProjects() {
+  try {
+    return await listCodexProjects();
+  } catch {
+    return [];
+  }
+}
+async function safeListIndexedProjectDisplayNames() {
+  const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
+  try {
+    const metadata = await adapter.listProjectMetadata();
+    return new Map(metadata.flatMap((project) => {
+      const displayName = project.displayName.trim();
+      if (displayName === "" || displayName === project.projectId) return [];
+      return [[project.projectId, displayName]];
+    }));
+  } catch {
+    return /* @__PURE__ */ new Map();
+  } finally {
+    adapter.close();
+  }
+}
+function projectOptionFromRegistryEntry(entry, currentProject, indexedDisplayName) {
+  return {
+    projectId: entry.projectId,
+    displayName: projectDisplayName(entry, currentProject, indexedDisplayName),
+    aliases: entry.aliases,
+    ...entry.mergedInto === void 0 ? {} : { mergedInto: entry.mergedInto },
+    disabled: entry.disabled,
+    ...entry.disabledAt === void 0 ? {} : { disabledAt: entry.disabledAt },
+    ...entry.disabledReason === void 0 ? {} : { disabledReason: entry.disabledReason },
+    memoryRoot: entry.memoryRoot,
+    counts: entry.counts,
+    current: entry.projectId === currentProject.projectId
+  };
+}
+function projectDisplayName(entry, currentProject, indexedDisplayName) {
+  if (entry.aliases[0] !== void 0) return entry.aliases[0];
+  if (entry.projectId === currentProject.projectId) return currentProject.displayName;
+  if (indexedDisplayName !== void 0 && indexedDisplayName.trim() !== "") return indexedDisplayName;
+  if (entry.displayName.trim() !== "" && entry.displayName !== entry.projectId) return entry.displayName;
+  return unlabeledProjectName(entry.projectId);
+}
+function unlabeledProjectName(projectId) {
+  return `Unlabeled project (${shortProjectId(projectId)})`;
+}
+function shortProjectId(projectId) {
+  return projectId.slice(0, 8);
+}
+async function readCountsFromRoot(memoryRoot) {
+  const [active, pending, tombstones] = await Promise.all([
+    readActiveMemoriesFromRoot(memoryRoot),
+    readPendingMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ]);
+  return { active: active.length, pending: pending.length, tombstones: tombstones.length };
+}
+function selectionLabel(scope, projectName) {
+  if (scope === "global") return "Global";
+  if (scope === "all") return `${projectName} + Global`;
+  return projectName;
+}
+function compareProjectOptions(left, right) {
+  if (left.current !== right.current) return left.current ? -1 : 1;
+  return left.displayName.localeCompare(right.displayName) || left.projectId.localeCompare(right.projectId);
+}
+function sortPendingNewestFirst3(pending) {
+  return [...pending].sort((left, right) => {
+    const lastSeen = right.lastSeenAt.localeCompare(left.lastSeenAt);
+    return lastSeen === 0 ? left.id.localeCompare(right.id) : lastSeen;
+  });
+}
+function sortMemoriesNewestFirst(memories) {
+  return [...memories].sort((left, right) => {
+    const updated = right.updatedAt.localeCompare(left.updatedAt);
+    return updated === 0 ? left.id.localeCompare(right.id) : updated;
+  });
+}
+function isCodexUiMemoryScope(value) {
+  return value === "project" || value === "global" || value === "all";
+}
+function isValidProjectId(value) {
+  return /^[A-Za-z0-9._-]+$/.test(value) && !/^\.+$/.test(value);
+}
+function uniqueInOrder3(values) {
+  const seen = /* @__PURE__ */ new Set();
+  return values.filter((value) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
 }
 async function readReviewSummaryRecordsForUi(memoryRoot) {
-  const targetPath = join22(memoryRoot, REVIEW_SUMMARIES_FILE5);
+  const targetPath = join23(memoryRoot, REVIEW_SUMMARIES_FILE5);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
-    content = await readFile15(targetPath, "utf8");
+    content = await readFile16(targetPath, "utf8");
   } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -18129,6 +18960,19 @@ function groupProjectMemories(memories) {
   }
   return PROJECT_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
 }
+function groupGlobalMemories(memories) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const label of GLOBAL_MEMORY_LABELS) {
+    groups.set(label, []);
+  }
+  for (const memory of memories) {
+    groups.get(labelForGlobalMemory(memory))?.push(memory);
+  }
+  return GLOBAL_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
+}
+function groupMemoriesForSelection(memories, scope) {
+  return scope === "global" ? groupGlobalMemories(memories) : groupProjectMemories(memories);
+}
 function labelForProjectMemory(memory) {
   const classification = memory.candidateKind ?? memory.candidate_kind ?? memory.type;
   if (classification === "project_decision") return "Project Decisions";
@@ -18145,20 +18989,42 @@ function labelForProjectMemory(memory) {
   if (hasTag(memory, "project_fact")) return "Project Facts";
   return "Other Project Memory";
 }
+function labelForGlobalMemory(memory) {
+  const classification = memory.candidateKind ?? memory.candidate_kind ?? memory.type;
+  if (classification === "user_preference") return "User Preferences";
+  if (classification === "interaction_style") return "Interaction Style";
+  if (classification === "relationship_boundary") return "Relationship Boundaries";
+  if (classification === "affective_pattern") return "Affective Patterns";
+  if (classification === "workflow_rule" || classification === "procedural_rule") return "Workflow Rules";
+  if (classification === "system_policy") return "System Policies";
+  if (classification === "reference") return "References";
+  if (classification === "episode") return "Episodes";
+  if (classification === "project_fact") return "Project Facts";
+  if (hasTag(memory, "user_preference")) return "User Preferences";
+  if (hasTag(memory, "interaction_style")) return "Interaction Style";
+  if (hasTag(memory, "relationship_boundary")) return "Relationship Boundaries";
+  if (hasTag(memory, "affective_pattern")) return "Affective Patterns";
+  if (hasTag(memory, "workflow_rule")) return "Workflow Rules";
+  if (hasTag(memory, "system_policy")) return "System Policies";
+  if (hasTag(memory, "reference")) return "References";
+  if (hasTag(memory, "episode")) return "Episodes";
+  if (hasTag(memory, "project_fact")) return "Project Facts";
+  return "Other Global Memory";
+}
 function hasTag(memory, expected) {
   return memory.tags.includes(expected);
 }
 function isReviewSummaryRecord2(value) {
-  if (!isRecord6(value)) return false;
+  if (!isRecord7(value)) return false;
   return typeof value.id === "string" && typeof value.runId === "string" && optionalString(value.sessionId) && optionalString(value.turnId) && typeof value.createdAt === "string" && (value.status === "ok" || value.status === "failed") && typeof value.summary === "string" && isRedaction(value.redaction) && Array.isArray(value.candidateIds) && value.candidateIds.every((item) => typeof item === "string") && optionalString(value.failureReason);
 }
 function isRedaction(value) {
-  return isRecord6(value) && isRecord6(value.input) && isRecord6(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
+  return isRecord7(value) && isRecord7(value.input) && isRecord7(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
 }
 function optionalString(value) {
   return value === void 0 || typeof value === "string";
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function ok(data) {
@@ -18186,7 +19052,7 @@ function methodNotAllowed() {
 function errorMessage4(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
-function isFileErrorCode10(error2, code) {
+function isFileErrorCode11(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -18203,6 +19069,9 @@ const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
+  selection: { scope: 'project', label: 'Project', projectId: '' },
+  projects: { projects: [], global: { counts: {} }, currentProjectId: '' },
+  modelConfig: { configured: false, missing: [] },
   pending: { pending: [], total: 0, project: {} },
   active: { active: [], project: {} },
   reviewSummaries: { summaries: [] },
@@ -18229,8 +19098,12 @@ const CONFIRM_LABELS = {
   edit: 'Confirm edit'
 }
 
+const MEMORY_SCOPES = ['project', 'global']
+
 const state = {
   activeTab: 'overview',
+  memoryScope: 'project',
+  selectedProjectId: '',
   dashboard: EMPTY_DASHBOARD,
   error: '',
   sessionToken: '',
@@ -18238,6 +19111,7 @@ const state = {
   pendingAction: null,
   receipt: null,
   actionError: '',
+  projectDelete: { confirming: false, loading: false, error: '', receipt: null },
   harvester: { loading: false, result: null, error: '' }
 }
 
@@ -18288,12 +19162,15 @@ async function apiFetch(pathname, options = {}) {
 async function loadDashboard(options = {}) {
   const renderAfter = options.renderAfter !== false
   try {
-    const response = await apiFetch('/api/dashboard')
+    const response = await apiFetch(dashboardEndpoint())
     const payload = await response.json()
     if (!payload.ok) {
       throw new Error(payload.error?.message || 'Dashboard API returned an error.')
     }
     state.dashboard = mergeDashboard(payload.data)
+    if (!state.selectedProjectId) {
+      state.selectedProjectId = state.dashboard.selection?.projectId || state.dashboard.projects?.currentProjectId || ''
+    }
     state.error = ''
   } catch (error) {
     state.dashboard = EMPTY_DASHBOARD
@@ -18302,10 +19179,20 @@ async function loadDashboard(options = {}) {
   if (renderAfter) render()
 }
 
+function dashboardEndpoint() {
+  const params = new URLSearchParams()
+  params.set('scope', state.memoryScope)
+  if (state.selectedProjectId) params.set('projectId', state.selectedProjectId)
+  return \`/api/dashboard?\${params.toString()}\`
+}
+
 function mergeDashboard(data) {
   return {
     ...EMPTY_DASHBOARD,
     ...(data || {}),
+    selection: { ...EMPTY_DASHBOARD.selection, ...(data?.selection || {}) },
+    projects: { ...EMPTY_DASHBOARD.projects, ...(data?.projects || {}) },
+    modelConfig: { ...EMPTY_DASHBOARD.modelConfig, ...(data?.modelConfig || {}) },
     pending: { ...EMPTY_DASHBOARD.pending, ...(data?.pending || {}) },
     active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },
     reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },
@@ -18341,36 +19228,99 @@ function renderNav() {
 
 function renderTopbar() {
   const dashboard = state.dashboard
-  const project = projectInfo(dashboard)
+  const selection = selectionInfo(dashboard)
   const pendingCount = listPending().length
   const status = dashboard.status || {}
   const sqliteStatus = text(status.index?.status || status.sqlite?.status || status.fallbackMode || 'read-only')
-  const modelStatus = modelLabel(status)
+  const modelStatus = modelLabel(dashboard.modelConfig || status)
   const stopHook = text(status.lastStopHook?.status || status.stopHook?.status || 'visible')
 
   topbar.innerHTML = \`
     <div>
       <p class="eyebrow">Local review console</p>
-      <h2>\${escapeHtml(project.displayName || 'Project Memory')}</h2>
+      <h2>\${escapeHtml(selection.label || 'Memory')}</h2>
     </div>
-    <div class="chip-row" aria-label="Runtime status">
-      \${statusChip('Project', project.projectId || 'unknown', 'muted')}
-      \${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
-      \${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
-      \${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
-      \${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
+    <div class="topbar-actions">
+      \${renderScopeControls(dashboard)}
+      <div class="chip-row" aria-label="Runtime status">
+        \${selection.scope === 'global'
+          ? statusChip('Scope', 'Global', 'muted')
+          : statusChip('Project ID', shortHash(selection.projectId || 'unknown'), 'muted')}
+        \${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
+        \${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
+        \${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
+        \${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
+      </div>
+    </div>
+  \`
+  bindTopbarControls()
+}
+
+function renderScopeControls(dashboard) {
+  const projects = Array.isArray(dashboard.projects?.projects) ? dashboard.projects.projects : []
+  const selectedProjectId = state.selectedProjectId || dashboard.selection?.projectId || dashboard.projects?.currentProjectId || ''
+  return \`
+    <div class="scope-controls" aria-label="Memory scope controls">
+      <select class="soft-select" data-project-select aria-label="Project selector">
+        \${projects.map((project) => \`
+          <option value="\${escapeHtml(project.projectId)}" \${project.projectId === selectedProjectId ? 'selected' : ''}>
+            \${escapeHtml(project.displayName || project.projectId)}\${project.disabled ? ' (disabled)' : ''}\${project.current ? ' (current)' : ''}
+          </option>
+        \`).join('')}
+      </select>
+      <div class="segmented-control" role="group" aria-label="Memory scope">
+        \${MEMORY_SCOPES.map((scope) => \`
+          <button type="button" data-scope="\${scope}" aria-pressed="\${state.memoryScope === scope ? 'true' : 'false'}">
+            \${escapeHtml(scopeLabel(scope))}
+          </button>
+        \`).join('')}
+      </div>
     </div>
   \`
 }
 
-function projectInfo(dashboard) {
-  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {
-    if (candidate?.projectId || candidate?.displayName) return candidate
+function bindTopbarControls() {
+  const projectSelect = topbar.querySelector('[data-project-select]')
+  if (projectSelect) {
+    projectSelect.addEventListener('change', () => {
+      state.selectedProjectId = projectSelect.value || ''
+      state.selectedPendingId = ''
+      state.pendingAction = null
+      state.receipt = null
+      state.projectDelete = { confirming: false, loading: false, error: '', receipt: null }
+      loadDashboard()
+    })
   }
-  return {}
+  topbar.querySelectorAll('[data-scope]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.memoryScope = button.dataset.scope || 'project'
+      state.selectedPendingId = ''
+      state.pendingAction = null
+      state.receipt = null
+      state.projectDelete = { confirming: false, loading: false, error: '', receipt: null }
+      loadDashboard()
+    })
+  })
+}
+
+function selectionInfo(dashboard) {
+  if (dashboard.selection?.label || dashboard.selection?.projectId) {
+    return dashboard.selection
+  }
+  for (const candidate of [dashboard.pending?.selection, dashboard.active?.selection, dashboard.projectMemory?.selection]) {
+    if (candidate?.label || candidate?.projectId) return candidate
+  }
+  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {
+    if (candidate?.projectId || candidate?.displayName) {
+      return { scope: 'project', label: candidate.displayName, projectId: candidate.projectId }
+    }
+  }
+  return { scope: 'project', label: 'Project Memory', projectId: '' }
 }
 
 function modelLabel(status) {
+  if (status.configured === true) return 'configured'
+  if (Array.isArray(status.missing) && status.missing.length > 0) return 'needs config'
   const model = status.model || status.modelConfig || status.config?.model
   if (typeof model === 'string' && model.trim()) return 'configured'
   if (model && typeof model === 'object') {
@@ -18413,15 +19363,18 @@ function renderOverview() {
   const active = listActive()
   const summaries = listSummaries()
   const signals = listSignals()
+  const selection = selectionInfo(state.dashboard)
   return \`
     <section class="page-stack">
       \${sectionHeader('Overview', 'Visibility for the memory pipeline.')}
       <div class="metric-grid">
         \${metric('Pending', pending.length, 'Awaiting review')}
-        \${metric('Active', active.length, 'Project memories')}
+        \${metric('Active', active.length, \`\${selection.label || 'Selected'} memories\`)}
         \${metric('Summaries', summaries.length, 'Stop Hook records')}
-        \${metric('Signals', signals.length, 'Harvester inputs')}
+        \${metric('Signals', signals.length, 'Current workspace inputs')}
       </div>
+      \${renderModelConfigPanel()}
+      \${renderTimelineDiagnostic()}
       <div class="soft-panel">
         <h3>Recent pending candidates</h3>
         \${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
@@ -18469,6 +19422,7 @@ function renderTimeline() {
   return \`
     <section class="page-stack">
       \${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}
+      \${renderTimelineDiagnostic()}
       <div class="soft-panel">
         <h3>Review summaries</h3>
         \${summaries.map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}
@@ -18492,9 +19446,10 @@ function renderSummaryRow(summary) {
 
 function renderProjectMemory() {
   const groups = Array.isArray(state.dashboard.projectMemory.groups) ? state.dashboard.projectMemory.groups : []
+  const selection = selectionInfo(state.dashboard)
   return \`
     <section class="page-stack">
-      \${sectionHeader('Project Memory', 'Active project memory grouped by kind.')}
+      \${sectionHeader('Project Memory', \`Active memory for \${selection.label || 'selected scope'}.\`)}
       \${groups.length > 0 ? groups.map((group) => \`
         <div class="soft-panel">
           <h3>\${escapeHtml(group.label || 'Project memory')}</h3>
@@ -18543,7 +19498,7 @@ function renderHarvester() {
       <div class="soft-panel action-panel">
         <div>
           <h3>Project harvester</h3>
-          <p>No pending memory was written.</p>
+          <p>Uses the current workspace, not the selected review scope. No pending memory was written.</p>
         </div>
         <button class="soft-button primary" type="button" data-harvest-dry-run \${state.harvester.loading ? 'disabled' : ''}>
           \${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}
@@ -18644,8 +19599,11 @@ function renderDetailRail() {
         <h3>Boundary</h3>
         <p>\${escapeHtml(WRITE_ACTION_COPY)}</p>
       </div>
+      \${renderSelectionRail()}
+      \${renderProjectDeletePanel()}
       <div class="soft-panel">
-        <h3>Project signals</h3>
+        <h3>Harvester inputs</h3>
+        <p>Signals are files and traces the harvester can inspect for project-memory candidates; they are not memories.</p>
         \${signals.slice(0, 5).map((signal) => \`
           <div class="soft-inset rail-item">
             <strong>\${escapeHtml(signal.kind || 'signal')}</strong>
@@ -18655,10 +19613,129 @@ function renderDetailRail() {
       </div>
       <div class="soft-panel">
         <h3>Review queue</h3>
-        <p>\${escapeHtml(String(pending.length))} pending candidates</p>
+        <p>\${escapeHtml(String(pending.length))} pending candidates in this scope</p>
       </div>
     </div>
   \`
+  bindProjectDeleteActions()
+}
+
+function renderSelectionRail() {
+  const selection = selectionInfo(state.dashboard)
+  return \`
+    <div class="soft-panel">
+      <h3>Review scope</h3>
+      <div class="soft-inset rail-item">
+        <strong>\${escapeHtml(selection.label || 'Selected memory')}</strong>
+        <span>\${escapeHtml(selectionMeta(selection))}</span>
+      </div>
+    </div>
+  \`
+}
+
+function renderProjectDeletePanel() {
+  const selection = selectionInfo(state.dashboard)
+  if (selection.scope === 'global') return ''
+  const project = selectedProjectOption()
+  if (!project) return ''
+  if (project.disabled) {
+    return \`
+      <div class="soft-panel danger-panel">
+        <h3>Project memory disabled</h3>
+        <p>No project-scope memory will be captured for this project.</p>
+        \${project.disabledReason ? \`<div class="soft-inset rail-item"><strong>Reason</strong><span>\${escapeHtml(project.disabledReason)}</span></div>\` : ''}
+      </div>
+    \`
+  }
+  if (state.projectDelete.receipt) {
+    return \`
+      <div class="soft-panel receipt-panel">
+        <h3>Project memory disabled</h3>
+        <div class="soft-inset rail-item">
+          <strong>\${escapeHtml(project.displayName || project.projectId)}</strong>
+          <span>\${escapeHtml(state.projectDelete.receipt.summary || 'Project memory deleted.')}</span>
+        </div>
+      </div>
+    \`
+  }
+  if (state.projectDelete.confirming) {
+    return \`
+      <div class="soft-panel danger-panel">
+        <h3>Delete & disable project memory</h3>
+        <p>This deletes this project's memory files and prevents future project-scope capture for the selected project.</p>
+        <form class="confirm-form" data-project-delete-form>
+          <label>Confirm projectId
+            <input name="confirmProjectId" required placeholder="\${escapeHtml(project.projectId)}">
+          </label>
+          <label>Reason
+            <textarea name="reason" rows="3" placeholder="Optional"></textarea>
+          </label>
+          <div class="detail-actions">
+            <button class="soft-button danger compact" type="submit" \${state.projectDelete.loading ? 'disabled' : ''}>Delete memory</button>
+            <button class="soft-button compact" type="button" data-cancel-project-delete>Cancel</button>
+          </div>
+        </form>
+        \${state.projectDelete.error ? \`<p class="notice error">\${escapeHtml(state.projectDelete.error)}</p>\` : ''}
+      </div>
+    \`
+  }
+  return \`
+    <div class="soft-panel danger-panel">
+      <h3>Delete project memory</h3>
+      <p>Remove this project's memory files and disable future project-scope capture.</p>
+      <button class="soft-button danger compact" type="button" data-project-delete>Delete & disable project memory</button>
+      \${state.projectDelete.error ? \`<p class="notice error">\${escapeHtml(state.projectDelete.error)}</p>\` : ''}
+    </div>
+  \`
+}
+
+function bindProjectDeleteActions() {
+  const deleteButton = detailRail.querySelector('[data-project-delete]')
+  if (deleteButton) {
+    deleteButton.addEventListener('click', () => {
+      state.projectDelete = { confirming: true, loading: false, error: '', receipt: null }
+      render()
+    })
+  }
+  const cancelButton = detailRail.querySelector('[data-cancel-project-delete]')
+  if (cancelButton) {
+    cancelButton.addEventListener('click', () => {
+      state.projectDelete = { confirming: false, loading: false, error: '', receipt: null }
+      render()
+    })
+  }
+  const form = detailRail.querySelector('[data-project-delete-form]')
+  if (form) {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      submitProjectDelete(new FormData(form))
+    })
+  }
+}
+
+async function submitProjectDelete(formData) {
+  const project = selectedProjectOption()
+  if (!project) return
+  state.projectDelete = { confirming: true, loading: true, error: '', receipt: null }
+  render()
+  try {
+    const response = await apiFetch(\`/api/projects/\${encodeURIComponent(project.projectId)}/delete-memory\`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmProjectId: String(formData.get('confirmProjectId') || '').trim(),
+        reason: String(formData.get('reason') || '').trim()
+      })
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Project memory deletion failed.')
+    }
+    await loadDashboard({ renderAfter: false })
+    state.projectDelete = { confirming: false, loading: false, error: '', receipt: payload.data?.receipt || {} }
+  } catch (error) {
+    state.projectDelete = { confirming: true, loading: false, error: errorMessage(error), receipt: null }
+  }
+  render()
 }
 
 function renderPendingDetail(candidate) {
@@ -18806,7 +19883,7 @@ async function submitPendingAction(candidate, formData) {
   if (!action) return
   const body = actionBody(action, candidate, formData)
   try {
-    const response = await apiFetch(\`/api/memory/\${encodeURIComponent(candidate.id)}/\${action}\`, {
+    const response = await apiFetch(\`/api/memory/\${encodeURIComponent(candidate.id)}/\${action}\${selectionQuery()}\`, {
       method: 'POST',
       body: JSON.stringify(body)
     })
@@ -18829,6 +19906,13 @@ async function submitPendingAction(candidate, formData) {
     state.actionError = errorMessage(error)
   }
   render()
+}
+
+function selectionQuery() {
+  const params = new URLSearchParams()
+  params.set('scope', state.memoryScope)
+  if (state.selectedProjectId) params.set('projectId', state.selectedProjectId)
+  return \`?\${params.toString()}\`
 }
 
 function actionBody(action, candidate, formData) {
@@ -18862,6 +19946,12 @@ function actionBody(action, candidate, formData) {
 
 function selectedPending() {
   return listPending().find((candidate) => candidate.id === state.selectedPendingId)
+}
+
+function selectedProjectOption() {
+  const projects = Array.isArray(state.dashboard.projects?.projects) ? state.dashboard.projects.projects : []
+  const selectedProjectId = state.selectedProjectId || selectionInfo(state.dashboard).projectId || state.dashboard.projects?.currentProjectId || ''
+  return projects.find((project) => project.projectId === selectedProjectId)
 }
 
 function actionLabel(action) {
@@ -18900,8 +19990,40 @@ function panel(title, body, tone) {
   \`
 }
 
+function renderModelConfigPanel() {
+  const config = state.dashboard.modelConfig || {}
+  const missing = Array.isArray(config.missing) ? config.missing : []
+  const title = config.configured ? 'Model configured' : 'Model config needed for harvest'
+  const body = config.configured
+    ? \`Model \${escapeHtml(config.model || 'configured')} at \${escapeHtml(config.baseUrl || 'configured endpoint')}. API key: \${escapeHtml(config.apiKeyPreview || 'not set')}.\`
+    : \`Reviewing existing memory works without a key. Harvest and model summaries need \${escapeHtml(missing.join(', ') || 'CYRENE_BASE_URL and CYRENE_MODEL')}; set CYRENE_API_KEY if the provider requires bearer auth.\`
+  return panel(title, body, config.configured ? 'muted' : 'warn')
+}
+
+function renderTimelineDiagnostic() {
+  const failures = listSummaries().filter((summary) => summary.status === 'failed')
+  if (failures.length === 0) return ''
+  const latest = failures[0]
+  const reason = latest.failureReason || latest.summary || 'Stop hook summary failed.'
+  return panel(
+    'Stop Hook summaries failing',
+    \`\${escapeHtml(String(failures.length))} failed summary records in this scope. Latest: \${escapeHtml(reason)}\`,
+    'error'
+  )
+}
+
 function statusChip(label, value, tone) {
   return \`<span class="status-chip \${escapeHtml(tone || 'muted')}"><b>\${escapeHtml(label)}</b>\${escapeHtml(value)}</span>\`
+}
+
+function scopeLabel(scope) {
+  if (scope === 'global') return 'Global'
+  return 'Project'
+}
+
+function selectionMeta(selection) {
+  if (selection.scope === 'global') return 'Global memory'
+  return \`Project \xB7 \${selection.projectId || 'unknown'}\`
 }
 
 function emptyState(textValue) {
@@ -18950,7 +20072,7 @@ export { TABS, WRITE_ACTION_COPY, escapeHtml }
   },
   "/styles.css": {
     "contentType": "text/css; charset=utf-8",
-    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
+    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
   }
 };
 
@@ -19044,14 +20166,14 @@ function handleUnhandledRequestError(request, response, error2) {
   writePlain(response, 500, "Internal server error\n");
 }
 async function handleRequest(input, request, response) {
-  const pathname = requestPathname(request);
-  if (pathname.startsWith("/api/")) {
-    await handleApiRequest(input, request, response, pathname);
+  const url = requestUrl(request);
+  if (url.pathname.startsWith("/api/")) {
+    await handleApiRequest(input, request, response, url.pathname, url.searchParams);
     return;
   }
-  handleStaticRequest(response, pathname);
+  handleStaticRequest(response, url.pathname);
 }
-async function handleApiRequest(input, request, response, pathname) {
+async function handleApiRequest(input, request, response, pathname, searchParams) {
   try {
     const method = request.method ?? "GET";
     if (isNonGetMethod(method) && isCrossOriginRequest(request)) {
@@ -19067,6 +20189,7 @@ async function handleApiRequest(input, request, response, pathname) {
       cwd: input.cwd,
       method,
       pathname,
+      searchParams,
       body,
       uiToken: input.uiToken,
       callModel: input.callModel
@@ -19147,7 +20270,10 @@ function writeNoContent(response) {
   response.end();
 }
 function requestPathname(request) {
-  return new URL(request.url ?? "/", `http://${HOST}`).pathname;
+  return requestUrl(request).pathname;
+}
+function requestUrl(request) {
+  return new URL(request.url ?? "/", `http://${HOST}`);
 }
 function safeRequestPathname(request) {
   try {
@@ -19257,21 +20383,21 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
-import { lstat as lstat14, mkdir as mkdir10, readFile as readFile16, realpath as realpath7, rename as rename4, writeFile as writeFile8 } from "node:fs/promises";
-import { join as join23 } from "node:path";
+import { randomUUID as randomUUID11 } from "node:crypto";
+import { lstat as lstat14, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
 var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID10();
+  const proposalId = randomUUID11();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
-    reportPath: join23(previewDir, DREAM_REPORT_FILE),
-    proposedChangesPath: join23(previewDir, "proposed_changes.json"),
-    diffPath: join23(previewDir, "diff.json"),
-    evalResultsPath: join23(previewDir, "eval_results.json")
+    reportPath: join24(previewDir, DREAM_REPORT_FILE),
+    proposedChangesPath: join24(previewDir, "proposed_changes.json"),
+    diffPath: join24(previewDir, "diff.json"),
+    evalResultsPath: join24(previewDir, "eval_results.json")
   };
   await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
   await writeJsonAtomic(paths.proposedChangesPath, {
@@ -19295,11 +20421,11 @@ async function readDreamReport(input) {
   }
   try {
     const previewDir = await getExistingPreviewDir(memoryRoot);
-    const reportPath = join23(previewDir, DREAM_REPORT_FILE);
+    const reportPath = join24(previewDir, DREAM_REPORT_FILE);
     await assertSafeMemoryDataFileTarget(reportPath);
-    return { memoryRoot, report: await readFile16(reportPath, "utf8") };
+    return { memoryRoot, report: await readFile17(reportPath, "utf8") };
   } catch (error2) {
-    if (isFileErrorCode11(error2, "ENOENT")) {
+    if (isFileErrorCode12(error2, "ENOENT")) {
       throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
     }
     throw error2;
@@ -19350,8 +20476,8 @@ function renderDreamReport(input) {
 `;
 }
 async function ensurePreviewDir(memoryRoot) {
-  const previewDir = join23(memoryRoot, DREAM_PREVIEW_DIR);
-  await mkdir10(previewDir, { recursive: true });
+  const previewDir = join24(memoryRoot, DREAM_PREVIEW_DIR);
+  await mkdir11(previewDir, { recursive: true });
   const stats = await lstat14(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
@@ -19362,7 +20488,7 @@ async function ensurePreviewDir(memoryRoot) {
   return realpath7(previewDir);
 }
 async function getExistingPreviewDir(memoryRoot) {
-  const previewDir = join23(memoryRoot, DREAM_PREVIEW_DIR);
+  const previewDir = join24(memoryRoot, DREAM_PREVIEW_DIR);
   const stats = await lstat14(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
@@ -19378,18 +20504,18 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID10()}.tmp`;
-  await writeFile8(tempPath, content, "utf8");
-  await rename4(tempPath, filePath);
+  const tempPath = `${filePath}.${process.pid}.${randomUUID11()}.tmp`;
+  await writeFile9(tempPath, content, "utf8");
+  await rename5(tempPath, filePath);
 }
-function isFileErrorCode11(error2, code) {
+function isFileErrorCode12(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
-import { lstat as lstat16, mkdir as mkdir11, readFile as readFile17, rm as rm4, writeFile as writeFile9 } from "node:fs/promises";
-import { join as join24 } from "node:path";
+import { randomUUID as randomUUID12 } from "node:crypto";
+import { lstat as lstat16, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
+import { join as join25 } from "node:path";
 
 // src/codex/dream-proposal.ts
 import { lstat as lstat15, realpath as realpath8 } from "node:fs/promises";
@@ -19536,7 +20662,7 @@ async function resolveReadableMemoryRootPath(memoryRoot) {
     }
     return realpath8(memoryRoot);
   } catch (error2) {
-    if (isFileErrorCode12(error2, "ENOENT")) {
+    if (isFileErrorCode13(error2, "ENOENT")) {
       return memoryRoot;
     }
     throw error2;
@@ -19555,7 +20681,7 @@ function tombstoneForExpiredPending(candidate, now) {
     evidence: candidate.evidence
   };
 }
-function isFileErrorCode12(error2, code) {
+function isFileErrorCode13(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -19682,7 +20808,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID11(),
+      id: randomUUID12(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -19707,7 +20833,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID11(),
+        id: randomUUID12(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -19833,7 +20959,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID11(),
+        id: randomUUID12(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -20003,16 +21129,16 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join24(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID11();
+  const lockDir = join25(locksDir, DREAM_LOCK_DIR);
+  const token = randomUUID12();
   while (true) {
     try {
-      await mkdir11(lockDir);
-      await writeFile9(join24(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await mkdir12(lockDir);
+      await writeFile10(join25(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
-      if (!isFileErrorCode13(error2, "EEXIST")) {
+      if (!isFileErrorCode14(error2, "EEXIST")) {
         throw error2;
       }
       const owner = await readDreamLockOwner(lockDir);
@@ -20027,9 +21153,9 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join24(memoryRoot, DREAM_LOCKS_DIR);
-  await mkdir11(locksDir).catch((error2) => {
-    if (!isFileErrorCode13(error2, "EEXIST")) {
+  const locksDir = join25(memoryRoot, DREAM_LOCKS_DIR);
+  await mkdir12(locksDir).catch((error2) => {
+    if (!isFileErrorCode14(error2, "EEXIST")) {
       throw error2;
     }
   });
@@ -20044,7 +21170,7 @@ async function readDreamLockOwner(lockDir) {
   try {
     stats = await lstat16(lockDir);
   } catch (error2) {
-    if (isFileErrorCode13(error2, "ENOENT")) {
+    if (isFileErrorCode14(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -20053,7 +21179,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile17(join24(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile18(join25(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -20063,7 +21189,7 @@ async function readDreamLockOwner(lockDir) {
       ...typeof parsed.token === "string" ? { token: parsed.token } : {}
     };
   } catch (error2) {
-    if (isFileErrorCode13(error2, "ENOENT") || error2 instanceof SyntaxError) {
+    if (isFileErrorCode14(error2, "ENOENT") || error2 instanceof SyntaxError) {
       return void 0;
     }
     throw error2;
@@ -20080,7 +21206,7 @@ async function removeDreamLockIfOwner(lockDir, expectedOwner) {
   if (!isSameDreamLockOwner(owner, expectedOwner)) {
     return false;
   }
-  await rm4(lockDir, { recursive: true, force: true });
+  await rm5(lockDir, { recursive: true, force: true });
   return true;
 }
 async function isDreamLockDirStale(lockDir, now, ttlMs) {
@@ -20095,7 +21221,7 @@ async function removeDreamLockIfUnowned(lockDir) {
   if (owner !== void 0) {
     return false;
   }
-  await rm4(lockDir, { recursive: true, force: true });
+  await rm5(lockDir, { recursive: true, force: true });
   return true;
 }
 function isSameDreamLockOwner(owner, expectedOwner) {
@@ -20107,17 +21233,17 @@ function isSameDreamLockOwner(owner, expectedOwner) {
 async function releaseDreamLock(lock) {
   const owner = await readDreamLockOwner(lock.lockDir);
   if (owner !== void 0 && owner.token === lock.token) {
-    await rm4(lock.lockDir, { recursive: true, force: true });
+    await rm5(lock.lockDir, { recursive: true, force: true });
   }
 }
-function isFileErrorCode13(error2, code) {
+function isFileErrorCode14(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash8, randomUUID as randomUUID12 } from "node:crypto";
-import { lstat as lstat17, readFile as readFile18, rename as rename5, writeFile as writeFile10 } from "node:fs/promises";
-import { join as join25 } from "node:path";
+import { createHash as createHash8, randomUUID as randomUUID13 } from "node:crypto";
+import { lstat as lstat17, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
+import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -20245,7 +21371,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID12(),
+      id: randomUUID13(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -20476,13 +21602,13 @@ function upsertActiveMemory2(active, memory) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join25(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile18(targetPath, "utf8");
+    const content = await readFile19(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
-    if (isFileErrorCode14(error2, "ENOENT")) {
+    if (isFileErrorCode15(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -20490,21 +21616,21 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join25(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID12()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID13()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
-  await writeFile10(tempPath, content === "" ? "" : `${content}
+  await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
-  await rename5(tempPath, targetPath);
+  await rename6(tempPath, targetPath);
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join25(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID12()}.tmp`;
-  await writeFile10(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
-  await rename5(tempPath, targetPath);
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID13()}.tmp`;
+  await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
+  await rename6(tempPath, targetPath);
 }
 function formatPendingProfilePatch(candidates) {
   const pending = candidates.filter((candidate) => candidate.status === "pending");
@@ -20547,242 +21673,11 @@ async function assertSafeProfileFileTarget(targetPath, label) {
       throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`);
     }
   } catch (error2) {
-    if (isFileErrorCode14(error2, "ENOENT")) {
+    if (isFileErrorCode15(error2, "ENOENT")) {
       return;
     }
     throw error2;
   }
-}
-function isFileErrorCode14(error2, code) {
-  return error2 instanceof Error && "code" in error2 && error2.code === code;
-}
-
-// src/codex/project-registry.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
-import { mkdir as mkdir12, readFile as readFile19, rename as rename6, rm as rm5, writeFile as writeFile11 } from "node:fs/promises";
-import { basename as basename5, dirname as dirname10, join as join26 } from "node:path";
-var PROJECT_METADATA_FILE = "project.json";
-var MERGE_JSONL_FILES = [
-  "index.jsonl",
-  "pending.jsonl",
-  "tombstones.jsonl",
-  "events.jsonl",
-  "profile_candidates.jsonl",
-  "review-summaries.jsonl"
-];
-async function listCodexProjects() {
-  const projectRoots = await getReadableCodexProjectRoots();
-  const entries = await Promise.all(projectRoots.map((root) => registryEntryFromRoot(root)));
-  return entries.sort((left, right) => left.projectId.localeCompare(right.projectId));
-}
-async function addCodexProjectAlias(input) {
-  const projectId = validateProjectId(input.projectId);
-  const alias = validateAlias(input.alias);
-  const memoryRoot = await ensureCodexProjectMemoryRoot(projectId);
-  const projectRoot = dirname10(memoryRoot);
-  const metadata = await readProjectMetadata(projectRoot);
-  await writeProjectMetadata(projectRoot, {
-    ...metadata,
-    projectId,
-    aliases: uniqueSorted2([...metadata.aliases ?? [], alias]),
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
-  return registryEntryFromRoot(projectRoot);
-}
-async function mergeCodexProjects(input) {
-  const fromProjectId = validateProjectId(input.fromProjectId);
-  const toProjectId = validateProjectId(input.toProjectId);
-  if (fromProjectId === toProjectId) {
-    throw new Error("Cannot merge a project into itself.");
-  }
-  const fromMemoryRoot = await getReadableCodexProjectMemoryRoot(fromProjectId);
-  if (fromMemoryRoot === null) {
-    throw new Error(`Project memory root not found: ${fromProjectId}`);
-  }
-  const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId);
-  await assertMergeJsonlFilesSafe(fromMemoryRoot, "source");
-  const gate2 = runMemoryMigrationEvalGate({
-    fromProjectId,
-    toProjectId,
-    activeMemories: await readActiveMemoriesFromRoot(fromMemoryRoot)
-  });
-  if (!gate2.passed) {
-    throw new Error(`Project merge blocked by eval gate: ${gate2.failedChecks.join(", ")}`);
-  }
-  const fromProjectRoot = dirname10(fromMemoryRoot);
-  const toProjectRoot = dirname10(toMemoryRoot);
-  const mergedFiles = await withMemoryMaintenanceLockFromRoot(toMemoryRoot, async (lockedToMemoryRoot) => {
-    const files = [];
-    for (const fileName of MERGE_JSONL_FILES) {
-      const merged = await mergeJsonlFile(join26(fromMemoryRoot, fileName), join26(lockedToMemoryRoot, fileName));
-      if (merged) {
-        files.push(fileName);
-      }
-    }
-    return files;
-  });
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const fromMetadata = await readProjectMetadata(fromProjectRoot);
-  const toMetadata = await readProjectMetadata(toProjectRoot);
-  await writeProjectMetadata(fromProjectRoot, {
-    ...fromMetadata,
-    projectId: fromProjectId,
-    mergedInto: toProjectId,
-    updatedAt: now
-  });
-  await writeProjectMetadata(toProjectRoot, {
-    ...toMetadata,
-    projectId: toProjectId,
-    aliases: uniqueSorted2([...toMetadata.aliases ?? [], ...fromMetadata.aliases ?? []]),
-    mergedFrom: uniqueSorted2([...toMetadata.mergedFrom ?? [], fromProjectId, ...fromMetadata.mergedFrom ?? []]),
-    updatedAt: now
-  });
-  return { fromProjectId, toProjectId, mergedFiles };
-}
-async function registryEntryFromRoot(root) {
-  const projectId = basename5(root);
-  const memoryRoot = join26(root, "memory");
-  const metadata = await readProjectMetadata(root);
-  const [active, pending, tombstones] = await Promise.all([
-    readActiveMemoriesFromRoot(memoryRoot),
-    readPendingMemoriesFromRoot(memoryRoot),
-    readTombstonesFromRoot(memoryRoot)
-  ]);
-  return {
-    projectId,
-    root,
-    memoryRoot,
-    aliases: uniqueSorted2(metadata.aliases ?? []),
-    mergedFrom: uniqueSorted2(metadata.mergedFrom ?? []),
-    mergedInto: metadata.mergedInto,
-    counts: {
-      active: active.length,
-      pending: pending.length,
-      tombstones: tombstones.length
-    }
-  };
-}
-async function mergeJsonlFile(sourcePath, targetPath) {
-  await assertMergeJsonlFileSafe(sourcePath, "source");
-  const sourceLines = await readJsonLinesIfExists(sourcePath);
-  if (sourceLines.length === 0) {
-    return false;
-  }
-  await assertMergeJsonlFileSafe(targetPath, "target");
-  const targetLines = await readJsonLinesIfExists(targetPath);
-  const merged = mergeJsonLines(targetLines, sourceLines);
-  await mkdir12(dirname10(targetPath), { recursive: true });
-  await writeJsonLinesAtomic2(targetPath, merged);
-  return true;
-}
-async function assertMergeJsonlFilesSafe(memoryRoot, role) {
-  await Promise.all(MERGE_JSONL_FILES.map((fileName) => assertMergeJsonlFileSafe(join26(memoryRoot, fileName), role)));
-}
-async function assertMergeJsonlFileSafe(filePath, role) {
-  try {
-    await assertSafeMemoryDataFileTarget(filePath);
-  } catch (error2) {
-    if (error2 instanceof Error) {
-      throw new Error(`Unsafe project merge ${role} JSONL file: ${error2.message}`);
-    }
-    throw error2;
-  }
-}
-async function writeJsonLinesAtomic2(filePath, values) {
-  const tempPath = join26(dirname10(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID13()}.tmp`);
-  let renamed = false;
-  try {
-    await writeFile11(tempPath, `${values.join("\n")}
-`, "utf8");
-    await assertMergeJsonlFileSafe(filePath, "target");
-    await rename6(tempPath, filePath);
-    renamed = true;
-  } finally {
-    if (!renamed) {
-      await rm5(tempPath, { force: true });
-    }
-  }
-}
-function mergeJsonLines(targetLines, sourceLines) {
-  const seen = /* @__PURE__ */ new Set();
-  const result2 = [];
-  for (const line of [...targetLines, ...sourceLines]) {
-    const key = jsonLineKey(line);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    result2.push(line);
-  }
-  return result2;
-}
-function jsonLineKey(line) {
-  try {
-    const parsed = JSON.parse(line);
-    if (typeof parsed.id === "string" && parsed.id.trim() !== "") {
-      return `id:${parsed.id}`;
-    }
-  } catch {
-  }
-  return `line:${line}`;
-}
-async function readJsonLinesIfExists(path) {
-  try {
-    return (await readFile19(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  } catch (error2) {
-    if (isFileErrorCode15(error2, "ENOENT")) {
-      return [];
-    }
-    throw error2;
-  }
-}
-async function readProjectMetadata(projectRoot) {
-  try {
-    const parsed = JSON.parse(await readFile19(join26(projectRoot, PROJECT_METADATA_FILE), "utf8"));
-    if (!isRecord7(parsed)) {
-      return {};
-    }
-    return {
-      projectId: typeof parsed.projectId === "string" ? parsed.projectId : void 0,
-      aliases: readStringArray(parsed.aliases),
-      mergedFrom: readStringArray(parsed.mergedFrom),
-      mergedInto: typeof parsed.mergedInto === "string" ? parsed.mergedInto : void 0,
-      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : void 0
-    };
-  } catch (error2) {
-    if (isFileErrorCode15(error2, "ENOENT")) {
-      return {};
-    }
-    throw error2;
-  }
-}
-async function writeProjectMetadata(projectRoot, metadata) {
-  await mkdir12(projectRoot, { recursive: true });
-  await writeFile11(join26(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
-`, "utf8");
-}
-function validateProjectId(value) {
-  const trimmed = value.trim();
-  if (!/^[A-Za-z0-9._-]+$/.test(trimmed) || /^\.+$/.test(trimmed)) {
-    throw new Error(`Invalid projectId: ${value}`);
-  }
-  return trimmed;
-}
-function validateAlias(value) {
-  const trimmed = value.trim();
-  if (trimmed === "") {
-    throw new Error("Invalid project alias: missing value");
-  }
-  return trimmed;
-}
-function readStringArray(value) {
-  return Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.trim() !== "") : [];
-}
-function uniqueSorted2(values) {
-  return Array.from(new Set(values)).sort();
-}
-function isRecord7(value) {
-  return typeof value === "object" && value !== null;
 }
 function isFileErrorCode15(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
@@ -20857,9 +21752,11 @@ function findSplitCandidates(projects, currentProjectId, currentDisplayName) {
 function formatProjectListEntry(project, current) {
   return [
     `  - projectId: ${project.projectId}${current ? " (current)" : ""}`,
+    `    displayName: ${project.displayName}`,
     `    aliases: ${formatList(project.aliases)}`,
     `    mergedFrom: ${formatList(project.mergedFrom)}`,
     `    mergedInto: ${project.mergedInto ?? "none"}`,
+    `    disabled: ${project.disabled ? "yes" : "no"}`,
     `    active: ${project.counts.active}`,
     `    pending: ${project.counts.pending}`,
     `    tombstones: ${project.counts.tombstones}`,
@@ -21000,7 +21897,7 @@ async function markSimilarHintTransferable(input) {
 async function findActiveMemory(cwd, memoryId, currentProjectOnly = false) {
   const current = await identifyCodexProject(cwd);
   const currentRoot = await ensureCodexProjectMemoryRoot(current.projectId);
-  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder3([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
+  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder4([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
   for (const memoryRoot of roots) {
     const active = await readActiveMemoriesFromRoot(memoryRoot);
     const memory = active.find((item) => item.id === memoryId);
@@ -21045,7 +21942,7 @@ function memoryPortability(memory) {
 function projectIdFromMemoryRoot(memoryRoot) {
   return basename6(dirname11(memoryRoot));
 }
-function uniqueInOrder3(values) {
+function uniqueInOrder4(values) {
   const seen = /* @__PURE__ */ new Set();
   const unique2 = [];
   for (const value of values) {

@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import {
+  codexProjectMemoryRoot,
+  ensureCodexProjectRoot,
   ensureCodexProjectMemoryRoot,
   getReadableCodexProjectMemoryRoot,
+  getReadableCodexProjectRoot,
   getReadableCodexProjectRoots
 } from './codex-memory-root.js'
 import {
@@ -17,11 +22,15 @@ import { runMemoryMigrationEvalGate } from '../eval/eval-runner.js'
 
 export interface CodexProjectRegistryEntry {
   projectId: string
+  displayName: string
   root: string
   memoryRoot: string
   aliases: string[]
   mergedFrom: string[]
   mergedInto?: string
+  disabled: boolean
+  disabledAt?: string
+  disabledReason?: string
   counts: {
     active: number
     pending: number
@@ -37,10 +46,23 @@ export interface CodexProjectMergeResult {
 
 interface CodexProjectMetadata {
   projectId?: string
+  displayName?: string
   aliases?: string[]
   mergedFrom?: string[]
   mergedInto?: string
+  disabled?: boolean
+  disabledAt?: string
+  disabledReason?: string
   updatedAt?: string
+}
+
+export interface CodexProjectDeleteMemoryResult {
+  projectId: string
+  memoryRoot: string
+  disabled: true
+  memoryDeleted: boolean
+  disabledAt: string
+  disabledReason?: string
 }
 
 const PROJECT_METADATA_FILE = 'project.json'
@@ -52,6 +74,8 @@ const MERGE_JSONL_FILES = [
   'profile_candidates.jsonl',
   'review-summaries.jsonl'
 ]
+const HOOK_TRACE_FILE = 'hook-trace.jsonl'
+const execFileAsync = promisify(execFile)
 
 export async function listCodexProjects(): Promise<CodexProjectRegistryEntry[]> {
   const projectRoots = await getReadableCodexProjectRoots()
@@ -72,6 +96,48 @@ export async function addCodexProjectAlias(input: { projectId: string; alias: st
     updatedAt: new Date().toISOString()
   })
   return registryEntryFromRoot(projectRoot)
+}
+
+export async function deleteCodexProjectMemory(input: {
+  projectId: string
+  reason?: string
+  now?: string
+}): Promise<CodexProjectDeleteMemoryResult> {
+  const projectId = validateProjectId(input.projectId)
+  const projectRoot = await ensureCodexProjectRoot(projectId)
+  const memoryRoot = codexProjectMemoryRoot(projectId)
+  const metadata = await readProjectMetadata(projectRoot)
+  const displayName = await displayNameForProjectEntry(projectId, memoryRoot, metadata)
+  const now = input.now ?? new Date().toISOString()
+  const reason = input.reason?.trim() || undefined
+  const memoryDeleted = await rmDirectoryIfExists(memoryRoot)
+  await writeProjectMetadata(projectRoot, {
+    ...metadata,
+    projectId,
+    displayName,
+    disabled: true,
+    disabledAt: now,
+    disabledReason: reason,
+    updatedAt: now
+  })
+  return {
+    projectId,
+    memoryRoot,
+    disabled: true,
+    memoryDeleted,
+    disabledAt: now,
+    ...(reason === undefined ? {} : { disabledReason: reason })
+  }
+}
+
+export async function isCodexProjectMemoryDisabled(projectIdInput: string): Promise<boolean> {
+  const projectId = validateProjectId(projectIdInput)
+  const projectRoot = await getReadableCodexProjectRoot(projectId)
+  if (projectRoot === null) {
+    return false
+  }
+  const metadata = await readProjectMetadata(projectRoot)
+  return metadata.disabled === true
 }
 
 export async function mergeCodexProjects(input: {
@@ -135,6 +201,7 @@ async function registryEntryFromRoot(root: string): Promise<CodexProjectRegistry
   const projectId = basename(root)
   const memoryRoot = join(root, 'memory')
   const metadata = await readProjectMetadata(root)
+  const displayName = await displayNameForProjectEntry(projectId, memoryRoot, metadata)
   const [active, pending, tombstones] = await Promise.all([
     readActiveMemoriesFromRoot(memoryRoot),
     readPendingMemoriesFromRoot(memoryRoot),
@@ -142,16 +209,133 @@ async function registryEntryFromRoot(root: string): Promise<CodexProjectRegistry
   ])
   return {
     projectId,
+    displayName,
     root,
     memoryRoot,
     aliases: uniqueSorted(metadata.aliases ?? []),
     mergedFrom: uniqueSorted(metadata.mergedFrom ?? []),
     mergedInto: metadata.mergedInto,
+    disabled: metadata.disabled === true,
+    ...(metadata.disabledAt === undefined ? {} : { disabledAt: metadata.disabledAt }),
+    ...(metadata.disabledReason === undefined ? {} : { disabledReason: metadata.disabledReason }),
     counts: {
       active: active.length,
       pending: pending.length,
       tombstones: tombstones.length
     }
+  }
+}
+
+async function displayNameForProjectEntry(
+  projectId: string,
+  memoryRoot: string,
+  metadata: CodexProjectMetadata
+): Promise<string> {
+  const alias = metadata.aliases?.find((value) => value.trim() !== '')
+  if (alias !== undefined) {
+    return alias
+  }
+  const metadataDisplayName = cleanDisplayName(metadata.displayName)
+  if (metadataDisplayName !== undefined && metadataDisplayName !== projectId) {
+    return metadataDisplayName
+  }
+  const tracedCwd = await latestHookTraceCwd(memoryRoot)
+  if (tracedCwd !== undefined) {
+    const inferred = await inferProjectDisplayNameFromCwd(tracedCwd)
+    if (inferred !== undefined && inferred !== projectId) {
+      return inferred
+    }
+  }
+  return projectId
+}
+
+async function latestHookTraceCwd(memoryRoot: string): Promise<string | undefined> {
+  let content: string
+  try {
+    content = await readFile(join(memoryRoot, HOOK_TRACE_FILE), 'utf8')
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return undefined
+    }
+    throw error
+  }
+
+  const lines = content.split(/\r?\n/).filter((line) => line.trim() !== '').reverse()
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as unknown
+      if (isRecord(parsed) && typeof parsed.cwd === 'string' && parsed.cwd.trim() !== '') {
+        return parsed.cwd.trim()
+      }
+    } catch {
+      // Ignore malformed hook trace lines when deriving a display name.
+    }
+  }
+  return undefined
+}
+
+async function inferProjectDisplayNameFromCwd(cwd: string): Promise<string | undefined> {
+  const gitRoot = (await tryGit(['rev-parse', '--show-toplevel'], cwd))?.trim()
+  const remote = (await tryGit(['config', '--get', 'remote.origin.url'], gitRoot ?? cwd))?.trim()
+  const remoteDisplayName = cleanDisplayName(remote === undefined ? undefined : repoNameFromRemote(remote))
+  if (remoteDisplayName !== undefined) {
+    return remoteDisplayName
+  }
+
+  const packageNameDisplay = await packageDisplayName(cwd)
+  if (packageNameDisplay !== undefined) {
+    return packageNameDisplay
+  }
+
+  return cleanDisplayName(basename(gitRoot ?? cwd))
+}
+
+async function packageDisplayName(cwd: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8')) as unknown
+    if (!isRecord(parsed) || typeof parsed.name !== 'string') {
+      return undefined
+    }
+    const unscoped = parsed.name.startsWith('@') ? parsed.name.split('/').slice(1).join('/') : parsed.name
+    return cleanDisplayName(unscoped)
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return undefined
+    }
+    return undefined
+  }
+}
+
+function repoNameFromRemote(remote: string): string | undefined {
+  const trimmed = remote.trim().replace(/\/+$/, '')
+  const match = /([^/:]+?)(?:\.git)?$/.exec(trimmed)
+  return match?.[1]
+}
+
+async function tryGit(args: string[], cwd: string): Promise<string | undefined> {
+  try {
+    const result = await execFileAsync('git', args, { cwd })
+    const text = result.stdout.trim()
+    return text === '' ? undefined : text
+  } catch {
+    return undefined
+  }
+}
+
+function cleanDisplayName(value: string | undefined): string | undefined {
+  const cleaned = value?.trim().replace(/\.git$/i, '')
+  return cleaned === undefined || cleaned === '' ? undefined : cleaned
+}
+
+async function rmDirectoryIfExists(path: string): Promise<boolean> {
+  try {
+    await rm(path, { recursive: true })
+    return true
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return false
+    }
+    throw error
   }
 }
 
@@ -247,9 +431,13 @@ async function readProjectMetadata(projectRoot: string): Promise<CodexProjectMet
     }
     return {
       projectId: typeof parsed.projectId === 'string' ? parsed.projectId : undefined,
+      displayName: typeof parsed.displayName === 'string' ? parsed.displayName : undefined,
       aliases: readStringArray(parsed.aliases),
       mergedFrom: readStringArray(parsed.mergedFrom),
       mergedInto: typeof parsed.mergedInto === 'string' ? parsed.mergedInto : undefined,
+      disabled: typeof parsed.disabled === 'boolean' ? parsed.disabled : undefined,
+      disabledAt: typeof parsed.disabledAt === 'string' ? parsed.disabledAt : undefined,
+      disabledReason: typeof parsed.disabledReason === 'string' ? parsed.disabledReason : undefined,
       updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined
     }
   } catch (error) {

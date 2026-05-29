@@ -31,6 +31,9 @@ describe('Codex UI source assets', () => {
     expect(js).not.toContain('Approve selected')
     expect(js).not.toContain('Reject selected')
     expect(js).toContain('/api/memory/harvest-project/dry-run')
+    expect(js).toContain('/delete-memory')
+    expect(js).toContain('Delete & disable project memory')
+    expect(js).toContain('confirmProjectId')
     expect(js).toContain("result.action === 'needs_model_config'")
     expect(js).toContain("result.action === 'noop'")
     expect(js).toContain("typeof result.reason === 'string'")
@@ -39,6 +42,7 @@ describe('Codex UI source assets', () => {
     expect(js).toContain('renderPreviewCandidateRow')
     expect(js).toContain('dry-run preview')
     expect(js).toContain('preview · dry-run only')
+    expect(js).toContain("['project', 'global']")
 
     for (const unsafeRoute of [
       'deep-apply',

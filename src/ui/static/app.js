@@ -3,6 +3,9 @@ const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
+  selection: { scope: 'project', label: 'Project', projectId: '' },
+  projects: { projects: [], global: { counts: {} }, currentProjectId: '' },
+  modelConfig: { configured: false, missing: [] },
   pending: { pending: [], total: 0, project: {} },
   active: { active: [], project: {} },
   reviewSummaries: { summaries: [] },
@@ -29,8 +32,12 @@ const CONFIRM_LABELS = {
   edit: 'Confirm edit'
 }
 
+const MEMORY_SCOPES = ['project', 'global']
+
 const state = {
   activeTab: 'overview',
+  memoryScope: 'project',
+  selectedProjectId: '',
   dashboard: EMPTY_DASHBOARD,
   error: '',
   sessionToken: '',
@@ -38,6 +45,7 @@ const state = {
   pendingAction: null,
   receipt: null,
   actionError: '',
+  projectDelete: { confirming: false, loading: false, error: '', receipt: null },
   harvester: { loading: false, result: null, error: '' }
 }
 
@@ -88,12 +96,15 @@ async function apiFetch(pathname, options = {}) {
 async function loadDashboard(options = {}) {
   const renderAfter = options.renderAfter !== false
   try {
-    const response = await apiFetch('/api/dashboard')
+    const response = await apiFetch(dashboardEndpoint())
     const payload = await response.json()
     if (!payload.ok) {
       throw new Error(payload.error?.message || 'Dashboard API returned an error.')
     }
     state.dashboard = mergeDashboard(payload.data)
+    if (!state.selectedProjectId) {
+      state.selectedProjectId = state.dashboard.selection?.projectId || state.dashboard.projects?.currentProjectId || ''
+    }
     state.error = ''
   } catch (error) {
     state.dashboard = EMPTY_DASHBOARD
@@ -102,10 +113,20 @@ async function loadDashboard(options = {}) {
   if (renderAfter) render()
 }
 
+function dashboardEndpoint() {
+  const params = new URLSearchParams()
+  params.set('scope', state.memoryScope)
+  if (state.selectedProjectId) params.set('projectId', state.selectedProjectId)
+  return `/api/dashboard?${params.toString()}`
+}
+
 function mergeDashboard(data) {
   return {
     ...EMPTY_DASHBOARD,
     ...(data || {}),
+    selection: { ...EMPTY_DASHBOARD.selection, ...(data?.selection || {}) },
+    projects: { ...EMPTY_DASHBOARD.projects, ...(data?.projects || {}) },
+    modelConfig: { ...EMPTY_DASHBOARD.modelConfig, ...(data?.modelConfig || {}) },
     pending: { ...EMPTY_DASHBOARD.pending, ...(data?.pending || {}) },
     active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },
     reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },
@@ -141,36 +162,99 @@ function renderNav() {
 
 function renderTopbar() {
   const dashboard = state.dashboard
-  const project = projectInfo(dashboard)
+  const selection = selectionInfo(dashboard)
   const pendingCount = listPending().length
   const status = dashboard.status || {}
   const sqliteStatus = text(status.index?.status || status.sqlite?.status || status.fallbackMode || 'read-only')
-  const modelStatus = modelLabel(status)
+  const modelStatus = modelLabel(dashboard.modelConfig || status)
   const stopHook = text(status.lastStopHook?.status || status.stopHook?.status || 'visible')
 
   topbar.innerHTML = `
     <div>
       <p class="eyebrow">Local review console</p>
-      <h2>${escapeHtml(project.displayName || 'Project Memory')}</h2>
+      <h2>${escapeHtml(selection.label || 'Memory')}</h2>
     </div>
-    <div class="chip-row" aria-label="Runtime status">
-      ${statusChip('Project', project.projectId || 'unknown', 'muted')}
-      ${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
-      ${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
-      ${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
-      ${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
+    <div class="topbar-actions">
+      ${renderScopeControls(dashboard)}
+      <div class="chip-row" aria-label="Runtime status">
+        ${selection.scope === 'global'
+          ? statusChip('Scope', 'Global', 'muted')
+          : statusChip('Project ID', shortHash(selection.projectId || 'unknown'), 'muted')}
+        ${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
+        ${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
+        ${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
+        ${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
+      </div>
+    </div>
+  `
+  bindTopbarControls()
+}
+
+function renderScopeControls(dashboard) {
+  const projects = Array.isArray(dashboard.projects?.projects) ? dashboard.projects.projects : []
+  const selectedProjectId = state.selectedProjectId || dashboard.selection?.projectId || dashboard.projects?.currentProjectId || ''
+  return `
+    <div class="scope-controls" aria-label="Memory scope controls">
+      <select class="soft-select" data-project-select aria-label="Project selector">
+        ${projects.map((project) => `
+          <option value="${escapeHtml(project.projectId)}" ${project.projectId === selectedProjectId ? 'selected' : ''}>
+            ${escapeHtml(project.displayName || project.projectId)}${project.disabled ? ' (disabled)' : ''}${project.current ? ' (current)' : ''}
+          </option>
+        `).join('')}
+      </select>
+      <div class="segmented-control" role="group" aria-label="Memory scope">
+        ${MEMORY_SCOPES.map((scope) => `
+          <button type="button" data-scope="${scope}" aria-pressed="${state.memoryScope === scope ? 'true' : 'false'}">
+            ${escapeHtml(scopeLabel(scope))}
+          </button>
+        `).join('')}
+      </div>
     </div>
   `
 }
 
-function projectInfo(dashboard) {
-  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {
-    if (candidate?.projectId || candidate?.displayName) return candidate
+function bindTopbarControls() {
+  const projectSelect = topbar.querySelector('[data-project-select]')
+  if (projectSelect) {
+    projectSelect.addEventListener('change', () => {
+      state.selectedProjectId = projectSelect.value || ''
+      state.selectedPendingId = ''
+      state.pendingAction = null
+      state.receipt = null
+      state.projectDelete = { confirming: false, loading: false, error: '', receipt: null }
+      loadDashboard()
+    })
   }
-  return {}
+  topbar.querySelectorAll('[data-scope]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.memoryScope = button.dataset.scope || 'project'
+      state.selectedPendingId = ''
+      state.pendingAction = null
+      state.receipt = null
+      state.projectDelete = { confirming: false, loading: false, error: '', receipt: null }
+      loadDashboard()
+    })
+  })
+}
+
+function selectionInfo(dashboard) {
+  if (dashboard.selection?.label || dashboard.selection?.projectId) {
+    return dashboard.selection
+  }
+  for (const candidate of [dashboard.pending?.selection, dashboard.active?.selection, dashboard.projectMemory?.selection]) {
+    if (candidate?.label || candidate?.projectId) return candidate
+  }
+  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {
+    if (candidate?.projectId || candidate?.displayName) {
+      return { scope: 'project', label: candidate.displayName, projectId: candidate.projectId }
+    }
+  }
+  return { scope: 'project', label: 'Project Memory', projectId: '' }
 }
 
 function modelLabel(status) {
+  if (status.configured === true) return 'configured'
+  if (Array.isArray(status.missing) && status.missing.length > 0) return 'needs config'
   const model = status.model || status.modelConfig || status.config?.model
   if (typeof model === 'string' && model.trim()) return 'configured'
   if (model && typeof model === 'object') {
@@ -213,15 +297,18 @@ function renderOverview() {
   const active = listActive()
   const summaries = listSummaries()
   const signals = listSignals()
+  const selection = selectionInfo(state.dashboard)
   return `
     <section class="page-stack">
       ${sectionHeader('Overview', 'Visibility for the memory pipeline.')}
       <div class="metric-grid">
         ${metric('Pending', pending.length, 'Awaiting review')}
-        ${metric('Active', active.length, 'Project memories')}
+        ${metric('Active', active.length, `${selection.label || 'Selected'} memories`)}
         ${metric('Summaries', summaries.length, 'Stop Hook records')}
-        ${metric('Signals', signals.length, 'Harvester inputs')}
+        ${metric('Signals', signals.length, 'Current workspace inputs')}
       </div>
+      ${renderModelConfigPanel()}
+      ${renderTimelineDiagnostic()}
       <div class="soft-panel">
         <h3>Recent pending candidates</h3>
         ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
@@ -269,6 +356,7 @@ function renderTimeline() {
   return `
     <section class="page-stack">
       ${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}
+      ${renderTimelineDiagnostic()}
       <div class="soft-panel">
         <h3>Review summaries</h3>
         ${summaries.map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}
@@ -292,9 +380,10 @@ function renderSummaryRow(summary) {
 
 function renderProjectMemory() {
   const groups = Array.isArray(state.dashboard.projectMemory.groups) ? state.dashboard.projectMemory.groups : []
+  const selection = selectionInfo(state.dashboard)
   return `
     <section class="page-stack">
-      ${sectionHeader('Project Memory', 'Active project memory grouped by kind.')}
+      ${sectionHeader('Project Memory', `Active memory for ${selection.label || 'selected scope'}.`)}
       ${groups.length > 0 ? groups.map((group) => `
         <div class="soft-panel">
           <h3>${escapeHtml(group.label || 'Project memory')}</h3>
@@ -343,7 +432,7 @@ function renderHarvester() {
       <div class="soft-panel action-panel">
         <div>
           <h3>Project harvester</h3>
-          <p>No pending memory was written.</p>
+          <p>Uses the current workspace, not the selected review scope. No pending memory was written.</p>
         </div>
         <button class="soft-button primary" type="button" data-harvest-dry-run ${state.harvester.loading ? 'disabled' : ''}>
           ${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}
@@ -444,8 +533,11 @@ function renderDetailRail() {
         <h3>Boundary</h3>
         <p>${escapeHtml(WRITE_ACTION_COPY)}</p>
       </div>
+      ${renderSelectionRail()}
+      ${renderProjectDeletePanel()}
       <div class="soft-panel">
-        <h3>Project signals</h3>
+        <h3>Harvester inputs</h3>
+        <p>Signals are files and traces the harvester can inspect for project-memory candidates; they are not memories.</p>
         ${signals.slice(0, 5).map((signal) => `
           <div class="soft-inset rail-item">
             <strong>${escapeHtml(signal.kind || 'signal')}</strong>
@@ -455,10 +547,129 @@ function renderDetailRail() {
       </div>
       <div class="soft-panel">
         <h3>Review queue</h3>
-        <p>${escapeHtml(String(pending.length))} pending candidates</p>
+        <p>${escapeHtml(String(pending.length))} pending candidates in this scope</p>
       </div>
     </div>
   `
+  bindProjectDeleteActions()
+}
+
+function renderSelectionRail() {
+  const selection = selectionInfo(state.dashboard)
+  return `
+    <div class="soft-panel">
+      <h3>Review scope</h3>
+      <div class="soft-inset rail-item">
+        <strong>${escapeHtml(selection.label || 'Selected memory')}</strong>
+        <span>${escapeHtml(selectionMeta(selection))}</span>
+      </div>
+    </div>
+  `
+}
+
+function renderProjectDeletePanel() {
+  const selection = selectionInfo(state.dashboard)
+  if (selection.scope === 'global') return ''
+  const project = selectedProjectOption()
+  if (!project) return ''
+  if (project.disabled) {
+    return `
+      <div class="soft-panel danger-panel">
+        <h3>Project memory disabled</h3>
+        <p>No project-scope memory will be captured for this project.</p>
+        ${project.disabledReason ? `<div class="soft-inset rail-item"><strong>Reason</strong><span>${escapeHtml(project.disabledReason)}</span></div>` : ''}
+      </div>
+    `
+  }
+  if (state.projectDelete.receipt) {
+    return `
+      <div class="soft-panel receipt-panel">
+        <h3>Project memory disabled</h3>
+        <div class="soft-inset rail-item">
+          <strong>${escapeHtml(project.displayName || project.projectId)}</strong>
+          <span>${escapeHtml(state.projectDelete.receipt.summary || 'Project memory deleted.')}</span>
+        </div>
+      </div>
+    `
+  }
+  if (state.projectDelete.confirming) {
+    return `
+      <div class="soft-panel danger-panel">
+        <h3>Delete & disable project memory</h3>
+        <p>This deletes this project's memory files and prevents future project-scope capture for the selected project.</p>
+        <form class="confirm-form" data-project-delete-form>
+          <label>Confirm projectId
+            <input name="confirmProjectId" required placeholder="${escapeHtml(project.projectId)}">
+          </label>
+          <label>Reason
+            <textarea name="reason" rows="3" placeholder="Optional"></textarea>
+          </label>
+          <div class="detail-actions">
+            <button class="soft-button danger compact" type="submit" ${state.projectDelete.loading ? 'disabled' : ''}>Delete memory</button>
+            <button class="soft-button compact" type="button" data-cancel-project-delete>Cancel</button>
+          </div>
+        </form>
+        ${state.projectDelete.error ? `<p class="notice error">${escapeHtml(state.projectDelete.error)}</p>` : ''}
+      </div>
+    `
+  }
+  return `
+    <div class="soft-panel danger-panel">
+      <h3>Delete project memory</h3>
+      <p>Remove this project's memory files and disable future project-scope capture.</p>
+      <button class="soft-button danger compact" type="button" data-project-delete>Delete & disable project memory</button>
+      ${state.projectDelete.error ? `<p class="notice error">${escapeHtml(state.projectDelete.error)}</p>` : ''}
+    </div>
+  `
+}
+
+function bindProjectDeleteActions() {
+  const deleteButton = detailRail.querySelector('[data-project-delete]')
+  if (deleteButton) {
+    deleteButton.addEventListener('click', () => {
+      state.projectDelete = { confirming: true, loading: false, error: '', receipt: null }
+      render()
+    })
+  }
+  const cancelButton = detailRail.querySelector('[data-cancel-project-delete]')
+  if (cancelButton) {
+    cancelButton.addEventListener('click', () => {
+      state.projectDelete = { confirming: false, loading: false, error: '', receipt: null }
+      render()
+    })
+  }
+  const form = detailRail.querySelector('[data-project-delete-form]')
+  if (form) {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      submitProjectDelete(new FormData(form))
+    })
+  }
+}
+
+async function submitProjectDelete(formData) {
+  const project = selectedProjectOption()
+  if (!project) return
+  state.projectDelete = { confirming: true, loading: true, error: '', receipt: null }
+  render()
+  try {
+    const response = await apiFetch(`/api/projects/${encodeURIComponent(project.projectId)}/delete-memory`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmProjectId: String(formData.get('confirmProjectId') || '').trim(),
+        reason: String(formData.get('reason') || '').trim()
+      })
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Project memory deletion failed.')
+    }
+    await loadDashboard({ renderAfter: false })
+    state.projectDelete = { confirming: false, loading: false, error: '', receipt: payload.data?.receipt || {} }
+  } catch (error) {
+    state.projectDelete = { confirming: true, loading: false, error: errorMessage(error), receipt: null }
+  }
+  render()
 }
 
 function renderPendingDetail(candidate) {
@@ -606,7 +817,7 @@ async function submitPendingAction(candidate, formData) {
   if (!action) return
   const body = actionBody(action, candidate, formData)
   try {
-    const response = await apiFetch(`/api/memory/${encodeURIComponent(candidate.id)}/${action}`, {
+    const response = await apiFetch(`/api/memory/${encodeURIComponent(candidate.id)}/${action}${selectionQuery()}`, {
       method: 'POST',
       body: JSON.stringify(body)
     })
@@ -629,6 +840,13 @@ async function submitPendingAction(candidate, formData) {
     state.actionError = errorMessage(error)
   }
   render()
+}
+
+function selectionQuery() {
+  const params = new URLSearchParams()
+  params.set('scope', state.memoryScope)
+  if (state.selectedProjectId) params.set('projectId', state.selectedProjectId)
+  return `?${params.toString()}`
 }
 
 function actionBody(action, candidate, formData) {
@@ -662,6 +880,12 @@ function actionBody(action, candidate, formData) {
 
 function selectedPending() {
   return listPending().find((candidate) => candidate.id === state.selectedPendingId)
+}
+
+function selectedProjectOption() {
+  const projects = Array.isArray(state.dashboard.projects?.projects) ? state.dashboard.projects.projects : []
+  const selectedProjectId = state.selectedProjectId || selectionInfo(state.dashboard).projectId || state.dashboard.projects?.currentProjectId || ''
+  return projects.find((project) => project.projectId === selectedProjectId)
 }
 
 function actionLabel(action) {
@@ -700,8 +924,40 @@ function panel(title, body, tone) {
   `
 }
 
+function renderModelConfigPanel() {
+  const config = state.dashboard.modelConfig || {}
+  const missing = Array.isArray(config.missing) ? config.missing : []
+  const title = config.configured ? 'Model configured' : 'Model config needed for harvest'
+  const body = config.configured
+    ? `Model ${escapeHtml(config.model || 'configured')} at ${escapeHtml(config.baseUrl || 'configured endpoint')}. API key: ${escapeHtml(config.apiKeyPreview || 'not set')}.`
+    : `Reviewing existing memory works without a key. Harvest and model summaries need ${escapeHtml(missing.join(', ') || 'CYRENE_BASE_URL and CYRENE_MODEL')}; set CYRENE_API_KEY if the provider requires bearer auth.`
+  return panel(title, body, config.configured ? 'muted' : 'warn')
+}
+
+function renderTimelineDiagnostic() {
+  const failures = listSummaries().filter((summary) => summary.status === 'failed')
+  if (failures.length === 0) return ''
+  const latest = failures[0]
+  const reason = latest.failureReason || latest.summary || 'Stop hook summary failed.'
+  return panel(
+    'Stop Hook summaries failing',
+    `${escapeHtml(String(failures.length))} failed summary records in this scope. Latest: ${escapeHtml(reason)}`,
+    'error'
+  )
+}
+
 function statusChip(label, value, tone) {
   return `<span class="status-chip ${escapeHtml(tone || 'muted')}"><b>${escapeHtml(label)}</b>${escapeHtml(value)}</span>`
+}
+
+function scopeLabel(scope) {
+  if (scope === 'global') return 'Global'
+  return 'Project'
+}
+
+function selectionMeta(selection) {
+  if (selection.scope === 'global') return 'Global memory'
+  return `Project · ${selection.projectId || 'unknown'}`
 }
 
 function emptyState(textValue) {

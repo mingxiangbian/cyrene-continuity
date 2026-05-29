@@ -11,6 +11,7 @@ import {
 } from '../src/codex/codex-hook-stop.js'
 import { readRecentCodexHookTrace } from '../src/codex/hook-trace-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
 import type { PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -178,27 +179,104 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain('Transcript path is a symlink.')
   })
 
-  it('rejects oversized transcript files before extraction', async () => {
+  it('summarizes the tail of oversized transcript files instead of failing the Stop hook', async () => {
     const home = await createTempDir('cyrene-codex-stop-oversized-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-codex-stop-oversized-project-')
     const transcript = join(cwd, 'transcript.jsonl')
-    await writeFile(transcript, Buffer.alloc(5 * 1024 * 1024 + 1, 'x'))
-
-    const result = await handleCodexStopHookPayload({
-      cwd,
-      session_id: 's-oversized',
-      turn_id: 't-oversized',
-      transcript_path: transcript
+    const latestMessage = 'latest turn survived transcript tail mode'
+    await writeFile(
+      transcript,
+      `${'x'.repeat(5 * 1024 * 1024 + 1)}\n${JSON.stringify({ role: 'user', content: latestMessage })}\n`
+    )
+    const callModel = vi.fn(async (input: { messages: Array<{ content: string }> }) => {
+      expect(input.messages[0]?.content).toContain(latestMessage)
+      return {
+        content: JSON.stringify({ summary: 'Oversized transcript tail was summarized.', candidates: [] }),
+        toolCalls: []
+      }
     })
 
-    expect(result.action).toBe('summary_failed')
+    const result = await handleCodexStopHookPayload(
+      {
+        cwd,
+        session_id: 's-oversized',
+        turn_id: 't-oversized',
+        transcript_path: transcript
+      },
+      { callModel }
+    )
+
+    expect(result.action).toBe('summary')
+    expect(callModel).toHaveBeenCalledTimes(1)
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
-      'Transcript path exceeds the maximum readable size.'
+      'Oversized transcript tail was summarized.'
     )
+  })
+
+  it('records a skipped summary instead of a failed timeline item when model config is missing', async () => {
+    const home = await createTempDir('cyrene-codex-stop-missing-model-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', '')
+    vi.stubEnv('CYRENE_MODEL', '')
+    vi.stubEnv('CYRENE_STRONG_MODEL', '')
+    vi.stubEnv('CYRENE_CHEAP_MODEL', '')
+    const cwd = await createTempDir('cyrene-codex-stop-missing-model-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: 'Plain discussion.' }) + '\n')
+
+    const result = await handleCodexStopHookPayload({
+      cwd,
+      session_id: 's-missing-model',
+      turn_id: 't-missing-model',
+      transcript_path: transcript
+    })
+
+    expect(result).toMatchObject({
+      action: 'summary',
+      reason: 'Codex review summary skipped because model config is incomplete.'
+    })
+    const identity = await identifyCodexProject(cwd)
+    const summaries = await readFile(join(codexProjectMemoryRoot(identity.projectId), 'review-summaries.jsonl'), 'utf8')
+    const [summary] = summaries.trim().split('\n').map((line) => JSON.parse(line) as {
+      status: string
+      summary: string
+      failureReason?: string
+    })
+    expect(summary).toMatchObject({
+      status: 'ok',
+      summary: 'Codex Stop hook skipped LLM review summary because model config is incomplete.'
+    })
+    expect(summary.failureReason).toBeUndefined()
+  })
+
+  it('does not create project memory or hook trace when the project is disabled', async () => {
+    const home = await createTempDir('cyrene-codex-stop-disabled-project-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-disabled-project-')
+    const identity = await identifyCodexProject(cwd)
+    await deleteCodexProjectMemory({ projectId: identity.projectId, reason: 'Do not capture this project.' })
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '以后默认这个项目要记住 review hash。' }) + '\n')
+
+    const result = await handleCodexStopHookPayload({
+      cwd,
+      session_id: 's-disabled-project',
+      turn_id: 't-disabled-project',
+      transcript_path: transcript
+    })
+
+    expect(result).toEqual({
+      action: 'noop',
+      reason: 'Project memory is disabled for this project.'
+    })
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expectMemoryFileMissing(memoryRoot, 'hook-trace.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review-summaries.jsonl')
   })
 
   it('rejects absolute transcript files outside the project cwd and Codex home', async () => {
@@ -529,6 +607,7 @@ describe('Codex Stop hook runtime', () => {
     vi.stubEnv('HOME', home)
     vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
     vi.stubEnv('CYRENE_MODEL', 'test-model')
+    vi.stubEnv('CYRENE_API_KEY', 'test-key')
     const cwd = await createTempDir('cyrene-codex-stop-harvest-project-')
     const transcript = join(cwd, 'transcript.jsonl')
     await writeFile(transcript, JSON.stringify({ role: 'user', content: 'This project keeps hooks in plugin/hooks/hooks.json.' }) + '\n')
@@ -598,6 +677,7 @@ describe('Codex Stop hook runtime', () => {
     vi.stubEnv('HOME', home)
     vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
     vi.stubEnv('CYRENE_MODEL', 'test-model')
+    vi.stubEnv('CYRENE_API_KEY', 'test-key')
     const cwd = await createTempDir('cyrene-codex-stop-harvest-invalid-project-')
     const transcript = join(cwd, 'transcript.jsonl')
     await writeFile(transcript, JSON.stringify({ role: 'user', content: 'Plain discussion.' }) + '\n')

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { handleCodexUiApiRequest } from '../src/codex/codex-ui-api.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
@@ -235,6 +235,156 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
+  it('returns grouped global memory with personal, affective, and procedural labels', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+    const memoryRoot = codexGlobalMemoryRoot()
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(
+      join(memoryRoot, 'index.jsonl'),
+      [
+        createActive({
+          id: 'preference-1',
+          domain: 'personal',
+          type: 'user_preference',
+          scope: 'global',
+          candidateKind: undefined,
+          tags: []
+        }),
+        createActive({
+          id: 'style-1',
+          domain: 'personal',
+          type: 'interaction_style',
+          scope: 'global',
+          candidateKind: undefined,
+          tags: []
+        }),
+        createActive({
+          id: 'affect-1',
+          domain: 'affective',
+          type: 'affective_pattern',
+          scope: 'global',
+          candidateKind: undefined,
+          tags: []
+        }),
+        createActive({
+          id: 'rule-1',
+          domain: 'procedural',
+          type: 'procedural_rule',
+          scope: 'global',
+          candidateKind: undefined,
+          tags: []
+        }),
+        createActive({
+          id: 'other-global-1',
+          domain: 'relationship',
+          type: 'reference',
+          scope: 'global',
+          candidateKind: undefined,
+          tags: []
+        })
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'GET',
+      pathname: '/api/project-memory',
+      searchParams: new URLSearchParams('scope=global')
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
+      expect(groupIds(data.groups)).toEqual({
+        'User Preferences': ['preference-1'],
+        'Interaction Style': ['style-1'],
+        'Relationship Boundaries': [],
+        'Affective Patterns': ['affect-1'],
+        'Workflow Rules': ['rule-1'],
+        'System Policies': [],
+        References: ['other-global-1'],
+        Episodes: [],
+        'Project Facts': [],
+        'Other Global Memory': []
+      })
+    }
+  })
+
+  it('infers unnamed project display names from hook-trace cwd metadata', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+    const tracedCwd = await createTempDir('cyrene-ui-understand-anything-')
+    await writeFile(join(tracedCwd, 'package.json'), '{"name":"Understand-Anything"}\n')
+    const otherRoot = codexProjectMemoryRoot('bb1ebd2e94131f05')
+    await mkdir(otherRoot, { recursive: true })
+    await writeFile(
+      join(otherRoot, 'hook-trace.jsonl'),
+      `${JSON.stringify({
+        id: 'trace-1',
+        createdAt: '2026-05-29T00:00:00.000Z',
+        event: 'stop',
+        cwd: tracedCwd,
+        summary: 'Stop hook received.',
+        signals: []
+      })}\n`
+    )
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/projects' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { projects: Array<{ projectId: string; displayName: string }> }
+      expect(data.projects).toContainEqual(expect.objectContaining({
+        projectId: 'bb1ebd2e94131f05',
+        displayName: 'Understand-Anything'
+      }))
+    }
+  })
+
+  it('deletes and disables project memory through the Web UI project route', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+    const projectId = 'bb1ebd2e94131f05'
+    const memoryRoot = codexProjectMemoryRoot(projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({ id: 'delete-me' }))}\n`)
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/projects/${projectId}/delete-memory`,
+      body: { confirmProjectId: projectId, reason: 'Do not create project memory here.' },
+      now: '2026-05-29T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: {
+          action: 'delete_project_memory',
+          projectId,
+          disabled: true,
+          memoryDeleted: true
+        }
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const projects = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/projects' })
+    expect(projects.body.ok).toBe(true)
+    if (projects.body.ok) {
+      const data = projects.body.data as { projects: Array<{ projectId: string; disabled?: boolean }> }
+      expect(data.projects).toContainEqual(expect.objectContaining({ projectId, disabled: true }))
+    }
+  })
+
   it('keeps empty project memory groups for UI empty states', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
@@ -289,6 +439,31 @@ describe('handleCodexUiApiRequest', () => {
     }
     expect(callModel).not.toHaveBeenCalled()
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
+  it('reports DeepSeek model config incomplete when the API key is missing', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', 'https://api.deepseek.com')
+    vi.stubEnv('CYRENE_MODEL', 'deepseek-v4-flash')
+    vi.stubEnv('CYRENE_API_KEY', '')
+    const { cwd } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/dashboard' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        modelConfig: { configured: boolean; apiKeyConfigured: boolean; missing: string[]; apiKeyPreview: string }
+      }
+      expect(data.modelConfig).toMatchObject({
+        configured: false,
+        apiKeyConfigured: false,
+        apiKeyPreview: 'not set'
+      })
+      expect(data.modelConfig.missing).toContain('CYRENE_API_KEY')
+    }
   })
 
   it('rejects write routes when reviewHash is missing', async () => {
