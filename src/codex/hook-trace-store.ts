@@ -155,7 +155,7 @@ function isCodexHookTraceRecord(value: unknown): value is CodexHookTraceRecord {
 
   return (
     isNonemptyString(value.id) &&
-    isNonemptyString(value.createdAt) &&
+    isValidTimestamp(value.createdAt) &&
     typeof value.event === 'string' &&
     HOOK_TRACE_EVENTS.has(value.event) &&
     typeof value.cwd === 'string' &&
@@ -191,6 +191,10 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonemptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
+}
+
+function isValidTimestamp(value: unknown): value is string {
+  return isNonemptyString(value) && Number.isFinite(Date.parse(value))
 }
 
 function isOptionalString(value: unknown): value is string | undefined {

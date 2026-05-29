@@ -143,6 +143,14 @@ describe('Codex hook trace store', () => {
       [
         JSON.stringify({}),
         JSON.stringify({ id: 'bad', createdAt: null }),
+        JSON.stringify({
+          id: 'bad-timestamp',
+          createdAt: 'zzzz',
+          event: 'stop',
+          cwd,
+          summary: 'Bad timestamp.',
+          signals: []
+        }),
         JSON.stringify(validRecord)
       ].join('\n') + '\n',
       'utf8'
@@ -151,8 +159,9 @@ describe('Codex hook trace store', () => {
     const result = await readRecentCodexHookTrace({ cwd })
 
     expect(result.records).toEqual([validRecord])
-    expect(result.warnings).toHaveLength(2)
+    expect(result.warnings).toHaveLength(3)
     expect(result.warnings).toEqual([
+      expect.stringContaining('Malformed hook trace line'),
       expect.stringContaining('Malformed hook trace line'),
       expect.stringContaining('Malformed hook trace line')
     ])
