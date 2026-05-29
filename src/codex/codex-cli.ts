@@ -6,6 +6,7 @@ import { handleCodexHookTraceCommand } from './codex-hook-trace.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
 import { rebuildCodexMemoryIndex } from './codex-memory-index.js'
 import { formatCodexMemoryDashboard } from './codex-memory-dashboard.js'
+import { startCodexUiServer, type CodexUiServer } from './codex-ui-server.js'
 import {
   formatCodexMemoryReview,
   runCodexMemoryApprove,
@@ -43,6 +44,16 @@ import type { CodexProjectHarvestMode } from './project-memory-signals.js'
 
 export async function handleCodexCommand(input: { cwd: string; args: string[]; runtimeEntryPath?: string }): Promise<void> {
   const command = input.args[0]
+  if (command === 'ui') {
+    const server = await startCodexUiServer({
+      cwd: input.cwd,
+      port: parseOptionalNonNegativeInteger(input.args, '--port')
+    })
+    process.stdout.write(`Cyrene Web UI: ${server.url}\n`)
+    await waitForProcessTermination(server)
+    return
+  }
+
   if (command === 'doctor') {
     process.stdout.write(await formatCodexDoctor({
       cwd: input.cwd,
@@ -275,8 +286,29 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
+}
+
+function waitForProcessTermination(server: CodexUiServer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const cleanup = () => {
+      process.off('SIGINT', onSignal)
+      process.off('SIGTERM', onSignal)
+    }
+    const onSignal = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      cleanup()
+      server.close().then(resolve, reject)
+    }
+
+    process.once('SIGINT', onSignal)
+    process.once('SIGTERM', onSignal)
+  })
 }
 
 function parseHarvestProjectMode(args: string[]): CodexProjectHarvestMode | undefined {
@@ -413,6 +445,18 @@ function parseOptionalPositiveInteger(args: string[], option: string): number | 
   const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid ${option}: expected positive integer`)
+  }
+  return parsed
+}
+
+function parseOptionalNonNegativeInteger(args: string[], option: string): number | undefined {
+  const value = parseOptionalOption(args, option)
+  if (value === undefined) {
+    return undefined
+  }
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${option}: expected non-negative integer`)
   }
   return parsed
 }
