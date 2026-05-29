@@ -131,6 +131,8 @@ export function buildCodexProjectMemoryHarvestPrompt(signals: ProjectMemorySigna
     `Allowed candidate_kind values: ${PROJECT_CANDIDATE_KINDS.join(', ')}.`,
     'Prefer no candidates over weak candidates.',
     'Good candidates capture design decisions, confirmed workflows, rejected approaches, repeated pitfalls, project boundaries, and repository policies.',
+    'Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.',
+    'Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.',
     'Reject one-time status, vague impressions, assistant self-praise, user psychology, private data, secrets, credentials, temporary output, and raw command dumps.',
     'Each candidate should include candidateKind or candidate_kind, content, signalIndexes, and optional tags.',
     'signalIndexes must be 1-based indexes of the collected signals that support that specific candidate.',

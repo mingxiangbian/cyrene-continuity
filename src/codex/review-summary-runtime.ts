@@ -145,6 +145,8 @@ export function buildCodexReviewSummaryPrompt(redactedTranscript: string): strin
     'Prefer no candidates over weak candidates.',
     'Use only the redacted transcript text below.',
     'Do not store secrets, credentials, raw quotes, psychological diagnoses, or assistant-only suggestions.',
+    'Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.',
+    'Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.',
     'Memory candidates must match the existing memory candidate schema.',
     'Candidates may include domain, type, strength, scope, content, normalizedKey, source, scores, evidence, and tags.',
     '',

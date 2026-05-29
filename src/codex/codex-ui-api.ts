@@ -318,6 +318,7 @@ async function handleMemoryWriteRoute(
   }
 
   const reviewHash = body.reviewHash.trim()
+  const reason = typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason.trim() : undefined
   if (route.action === 'approve') {
     return writeResultToApi(
       await promoteCodexPendingMemory({ cwd: input.cwd, projectId: selection.projectId, id: route.id, reviewHash, now: input.now }),
@@ -328,16 +329,13 @@ async function handleMemoryWriteRoute(
   }
 
   if (route.action === 'reject') {
-    if (typeof body.reason !== 'string' || body.reason.trim() === '') {
-      return failure(400, 'invalid_request', 'Reject requires a reason.')
-    }
     return writeResultToApi(
       await rejectCodexPendingMemory({
         cwd: input.cwd,
         projectId: selection.projectId,
         id: route.id,
         reviewHash,
-        reason: body.reason.trim(),
+        reason,
         now: input.now
       }),
       'reject',
@@ -347,9 +345,6 @@ async function handleMemoryWriteRoute(
   }
 
   if (route.action === 'defer') {
-    if (typeof body.reason !== 'string' || body.reason.trim() === '') {
-      return failure(400, 'invalid_request', 'Defer requires a reason.')
-    }
     const days = optionalPositiveInteger(body.days, 7)
     if (days === undefined) {
       return failure(400, 'invalid_request', 'Defer days must be a positive integer.')
@@ -360,7 +355,7 @@ async function handleMemoryWriteRoute(
         projectId: selection.projectId,
         id: route.id,
         reviewHash,
-        reason: body.reason.trim(),
+        reason,
         days,
         now: input.now
       }),

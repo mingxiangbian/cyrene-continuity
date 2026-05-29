@@ -16824,6 +16824,8 @@ function buildCodexProjectMemoryHarvestPrompt(signals) {
     `Allowed candidate_kind values: ${PROJECT_CANDIDATE_KINDS.join(", ")}.`,
     "Prefer no candidates over weak candidates.",
     "Good candidates capture design decisions, confirmed workflows, rejected approaches, repeated pitfalls, project boundaries, and repository policies.",
+    "Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.",
+    "Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.",
     "Reject one-time status, vague impressions, assistant self-praise, user psychology, private data, secrets, credentials, temporary output, and raw command dumps.",
     "Each candidate should include candidateKind or candidate_kind, content, signalIndexes, and optional tags.",
     "signalIndexes must be 1-based indexes of the collected signals that support that specific candidate.",
@@ -17075,6 +17077,10 @@ function recentTranscriptMessages(messages, limit = 40) {
 }
 function parseTranscriptLine(value) {
   const record2 = isRecord4(value) ? value : void 0;
+  const eventMessage = parseCodexEventMessage(record2);
+  if (eventMessage !== void 0) {
+    return [eventMessage];
+  }
   const source = isRecord4(record2?.message) ? record2.message : record2;
   const role = asString(source?.role);
   const content = contentToString(source?.content);
@@ -17082,6 +17088,24 @@ function parseTranscriptLine(value) {
     return [];
   }
   return [{ role, content }];
+}
+function parseCodexEventMessage(record2) {
+  if (record2?.type !== "event_msg") {
+    return void 0;
+  }
+  const payload = isRecord4(record2.payload) ? record2.payload : void 0;
+  const payloadType = asString(payload?.type);
+  const message = asString(payload?.message);
+  if (message === void 0) {
+    return void 0;
+  }
+  if (payloadType === "user_message") {
+    return { role: "user", content: message };
+  }
+  if (payloadType === "agent_message") {
+    return { role: "assistant", content: message };
+  }
+  return void 0;
 }
 function contentToString(value) {
   if (typeof value === "string") {
@@ -17213,6 +17237,8 @@ function buildCodexReviewSummaryPrompt(redactedTranscript) {
     "Prefer no candidates over weak candidates.",
     "Use only the redacted transcript text below.",
     "Do not store secrets, credentials, raw quotes, psychological diagnoses, or assistant-only suggestions.",
+    "Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.",
+    "Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.",
     "Memory candidates must match the existing memory candidate schema.",
     "Candidates may include domain, type, strength, scope, content, normalizedKey, source, scores, evidence, and tags.",
     "",
@@ -18483,6 +18509,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
     return failure(400, "invalid_request", "Write requests require reviewHash.");
   }
   const reviewHash = body.reviewHash.trim();
+  const reason = typeof body.reason === "string" && body.reason.trim() !== "" ? body.reason.trim() : void 0;
   if (route.action === "approve") {
     return writeResultToApi(
       await promoteCodexPendingMemory({ cwd: input.cwd, projectId: selection.projectId, id: route.id, reviewHash, now: input.now }),
@@ -18492,16 +18519,13 @@ async function handleMemoryWriteRoute(input, route, selection) {
     );
   }
   if (route.action === "reject") {
-    if (typeof body.reason !== "string" || body.reason.trim() === "") {
-      return failure(400, "invalid_request", "Reject requires a reason.");
-    }
     return writeResultToApi(
       await rejectCodexPendingMemory({
         cwd: input.cwd,
         projectId: selection.projectId,
         id: route.id,
         reviewHash,
-        reason: body.reason.trim(),
+        reason,
         now: input.now
       }),
       "reject",
@@ -18510,9 +18534,6 @@ async function handleMemoryWriteRoute(input, route, selection) {
     );
   }
   if (route.action === "defer") {
-    if (typeof body.reason !== "string" || body.reason.trim() === "") {
-      return failure(400, "invalid_request", "Defer requires a reason.");
-    }
     const days = optionalPositiveInteger(body.days, 7);
     if (days === void 0) {
       return failure(400, "invalid_request", "Defer days must be a positive integer.");
@@ -18523,7 +18544,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
         projectId: selection.projectId,
         id: route.id,
         reviewHash,
-        reason: body.reason.trim(),
+        reason,
         days,
         now: input.now
       }),
@@ -19781,7 +19802,7 @@ function renderConfirmForm(candidate, action) {
   const reasonField = action === 'reject' || action === 'defer'
     ? \`
       <label>Reason
-        <textarea name="reason" rows="3" required placeholder="Required review reason"></textarea>
+        <textarea name="reason" rows="3" placeholder="Optional review note"></textarea>
       </label>
     \`
     : ''

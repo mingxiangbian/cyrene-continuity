@@ -583,6 +583,56 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).resolves.not.toContain('"action":"reject"')
   })
 
+  it('writes review summary and pending candidate from Codex event transcript messages', async () => {
+    const home = await createTempDir('cyrene-codex-stop-event-transcript-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-event-transcript-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, [
+      JSON.stringify({
+        type: 'event_msg',
+        payload: { type: 'user_message', message: '这个项目的 Stop hook review summary 应该可以生成 pending memory。' }
+      }),
+      JSON.stringify({
+        type: 'event_msg',
+        payload: { type: 'agent_message', message: '确认。' }
+      })
+    ].join('\n') + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, transcript_path: transcript, session_id: 's-event', turn_id: 't-event' },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({
+            summary: '用户要求 Stop hook review summary 能生成 pending memory。',
+            candidates: [
+              {
+                domain: 'project',
+                type: 'project_fact',
+                strength: 'soft',
+                scope: 'project',
+                source: 'user_explicit',
+                content: 'Stop hook review summaries should be able to create pending project memory.',
+                evidence: [{ summary: '用户要求 Stop hook review summary 能生成 pending memory。' }]
+              }
+            ]
+          }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('pending')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
+      '用户要求 Stop hook review summary 能生成 pending memory。'
+    )
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
+      'Stop hook review summaries should be able to create pending project memory.'
+    )
+  })
+
   it('still proposes explicit durable memory when review summary model fails', async () => {
     const home = await createTempDir('cyrene-codex-stop-home-')
     vi.stubEnv('HOME', home)

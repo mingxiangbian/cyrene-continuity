@@ -449,6 +449,46 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
+  it('keeps Web UI project harvest dry-run only when model extraction returns candidates', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
+    vi.stubEnv('CYRENE_MODEL', 'test-model')
+    vi.stubEnv('CYRENE_API_KEY', 'test-key')
+    const { cwd, memoryRoot } = await seedProject()
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const callModel = vi.fn(async () => ({
+      content: JSON.stringify({
+        candidates: [{
+          candidateKind: 'project_fact',
+          content: 'The Web UI project harvester must not write pending candidates directly.',
+          signalIndexes: [1]
+        }]
+      }),
+      toolCalls: []
+    }))
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/harvest-project/dry-run',
+      body: { dryRun: false, cwd: '/tmp/not-used' },
+      callModel
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { result: { action: string; candidates?: Array<{ content: string }> } }
+      expect(data.result.action).toBe('preview')
+      expect(data.result.candidates?.[0]?.content).toBe(
+        'The Web UI project harvester must not write pending candidates directly.'
+      )
+    }
+    expect(callModel).toHaveBeenCalledTimes(1)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
   it('reports DeepSeek model config incomplete when the API key is missing', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
@@ -512,13 +552,13 @@ describe('handleCodexUiApiRequest', () => {
     })
   })
 
-  it('requires reasons for reject and defer write routes', async () => {
+  it('allows reject and defer without reasons through the Web UI write routes', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
-    const { cwd, pending } = await seedProject()
-    const hash = await pendingHash(cwd)
 
     for (const action of ['reject', 'defer']) {
+      const { cwd, pending } = await seedProject()
+      const hash = await pendingHash(cwd)
       const result = await handleCodexUiApiRequest({
         cwd,
         method: 'POST',
@@ -526,11 +566,17 @@ describe('handleCodexUiApiRequest', () => {
         body: { reviewHash: hash }
       })
 
-      expect(result.status).toBe(400)
-      expect(result.body).toMatchObject({
-        ok: false,
-        error: { code: 'invalid_request' }
-      })
+      expect(result.status).toBe(200)
+      expect(result.body.ok).toBe(true)
+      if (result.body.ok) {
+        expect(result.body.data).toMatchObject({
+          receipt: {
+            action,
+            id: pending.id,
+            reviewHash: hash
+          }
+        })
+      }
     }
   })
 

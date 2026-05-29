@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
-import { runCodexReviewSummary } from '../src/codex/review-summary-runtime.js'
+import { buildCodexReviewSummaryPrompt, runCodexReviewSummary } from '../src/codex/review-summary-runtime.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { createDefaultConfig, type AppConfig } from '../src/config.js'
 import type { CallModelInput, ModelResponse } from '../src/llm-client.js'
@@ -52,6 +52,13 @@ async function readReviewSummaries(cwd: string): Promise<string> {
 }
 
 describe('Codex review summary runtime', () => {
+  it('asks generated memory text to use Chinese while preserving English terms', () => {
+    const prompt = buildCodexReviewSummaryPrompt('User discussed API workflow and README.md.')
+
+    expect(prompt).toContain('Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.')
+    expect(prompt).toContain('Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.')
+  })
+
   it('writes a redacted summary without pending candidates', async () => {
     const home = await createTempDir('cyrene-review-runtime-home-')
     vi.stubEnv('HOME', home)

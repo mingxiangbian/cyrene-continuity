@@ -26,6 +26,10 @@ export function recentTranscriptMessages(messages: TranscriptMessage[], limit = 
 
 function parseTranscriptLine(value: unknown): TranscriptMessage[] {
   const record = isRecord(value) ? value : undefined
+  const eventMessage = parseCodexEventMessage(record)
+  if (eventMessage !== undefined) {
+    return [eventMessage]
+  }
   const source = isRecord(record?.message) ? record.message : record
   const role = asString(source?.role)
   const content = contentToString(source?.content)
@@ -33,6 +37,25 @@ function parseTranscriptLine(value: unknown): TranscriptMessage[] {
     return []
   }
   return [{ role, content }]
+}
+
+function parseCodexEventMessage(record: Record<string, unknown> | undefined): TranscriptMessage | undefined {
+  if (record?.type !== 'event_msg') {
+    return undefined
+  }
+  const payload = isRecord(record.payload) ? record.payload : undefined
+  const payloadType = asString(payload?.type)
+  const message = asString(payload?.message)
+  if (message === undefined) {
+    return undefined
+  }
+  if (payloadType === 'user_message') {
+    return { role: 'user', content: message }
+  }
+  if (payloadType === 'agent_message') {
+    return { role: 'assistant', content: message }
+  }
+  return undefined
 }
 
 function contentToString(value: unknown): string | undefined {

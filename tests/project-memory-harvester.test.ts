@@ -510,6 +510,8 @@ describe('runCodexProjectMemoryHarvest', () => {
     ]) {
       expect(prompt).toContain(kind)
     }
+    expect(prompt).toContain('Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.')
+    expect(prompt).toContain('Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.')
     expect(prompt).toContain('repository_policy')
     expect(prompt).toContain('preserve pending-only memory review model')
     expect(prompt).toContain('hook_trace')

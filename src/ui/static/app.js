@@ -711,7 +711,7 @@ function renderConfirmForm(candidate, action) {
   const reasonField = action === 'reject' || action === 'defer'
     ? `
       <label>Reason
-        <textarea name="reason" rows="3" required placeholder="Required review reason"></textarea>
+        <textarea name="reason" rows="3" placeholder="Optional review note"></textarea>
       </label>
     `
     : ''

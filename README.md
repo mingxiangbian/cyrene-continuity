@@ -133,7 +133,7 @@ global memory.
 It supports hash-checked
 single-candidate pending review actions: approve, reject, defer, and edit. Every
 write action requires the current review hash and an in-session UI token.
-Reject/defer require a reason; edit requires a change note. The UI does not
+Reject/defer accept an optional review note; edit requires a change note. The UI does not
 batch approve, does not apply Dream/Profile changes, and does not require model
 API configuration for reviewing existing pending candidates. The Harvester view
 only runs `harvest-project` dry-run preview from the UI; it does not write

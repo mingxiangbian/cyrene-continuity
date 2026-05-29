@@ -17,6 +17,28 @@ describe('Codex transcript parsing', () => {
     ])
   })
 
+  it('parses Codex event transcript user and agent messages', () => {
+    const messages = parseTranscriptMessages(
+      [
+        JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: '记住：项目总结要能进入 pending。' } }),
+        JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: '收到。' } }),
+        JSON.stringify({
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'internal instructions should not become transcript memory text' }]
+          }
+        })
+      ].join('\n')
+    )
+
+    expect(messages).toEqual([
+      { role: 'user', content: '记住：项目总结要能进入 pending。' },
+      { role: 'assistant', content: '收到。' }
+    ])
+  })
+
   it('keeps only the most recent messages after parsing', () => {
     const messages = Array.from({ length: 45 }, (_, index) => ({
       role: index % 2 === 0 ? 'user' : 'assistant',
