@@ -329,8 +329,9 @@ describe('handleCodexUiApiRequest', () => {
     expect(result.status).toBe(200)
     expect(result.body.ok).toBe(true)
     if (result.body.ok) {
-      const data = result.body.data as { reviewSummaries: Array<{ id: string }> }
-      expect(data.reviewSummaries.map((record) => record.id)).toEqual(['summary-2', 'summary-1'])
+      const data = result.body.data as { summaries: Array<{ id: string }>; reviewSummaries?: unknown }
+      expect(data.summaries.map((record) => record.id)).toEqual(['summary-2', 'summary-1'])
+      expect(data.reviewSummaries).toBeUndefined()
     }
   })
 })

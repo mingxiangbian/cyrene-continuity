@@ -142,12 +142,12 @@ async function readProjectMemory(cwd: string): Promise<ActiveMemoryResult & { gr
 async function readReviewSummaries(cwd: string): Promise<{
   project: CodexProjectIdentity
   memoryRoot: string
-  reviewSummaries: CodexReviewSummaryRecord[]
+  summaries: CodexReviewSummaryRecord[]
 }> {
   const project = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(project.projectId)
-  const reviewSummaries = await readReviewSummaryRecordsForUi(memoryRoot)
-  return { project, memoryRoot, reviewSummaries }
+  const summaries = await readReviewSummaryRecordsForUi(memoryRoot)
+  return { project, memoryRoot, summaries }
 }
 
 async function readProfile(cwd: string): Promise<{
