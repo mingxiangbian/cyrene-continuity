@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { handleCodexUiApiRequest, type CodexUiApiResponse } from './codex-ui-api.js'
@@ -14,7 +15,12 @@ export interface CodexUiServer {
 export interface StartCodexUiServerInput {
   cwd: string
   port?: number
+  uiToken?: string
   callModel?: (input: CallModelInput) => Promise<ModelResponse>
+}
+
+interface CodexUiServerContext extends StartCodexUiServerInput {
+  uiToken: string
 }
 
 const HOST = '127.0.0.1'
@@ -46,8 +52,12 @@ async function listenWithFallback(input: StartCodexUiServerInput, requestedPort:
 
 function listen(input: StartCodexUiServerInput, port: number): Promise<CodexUiServer> {
   return new Promise((resolve, reject) => {
+    const context: CodexUiServerContext = {
+      ...input,
+      uiToken: input.uiToken ?? createUiToken()
+    }
     const server = createServer((request, response) => {
-      handleRequest(input, request, response).catch((error: unknown) => {
+      handleRequest(context, request, response).catch((error: unknown) => {
         handleUnhandledRequestError(request, response, error)
       })
     })
@@ -106,7 +116,7 @@ function handleUnhandledRequestError(request: IncomingMessage, response: ServerR
 }
 
 async function handleRequest(
-  input: StartCodexUiServerInput,
+  input: CodexUiServerContext,
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> {
@@ -119,7 +129,7 @@ async function handleRequest(
 }
 
 async function handleApiRequest(
-  input: StartCodexUiServerInput,
+  input: CodexUiServerContext,
   request: IncomingMessage,
   response: ServerResponse,
   pathname: string
@@ -130,12 +140,17 @@ async function handleApiRequest(
       writeJson(response, 403, failure('cross_origin_forbidden', 'Cross-origin non-GET API requests are not allowed.'))
       return
     }
+    if (isNonGetMethod(method) && !hasValidUiToken(request, input.uiToken)) {
+      writeJson(response, 403, failure('csrf_forbidden', 'Missing or invalid Cyrene UI session token.'))
+      return
+    }
     const body = needsBody(method) ? await readJsonBody(request) : undefined
     const result = await handleCodexUiApiRequest({
       cwd: input.cwd,
       method,
       pathname,
       body,
+      uiToken: input.uiToken,
       callModel: input.callModel
     })
     writeJson(response, result.status, result.body)
@@ -248,6 +263,14 @@ function isCrossOriginRequest(request: IncomingMessage): boolean {
   } catch {
     return true
   }
+}
+
+function createUiToken(): string {
+  return randomBytes(32).toString('hex')
+}
+
+function hasValidUiToken(request: IncomingMessage, expectedToken: string): boolean {
+  return singleHeaderValue(request.headers['x-cyrene-ui-token']) === expectedToken
 }
 
 function singleHeaderValue(value: string | string[] | undefined): string | undefined {

@@ -125,6 +125,25 @@ function createReviewSummary() {
 }
 
 describe('handleCodexUiApiRequest', () => {
+  it('returns the UI session token for same-origin UI bootstrap', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'GET',
+      pathname: '/api/session',
+      uiToken: 'test-ui-token'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toEqual({ token: 'test-ui-token' })
+    }
+  })
+
   it('returns dashboard data with pending memory and profile text', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)

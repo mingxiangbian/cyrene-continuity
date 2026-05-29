@@ -29,6 +29,7 @@ export interface HandleCodexUiApiRequestInput {
   pathname: string
   body?: unknown
   now?: string
+  uiToken?: string
   callModel?: (input: CallModelInput) => Promise<ModelResponse>
 }
 
@@ -58,6 +59,13 @@ type ProjectMemoryLabel = typeof PROJECT_MEMORY_LABELS[number]
 
 export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInput): Promise<CodexUiApiResult<unknown>> {
   try {
+    if (input.pathname === '/api/session') {
+      if (input.method.toUpperCase() !== 'GET') {
+        return methodNotAllowed()
+      }
+      return ok({ token: input.uiToken ?? '' })
+    }
+
     if (input.pathname === '/api/memory/harvest-project/dry-run') {
       if (input.method.toUpperCase() !== 'POST') {
         return methodNotAllowed()

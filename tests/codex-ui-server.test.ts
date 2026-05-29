@@ -42,6 +42,15 @@ async function readJson(response: Response): Promise<unknown> {
   return response.json() as Promise<unknown>
 }
 
+async function fetchSessionToken(localServer: CodexUiServer): Promise<string> {
+  const response = await fetch(`${localServer.url}/api/session`)
+  const body = await readJson(response) as { ok: true; data: { token: string } }
+  expect(response.status).toBe(200)
+  expect(body.ok).toBe(true)
+  expect(body.data.token).toMatch(/^[a-f0-9]{64}$/)
+  return body.data.token
+}
+
 describe('startCodexUiServer', () => {
   it('starts on localhost with an assigned port and close handle', async () => {
     const localServer = await startTestServer()
@@ -74,6 +83,14 @@ describe('startCodexUiServer', () => {
     expect(response.headers.get('content-type')).toContain('application/json')
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(body).toMatchObject({ ok: true })
+  })
+
+  it('serves a per-server UI session token', async () => {
+    const localServer = await startTestServer()
+
+    const token = await fetchSessionToken(localServer)
+
+    expect(token).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('returns plain text 404 for missing static routes', async () => {
@@ -136,6 +153,29 @@ describe('startCodexUiServer', () => {
 
   it('returns structured JSON for malformed request JSON', async () => {
     const localServer = await startTestServer()
+    const token = await fetchSessionToken(localServer)
+
+    const response = await fetch(`${localServer.url}/api/memory/harvest-project/dry-run`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-cyrene-ui-token': token
+      },
+      body: '{bad-json'
+    })
+    const body = await readJson(response)
+
+    expect(response.status).toBe(400)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(body).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_json' }
+    })
+  })
+
+  it('rejects same-origin non-GET API requests without the UI token before body parsing', async () => {
+    const localServer = await startTestServer()
 
     const response = await fetch(`${localServer.url}/api/memory/harvest-project/dry-run`, {
       method: 'POST',
@@ -144,9 +184,48 @@ describe('startCodexUiServer', () => {
     })
     const body = await readJson(response)
 
+    expect(response.status).toBe(403)
+    expect(body).toMatchObject({
+      ok: false,
+      error: { code: 'csrf_forbidden' }
+    })
+  })
+
+  it('rejects same-origin non-GET API requests with the wrong UI token', async () => {
+    const localServer = await startTestServer()
+
+    const response = await fetch(`${localServer.url}/api/memory/harvest-project/dry-run`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-cyrene-ui-token': 'wrong-token'
+      },
+      body: '{}'
+    })
+    const body = await readJson(response)
+
+    expect(response.status).toBe(403)
+    expect(body).toMatchObject({
+      ok: false,
+      error: { code: 'csrf_forbidden' }
+    })
+  })
+
+  it('allows same-origin non-GET API requests with the UI token to reach body validation', async () => {
+    const localServer = await startTestServer()
+    const token = await fetchSessionToken(localServer)
+
+    const response = await fetch(`${localServer.url}/api/memory/harvest-project/dry-run`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-cyrene-ui-token': token
+      },
+      body: '{bad-json'
+    })
+    const body = await readJson(response)
+
     expect(response.status).toBe(400)
-    expect(response.headers.get('content-type')).toContain('application/json')
-    expect(response.headers.get('cache-control')).toBe('no-store')
     expect(body).toMatchObject({
       ok: false,
       error: { code: 'invalid_json' }
@@ -215,10 +294,14 @@ describe('startCodexUiServer', () => {
 
   it('returns structured JSON when request body exceeds 64 KiB', async () => {
     const localServer = await startTestServer()
+    const token = await fetchSessionToken(localServer)
 
     const response = await fetch(`${localServer.url}/api/memory/harvest-project/dry-run`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-cyrene-ui-token': token
+      },
       body: 'x'.repeat(65_537)
     })
     const body = await readJson(response)
