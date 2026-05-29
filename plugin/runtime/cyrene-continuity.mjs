@@ -17802,6 +17802,415 @@ function errorMessage3(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 
+// src/codex/codex-ui-server.ts
+import { createServer } from "node:http";
+
+// src/codex/codex-ui-api.ts
+import { readFile as readFile15 } from "node:fs/promises";
+import { join as join22 } from "node:path";
+var REVIEW_SUMMARIES_FILE5 = "review-summaries.jsonl";
+var PROJECT_MEMORY_LABELS = [
+  "Project Facts",
+  "Project Decisions",
+  "Workflow Rules",
+  "Known Pitfalls",
+  "Rejected Approaches",
+  "Open Questions",
+  "Other Project Memory"
+];
+async function handleCodexUiApiRequest(input) {
+  try {
+    if (input.pathname === "/api/memory/harvest-project/dry-run") {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      const result2 = await runCodexProjectMemoryHarvest({
+        cwd: input.cwd,
+        config: createDefaultConfig(input.cwd),
+        callModel: input.callModel ?? callModel,
+        dryRun: true,
+        now: input.now
+      });
+      return ok({ result: result2 });
+    }
+    if (input.method.toUpperCase() !== "GET") {
+      return methodNotAllowed();
+    }
+    switch (input.pathname) {
+      case "/api/status":
+        return ok(await readCodexMemoryStatus({ cwd: input.cwd }));
+      case "/api/dashboard":
+        return ok(await readDashboard(input.cwd, input.now));
+      case "/api/memory/pending":
+        return ok(await listCodexPendingMemories({ cwd: input.cwd }));
+      case "/api/memory/active":
+        return ok(await readActive(input.cwd));
+      case "/api/review-summaries":
+        return ok(await readReviewSummaries2(input.cwd));
+      case "/api/project-memory":
+        return ok(await readProjectMemory(input.cwd));
+      case "/api/dream":
+        return ok(await readDream(input.cwd));
+      case "/api/profile":
+        return ok(await readProfile(input.cwd));
+      default:
+        return notFound();
+    }
+  } catch (error2) {
+    return failure(500, "internal_error", errorMessage4(error2));
+  }
+}
+async function readActive(cwd) {
+  const project = await identifyCodexProject(cwd);
+  const memoryRoot = codexProjectMemoryRoot(project.projectId);
+  const active = await readActiveMemoriesFromRoot(memoryRoot);
+  return { project, active, memoryRoot };
+}
+async function readDashboard(cwd, now) {
+  const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals] = await Promise.all([
+    readCodexMemoryStatus({ cwd }),
+    listCodexPendingMemories({ cwd }),
+    readActive(cwd),
+    readReviewSummaries2(cwd),
+    readProjectMemory(cwd),
+    readDream(cwd),
+    readProfile(cwd),
+    collectProjectMemorySignals({ cwd, now, mode: "default" })
+  ]);
+  return {
+    status,
+    pending,
+    active,
+    reviewSummaries,
+    projectMemory,
+    dream,
+    profile,
+    signals
+  };
+}
+async function readProjectMemory(cwd) {
+  const active = await readActive(cwd);
+  return {
+    ...active,
+    groups: groupProjectMemories(active.active)
+  };
+}
+async function readReviewSummaries2(cwd) {
+  const project = await identifyCodexProject(cwd);
+  const memoryRoot = codexProjectMemoryRoot(project.projectId);
+  const summaries = await readReviewSummaryRecordsForUi(memoryRoot);
+  return { project, memoryRoot, summaries };
+}
+async function readProfile(cwd) {
+  const project = await identifyCodexProject(cwd);
+  const memoryRoot = codexProjectMemoryRoot(project.projectId);
+  const profile = await readModelProfileFromRootIfExists(memoryRoot);
+  return { project, memoryRoot, profile: profile ?? "" };
+}
+async function readDream(cwd) {
+  const project = await identifyCodexProject(cwd);
+  const memoryRoot = codexProjectMemoryRoot(project.projectId);
+  const dream = await readCodexMemoryDreamState(memoryRoot);
+  return { project, memoryRoot, dream };
+}
+async function readReviewSummaryRecordsForUi(memoryRoot) {
+  const targetPath = join22(memoryRoot, REVIEW_SUMMARIES_FILE5);
+  let content;
+  try {
+    await assertSafeMemoryDataFileTarget(targetPath);
+    content = await readFile15(targetPath, "utf8");
+  } catch (error2) {
+    if (isFileErrorCode10(error2, "ENOENT")) {
+      return [];
+    }
+    throw error2;
+  }
+  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return isReviewSummaryRecord2(parsed) ? [parsed] : [];
+    } catch {
+      return [];
+    }
+  }).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+function groupProjectMemories(memories) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const label of PROJECT_MEMORY_LABELS) {
+    groups.set(label, []);
+  }
+  for (const memory of memories) {
+    groups.get(labelForProjectMemory(memory))?.push(memory);
+  }
+  return PROJECT_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
+}
+function labelForProjectMemory(memory) {
+  const classification = memory.candidateKind ?? memory.candidate_kind ?? memory.type;
+  if (classification === "project_decision") return "Project Decisions";
+  if (classification === "workflow_rule" || classification === "procedural_rule") return "Workflow Rules";
+  if (classification === "known_pitfall") return "Known Pitfalls";
+  if (classification === "rejected_approach") return "Rejected Approaches";
+  if (classification === "open_question") return "Open Questions";
+  if (classification === "project_fact") return "Project Facts";
+  if (hasTag(memory, "project_decision")) return "Project Decisions";
+  if (hasTag(memory, "workflow_rule")) return "Workflow Rules";
+  if (hasTag(memory, "known_pitfall")) return "Known Pitfalls";
+  if (hasTag(memory, "rejected_approach")) return "Rejected Approaches";
+  if (hasTag(memory, "open_question")) return "Open Questions";
+  if (hasTag(memory, "project_fact")) return "Project Facts";
+  return "Other Project Memory";
+}
+function hasTag(memory, expected) {
+  return memory.tags.includes(expected);
+}
+function isReviewSummaryRecord2(value) {
+  if (!isRecord6(value)) return false;
+  return typeof value.id === "string" && typeof value.runId === "string" && optionalString(value.sessionId) && optionalString(value.turnId) && typeof value.createdAt === "string" && (value.status === "ok" || value.status === "failed") && typeof value.summary === "string" && isRedaction(value.redaction) && Array.isArray(value.candidateIds) && value.candidateIds.every((item) => typeof item === "string") && optionalString(value.failureReason);
+}
+function isRedaction(value) {
+  return isRecord6(value) && isRecord6(value.input) && isRecord6(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
+}
+function optionalString(value) {
+  return value === void 0 || typeof value === "string";
+}
+function isRecord6(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function ok(data) {
+  return { status: 200, body: { ok: true, data } };
+}
+function failure(status, code, message) {
+  return { status, body: { ok: false, error: { code, message } } };
+}
+function notFound() {
+  return failure(404, "not_found", "API route not found.");
+}
+function methodNotAllowed() {
+  return failure(405, "method_not_allowed", "Method not allowed.");
+}
+function errorMessage4(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+function isFileErrorCode10(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
+// src/codex/codex-ui-static.generated.ts
+var CODEX_UI_STATIC_ASSETS = {
+  "/": {
+    "contentType": "text/html; charset=utf-8",
+    "body": '<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="utf-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1">\n    <title>Cyrene Memory Console</title>\n    <link rel="stylesheet" href="/styles.css">\n  </head>\n  <body>\n    <div id="app" class="app-shell" data-app>\n      <aside class="sidebar" aria-label="Memory navigation">\n        <div class="brand-lockup">\n          <div class="brand-mark" aria-hidden="true">C</div>\n          <div>\n            <p class="eyebrow">Cyrene</p>\n            <h1>Cyrene Memory Console</h1>\n          </div>\n        </div>\n        <nav class="nav-list" data-nav aria-label="Memory sections"></nav>\n      </aside>\n      <main class="main-shell">\n        <header class="topbar" data-topbar></header>\n        <section class="content-grid" aria-label="Memory workspace">\n          <div class="workspace" data-workspace></div>\n          <aside class="detail-rail" data-detail-rail aria-label="Memory detail"></aside>\n        </section>\n      </main>\n    </div>\n    <script type="module" src="/app.js"></script>\n  </body>\n</html>\n'
+  },
+  "/app.js": {
+    "contentType": "text/javascript; charset=utf-8",
+    "body": "const WRITE_ACTION_DISABLED_COPY = 'Write actions disabled in v1. Use CLI with review hash.'\nconst DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'\nconst EMPTY_DASHBOARD = {\n  status: {},\n  pending: { pending: [], total: 0, project: {} },\n  active: { active: [], project: {} },\n  reviewSummaries: { summaries: [] },\n  projectMemory: { groups: [] },\n  dream: { dream: {} },\n  profile: { profile: '' },\n  signals: { signals: [] }\n}\n\nconst TABS = [\n  { id: 'overview', label: 'Overview' },\n  { id: 'inbox', label: 'Inbox' },\n  { id: 'timeline', label: 'Timeline' },\n  { id: 'project-memory', label: 'Project Memory' },\n  { id: 'harvester', label: 'Harvester' },\n  { id: 'dream', label: 'Dream' },\n  { id: 'profile', label: 'Profile' }\n]\n\nconst state = {\n  activeTab: 'overview',\n  dashboard: EMPTY_DASHBOARD,\n  error: '',\n  harvester: { loading: false, result: null, error: '' }\n}\n\nconst app = document.querySelector('[data-app]')\nconst nav = document.querySelector('[data-nav]')\nconst topbar = document.querySelector('[data-topbar]')\nconst workspace = document.querySelector('[data-workspace]')\nconst detailRail = document.querySelector('[data-detail-rail]')\n\nif (app && nav && topbar && workspace && detailRail) {\n  app.dataset.ready = 'true'\n  render()\n  loadDashboard()\n}\n\nasync function loadDashboard() {\n  try {\n    const response = await fetch('/api/dashboard', { headers: { accept: 'application/json' } })\n    const payload = await response.json()\n    if (!payload.ok) {\n      throw new Error(payload.error?.message || 'Dashboard API returned an error.')\n    }\n    state.dashboard = mergeDashboard(payload.data)\n    state.error = ''\n  } catch (error) {\n    state.dashboard = EMPTY_DASHBOARD\n    state.error = errorMessage(error)\n  }\n  render()\n}\n\nfunction mergeDashboard(data) {\n  return {\n    ...EMPTY_DASHBOARD,\n    ...(data || {}),\n    pending: { ...EMPTY_DASHBOARD.pending, ...(data?.pending || {}) },\n    active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },\n    reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },\n    projectMemory: { ...EMPTY_DASHBOARD.projectMemory, ...(data?.projectMemory || {}) },\n    dream: { ...EMPTY_DASHBOARD.dream, ...(data?.dream || {}) },\n    profile: { ...EMPTY_DASHBOARD.profile, ...(data?.profile || {}) },\n    signals: { ...EMPTY_DASHBOARD.signals, ...(data?.signals || {}) }\n  }\n}\n\nfunction render() {\n  renderNav()\n  renderTopbar()\n  renderWorkspace()\n  renderDetailRail()\n}\n\nfunction renderNav() {\n  nav.innerHTML = TABS.map((tab) => `\n    <button class=\"nav-button\" type=\"button\" data-tab=\"${escapeHtml(tab.id)}\" aria-current=\"${tab.id === state.activeTab ? 'page' : 'false'}\">\n      <span>${escapeHtml(tab.label)}</span>\n    </button>\n  `).join('')\n  nav.querySelectorAll('[data-tab]').forEach((button) => {\n    button.addEventListener('click', () => {\n      state.activeTab = button.dataset.tab || 'overview'\n      render()\n    })\n  })\n}\n\nfunction renderTopbar() {\n  const dashboard = state.dashboard\n  const project = projectInfo(dashboard)\n  const pendingCount = listPending().length\n  const status = dashboard.status || {}\n  const sqliteStatus = text(status.index?.status || status.sqlite?.status || status.fallbackMode || 'read-only')\n  const modelStatus = modelLabel(status)\n  const stopHook = text(status.lastStopHook?.status || status.stopHook?.status || 'visible')\n\n  topbar.innerHTML = `\n    <div>\n      <p class=\"eyebrow\">Local read-only console</p>\n      <h2>${escapeHtml(project.displayName || 'Project Memory')}</h2>\n    </div>\n    <div class=\"chip-row\" aria-label=\"Runtime status\">\n      ${statusChip('Project', project.projectId || 'unknown', 'muted')}\n      ${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}\n      ${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}\n      ${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}\n      ${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}\n    </div>\n  `\n}\n\nfunction projectInfo(dashboard) {\n  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {\n    if (candidate?.projectId || candidate?.displayName) return candidate\n  }\n  return {}\n}\n\nfunction modelLabel(status) {\n  const model = status.model || status.modelConfig || status.config?.model\n  if (typeof model === 'string' && model.trim()) return 'configured'\n  if (model && typeof model === 'object') {\n    return model.configured || model.baseUrl || model.model ? 'configured' : 'needs config'\n  }\n  return 'unknown'\n}\n\nfunction renderWorkspace() {\n  const warning = state.error ? panel('Dashboard unavailable', escapeHtml(state.error), 'error') : ''\n  workspace.innerHTML = warning + pageHtml(state.activeTab)\n  const dryRunButton = workspace.querySelector('[data-harvest-dry-run]')\n  if (dryRunButton) {\n    dryRunButton.addEventListener('click', runHarvesterDryRun)\n  }\n}\n\nfunction pageHtml(tabId) {\n  if (tabId === 'inbox') return renderInbox()\n  if (tabId === 'timeline') return renderTimeline()\n  if (tabId === 'project-memory') return renderProjectMemory()\n  if (tabId === 'harvester') return renderHarvester()\n  if (tabId === 'dream') return renderDream()\n  if (tabId === 'profile') return renderProfile()\n  return renderOverview()\n}\n\nfunction renderOverview() {\n  const pending = listPending()\n  const active = listActive()\n  const summaries = listSummaries()\n  const signals = listSignals()\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Overview', 'Read-only visibility for the memory pipeline.')}\n      <div class=\"metric-grid\">\n        ${metric('Pending', pending.length, 'Awaiting CLI review')}\n        ${metric('Active', active.length, 'Project memories')}\n        ${metric('Summaries', summaries.length, 'Stop Hook records')}\n        ${metric('Signals', signals.length, 'Harvester inputs')}\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Recent pending candidates</h3>\n        ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Recent timeline</h3>\n        ${summaries.slice(0, 4).map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}\n      </div>\n    </section>\n  `\n}\n\nfunction renderInbox() {\n  const pending = listPending()\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}\n      <div class=\"soft-inset boundary-copy\">${escapeHtml(WRITE_ACTION_DISABLED_COPY)}</div>\n      <div class=\"soft-panel\">\n        <h3>Pending candidates</h3>\n        ${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}\n      </div>\n    </section>\n  `\n}\n\nfunction renderCandidateRow(candidate) {\n  const actions = ['Approve', 'Reject', 'Edit', 'Defer'].map((label) => `\n    <button class=\"soft-button compact\" type=\"button\" disabled title=\"${escapeHtml(WRITE_ACTION_DISABLED_COPY)}\">${escapeHtml(label)}</button>\n  `).join('')\n  return `\n    <article class=\"data-row candidate-row\">\n      <div>\n        <div class=\"row-title\">${escapeHtml(candidate.content || candidate.id || 'Pending candidate')}</div>\n        <div class=\"row-meta\">\n          ${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}\n          ${candidate.reviewHash ? ` \xB7 review ${escapeHtml(shortHash(candidate.reviewHash))}` : ''}\n        </div>\n      </div>\n      <div class=\"action-strip\" aria-label=\"${escapeHtml(WRITE_ACTION_DISABLED_COPY)}\">${actions}</div>\n    </article>\n  `\n}\n\nfunction renderTimeline() {\n  const summaries = listSummaries()\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}\n      <div class=\"soft-panel\">\n        <h3>Review summaries</h3>\n        ${summaries.map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}\n      </div>\n    </section>\n  `\n}\n\nfunction renderSummaryRow(summary) {\n  const ids = Array.isArray(summary.candidateIds) ? summary.candidateIds.join(', ') : 'none'\n  return `\n    <article class=\"data-row\">\n      <div>\n        <div class=\"row-title\">${escapeHtml(summary.summary || summary.id || 'Review summary')}</div>\n        <div class=\"row-meta\">${escapeHtml(summary.createdAt || 'unknown time')} \xB7 candidates ${escapeHtml(ids)}</div>\n      </div>\n      ${statusChip(summary.status || 'unknown', summary.status || 'unknown', summary.status === 'failed' ? 'error' : 'ok')}\n    </article>\n  `\n}\n\nfunction renderProjectMemory() {\n  const groups = Array.isArray(state.dashboard.projectMemory.groups) ? state.dashboard.projectMemory.groups : []\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Project Memory', 'Active project memory grouped by kind.')}\n      ${groups.length > 0 ? groups.map((group) => `\n        <div class=\"soft-panel\">\n          <h3>${escapeHtml(group.label || 'Project memory')}</h3>\n          ${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No active memories in this group.')}\n        </div>\n      `).join('') : panel('Project memory unavailable', 'No grouped project memory returned yet.', 'muted')}\n    </section>\n  `\n}\n\nfunction renderMemoryRow(memory) {\n  return `\n    <article class=\"data-row\">\n      <div>\n        <div class=\"row-title\">${escapeHtml(memory.content || memory.id || 'Memory')}</div>\n        <div class=\"row-meta\">${escapeHtml(memory.candidateKind || memory.type || 'memory')} \xB7 ${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>\n      </div>\n      ${statusChip('active', memory.status || 'active', 'ok')}\n    </article>\n  `\n}\n\nfunction renderHarvester() {\n  const result = state.harvester.result\n  const resultHtml = state.harvester.error\n    ? panel('Harvester dry-run failed', escapeHtml(state.harvester.error), 'error')\n    : result\n      ? renderHarvesterResult(result)\n      : panel('Dry-run ready', 'Preview project-scope candidates without writing pending memory.', 'muted')\n\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Harvester', 'Run a project-memory dry-run preview.')}\n      <div class=\"soft-panel action-panel\">\n        <div>\n          <h3>Project harvester</h3>\n          <p>No pending memory was written.</p>\n        </div>\n        <button class=\"soft-button primary\" type=\"button\" data-harvest-dry-run ${state.harvester.loading ? 'disabled' : ''}>\n          ${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}\n        </button>\n      </div>\n      ${resultHtml}\n    </section>\n  `\n}\n\nasync function runHarvesterDryRun() {\n  state.harvester = { loading: true, result: null, error: '' }\n  render()\n  try {\n    const response = await fetch(DRY_RUN_ENDPOINT, {\n      method: 'POST',\n      headers: { 'content-type': 'application/json' },\n      body: '{}'\n    })\n    const payload = await response.json()\n    if (!payload.ok) {\n      throw new Error(payload.error?.message || 'Harvester API returned an error.')\n    }\n    state.harvester = { loading: false, result: payload.data?.result || payload.data, error: '' }\n  } catch (error) {\n    state.harvester = { loading: false, result: null, error: errorMessage(error) }\n  }\n  render()\n}\n\nfunction renderHarvesterResult(result) {\n  const candidates = Array.isArray(result.candidates) ? result.candidates : []\n  const warnings = Array.isArray(result.warnings) ? result.warnings : []\n  const reason = typeof result.reason === 'string' && result.reason.trim()\n    ? `<p class=\"notice ${result.action === 'needs_model_config' ? 'warn' : 'muted'}\">${escapeHtml(result.reason.trim())}</p>`\n    : ''\n  const emptyCopy = result.action === 'needs_model_config' || result.action === 'noop'\n    ? 'No preview candidates were produced.'\n    : 'No preview candidates returned.'\n  return `\n    <div class=\"soft-panel\">\n      <h3>Dry-run result</h3>\n      <div class=\"soft-inset\">Action: ${escapeHtml(result.action || 'preview')} \xB7 No pending memory was written.</div>\n      ${reason}\n      ${warnings.map((warning) => `<p class=\"notice warn\">${escapeHtml(warning)}</p>`).join('')}\n      ${candidates.map(renderMemoryRow).join('') || emptyState(emptyCopy)}\n    </div>\n  `\n}\n\nfunction renderDream() {\n  const dream = state.dashboard.dream.dream || {}\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Dream', 'Read-only dream pass state.')}\n      <div class=\"soft-panel\">\n        <h3>Dream status</h3>\n        <div class=\"soft-inset\">\n          Due: ${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>\n          Last run: ${escapeHtml(dream.lastDreamAt || 'never')}<br>\n          Status: ${escapeHtml(dream.lastDreamStatus || 'unknown')}\n        </div>\n      </div>\n    </section>\n  `\n}\n\nfunction renderProfile() {\n  const profile = state.dashboard.profile.profile || ''\n  return `\n    <section class=\"page-stack\">\n      ${sectionHeader('Profile', 'Current project model profile preview.')}\n      <div class=\"soft-panel\">\n        <h3>MODEL_PROFILE.md</h3>\n        <pre class=\"profile-preview\">${escapeHtml(profile || 'No project profile text found.')}</pre>\n      </div>\n    </section>\n  `\n}\n\nfunction renderDetailRail() {\n  const pending = listPending()\n  const signals = listSignals()\n  detailRail.innerHTML = `\n    <div class=\"rail-stack\">\n      <div class=\"soft-panel\">\n        <h3>Boundary</h3>\n        <p>${escapeHtml(WRITE_ACTION_DISABLED_COPY)}</p>\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Project signals</h3>\n        ${signals.slice(0, 5).map((signal) => `\n          <div class=\"soft-inset rail-item\">\n            <strong>${escapeHtml(signal.kind || 'signal')}</strong>\n            <span>${escapeHtml((signal.files || signal.paths || []).slice(0, 2).join(', ') || 'detected')}</span>\n          </div>\n        `).join('') || emptyState('No signals found.')}\n      </div>\n      <div class=\"soft-panel\">\n        <h3>Review queue</h3>\n        <p>${escapeHtml(String(pending.length))} pending candidates</p>\n      </div>\n    </div>\n  `\n}\n\nfunction sectionHeader(title, subtitle) {\n  return `\n    <header class=\"section-header\">\n      <p class=\"eyebrow\">${escapeHtml(subtitle)}</p>\n      <h2>${escapeHtml(title)}</h2>\n    </header>\n  `\n}\n\nfunction metric(label, value, note) {\n  return `\n    <div class=\"soft-panel metric-card\">\n      <span>${escapeHtml(label)}</span>\n      <strong>${escapeHtml(String(value))}</strong>\n      <small>${escapeHtml(note)}</small>\n    </div>\n  `\n}\n\nfunction panel(title, body, tone) {\n  return `\n    <div class=\"soft-panel notice ${escapeHtml(tone || 'muted')}\">\n      <h3>${escapeHtml(title)}</h3>\n      <p>${body}</p>\n    </div>\n  `\n}\n\nfunction statusChip(label, value, tone) {\n  return `<span class=\"status-chip ${escapeHtml(tone || 'muted')}\"><b>${escapeHtml(label)}</b>${escapeHtml(value)}</span>`\n}\n\nfunction emptyState(textValue) {\n  return `<div class=\"soft-inset empty-state\">${escapeHtml(textValue)}</div>`\n}\n\nfunction listPending() {\n  return Array.isArray(state.dashboard.pending.pending) ? state.dashboard.pending.pending : []\n}\n\nfunction listActive() {\n  return Array.isArray(state.dashboard.active.active) ? state.dashboard.active.active : []\n}\n\nfunction listSummaries() {\n  return Array.isArray(state.dashboard.reviewSummaries.summaries) ? state.dashboard.reviewSummaries.summaries : []\n}\n\nfunction listSignals() {\n  return Array.isArray(state.dashboard.signals.signals) ? state.dashboard.signals.signals : []\n}\n\nfunction shortHash(value) {\n  return String(value).slice(0, 10)\n}\n\nfunction text(value) {\n  return String(value || 'unknown')\n}\n\nfunction errorMessage(error) {\n  return error instanceof Error ? error.message : String(error)\n}\n\nfunction escapeHtml(value) {\n  return String(value)\n    .replaceAll('&', '&amp;')\n    .replaceAll('<', '&lt;')\n    .replaceAll('>', '&gt;')\n    .replaceAll('\"', '&quot;')\n    .replaceAll(\"'\", '&#039;')\n}\n\nexport { TABS, WRITE_ACTION_DISABLED_COPY, escapeHtml }\n"
+  },
+  "/styles.css": {
+    "contentType": "text/css; charset=utf-8",
+    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
+  }
+};
+
+// src/codex/codex-ui-static.ts
+function getCodexUiStaticAsset(pathname) {
+  return CODEX_UI_STATIC_ASSETS[pathname];
+}
+
+// src/codex/codex-ui-server.ts
+var HOST = "127.0.0.1";
+var DEFAULT_PORT = 47833;
+var FOLLOWING_PORT_ATTEMPTS = 20;
+var MAX_BODY_BYTES = 65536;
+var STATIC_CACHE_CONTROL = "no-store, no-cache";
+async function startCodexUiServer(input) {
+  if (input.port === 0) {
+    return listen(input, input.port);
+  }
+  return listenWithFallback(input, input.port ?? DEFAULT_PORT);
+}
+async function listenWithFallback(input, requestedPort) {
+  let lastError;
+  for (let offset = 0; offset <= FOLLOWING_PORT_ATTEMPTS; offset += 1) {
+    const port = requestedPort + offset;
+    try {
+      return await listen(input, port);
+    } catch (error2) {
+      if (!isAddressInUseError(error2)) throw error2;
+      lastError = error2;
+    }
+  }
+  throw lastError;
+}
+function listen(input, port) {
+  return new Promise((resolve8, reject2) => {
+    const server = createServer((request, response) => {
+      handleRequest(input, request, response).catch((error2) => {
+        handleUnhandledRequestError(request, response, error2);
+      });
+    });
+    const onError = (error2) => {
+      server.close();
+      reject2(error2);
+    };
+    server.once("error", onError);
+    server.listen(port, HOST, () => {
+      server.off("error", onError);
+      const address = server.address();
+      if (!isAddressInfo(address)) {
+        server.close();
+        reject2(new Error("Codex UI server did not bind to a TCP port."));
+        return;
+      }
+      resolve8(createCodexUiServer(server, address.port));
+    });
+  });
+}
+function createCodexUiServer(server, port) {
+  let closed = false;
+  return {
+    host: HOST,
+    port,
+    url: `http://${HOST}:${port}`,
+    close: () => new Promise((resolve8, reject2) => {
+      if (closed) {
+        resolve8();
+        return;
+      }
+      closed = true;
+      server.close((error2) => {
+        if (error2) reject2(error2);
+        else resolve8();
+      });
+    })
+  };
+}
+function handleUnhandledRequestError(request, response, error2) {
+  if (response.headersSent || response.writableEnded) {
+    response.destroy();
+    return;
+  }
+  const pathname = safeRequestPathname(request);
+  if (pathname?.startsWith("/api/")) {
+    writeJson(response, 500, failure2("internal_error", errorMessage5(error2)));
+    return;
+  }
+  writePlain(response, 500, "Internal server error\n");
+}
+async function handleRequest(input, request, response) {
+  const pathname = requestPathname(request);
+  if (pathname.startsWith("/api/")) {
+    await handleApiRequest(input, request, response, pathname);
+    return;
+  }
+  handleStaticRequest(response, pathname);
+}
+async function handleApiRequest(input, request, response, pathname) {
+  try {
+    const method = request.method ?? "GET";
+    const body = needsBody(method) ? await readJsonBody(request) : void 0;
+    const result2 = await handleCodexUiApiRequest({
+      cwd: input.cwd,
+      method,
+      pathname,
+      body,
+      callModel: input.callModel
+    });
+    writeJson(response, result2.status, result2.body);
+  } catch (error2) {
+    if (error2 instanceof RequestBodyTooLargeError) {
+      writeJson(response, 413, failure2("request_body_too_large", "Request body exceeds 64 KiB."));
+      return;
+    }
+    if (error2 instanceof InvalidJsonError) {
+      writeJson(response, 400, failure2("invalid_json", "Request body must be valid JSON."));
+      return;
+    }
+    writeJson(response, 500, failure2("internal_error", errorMessage5(error2)));
+  }
+}
+function handleStaticRequest(response, pathname) {
+  try {
+    const asset = getCodexUiStaticAsset(pathname);
+    if (asset === void 0) {
+      writePlain(response, 404, "Not found\n");
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": asset.contentType,
+      "cache-control": STATIC_CACHE_CONTROL
+    });
+    response.end(asset.body);
+  } catch (error2) {
+    writePlain(response, 500, `${errorMessage5(error2)}
+`);
+  }
+}
+async function readJsonBody(request) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      throw new RequestBodyTooLargeError();
+    }
+    chunks.push(buffer);
+  }
+  if (chunks.length === 0) return void 0;
+  const content = Buffer.concat(chunks).toString("utf8");
+  if (content.trim() === "") return void 0;
+  try {
+    return JSON.parse(content);
+  } catch {
+    throw new InvalidJsonError();
+  }
+}
+function writeJson(response, status, body) {
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store"
+  });
+  response.end(`${JSON.stringify(body, null, 2)}
+`);
+}
+function writePlain(response, status, body) {
+  response.writeHead(status, {
+    "content-type": "text/plain; charset=utf-8",
+    "cache-control": STATIC_CACHE_CONTROL
+  });
+  response.end(body);
+}
+function requestPathname(request) {
+  return new URL(request.url ?? "/", `http://${HOST}`).pathname;
+}
+function safeRequestPathname(request) {
+  try {
+    return requestPathname(request);
+  } catch {
+    return void 0;
+  }
+}
+function needsBody(method) {
+  const upperMethod = method.toUpperCase();
+  return upperMethod === "POST" || upperMethod === "PUT" || upperMethod === "PATCH";
+}
+function failure2(code, message) {
+  return { ok: false, error: { code, message } };
+}
+function isAddressInfo(address) {
+  return typeof address === "object" && address !== null && "port" in address;
+}
+function isAddressInUseError(error2) {
+  return error2 instanceof Error && "code" in error2 && error2.code === "EADDRINUSE";
+}
+function errorMessage5(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+var InvalidJsonError = class extends Error {
+};
+var RequestBodyTooLargeError = class extends Error {
+};
+
 // src/codex/codex-memory-review-cli.ts
 async function formatCodexMemoryReview(input) {
   const result2 = await listCodexPendingMemories(input);
@@ -17855,8 +18264,8 @@ async function runCodexMemoryDefer(input) {
 
 // src/codex/dream-artifacts.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
-import { lstat as lstat14, mkdir as mkdir10, readFile as readFile15, realpath as realpath7, rename as rename4, writeFile as writeFile8 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { lstat as lstat14, mkdir as mkdir10, readFile as readFile16, realpath as realpath7, rename as rename4, writeFile as writeFile8 } from "node:fs/promises";
+import { join as join23 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
 var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
@@ -17865,10 +18274,10 @@ async function writeDreamPreviewArtifacts(input) {
   const proposalId = randomUUID10();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
-    reportPath: join22(previewDir, DREAM_REPORT_FILE),
-    proposedChangesPath: join22(previewDir, "proposed_changes.json"),
-    diffPath: join22(previewDir, "diff.json"),
-    evalResultsPath: join22(previewDir, "eval_results.json")
+    reportPath: join23(previewDir, DREAM_REPORT_FILE),
+    proposedChangesPath: join23(previewDir, "proposed_changes.json"),
+    diffPath: join23(previewDir, "diff.json"),
+    evalResultsPath: join23(previewDir, "eval_results.json")
   };
   await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
   await writeJsonAtomic(paths.proposedChangesPath, {
@@ -17892,11 +18301,11 @@ async function readDreamReport(input) {
   }
   try {
     const previewDir = await getExistingPreviewDir(memoryRoot);
-    const reportPath = join22(previewDir, DREAM_REPORT_FILE);
+    const reportPath = join23(previewDir, DREAM_REPORT_FILE);
     await assertSafeMemoryDataFileTarget(reportPath);
-    return { memoryRoot, report: await readFile15(reportPath, "utf8") };
+    return { memoryRoot, report: await readFile16(reportPath, "utf8") };
   } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
       throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
     }
     throw error2;
@@ -17947,7 +18356,7 @@ function renderDreamReport(input) {
 `;
 }
 async function ensurePreviewDir(memoryRoot) {
-  const previewDir = join22(memoryRoot, DREAM_PREVIEW_DIR);
+  const previewDir = join23(memoryRoot, DREAM_PREVIEW_DIR);
   await mkdir10(previewDir, { recursive: true });
   const stats = await lstat14(previewDir);
   if (stats.isSymbolicLink()) {
@@ -17959,7 +18368,7 @@ async function ensurePreviewDir(memoryRoot) {
   return realpath7(previewDir);
 }
 async function getExistingPreviewDir(memoryRoot) {
-  const previewDir = join22(memoryRoot, DREAM_PREVIEW_DIR);
+  const previewDir = join23(memoryRoot, DREAM_PREVIEW_DIR);
   const stats = await lstat14(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
@@ -17979,14 +18388,14 @@ async function writeTextAtomic(filePath, content) {
   await writeFile8(tempPath, content, "utf8");
   await rename4(tempPath, filePath);
 }
-function isFileErrorCode10(error2, code) {
+function isFileErrorCode11(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/memory-dream.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-import { lstat as lstat16, mkdir as mkdir11, readFile as readFile16, rm as rm4, writeFile as writeFile9 } from "node:fs/promises";
-import { join as join23 } from "node:path";
+import { lstat as lstat16, mkdir as mkdir11, readFile as readFile17, rm as rm4, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join24 } from "node:path";
 
 // src/codex/dream-proposal.ts
 import { lstat as lstat15, realpath as realpath8 } from "node:fs/promises";
@@ -18133,7 +18542,7 @@ async function resolveReadableMemoryRootPath(memoryRoot) {
     }
     return realpath8(memoryRoot);
   } catch (error2) {
-    if (isFileErrorCode11(error2, "ENOENT")) {
+    if (isFileErrorCode12(error2, "ENOENT")) {
       return memoryRoot;
     }
     throw error2;
@@ -18152,7 +18561,7 @@ function tombstoneForExpiredPending(candidate, now) {
     evidence: candidate.evidence
   };
 }
-function isFileErrorCode11(error2, code) {
+function isFileErrorCode12(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -18600,16 +19009,16 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join23(locksDir, DREAM_LOCK_DIR);
+  const lockDir = join24(locksDir, DREAM_LOCK_DIR);
   const token = randomUUID11();
   while (true) {
     try {
       await mkdir11(lockDir);
-      await writeFile9(join23(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await writeFile9(join24(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
-      if (!isFileErrorCode12(error2, "EEXIST")) {
+      if (!isFileErrorCode13(error2, "EEXIST")) {
         throw error2;
       }
       const owner = await readDreamLockOwner(lockDir);
@@ -18624,9 +19033,9 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join23(memoryRoot, DREAM_LOCKS_DIR);
+  const locksDir = join24(memoryRoot, DREAM_LOCKS_DIR);
   await mkdir11(locksDir).catch((error2) => {
-    if (!isFileErrorCode12(error2, "EEXIST")) {
+    if (!isFileErrorCode13(error2, "EEXIST")) {
       throw error2;
     }
   });
@@ -18641,7 +19050,7 @@ async function readDreamLockOwner(lockDir) {
   try {
     stats = await lstat16(lockDir);
   } catch (error2) {
-    if (isFileErrorCode12(error2, "ENOENT")) {
+    if (isFileErrorCode13(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -18650,7 +19059,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile16(join23(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile17(join24(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -18660,7 +19069,7 @@ async function readDreamLockOwner(lockDir) {
       ...typeof parsed.token === "string" ? { token: parsed.token } : {}
     };
   } catch (error2) {
-    if (isFileErrorCode12(error2, "ENOENT") || error2 instanceof SyntaxError) {
+    if (isFileErrorCode13(error2, "ENOENT") || error2 instanceof SyntaxError) {
       return void 0;
     }
     throw error2;
@@ -18707,14 +19116,14 @@ async function releaseDreamLock(lock) {
     await rm4(lock.lockDir, { recursive: true, force: true });
   }
 }
-function isFileErrorCode12(error2, code) {
+function isFileErrorCode13(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/profile-candidates.ts
 import { createHash as createHash8, randomUUID as randomUUID12 } from "node:crypto";
-import { lstat as lstat17, readFile as readFile17, rename as rename5, writeFile as writeFile10 } from "node:fs/promises";
-import { join as join24 } from "node:path";
+import { lstat as lstat17, readFile as readFile18, rename as rename5, writeFile as writeFile10 } from "node:fs/promises";
+import { join as join25 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -19073,13 +19482,13 @@ function upsertActiveMemory2(active, memory) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join24(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join25(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile17(targetPath, "utf8");
+    const content = await readFile18(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
-    if (isFileErrorCode13(error2, "ENOENT")) {
+    if (isFileErrorCode14(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -19087,7 +19496,7 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join24(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join25(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
   const tempPath = `${targetPath}.${process.pid}.${randomUUID12()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
@@ -19097,7 +19506,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join24(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join25(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
   const tempPath = `${targetPath}.${process.pid}.${randomUUID12()}.tmp`;
   await writeFile10(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
@@ -19144,20 +19553,20 @@ async function assertSafeProfileFileTarget(targetPath, label) {
       throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`);
     }
   } catch (error2) {
-    if (isFileErrorCode13(error2, "ENOENT")) {
+    if (isFileErrorCode14(error2, "ENOENT")) {
       return;
     }
     throw error2;
   }
 }
-function isFileErrorCode13(error2, code) {
+function isFileErrorCode14(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/project-registry.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { mkdir as mkdir12, readFile as readFile18, rename as rename6, rm as rm5, writeFile as writeFile11 } from "node:fs/promises";
-import { basename as basename5, dirname as dirname10, join as join25 } from "node:path";
+import { mkdir as mkdir12, readFile as readFile19, rename as rename6, rm as rm5, writeFile as writeFile11 } from "node:fs/promises";
+import { basename as basename5, dirname as dirname10, join as join26 } from "node:path";
 var PROJECT_METADATA_FILE = "project.json";
 var MERGE_JSONL_FILES = [
   "index.jsonl",
@@ -19211,7 +19620,7 @@ async function mergeCodexProjects(input) {
   const mergedFiles = await withMemoryMaintenanceLockFromRoot(toMemoryRoot, async (lockedToMemoryRoot) => {
     const files = [];
     for (const fileName of MERGE_JSONL_FILES) {
-      const merged = await mergeJsonlFile(join25(fromMemoryRoot, fileName), join25(lockedToMemoryRoot, fileName));
+      const merged = await mergeJsonlFile(join26(fromMemoryRoot, fileName), join26(lockedToMemoryRoot, fileName));
       if (merged) {
         files.push(fileName);
       }
@@ -19238,7 +19647,7 @@ async function mergeCodexProjects(input) {
 }
 async function registryEntryFromRoot(root) {
   const projectId = basename5(root);
-  const memoryRoot = join25(root, "memory");
+  const memoryRoot = join26(root, "memory");
   const metadata = await readProjectMetadata(root);
   const [active, pending, tombstones] = await Promise.all([
     readActiveMemoriesFromRoot(memoryRoot),
@@ -19273,7 +19682,7 @@ async function mergeJsonlFile(sourcePath, targetPath) {
   return true;
 }
 async function assertMergeJsonlFilesSafe(memoryRoot, role) {
-  await Promise.all(MERGE_JSONL_FILES.map((fileName) => assertMergeJsonlFileSafe(join25(memoryRoot, fileName), role)));
+  await Promise.all(MERGE_JSONL_FILES.map((fileName) => assertMergeJsonlFileSafe(join26(memoryRoot, fileName), role)));
 }
 async function assertMergeJsonlFileSafe(filePath, role) {
   try {
@@ -19286,7 +19695,7 @@ async function assertMergeJsonlFileSafe(filePath, role) {
   }
 }
 async function writeJsonLinesAtomic2(filePath, values) {
-  const tempPath = join25(dirname10(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID13()}.tmp`);
+  const tempPath = join26(dirname10(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID13()}.tmp`);
   let renamed = false;
   try {
     await writeFile11(tempPath, `${values.join("\n")}
@@ -19325,9 +19734,9 @@ function jsonLineKey(line) {
 }
 async function readJsonLinesIfExists(path) {
   try {
-    return (await readFile18(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    return (await readFile19(path, "utf8")).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   } catch (error2) {
-    if (isFileErrorCode14(error2, "ENOENT")) {
+    if (isFileErrorCode15(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -19335,8 +19744,8 @@ async function readJsonLinesIfExists(path) {
 }
 async function readProjectMetadata(projectRoot) {
   try {
-    const parsed = JSON.parse(await readFile18(join25(projectRoot, PROJECT_METADATA_FILE), "utf8"));
-    if (!isRecord6(parsed)) {
+    const parsed = JSON.parse(await readFile19(join26(projectRoot, PROJECT_METADATA_FILE), "utf8"));
+    if (!isRecord7(parsed)) {
       return {};
     }
     return {
@@ -19347,7 +19756,7 @@ async function readProjectMetadata(projectRoot) {
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : void 0
     };
   } catch (error2) {
-    if (isFileErrorCode14(error2, "ENOENT")) {
+    if (isFileErrorCode15(error2, "ENOENT")) {
       return {};
     }
     throw error2;
@@ -19355,7 +19764,7 @@ async function readProjectMetadata(projectRoot) {
 }
 async function writeProjectMetadata(projectRoot, metadata) {
   await mkdir12(projectRoot, { recursive: true });
-  await writeFile11(join25(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
+  await writeFile11(join26(projectRoot, PROJECT_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}
 `, "utf8");
 }
 function validateProjectId(value) {
@@ -19378,10 +19787,10 @@ function readStringArray(value) {
 function uniqueSorted2(values) {
   return Array.from(new Set(values)).sort();
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null;
 }
-function isFileErrorCode14(error2, code) {
+function isFileErrorCode15(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -19657,6 +20066,16 @@ function uniqueInOrder3(values) {
 // src/codex/codex-cli.ts
 async function handleCodexCommand(input) {
   const command = input.args[0];
+  if (command === "ui") {
+    const server = await startCodexUiServer({
+      cwd: input.cwd,
+      port: parseOptionalNonNegativeInteger(input.args, "--port")
+    });
+    process.stdout.write(`Cyrene Web UI: ${server.url}
+`);
+    await waitForProcessTermination(server);
+    return;
+  }
   if (command === "doctor") {
     process.stdout.write(await formatCodexDoctor({
       cwd: input.cwd,
@@ -19858,8 +20277,27 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
+}
+function waitForProcessTermination(server) {
+  return new Promise((resolve8, reject2) => {
+    let settled = false;
+    const cleanup = () => {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+    };
+    const onSignal = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      server.close().then(resolve8, reject2);
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  });
 }
 function parseHarvestProjectMode(args) {
   return args.includes("--changed-files") ? "changed_files" : void 0;
@@ -19985,6 +20423,21 @@ function parseOptionalPositiveInteger(args, option) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid ${option}: expected positive integer`);
+  }
+  return parsed;
+}
+function parseOptionalNonNegativeInteger(args, option) {
+  const index = args.indexOf(option);
+  if (index >= 0 && args[index + 1] === void 0) {
+    throw new Error(`Invalid ${option}: missing value`);
+  }
+  const value = parseOptionalOption(args, option);
+  if (value === void 0) {
+    return void 0;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+    throw new Error(`Invalid ${option}: expected integer port 0-65535`);
   }
   return parsed;
 }
@@ -20496,15 +20949,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage4 = "";
+  let errorMessage6 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage4 = map(fullIssue, { data, defaultError: errorMessage4 }).message;
+    errorMessage6 = map(fullIssue, { data, defaultError: errorMessage6 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage4
+    message: errorMessage6
   };
 };
 var EMPTY_PATH = [];
@@ -30326,19 +30779,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage4, refs) {
+function addErrorMessage(res, key, errorMessage6, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage4) {
+  if (errorMessage6) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage4
+      [key]: errorMessage6
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage4, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage6, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage4, refs);
+  addErrorMessage(res, key, errorMessage6, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -31649,8 +32102,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage4 = message;
-                    const error2 = new McpError(errorMessage4.error.code, errorMessage4.error.message, errorMessage4.error.data);
+                    const errorMessage6 = message;
+                    const error2 = new McpError(errorMessage6.error.code, errorMessage6.error.message, errorMessage6.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -32950,23 +33403,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage4 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage4}`);
+          const errorMessage6 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage6}`);
         }
         const { params } = validatedRequest.data;
         const result2 = await Promise.resolve(handler(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result2);
           if (!taskValidationResult.success) {
-            const errorMessage4 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage4}`);
+            const errorMessage6 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage6}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result2);
         if (!validationResult.success) {
-          const errorMessage4 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage4}`);
+          const errorMessage6 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage6}`);
         }
         return validationResult.data;
       };
@@ -33460,12 +33913,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage4) {
+  createToolError(errorMessage6) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage4
+          text: errorMessage6
         }
       ],
       isError: true
@@ -33483,8 +33936,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage4 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage4}`);
+      const errorMessage6 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage6}`);
     }
     return parseResult.data;
   }
@@ -33508,8 +33961,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result2.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage4 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage4}`);
+      const errorMessage6 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage6}`);
     }
   }
   /**
@@ -33721,8 +34174,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage4 = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage4}`);
+          const errorMessage6 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage6}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;

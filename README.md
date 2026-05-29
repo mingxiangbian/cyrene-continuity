@@ -87,6 +87,7 @@ npm run dev -- codex install --dev
 npm run build:plugin
 npm run dev -- mcp-server --stdio
 npm run dev -- codex doctor
+npm run dev -- codex ui [--port <n>]
 npm run dev -- codex install --dev
 npm run dev -- codex install --plugin
 npm run dev -- codex install-hook --stop
@@ -116,6 +117,23 @@ npm run dev -- codex profile apply --candidate <candidateId> --review-hash <hash
 npm run dev -- codex similar-hints explain --source-project-id <projectId>
 npm run dev -- codex similar-hints mark-transferable --memory-id <memoryId> --review-hash <hash>
 ```
+
+`cyrene-continuity codex ui` starts a local-only Web UI on
+`http://127.0.0.1:47833` by default. If that port is busy, the server tries the
+following ports and prints the bound URL. Pass `--port <n>` to request a
+specific port, or `--port 0` to let the operating system choose an available
+local port.
+
+The v1 Web UI is a read-first visibility console for Overview, Inbox, Timeline,
+Project Memory, Harvester, Dream, and Profile views. It shows pending review
+candidates, review summaries, active project memory, project harvester signals,
+Dream state, and profile text from the local Cyrene data store. The review
+console is read-only: approve, reject, edit, and defer actions are disabled in
+the browser. Use `codex memory review` to inspect candidate metadata, then use
+`codex memory approve|reject|edit|defer <candidateId> --review-hash <hash>` for
+decisions that write review state. The Harvester view only runs
+`harvest-project` dry-run preview from the UI; it does not write pending memory,
+active memory, or profiles.
 
 `deep-preview` is the default safe dream stage. It writes review artifacts under
 `dream-preview/` and does not promote, reject, or tombstone memory. `deep-apply`
