@@ -105,6 +105,17 @@ describe('startCodexUiServer', () => {
     expect(body).toBe('Not found\n')
   })
 
+  it('returns an empty favicon response without logging a browser 404', async () => {
+    const localServer = await startTestServer()
+
+    const response = await fetch(`${localServer.url}/favicon.ico`)
+    const body = await response.text()
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get('cache-control')).toBe('no-store, no-cache')
+    expect(body).toBe('')
+  })
+
   it('releases the listener when closed', async () => {
     const localServer = await startTestServer()
     const assignedPort = localServer.port

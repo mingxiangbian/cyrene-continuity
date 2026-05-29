@@ -124,16 +124,17 @@ following ports and prints the bound URL. Pass `--port <n>` to request a
 specific port, or `--port 0` to let the operating system choose an available
 local port.
 
-The v1 Web UI is a read-first visibility console for Overview, Inbox, Timeline,
-Project Memory, Harvester, Dream, and Profile views. It shows pending review
-candidates, review summaries, active project memory, project harvester signals,
-Dream state, and profile text from the local Cyrene data store. The review
-console is read-only: approve, reject, edit, and defer actions are disabled in
-the browser. Use `codex memory review` to inspect candidate metadata, then use
-`codex memory approve|reject|edit|defer <candidateId> --review-hash <hash>` for
-decisions that write review state. The Harvester view only runs
-`harvest-project` dry-run preview from the UI; it does not write pending memory,
-active memory, or profiles.
+The local Web UI is a review console for Overview, Inbox, Timeline, Project
+Memory, Harvester, Dream, and Profile views. It shows pending review candidates,
+review summaries, active project memory, project harvester signals, Dream state,
+and profile text from the local Cyrene data store. It supports hash-checked
+single-candidate pending review actions: approve, reject, defer, and edit. Every
+write action requires the current review hash and an in-session UI token.
+Reject/defer require a reason; edit requires a change note. The UI does not
+batch approve, does not apply Dream/Profile changes, and does not require model
+API configuration for reviewing existing pending candidates. The Harvester view
+only runs `harvest-project` dry-run preview from the UI; it does not write
+pending memory, active memory, or profiles.
 
 `deep-preview` is the default safe dream stage. It writes review artifacts under
 `dream-preview/` and does not promote, reject, or tombstone memory. `deep-apply`

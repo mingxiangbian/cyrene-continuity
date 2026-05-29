@@ -13,7 +13,7 @@ When using this repository from source, rebuild and install the plugin bridge wi
 
 ## Local Web UI
 
-Use `cyrene-continuity codex ui` when the user wants local visibility into the memory pipeline or a review console for pending candidates, review summaries, project memory, harvester preview, Dream state, or profile text. The Web UI is local-only and v1 write actions are disabled. Approval, rejection, edits, and deferral still require explicit user intent through CLI or MCP review-hash tools such as `codex memory approve|reject|edit|defer <candidateId> --review-hash <hash>`.
+Use `cyrene-continuity codex ui` when the user wants local visual review of the memory pipeline or hash-checked single-candidate pending memory actions. The UI can approve/reject/defer/edit pending candidates, but it must not imply batch review, Dream apply, Profile apply, or active-memory edits.
 
 ## Required behavior
 

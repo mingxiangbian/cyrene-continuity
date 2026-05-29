@@ -19086,6 +19086,10 @@ async function handleApiRequest(input, request, response, pathname) {
 }
 function handleStaticRequest(response, pathname) {
   try {
+    if (pathname === "/favicon.ico") {
+      writeNoContent(response);
+      return;
+    }
     const asset = getCodexUiStaticAsset(pathname);
     if (asset === void 0) {
       writePlain(response, 404, "Not found\n");
@@ -19135,6 +19139,12 @@ function writePlain(response, status, body) {
     "cache-control": STATIC_CACHE_CONTROL
   });
   response.end(body);
+}
+function writeNoContent(response) {
+  response.writeHead(204, {
+    "cache-control": STATIC_CACHE_CONTROL
+  });
+  response.end();
 }
 function requestPathname(request) {
   return new URL(request.url ?? "/", `http://${HOST}`).pathname;
