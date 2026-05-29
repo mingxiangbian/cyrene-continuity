@@ -113,6 +113,10 @@ export async function readRecentCodexHookTrace(input: {
   }
 
   const newestLimit = Math.max(0, input.limit ?? DEFAULT_LIMIT)
+  if (newestLimit === 0) {
+    return { records: [], warnings }
+  }
+
   return {
     records: records
       .filter((record) => isWithinMaxAge(record, input.now, input.maxAgeDays))

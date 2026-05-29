@@ -194,6 +194,12 @@ describe('Codex hook trace store', () => {
     const limited = await readRecentCodexHookTrace({ cwd, limit: 1 })
     expect(limited.records).toMatchObject([{ summary: 'Newest stop.' }])
 
+    const empty = await readRecentCodexHookTrace({ cwd, limit: 0 })
+    expect(empty.records).toEqual([])
+
+    const negative = await readRecentCodexHookTrace({ cwd, limit: -1 })
+    expect(negative.records).toEqual([])
+
     const recent = await readRecentCodexHookTrace({
       cwd,
       now: '2026-05-29T00:00:00.000Z',
