@@ -21,6 +21,7 @@ const HOST = '127.0.0.1'
 const DEFAULT_PORT = 47833
 const DEFAULT_PORT_ATTEMPTS = 50
 const MAX_BODY_BYTES = 65_536
+const STATIC_CACHE_CONTROL = 'no-store, no-cache'
 
 export async function startCodexUiServer(input: StartCodexUiServerInput): Promise<CodexUiServer> {
   if (input.port !== undefined) {
@@ -136,7 +137,7 @@ function handleStaticRequest(response: ServerResponse, pathname: string): void {
     }
     response.writeHead(200, {
       'content-type': asset.contentType,
-      'cache-control': 'no-store'
+      'cache-control': STATIC_CACHE_CONTROL
     })
     response.end(asset.body)
   } catch (error) {
@@ -178,7 +179,7 @@ function writeJson(response: ServerResponse, status: number, body: CodexUiApiRes
 function writePlain(response: ServerResponse, status: number, body: string): void {
   response.writeHead(status, {
     'content-type': 'text/plain; charset=utf-8',
-    'cache-control': 'no-store'
+    'cache-control': STATIC_CACHE_CONTROL
   })
   response.end(body)
 }

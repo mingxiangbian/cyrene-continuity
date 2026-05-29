@@ -60,6 +60,7 @@ describe('startCodexUiServer', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/html')
+    expect(response.headers.get('cache-control')).toBe('no-store, no-cache')
     expect(body).toContain('Cyrene Memory Console')
   })
 
@@ -83,7 +84,19 @@ describe('startCodexUiServer', () => {
 
     expect(response.status).toBe(404)
     expect(response.headers.get('content-type')).toContain('text/plain')
+    expect(response.headers.get('cache-control')).toBe('no-store, no-cache')
     expect(body).toBe('Not found\n')
+  })
+
+  it('releases the listener when closed', async () => {
+    const localServer = await startTestServer()
+    const assignedPort = localServer.port
+    await localServer.close()
+    server = undefined
+
+    const replacement = await startCodexUiServer({ cwd: await createProject(), port: assignedPort })
+    expect(replacement.port).toBe(assignedPort)
+    await replacement.close()
   })
 
   it('returns structured JSON 404 for missing API routes', async () => {
