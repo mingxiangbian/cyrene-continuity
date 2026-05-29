@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -779,6 +779,29 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('deep-apply replaces a stale dream lock without owner metadata', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const candidate = createPending({
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+    const lockDir = join(memoryRoot, '.locks', 'dream.lock')
+    await mkdir(lockDir, { recursive: true })
+    const oldTime = new Date('2026-05-25T00:00:00.000Z')
+    await utimes(lockDir, oldTime, oldTime)
+
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
+
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 1 })
+    await expect(readFile(join(lockDir, 'owner.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('deep-apply replaces a stale dream lock', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)
@@ -817,6 +840,59 @@ describe('Codex memory dream runtime', () => {
     await testOnlyDreamLock.release(lock)
 
     await expect(readFile(ownerPath, 'utf8')).resolves.toContain('other-owner')
+  })
+
+  it('skips dream roots when memory dream is disabled', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_MEMORY_DREAM_ENABLED', '0')
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const candidate = createPending({
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
+
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
+      promoted: 0,
+      recommendedPromotions: 0,
+      rejected: 0,
+      keptPending: 1,
+      skipped: expect.stringContaining('disabled')
+    })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'dream-state.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('bounds deep dream maintenance waits by the dream runtime budget', async () => {
+    const home = await createTempDir('cyrene-dream-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_MEMORY_MAINTENANCE_LOCK_TIMEOUT_MS', '80')
+    vi.stubEnv('CYRENE_MEMORY_DREAM_MAX_RUNTIME_MS', '20')
+    const cwd = await createTempDir('cyrene-dream-project-')
+    const memoryRoot = await seedProjectPending(cwd, [createPending()])
+    const lockDir = join(memoryRoot, '.maintenance.lock')
+    await mkdir(lockDir)
+    const startedAt = Date.now()
+
+    const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
+
+    expect(Date.now() - startedAt).toBeLessThan(80)
+    expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
+      promoted: 0,
+      recommendedPromotions: 0,
+      rejected: 0,
+      keptPending: 1,
+      skipped: expect.stringContaining('runtime budget')
+    })
+    await expect(readdir(lockDir)).resolves.toEqual([])
   })
 
   it('deep-apply recommends global-scope pending memory from the global root', async () => {

@@ -58,7 +58,6 @@ const memoryCandidateSchema = z.object({
 })
 
 export const memoryProposeInputSchema = {
-  cwd: z.string().optional(),
   candidate: memoryCandidateSchema
 }
 

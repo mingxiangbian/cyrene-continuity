@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, rm } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { assertMemoryProjectionTargetsSafe, renderMemoryProjectionsFromRoot } from './memory-exporter.js'
@@ -19,7 +19,10 @@ import type { CyreneMemory, MemoryEvent, MemoryEvidence, MemoryTombstone, Pendin
 const MAINTENANCE_LOCK_DIR = '.maintenance.lock'
 const MAINTENANCE_LOCK_TIMEOUT_MS = 30_000
 const MAINTENANCE_LOCK_POLL_MS = 10
+const MAINTENANCE_LOCK_STALE_MS = 15 * 60 * 1000
 const MAINTENANCE_LOCK_TIMEOUT_ENV = 'CYRENE_MEMORY_MAINTENANCE_LOCK_TIMEOUT_MS'
+const MAINTENANCE_LOCK_STALE_ENV = 'CYRENE_MEMORY_MAINTENANCE_LOCK_STALE_MS'
+const MAINTENANCE_LOCK_OWNER_FILE = 'owner.json'
 
 export interface MemoryMaintenanceBudget {
   activeMaxItems: number
@@ -44,6 +47,18 @@ export interface MemoryMaintenanceResult {
 export interface MemoryMaintenanceLockOptions {
   timeoutMs?: number
   pollMs?: number
+  staleMs?: number
+}
+
+export class MemoryMaintenanceLockTimeoutError extends Error {
+  constructor(readonly lockDir: string) {
+    super(`Timed out waiting for memory maintenance lock: ${lockDir}`)
+    this.name = 'MemoryMaintenanceLockTimeoutError'
+  }
+}
+
+export function isMemoryMaintenanceLockTimeoutError(error: unknown): error is MemoryMaintenanceLockTimeoutError {
+  return error instanceof MemoryMaintenanceLockTimeoutError
 }
 
 export async function runMemoryMaintenanceFromRoot(input: {
@@ -156,16 +171,27 @@ export async function withMemoryMaintenanceLockFromRoot<T>(
   const startedAt = Date.now()
   const timeoutMs = options.timeoutMs ?? memoryMaintenanceLockTimeoutMs()
   const pollMs = options.pollMs ?? MAINTENANCE_LOCK_POLL_MS
+  const staleMs = options.staleMs ?? memoryMaintenanceLockStaleMs()
+  const token = randomUUID()
   while (true) {
+    let acquired = false
     try {
       await mkdir(lockDir)
+      acquired = true
+      await writeMaintenanceLockOwner(lockDir, token)
       break
     } catch (error) {
       if (!isFileErrorCode(error, 'EEXIST')) {
+        if (acquired) {
+          await rm(lockDir, { recursive: true, force: true }).catch(() => undefined)
+        }
         throw error
       }
+      if (await removeStaleMaintenanceLock(lockDir, Date.now(), staleMs)) {
+        continue
+      }
       if (Date.now() - startedAt > timeoutMs) {
-        throw new Error(`Timed out waiting for memory maintenance lock: ${lockDir}`)
+        throw new MemoryMaintenanceLockTimeoutError(lockDir)
       }
       await delay(pollMs)
     }
@@ -178,11 +204,116 @@ export async function withMemoryMaintenanceLockFromRoot<T>(
   }
 }
 
-function memoryMaintenanceLockTimeoutMs(): number {
+interface MaintenanceLockOwner {
+  acquiredAt: string
+  pid?: number
+  token?: string
+}
+
+interface MaintenanceLockState {
+  owner?: MaintenanceLockOwner
+  mtimeMs: number
+}
+
+async function writeMaintenanceLockOwner(lockDir: string, token: string): Promise<void> {
+  await writeFile(
+    join(lockDir, MAINTENANCE_LOCK_OWNER_FILE),
+    `${JSON.stringify({ acquiredAt: new Date().toISOString(), pid: process.pid, token })}\n`,
+    'utf8'
+  )
+}
+
+async function removeStaleMaintenanceLock(lockDir: string, nowMs: number, staleMs: number): Promise<boolean> {
+  const state = await readMaintenanceLockState(lockDir)
+  if (state === undefined) {
+    return true
+  }
+  if (!isMaintenanceLockStale(state, nowMs, staleMs)) {
+    return false
+  }
+
+  const current = await readMaintenanceLockState(lockDir)
+  if (current === undefined) {
+    return true
+  }
+  if (!isSameMaintenanceLockState(current, state) || !isMaintenanceLockStale(current, nowMs, staleMs)) {
+    return false
+  }
+
+  await rm(lockDir, { recursive: true, force: true })
+  return true
+}
+
+async function readMaintenanceLockState(lockDir: string): Promise<MaintenanceLockState | undefined> {
+  let stats
+  try {
+    stats = await lstat(lockDir)
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return undefined
+    }
+    throw error
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`Refusing to use invalid memory maintenance lock path: ${lockDir}`)
+  }
+
+  return {
+    owner: await readMaintenanceLockOwner(lockDir),
+    mtimeMs: stats.mtimeMs
+  }
+}
+
+async function readMaintenanceLockOwner(lockDir: string): Promise<MaintenanceLockOwner | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(join(lockDir, MAINTENANCE_LOCK_OWNER_FILE), 'utf8')) as {
+      acquiredAt?: unknown
+      pid?: unknown
+      token?: unknown
+    }
+    if (typeof parsed.acquiredAt !== 'string') {
+      return undefined
+    }
+    return {
+      acquiredAt: parsed.acquiredAt,
+      ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
+      ...(typeof parsed.token === 'string' ? { token: parsed.token } : {})
+    }
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT') || error instanceof SyntaxError) {
+      return undefined
+    }
+    throw error
+  }
+}
+
+function isMaintenanceLockStale(state: MaintenanceLockState, nowMs: number, staleMs: number): boolean {
+  const acquiredAtMs = state.owner === undefined ? undefined : new Date(state.owner.acquiredAt).getTime()
+  const lockAgeMs = Number.isFinite(acquiredAtMs) ? nowMs - (acquiredAtMs as number) : nowMs - state.mtimeMs
+  return lockAgeMs > staleMs
+}
+
+function isSameMaintenanceLockState(left: MaintenanceLockState, right: MaintenanceLockState): boolean {
+  if (left.owner?.token !== undefined || right.owner?.token !== undefined) {
+    return left.owner?.token === right.owner?.token
+  }
+  return left.owner?.acquiredAt === right.owner?.acquiredAt &&
+    left.owner?.pid === right.owner?.pid &&
+    left.mtimeMs === right.mtimeMs
+}
+
+export function memoryMaintenanceLockTimeoutMs(): number {
   const raw = process.env[MAINTENANCE_LOCK_TIMEOUT_ENV]
   if (raw === undefined) return MAINTENANCE_LOCK_TIMEOUT_MS
   const parsed = Number.parseInt(raw, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : MAINTENANCE_LOCK_TIMEOUT_MS
+}
+
+function memoryMaintenanceLockStaleMs(): number {
+  const raw = process.env[MAINTENANCE_LOCK_STALE_ENV]
+  if (raw === undefined) return MAINTENANCE_LOCK_STALE_MS
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : MAINTENANCE_LOCK_STALE_MS
 }
 
 type DedupedMemories = CyreneMemory[] & { removed: number }

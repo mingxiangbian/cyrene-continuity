@@ -17,8 +17,33 @@ const RULES: RedactionRule[] = [
   },
   {
     name: 'secret',
+    pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+    replacement: '[REDACTED_SECRET]'
+  },
+  {
+    name: 'secret',
+    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b/g,
+    replacement: '[REDACTED_SECRET]'
+  },
+  {
+    name: 'secret',
+    pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+    replacement: '[REDACTED_SECRET]'
+  },
+  {
+    name: 'secret',
+    pattern: /\b(?:xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{30,}|(?:sk|pk)_(?:live|test)_[0-9A-Za-z]{16,})\b/g,
+    replacement: '[REDACTED_SECRET]'
+  },
+  {
+    name: 'secret',
     pattern: /\b[A-Z0-9_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)\s*=\s*["']?[^"'\s]+["']?/gi,
     replacement: '[REDACTED_SECRET]'
+  },
+  {
+    name: 'secret',
+    pattern: /(["']?[A-Z0-9_.-]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)["']?\s*:\s*)["'][^"'\s]{8,}["']/gi,
+    replacement: '$1"[REDACTED_SECRET]"'
   },
   {
     name: 'secret',
@@ -29,6 +54,11 @@ const RULES: RedactionRule[] = [
     name: 'secret',
     pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/gi,
     replacement: 'Bearer [REDACTED_SECRET]'
+  },
+  {
+    name: 'secret',
+    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+    replacement: '[REDACTED_SECRET]'
   },
   {
     name: 'email',

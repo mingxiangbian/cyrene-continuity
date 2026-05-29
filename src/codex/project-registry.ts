@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import {
   ensureCodexProjectMemoryRoot,
@@ -8,8 +9,10 @@ import {
 import {
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
-  readTombstonesFromRoot
+  readTombstonesFromRoot,
+  assertSafeMemoryDataFileTarget
 } from '../memory/memory-store.js'
+import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
 import { runMemoryMigrationEvalGate } from '../eval/eval-runner.js'
 
 export interface CodexProjectRegistryEntry {
@@ -86,6 +89,7 @@ export async function mergeCodexProjects(input: {
     throw new Error(`Project memory root not found: ${fromProjectId}`)
   }
   const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId)
+  await assertMergeJsonlFilesSafe(fromMemoryRoot, 'source')
   const gate = runMemoryMigrationEvalGate({
     fromProjectId,
     toProjectId,
@@ -96,14 +100,16 @@ export async function mergeCodexProjects(input: {
   }
   const fromProjectRoot = dirname(fromMemoryRoot)
   const toProjectRoot = dirname(toMemoryRoot)
-  const mergedFiles: string[] = []
-
-  for (const fileName of MERGE_JSONL_FILES) {
-    const merged = await mergeJsonlFile(join(fromMemoryRoot, fileName), join(toMemoryRoot, fileName))
-    if (merged) {
-      mergedFiles.push(fileName)
+  const mergedFiles = await withMemoryMaintenanceLockFromRoot(toMemoryRoot, async (lockedToMemoryRoot) => {
+    const files: string[] = []
+    for (const fileName of MERGE_JSONL_FILES) {
+      const merged = await mergeJsonlFile(join(fromMemoryRoot, fileName), join(lockedToMemoryRoot, fileName))
+      if (merged) {
+        files.push(fileName)
+      }
     }
-  }
+    return files
+  })
 
   const now = new Date().toISOString()
   const fromMetadata = await readProjectMetadata(fromProjectRoot)
@@ -150,15 +156,47 @@ async function registryEntryFromRoot(root: string): Promise<CodexProjectRegistry
 }
 
 async function mergeJsonlFile(sourcePath: string, targetPath: string): Promise<boolean> {
+  await assertMergeJsonlFileSafe(sourcePath, 'source')
   const sourceLines = await readJsonLinesIfExists(sourcePath)
   if (sourceLines.length === 0) {
     return false
   }
+  await assertMergeJsonlFileSafe(targetPath, 'target')
   const targetLines = await readJsonLinesIfExists(targetPath)
   const merged = mergeJsonLines(targetLines, sourceLines)
   await mkdir(dirname(targetPath), { recursive: true })
-  await writeFile(targetPath, `${merged.join('\n')}\n`, 'utf8')
+  await writeJsonLinesAtomic(targetPath, merged)
   return true
+}
+
+async function assertMergeJsonlFilesSafe(memoryRoot: string, role: 'source' | 'target'): Promise<void> {
+  await Promise.all(MERGE_JSONL_FILES.map((fileName) => assertMergeJsonlFileSafe(join(memoryRoot, fileName), role)))
+}
+
+async function assertMergeJsonlFileSafe(filePath: string, role: 'source' | 'target'): Promise<void> {
+  try {
+    await assertSafeMemoryDataFileTarget(filePath)
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Unsafe project merge ${role} JSONL file: ${error.message}`)
+    }
+    throw error
+  }
+}
+
+async function writeJsonLinesAtomic(filePath: string, values: string[]): Promise<void> {
+  const tempPath = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`)
+  let renamed = false
+  try {
+    await writeFile(tempPath, `${values.join('\n')}\n`, 'utf8')
+    await assertMergeJsonlFileSafe(filePath, 'target')
+    await rename(tempPath, filePath)
+    renamed = true
+  } finally {
+    if (!renamed) {
+      await rm(tempPath, { force: true })
+    }
+  }
 }
 
 function mergeJsonLines(targetLines: string[], sourceLines: string[]): string[] {
@@ -229,7 +267,7 @@ async function writeProjectMetadata(projectRoot: string, metadata: CodexProjectM
 
 function validateProjectId(value: string): string {
   const trimmed = value.trim()
-  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed) || /^\.+$/.test(trimmed)) {
     throw new Error(`Invalid projectId: ${value}`)
   }
   return trimmed

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -278,5 +278,57 @@ describe('Codex memory propose', () => {
         }
       })
     ).rejects.toThrow(/memory symlink/)
+  })
+
+  it('refuses to merge pending memory through a symlinked pending data file', async () => {
+    const home = await createTempDir('cyrene-codex-propose-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-propose-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const outside = await createTempDir('cyrene-codex-propose-outside-')
+    const outsidePending = join(outside, 'pending.jsonl')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(outsidePending, 'outside target must stay unchanged\n')
+    await symlink(outsidePending, join(memoryRoot, 'pending.jsonl'))
+
+    await expect(
+      proposeCodexMemoryCandidate({
+        cwd,
+        candidate: {
+          domain: 'project',
+          type: 'project_fact',
+          content: 'Should not write pending memory through a symlink.',
+          evidence: [{ runId: 'run-pending-symlink', summary: 'Pending symlink test.' }]
+        }
+      })
+    ).rejects.toThrow(/memory data file symlink/)
+    await expect(readFile(outsidePending, 'utf8')).resolves.toBe('outside target must stay unchanged\n')
+  })
+
+  it('refuses to append memory events through a symlinked events data file', async () => {
+    const home = await createTempDir('cyrene-codex-propose-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-propose-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const outside = await createTempDir('cyrene-codex-propose-outside-')
+    const outsideEvents = join(outside, 'events.jsonl')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(outsideEvents, 'outside target must stay unchanged\n')
+    await symlink(outsideEvents, join(memoryRoot, 'events.jsonl'))
+
+    await expect(
+      proposeCodexMemoryCandidate({
+        cwd,
+        candidate: {
+          domain: 'project',
+          type: 'project_fact',
+          content: 'Should not append memory events through a symlink.',
+          evidence: [{ runId: 'run-events-symlink', summary: 'Events symlink test.' }]
+        }
+      })
+    ).rejects.toThrow(/memory data file symlink/)
+    await expect(readFile(outsideEvents, 'utf8')).resolves.toBe('outside target must stay unchanged\n')
   })
 })

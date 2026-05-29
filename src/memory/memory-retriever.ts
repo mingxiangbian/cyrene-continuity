@@ -52,7 +52,10 @@ export async function retrieveMemories(input: RetrieveMemoriesInput): Promise<Re
       break
     }
     const itemTokens = estimateTokens(item.memory.content)
-    if (selected.length > 0 && tokenCount + itemTokens > input.maxTokens) {
+    if (itemTokens > input.maxTokens) {
+      continue
+    }
+    if (tokenCount + itemTokens > input.maxTokens) {
       break
     }
     selected.push(item)

@@ -1,13 +1,14 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runMemoryMaintenanceFromRoot, type MemoryMaintenanceBudget } from '../src/memory/memory-maintenance.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
@@ -129,6 +130,30 @@ describe('root memory maintenance', () => {
     expect(events.filter((event) => event.action === 'expire')).toEqual([
       expect.objectContaining({ memoryId: 'expired-1', reason: 'expired' })
     ])
+  })
+
+  it('removes stale maintenance locks before running maintenance', async () => {
+    vi.stubEnv('CYRENE_MEMORY_MAINTENANCE_LOCK_TIMEOUT_MS', '20')
+    const memoryRoot = await createMemoryRoot()
+    const expired = createMemory({
+      id: 'expired-1',
+      normalizedKey: 'expired-memory',
+      expiresAt: '2026-05-25T00:00:00.000Z'
+    })
+    await seedMemoryRoot({ memoryRoot, active: [expired] })
+    const lockDir = join(memoryRoot, '.maintenance.lock')
+    await mkdir(lockDir)
+    const oldTime = new Date('2020-01-01T00:00:00.000Z')
+    await utimes(lockDir, oldTime, oldTime)
+
+    const result = await runMemoryMaintenanceFromRoot({
+      memoryRoot,
+      budget: createBudget(),
+      now: '2026-05-26T00:00:00.000Z'
+    })
+
+    expect(result).toMatchObject({ expired: 1, activeCount: 0 })
+    await expect(readdir(lockDir)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('dedupes active memories by normalizedKey and keeps stronger newer evidence', async () => {

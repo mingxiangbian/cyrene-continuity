@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createDefaultConfig } from '../config.js'
 import { createEmbeddingProviderFromEnv } from '../memory/embedding-provider.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
-import { readPendingMemoriesFromRoot } from '../memory/memory-store.js'
+import { assertSafeMemoryDataFileTarget, readPendingMemoriesFromRoot } from '../memory/memory-store.js'
 import {
   codexGlobalMemoryRoot,
   codexGlobalRoot,
@@ -186,8 +186,10 @@ async function readDoctorDreamState(memoryRoot: string) {
 }
 
 async function readProfileCandidatesStatus(memoryRoot: string): Promise<DoctorProfileCandidatesStatus> {
+  const targetPath = join(memoryRoot, 'profile_candidates.jsonl')
   try {
-    await readFile(join(memoryRoot, 'profile_candidates.jsonl'), 'utf8')
+    await assertSafeMemoryDataFileTarget(targetPath)
+    await readFile(targetPath, 'utf8')
     return 'ok'
   } catch (error) {
     return isErrorCode(error, 'ENOENT') ? 'missing' : 'unreadable'

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { lstat, readFile, realpath } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createDefaultConfig, type AppConfig } from '../config.js'
 import { callModel as defaultCallModel } from '../llm-client.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
@@ -41,6 +42,7 @@ export interface CodexStopHookCommandOutput {
 
 const DURABLE_SIGNAL = /记住|请记住|以后默认|之后默认|以后你要|以后请|from now on|please remember|remember that|default to/i
 const GLOBAL_SCOPE_SIGNAL = /所有项目|全部项目|每个项目|所有 repo|全部 repo|全局|global|all projects|every project|all repos|every repo/i
+const MAX_TRANSCRIPT_BYTES = 5 * 1024 * 1024
 
 export async function handleCodexStopHookCommand(): Promise<string> {
   let result: CodexStopHookResult
@@ -88,12 +90,17 @@ async function handleCodexStopHookPayloadUnsafe(
   deps: CodexStopHookDeps,
   cwd: string
 ): Promise<CodexStopHookResult> {
+  const config = deps.config ?? createDefaultConfig(cwd)
+  if (!config.memoryAutoExtractEnabled) {
+    return { action: 'noop', reason: 'Codex memory auto extraction is disabled.' }
+  }
+
   const transcriptPath = asString(payload.transcript_path) ?? asString(payload.transcriptPath)
   if (transcriptPath === undefined) {
     return { action: 'noop', reason: 'No transcript path provided.' }
   }
 
-  const transcriptText = await readTranscriptText(transcriptPath)
+  const transcriptText = await readTranscriptText(cwd, transcriptPath)
   if (transcriptText === undefined) {
     return { action: 'noop', reason: 'No transcript messages found.' }
   }
@@ -103,7 +110,6 @@ async function handleCodexStopHookPayloadUnsafe(
     return { action: 'noop', reason: 'No transcript messages found.' }
   }
 
-  const config = deps.config ?? createDefaultConfig(cwd)
   const review = await runCodexReviewSummary({
     cwd,
     sessionId: asString(payload.session_id),
@@ -286,7 +292,8 @@ export async function extractRecentExplicitMemoryInstruction(payload: CodexStopH
     return undefined
   }
 
-  const transcriptText = await readTranscriptText(transcriptPath)
+  const cwd = asString(payload.cwd) ?? process.cwd()
+  const transcriptText = await readTranscriptText(cwd, transcriptPath)
   if (transcriptText === undefined) {
     return undefined
   }
@@ -300,15 +307,66 @@ function extractRecentExplicitMemoryInstructionFromMessages(messages: Transcript
   return userMessages.reverse().find((message) => DURABLE_SIGNAL.test(message.content))?.content
 }
 
-async function readTranscriptText(transcriptPath: string): Promise<string | undefined> {
+async function readTranscriptText(cwd: string, transcriptPath: string): Promise<string | undefined> {
   try {
-    return await readFile(transcriptPath, 'utf8')
+    const safePath = await resolveSafeTranscriptPath(cwd, transcriptPath)
+    return await readFile(safePath, 'utf8')
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
       return undefined
     }
     throw error
   }
+}
+
+async function resolveSafeTranscriptPath(cwd: string, transcriptPath: string): Promise<string> {
+  const resolved = isAbsolute(transcriptPath) ? transcriptPath : resolve(cwd, transcriptPath)
+  const stats = await lstat(resolved)
+  if (stats.isSymbolicLink()) {
+    throw new Error('Transcript path is a symlink.')
+  }
+  if (!stats.isFile()) {
+    throw new Error('Transcript path is not a regular file.')
+  }
+  if (stats.size > MAX_TRANSCRIPT_BYTES) {
+    throw new Error('Transcript path exceeds the maximum readable size.')
+  }
+  const safePath = await realpath(resolved)
+  const allowedRoots = await allowedTranscriptRoots(cwd)
+  if (!allowedRoots.some((root) => isPathInside(root, safePath))) {
+    throw new Error('Transcript path must be inside the project cwd or Codex home.')
+  }
+  return safePath
+}
+
+async function allowedTranscriptRoots(cwd: string): Promise<string[]> {
+  const roots = [cwd, codexHomePath()].filter((root): root is string => root !== undefined)
+  const realRoots: string[] = []
+  for (const root of roots) {
+    try {
+      realRoots.push(await realpath(root))
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        continue
+      }
+      throw error
+    }
+  }
+  return Array.from(new Set(realRoots))
+}
+
+function codexHomePath(): string | undefined {
+  const configured = process.env.CODEX_HOME?.trim()
+  if (configured !== undefined && configured !== '') {
+    return configured
+  }
+  const home = process.env.HOME?.trim()
+  return home === undefined || home === '' ? undefined : join(home, '.codex')
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const path = relative(parent, child)
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
 }
 
 function asString(value: unknown): string | undefined {

@@ -7,6 +7,10 @@ description: Use Cyrene continuity for long-running engineering work, architectu
 
 Use this skill when the task benefits from Cyrene's long-term project memory, response strategy, or principled dissent.
 
+## Setup note
+
+When using this repository from source, rebuild and install the plugin bridge with `npm run build:plugin` and `npm run dev -- codex install --plugin`, then start a new Codex session so the bundled MCP server and this skill are rediscovered.
+
 ## Required behavior
 
 1. At the start of substantial planning, architecture, debugging, code review, or Cyrene-related work, call the MCP tool `cyrene_continuity_get` when available.

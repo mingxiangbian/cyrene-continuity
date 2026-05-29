@@ -1203,8 +1203,11 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('evidence count: 2')
     expect(result.stdout).toContain(`review hash: ${reviewHashForPendingMemory(candidate)}`)
     expect(result.stdout).toContain(
-      `suggested action: cyrene-continuity codex memory approve cli-pending-1 --review-hash ${reviewHashForPendingMemory(candidate)}`
+      `suggested action: Review cli-pending-1 in Codex chat before any promote action; review hash ${reviewHashForPendingMemory(candidate)}.`
     )
+    expect(result.stdout).not.toContain('cyrene-continuity codex memory approve')
+    expect(result.stdout).not.toContain('cyrene-continuity codex memory reject')
+    expect(result.stdout).not.toContain('cyrene-continuity codex memory defer')
   })
 
   it('memory approve/reject/edit/defer route through hash-checked review functions', async () => {

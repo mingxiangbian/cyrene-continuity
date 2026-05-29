@@ -310,6 +310,53 @@ describe('memory SQLite index', () => {
     })).resolves.toEqual([])
   })
 
+  it('skips an oversized first result and returns later memories within the token budget', async () => {
+    const root = await createTempDir('cyrene-memory-index-budget-skip-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'project-a-oversized',
+        content: 'Router '.repeat(80),
+        normalizedKey: 'router-oversized-budget',
+        scores: {
+          evidenceStrength: 0.99,
+          stability: 0.99,
+          usefulness: 0.99,
+          safety: 0.99,
+          sensitivity: 0.01
+        }
+      }),
+      activeMemory({
+        id: 'project-a-small',
+        content: 'Router small memory.',
+        normalizedKey: 'router-small-budget',
+        scores: {
+          evidenceStrength: 0.5,
+          stability: 0.5,
+          usefulness: 0.5,
+          safety: 0.9,
+          sensitivity: 0.1
+        }
+      })
+    ])
+
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const result = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'router',
+      route: 'project',
+      maxItems: 10,
+      maxTokens: 6
+    })
+
+    expect(result.map((item) => item.memory.id)).toEqual(['project-a-small'])
+  })
+
   it('keeps FTS scoring available across query initialization', async () => {
     const root = await createTempDir('cyrene-memory-index-fts-')
     const projectRoot = join(root, 'projects', 'project-a', 'memory')

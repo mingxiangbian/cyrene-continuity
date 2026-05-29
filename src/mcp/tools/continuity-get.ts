@@ -5,7 +5,6 @@ import { jsonText } from '../mcp-json.js'
 const taskSchema = z.enum(['coding', 'planning', 'debugging', 'conversation', 'memory'])
 
 export const continuityGetInputSchema = {
-  cwd: z.string().optional(),
   userMessage: z.string(),
   task: taskSchema.optional()
 }

@@ -67,6 +67,8 @@ export interface CodexPendingMemorySummary {
   content: string
   normalizedKey: string
   source: PendingMemory['source']
+  portability?: PendingMemory['portability']
+  profileVisibility?: PendingMemory['profileVisibility']
   seenCount: number
   firstSeenAt: string
   lastSeenAt: string
@@ -256,6 +258,8 @@ export function reviewHashForPendingMemory(candidate: PendingMemory): string {
       sourceKind: entry.sourceKind ?? null
     })),
     source: candidate.source,
+    portability: candidate.portability ?? null,
+    profileVisibility: candidate.profileVisibility ?? null,
     scores: {
       evidenceStrength: candidate.scores.evidenceStrength,
       stability: candidate.scores.stability,
@@ -294,6 +298,8 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
     content: candidate.content,
     normalizedKey: candidate.normalizedKey,
     source: candidate.source,
+    ...(candidate.portability === undefined ? {} : { portability: candidate.portability }),
+    ...(candidate.profileVisibility === undefined ? {} : { profileVisibility: candidate.profileVisibility }),
     seenCount: candidate.seenCount,
     firstSeenAt: candidate.firstSeenAt,
     lastSeenAt: candidate.lastSeenAt,
@@ -329,13 +335,7 @@ function suggestedReviewAction(
   reviewHash: string,
   recommendation: CodexPendingMemoryRecommendation
 ): string {
-  if (recommendation === 'promote') {
-    return `cyrene-continuity codex memory approve ${candidateId} --review-hash ${reviewHash}`
-  }
-  if (recommendation === 'reject') {
-    return `cyrene-continuity codex memory reject ${candidateId} --review-hash ${reviewHash}`
-  }
-  return `cyrene-continuity codex memory defer ${candidateId} --review-hash ${reviewHash}`
+  return `Review ${candidateId} in Codex chat before any ${recommendation} action; review hash ${reviewHash}.`
 }
 
 export async function listCodexPendingMemories(input: {

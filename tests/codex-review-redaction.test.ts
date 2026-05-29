@@ -30,6 +30,42 @@ describe('Codex review redaction', () => {
     expect(result.counts.privateKey).toBe(1)
   })
 
+  it('redacts common provider tokens and JSON-style secret fields', () => {
+    const awsAccessKey = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('')
+    const githubToken = ['ghp_', 'abcdefghijklmnopqrstuvwxyz', '1234567890'].join('')
+    const githubFineGrainedToken = ['github_pat_', 'abcdefghijklmnopqrstuvwxyz_', '1234567890'].join('')
+    const slackToken = ['xo', 'xb-', '123456789012-', 'abcdefghijklmnop'].join('')
+    const googleToken = ['AI', 'za', 'abcdefghijklmnopqrstuvwxyz', '1234567890'].join('')
+    const stripeToken = ['sk_', 'live_', '1234567890', 'abcdefghijklmnop'].join('')
+    const jwtToken = [
+      'eyJhbGciOiJIUzI1NiJ9',
+      'eyJzdWIiOiIxMjM0NTY3ODkwIn0',
+      'abcdefghijklmnop'
+    ].join('.')
+    const input = [
+      `AWS_ACCESS_KEY_ID=${awsAccessKey}`,
+      `github token ${githubToken}`,
+      `fine grained ${githubFineGrainedToken}`,
+      `slack ${slackToken}`,
+      `google ${googleToken}`,
+      `stripe ${stripeToken}`,
+      'config {"client_secret":"supersecretvalue123"}',
+      `jwt ${jwtToken}`
+    ].join('\n')
+
+    const result = redactReviewText(input)
+
+    expect(result.text).not.toContain(awsAccessKey)
+    expect(result.text).not.toContain(githubToken)
+    expect(result.text).not.toContain(githubFineGrainedToken)
+    expect(result.text).not.toContain(slackToken)
+    expect(result.text).not.toContain(googleToken)
+    expect(result.text).not.toContain(stripeToken)
+    expect(result.text).not.toContain('supersecretvalue123')
+    expect(result.text).not.toContain(jwtToken)
+    expect(result.counts.secret).toBeGreaterThanOrEqual(8)
+  })
+
   it('merges redaction counts', () => {
     expect(redactReviewText('a@example.com b@example.com').counts.email).toBe(2)
   })

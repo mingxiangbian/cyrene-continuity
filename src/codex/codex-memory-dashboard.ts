@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
 import {
+  assertSafeMemoryDataFileTarget,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
@@ -85,7 +86,12 @@ async function readDashboardPendingMemories(roots: string[]): Promise<PendingMem
 }
 
 async function readReviewSummaries(root: string): Promise<CodexReviewSummaryRecord[]> {
-  const content = await readOptional(join(root, REVIEW_SUMMARIES_FILE))
+  let content: string
+  try {
+    content = await readOptionalMemoryDataFile(join(root, REVIEW_SUMMARIES_FILE))
+  } catch {
+    return []
+  }
   return content
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -331,6 +337,18 @@ function stripTomlInlineComment(value: string): string {
 
 async function readOptional(path: string): Promise<string> {
   try {
+    return await readFile(path, 'utf8')
+  } catch (error) {
+    if (isErrorCode(error, 'ENOENT')) {
+      return ''
+    }
+    throw error
+  }
+}
+
+async function readOptionalMemoryDataFile(path: string): Promise<string> {
+  try {
+    await assertSafeMemoryDataFileTarget(path)
     return await readFile(path, 'utf8')
   } catch (error) {
     if (isErrorCode(error, 'ENOENT')) {

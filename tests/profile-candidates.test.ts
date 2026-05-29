@@ -114,6 +114,52 @@ describe('Codex profile candidates', () => {
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('reflects safe-summary profile memory without widening raw details to always-on profile text', async () => {
+    const home = await createTempDir('cyrene-profile-safe-summary-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-profile-safe-summary-project-')
+    const memoryRoot = await seedProjectActive(cwd, [
+      createActive({
+        id: 'safe-summary-source',
+        domain: 'personal',
+        type: 'interaction_style',
+        content: 'The user prefers short status updates because private family stress makes long replies hard.',
+        profileVisibility: 'safe_summary',
+        scores: {
+          evidenceStrength: 0.95,
+          stability: 0.9,
+          usefulness: 0.9,
+          safety: 0.9,
+          sensitivity: 0.4
+        }
+      })
+    ])
+
+    const reflection = await runCodexProfileReflection({ cwd, source: 'daily-interview', now: '2026-05-26T00:00:00.000Z' })
+    const candidate = reflection.candidates[0]
+    expect(candidate).toMatchObject({
+      sourceProfileVisibility: 'safe_summary',
+      proposedSection: 'Interaction Preferences',
+      content: 'The user prefers short status updates.'
+    })
+    expect(JSON.stringify(candidate)).not.toContain('private family stress')
+
+    const result = await applyCodexProfileCandidate({
+      cwd,
+      candidateId: candidate?.id ?? '',
+      reviewHash: candidate?.reviewHash ?? '',
+      now: '2026-05-26T00:00:01.000Z'
+    })
+
+    expect(result.result.action).toBe('apply')
+    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    expect(active.find((item) => item.id === `profile-memory-${candidate?.id}`)).toMatchObject({
+      content: 'The user prefers short status updates.',
+      profileVisibility: 'safe_summary'
+    })
+    await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.not.toContain('private family stress')
+  })
+
   it('apply requires a matching review hash', async () => {
     const home = await createTempDir('cyrene-profile-home-')
     vi.stubEnv('HOME', home)

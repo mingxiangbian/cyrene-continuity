@@ -3,13 +3,10 @@ import { getCodexMemoryProfile, runCodexMemoryDream } from '../../codex/memory-d
 import { jsonText } from '../mcp-json.js'
 
 export const memoryDreamRunInputSchema = {
-  cwd: z.string().optional(),
   stage: z.enum(['light', 'rem', 'deep-preview', 'deep-apply']).optional()
 }
 
-export const memoryProfileGetInputSchema = {
-  cwd: z.string().optional()
-}
+export const memoryProfileGetInputSchema = {}
 
 export async function handleMemoryDreamRun(
   input: { cwd?: string; stage?: 'light' | 'rem' | 'deep-preview' | 'deep-apply' },

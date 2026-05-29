@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -94,6 +94,30 @@ describe('Codex Stop hook runtime', () => {
     })
   })
 
+  it('no-ops without extraction when memory auto extraction is disabled', async () => {
+    const home = await createTempDir('cyrene-codex-stop-disabled-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_MEMORY_AUTO_EXTRACT', '0')
+    const cwd = await createTempDir('cyrene-codex-stop-disabled-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '以后默认 spec 和 plan 用中文写。' }) + '\n')
+    const callModel = vi.fn(async () => {
+      throw new Error('model should not be called when extraction is disabled')
+    })
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-disabled', turn_id: 't-disabled', transcript_path: transcript },
+      { callModel }
+    )
+
+    expect(result).toEqual({ action: 'noop', reason: 'Codex memory auto extraction is disabled.' })
+    expect(callModel).not.toHaveBeenCalled()
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review-summaries.jsonl')
+  })
+
   it('records visible failed summary when transcript read fails without blocking Codex', async () => {
     const home = await createTempDir('cyrene-codex-stop-failure-home-')
     vi.stubEnv('HOME', home)
@@ -125,7 +149,108 @@ describe('Codex Stop hook runtime', () => {
       turnId: 't-fail',
       summary: 'Codex Stop hook failed; no transcript content persisted.'
     })
-    expect(summary.failureReason).toEqual(expect.any(String))
+    expect(summary.failureReason).toContain('Transcript path is not a regular file.')
+    await expectMemoryFileMissing(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl')
+  })
+
+  it('rejects symlinked transcript files without reading the target content', async () => {
+    const home = await createTempDir('cyrene-codex-stop-symlink-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-symlink-project-')
+    const outside = await createTempDir('cyrene-codex-stop-symlink-outside-')
+    const outsideTranscript = join(outside, 'transcript.jsonl')
+    const transcript = join(cwd, 'transcript-link.jsonl')
+    await writeFile(outsideTranscript, JSON.stringify({ role: 'user', content: '以后默认 spec 和 plan 用中文写。' }) + '\n')
+    await symlink(outsideTranscript, transcript)
+
+    const result = await handleCodexStopHookPayload({
+      cwd,
+      session_id: 's-symlink',
+      turn_id: 't-symlink',
+      transcript_path: transcript
+    })
+
+    expect(result.action).toBe('summary_failed')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain('Transcript path is a symlink.')
+  })
+
+  it('rejects oversized transcript files before extraction', async () => {
+    const home = await createTempDir('cyrene-codex-stop-oversized-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-oversized-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, Buffer.alloc(5 * 1024 * 1024 + 1, 'x'))
+
+    const result = await handleCodexStopHookPayload({
+      cwd,
+      session_id: 's-oversized',
+      turn_id: 't-oversized',
+      transcript_path: transcript
+    })
+
+    expect(result.action).toBe('summary_failed')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
+      'Transcript path exceeds the maximum readable size.'
+    )
+  })
+
+  it('rejects absolute transcript files outside the project cwd and Codex home', async () => {
+    const home = await createTempDir('cyrene-codex-stop-external-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-external-project-')
+    const outside = await createTempDir('cyrene-codex-stop-external-transcript-')
+    const transcript = join(outside, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '以后默认 spec 和 plan 用中文写。' }) + '\n')
+    const callModel = vi.fn(async () => {
+      throw new Error('model should not be called for external transcript paths')
+    })
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-external', turn_id: 't-external', transcript_path: transcript },
+      { callModel }
+    )
+
+    expect(result.action).toBe('summary_failed')
+    expect(callModel).not.toHaveBeenCalled()
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
+      'Transcript path must be inside the project cwd or Codex home.'
+    )
+  })
+
+  it('allows absolute transcript files under Codex home', async () => {
+    const home = await createTempDir('cyrene-codex-stop-codex-home-')
+    vi.stubEnv('HOME', home)
+    const codexHome = join(home, '.codex')
+    vi.stubEnv('CODEX_HOME', codexHome)
+    const cwd = await createTempDir('cyrene-codex-stop-codex-home-project-')
+    await mkdir(join(codexHome, 'sessions'), { recursive: true })
+    const transcript = join(codexHome, 'sessions', 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '普通讨论' }) + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-codex-home', turn_id: 't-codex-home', transcript_path: transcript },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({ summary: 'Codex home transcript was summarized.', candidates: [] }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('summary')
+    const identity = await identifyCodexProject(cwd)
+    await expect(readFile(join(codexProjectMemoryRoot(identity.projectId), 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
+      'Codex home transcript was summarized.'
+    )
   })
 
   it('writes pending memory for explicit durable user instruction', async () => {

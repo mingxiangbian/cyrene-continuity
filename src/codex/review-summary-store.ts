@@ -1,6 +1,6 @@
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ensureWritableMemoryRootPath } from '../memory/memory-store.js'
+import { assertSafeMemoryDataFileTarget, ensureWritableMemoryRootPath } from '../memory/memory-store.js'
 
 const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
 
@@ -29,5 +29,7 @@ export async function appendCodexReviewSummary(
   record: CodexReviewSummaryRecord
 ): Promise<void> {
   const root = await ensureWritableMemoryRootPath(memoryRoot)
-  await appendFile(join(root, REVIEW_SUMMARIES_FILE), `${JSON.stringify(record)}\n`, 'utf8')
+  const targetPath = join(root, REVIEW_SUMMARIES_FILE)
+  await assertSafeMemoryDataFileTarget(targetPath)
+  await appendFile(targetPath, `${JSON.stringify(record)}\n`, 'utf8')
 }

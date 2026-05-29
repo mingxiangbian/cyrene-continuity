@@ -5,6 +5,7 @@ import { renderMemoryProjections } from './memory-exporter.js'
 import {
   appendMemoryEvent,
   appendMemoryEventFromRoot,
+  assertSafeMemoryDataFileTarget,
   ensureWritableMemoryRootPath,
   readActiveMemories,
   readActiveMemoriesFromRoot,
@@ -154,6 +155,7 @@ export async function restoreMemorySnapshot(input: RestoreMemorySnapshotInput): 
 }
 
 async function readSnapshotFile(filePath: string): Promise<MemorySnapshotFile> {
+  await assertSafeMemoryDataFileTarget(filePath)
   const parsed = JSON.parse(await readFile(filePath, 'utf8')) as Partial<MemorySnapshotFile>
   if (
     parsed.version !== 1 ||

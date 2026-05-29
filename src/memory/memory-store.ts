@@ -47,6 +47,23 @@ export async function ensureWritableMemoryRootPath(memoryRoot: string): Promise<
   return ensureWritableMemoryRoot(memoryRoot)
 }
 
+export async function assertSafeMemoryDataFileTarget(filePath: string): Promise<void> {
+  try {
+    const stats = await lstat(filePath)
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use memory data file symlink: ${filePath}`)
+    }
+    if (!stats.isFile()) {
+      throw new Error(`Refusing to use non-file memory data path: ${filePath}`)
+    }
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return
+    }
+    throw error
+  }
+}
+
 export async function readPendingMemoriesFromRoot(memoryRoot: string): Promise<PendingMemory[]> {
   const readable = await isReadableMemoryRoot(memoryRoot)
   if (!readable) {
@@ -230,6 +247,7 @@ async function getSafeMemoryRoot(memoryRoot: string): Promise<string> {
 async function readJsonLines<T>(filePath: string): Promise<T[]> {
   let content: string
   try {
+    await assertSafeMemoryDataFileTarget(filePath)
     content = await readFile(filePath, 'utf8')
   } catch (error) {
     if (isFileErrorCode(error, 'ENOENT')) {
@@ -246,6 +264,7 @@ async function readJsonLines<T>(filePath: string): Promise<T[]> {
 }
 
 async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promise<void> {
+  await assertSafeMemoryDataFileTarget(filePath)
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
   const content = values.map((value) => JSON.stringify(value)).join('\n')
   await writeFile(tempPath, content === '' ? '' : `${content}\n`, 'utf8')
@@ -253,6 +272,7 @@ async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promis
 }
 
 async function appendJsonLine(filePath: string, value: unknown): Promise<void> {
+  await assertSafeMemoryDataFileTarget(filePath)
   await appendFile(filePath, `${JSON.stringify(value)}\n`, 'utf8')
 }
 

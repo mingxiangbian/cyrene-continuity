@@ -309,6 +309,22 @@ describe('Cyrene MCP server', () => {
       expect(names).toContain('cyrene_memory_defer')
       expect(names).toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
+      const schemasByName = new Map(result.tools.map((tool) => [tool.name, tool.inputSchema as { properties?: Record<string, unknown> }]))
+      for (const toolName of [
+        'cyrene_continuity_get',
+        'cyrene_memory_propose',
+        'cyrene_memory_pending_list',
+        'cyrene_memory_pending_get',
+        'cyrene_memory_promote',
+        'cyrene_memory_reject',
+        'cyrene_memory_edit',
+        'cyrene_memory_defer',
+        'cyrene_memory_dream_run',
+        'cyrene_memory_profile_get',
+        'cyrene_project_identify'
+      ]) {
+        expect(schemasByName.get(toolName)?.properties ?? {}).not.toHaveProperty('cwd')
+      }
     } finally {
       await client.close()
     }

@@ -2,6 +2,7 @@ import { constants } from 'node:fs'
 import { access, lstat, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import {
+  assertSafeMemoryDataFileTarget,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
@@ -279,8 +280,10 @@ async function readLatestReviewSummary(root: string): Promise<{
   reason?: string
 }> {
   let text: string
+  const targetPath = join(root, REVIEW_SUMMARIES_FILE)
   try {
-    text = await readFile(join(root, REVIEW_SUMMARIES_FILE), 'utf8')
+    await assertSafeMemoryDataFileTarget(targetPath)
+    text = await readFile(targetPath, 'utf8')
   } catch (error) {
     if (isErrorCode(error, 'ENOENT')) {
       return { status: 'missing' }
@@ -337,8 +340,10 @@ async function readDreamStatus(root: string): Promise<CodexMemoryStatus['dream']
 
 async function readPendingProfileCandidateCount(root: string): Promise<number> {
   let text: string
+  const targetPath = join(root, PROFILE_CANDIDATES_FILE)
   try {
-    text = await readFile(join(root, PROFILE_CANDIDATES_FILE), 'utf8')
+    await assertSafeMemoryDataFileTarget(targetPath)
+    text = await readFile(targetPath, 'utf8')
   } catch (error) {
     if (isErrorCode(error, 'ENOENT')) {
       return 0

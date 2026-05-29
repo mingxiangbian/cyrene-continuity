@@ -161,8 +161,9 @@ describe('Codex pending memory review', () => {
       evidenceCount: 2,
       risk: 'low',
       sensitivity: 0.1,
-      suggestedAction: `cyrene-continuity codex memory approve summary-promote --review-hash ${reviewHashForPendingMemory(candidate)}`
+      suggestedAction: `Review summary-promote in Codex chat before any promote action; review hash ${reviewHashForPendingMemory(candidate)}.`
     })
+    expect(result.pending[0]?.suggestedAction).not.toContain('cyrene-continuity codex memory')
   })
 
   it('uses explicit candidate kind in review metadata and review hashes', async () => {
@@ -192,6 +193,23 @@ describe('Codex pending memory review', () => {
       candidateKind: 'project_decision'
     })))
     expect(reviewHashForPendingMemory(changedKind)).not.toBe(reviewHashForPendingMemory(sameKindLegacy))
+  })
+
+  it('includes profile visibility and portability in review hashes', () => {
+    const base = createPending({
+      tags: [],
+      profileVisibility: 'safe_summary',
+      portability: 'local_only'
+    })
+
+    expect(reviewHashForPendingMemory({
+      ...base,
+      profileVisibility: 'always'
+    })).not.toBe(reviewHashForPendingMemory(base))
+    expect(reviewHashForPendingMemory({
+      ...base,
+      portability: 'similar_project'
+    })).not.toBe(reviewHashForPendingMemory(base))
   })
 
   it('gets a pending memory by id with full candidate and review hash', async () => {

@@ -7,7 +7,7 @@ import {
   codexProjectMemoryRoot,
   ensureCodexProjectMemoryRoot
 } from '../src/codex/codex-memory-root.js'
-import { readActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
+import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -59,6 +59,26 @@ describe('Codex memory root', () => {
 
     await expect(readActiveMemoriesFromRoot(join(parent, 'memory'))).rejects.toThrow(/memory symlink/)
     await expect(readFile(join(outside, 'memory', 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('refuses to read active memories through symlinked memory data files', async () => {
+    const root = await createTempDir('cyrene-codex-memory-root-')
+    const outside = await createTempDir('cyrene-codex-memory-outside-')
+    await writeFile(join(outside, 'index.jsonl'), JSON.stringify(createMemory()) + '\n')
+    await symlink(join(outside, 'index.jsonl'), join(root, 'index.jsonl'))
+
+    await expect(readActiveMemoriesFromRoot(root)).rejects.toThrow(/memory data file symlink/)
+  })
+
+  it('refuses to write active memories through symlinked memory data files', async () => {
+    const root = await createTempDir('cyrene-codex-memory-root-')
+    const outside = await createTempDir('cyrene-codex-memory-outside-')
+    const outsideIndex = join(outside, 'index.jsonl')
+    await writeFile(outsideIndex, 'outside target must stay unchanged\n')
+    await symlink(outsideIndex, join(root, 'index.jsonl'))
+
+    await expect(writeActiveMemoriesFromRoot(root, [createMemory()])).rejects.toThrow(/memory data file symlink/)
+    await expect(readFile(outsideIndex, 'utf8')).resolves.toBe('outside target must stay unchanged\n')
   })
 
   it('refuses to create Codex memory under a symlinked project root', async () => {

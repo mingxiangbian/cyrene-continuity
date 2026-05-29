@@ -14,7 +14,7 @@ import {
   writeActiveMemoriesFromRoot
 } from '../memory/memory-store.js'
 import { deriveProfileVisibility } from '../memory/memory-validator.js'
-import type { CyreneMemory } from '../memory/types.js'
+import type { CyreneMemory, MemoryProfileVisibility } from '../memory/types.js'
 import { runProfileApplyEvalGate, type EvalCheckName } from '../eval/eval-runner.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
@@ -37,6 +37,7 @@ export interface ProfileCandidate {
   status: ProfileCandidateStatus
   source: 'daily_profile_reflection' | 'manual_review' | 'memory_dream'
   proposedSection: ProfileCandidateSection
+  sourceProfileVisibility?: Extract<MemoryProfileVisibility, 'always' | 'safe_summary'>
   content: string
   rationale: string
   sourceMemoryIds: string[]
@@ -105,6 +106,7 @@ export function reviewHashForProfileCandidate(candidate: ProfileCandidate): stri
     status: candidate.status,
     source: candidate.source,
     proposedSection: candidate.proposedSection,
+    sourceProfileVisibility: candidate.sourceProfileVisibility ?? null,
     content: candidate.content,
     rationale: candidate.rationale,
     sourceMemoryIds: candidate.sourceMemoryIds,
@@ -274,13 +276,18 @@ function profileCandidateFromMemory(memory: CyreneMemory, now: string): ProfileC
   if (visibility !== 'always' && visibility !== 'safe_summary') {
     return []
   }
+  const content = profileCandidateContent(memory, visibility)
+  if (content === null) {
+    return []
+  }
   return [{
     id: `profile-${memory.id}`,
     scope: memory.scope === 'global' ? 'global' : 'project',
     status: 'pending',
     source: 'daily_profile_reflection',
     proposedSection: profileSection(memory, visibility),
-    content: memory.content,
+    sourceProfileVisibility: visibility,
+    content,
     rationale: 'Derived from active memory marked profile-visible.',
     sourceMemoryIds: [memory.id],
     evidenceSummary: memory.evidence.map((entry) => entry.summary ?? entry.runId ?? '').filter(Boolean).join(' '),
@@ -310,6 +317,7 @@ function summarizeProfileCandidate(candidate: ProfileCandidate): ProfileCandidat
 
 function activeMemoryFromProfileCandidate(candidate: ProfileCandidate, now: string, reviewHash: string): CyreneMemory {
   const classification = profileMemoryClassification(candidate.proposedSection)
+  const visibility = candidate.sourceProfileVisibility ?? 'always'
   return {
     id: `profile-memory-${candidate.id}`,
     domain: classification.domain,
@@ -338,9 +346,86 @@ function activeMemoryFromProfileCandidate(candidate: ProfileCandidate, now: stri
     createdAt: candidate.createdAt,
     updatedAt: now,
     userConfirmed: true,
-    profileVisibility: 'always',
+    profileVisibility: visibility,
     tags: ['profile-candidate', `profile-section:${candidate.proposedSection}`]
   }
+}
+
+function profileCandidateContent(
+  memory: CyreneMemory,
+  visibility: Extract<MemoryProfileVisibility, 'always' | 'safe_summary'>
+): string | null {
+  const content = sanitizeProfileCandidateContent(memory.content)
+  if (content === null) {
+    return null
+  }
+  if (visibility === 'always') {
+    return content
+  }
+  if (memory.domain === 'personal' || memory.domain === 'relationship' || memory.domain === 'affective') {
+    return safeSummaryProfileContent(content, memory.type)
+  }
+  return content
+}
+
+function sanitizeProfileCandidateContent(content: string): string | null {
+  const sanitized = content
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}\b/g, '$1[REDACTED]')
+    .replace(/\b(password|passwd|credential|secret|api[_ -]?key|token|private key|ssh key)\s*[:=]\s*\S+/gi, '$1=[REDACTED]')
+    .replace(/\b[A-Fa-f0-9]{32,}\b/g, '[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return sanitized === '' ? null : sanitized
+}
+
+function safeSummaryProfileContent(content: string, type: CyreneMemory['type']): string | null {
+  const guidance = extractProfileGuidance(content, type)
+  if (guidance === null || containsRawSensitiveProfileDetail(guidance)) {
+    return null
+  }
+  const sentence = guidance
+    .replace(/^(?:to\s+)?prefer\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (sentence === '') {
+    return null
+  }
+  return `The user prefers ${sentence.charAt(0).toLowerCase()}${sentence.slice(1).replace(/[.?!]*$/, '.')}`
+}
+
+function extractProfileGuidance(content: string, type: CyreneMemory['type']): string | null {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  const preference =
+    matchProfileGuidance(normalized, /\b(?:makes|made|means|meant|leads|led)\s+(?:them|the user|user)\s+prefer\s+(.+)$/i) ??
+    matchProfileGuidance(normalized, /^(?:the\s+)?user\s+prefers?\s+(.+)$/i) ??
+    matchProfileGuidance(normalized, /^(?:the\s+)?user\s+(?:responds better|works best)\s+when\s+(.+)$/i)
+
+  if (preference !== null) {
+    return stripSensitiveProfileRationale(preference)
+  }
+
+  if (type === 'relationship_boundary') {
+    const boundary = matchProfileGuidance(normalized, /^(?:the\s+)?user\s+(?:asks|asked|wants|wanted)\s+(?:you\s+)?(?:to\s+)?(.+)$/i)
+    return boundary === null ? null : stripSensitiveProfileRationale(boundary)
+  }
+
+  return null
+}
+
+function matchProfileGuidance(content: string, pattern: RegExp): string | null {
+  const match = pattern.exec(content)
+  return match?.[1] === undefined ? null : match[1]
+}
+
+function stripSensitiveProfileRationale(content: string): string {
+  return content.split(/\b(?:because|due to|after|following|since)\b/i)[0]?.trim() ?? ''
+}
+
+function containsRawSensitiveProfileDetail(content: string): boolean {
+  return /\b(private|divorce|medical|diagnosis|diagnosed|trauma|family|partner|spouse|ex[- ]?partner)\b|隐私|离婚|创伤|诊断/i.test(
+    content
+  )
 }
 
 function profileMemoryClassification(section: ProfileCandidateSection): Pick<CyreneMemory, 'domain' | 'type'> {
@@ -436,8 +521,10 @@ function upsertActiveMemory(active: CyreneMemory[], memory: CyreneMemory): Cyren
 
 async function readProfileCandidatesFromRoot(memoryRoot: string): Promise<ProfileCandidate[]> {
   const root = await ensureWritableMemoryRootPath(memoryRoot)
+  const targetPath = join(root, PROFILE_CANDIDATES_FILE)
   try {
-    const content = await readFile(join(root, PROFILE_CANDIDATES_FILE), 'utf8')
+    await assertSafeProfileFileTarget(targetPath, 'profile candidate')
+    const content = await readFile(targetPath, 'utf8')
     return content
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -496,9 +583,9 @@ function formatPendingProfilePatch(candidates: ProfileCandidateSummary[]): strin
     lines.push('')
     lines.push(candidate.content)
     lines.push('')
-    lines.push('Apply:')
+    lines.push('Next step:')
     lines.push('')
-    lines.push(`cyrene-continuity codex profile apply --candidate ${candidate.id} --review-hash ${candidate.reviewHash}`)
+    lines.push(`Review ${candidate.id} in Codex chat before applying; review hash ${candidate.reviewHash}.`)
     lines.push('')
   }
 

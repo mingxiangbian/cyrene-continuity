@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ensureWritableMemoryRootPath } from '../memory/memory-store.js'
+import { assertSafeMemoryDataFileTarget, ensureWritableMemoryRootPath } from '../memory/memory-store.js'
 
 export interface CodexMemoryDreamState {
   lastDreamAt?: string
@@ -31,7 +31,9 @@ export async function readCodexMemoryDreamState(memoryRoot: string): Promise<Cod
   }
 
   try {
-    const parsed = JSON.parse(await readFile(join(memoryRoot, DREAM_STATE_FILE), 'utf8')) as Partial<CodexMemoryDreamState>
+    const targetPath = join(memoryRoot, DREAM_STATE_FILE)
+    await assertSafeMemoryDataFileTarget(targetPath)
+    const parsed = JSON.parse(await readFile(targetPath, 'utf8')) as Partial<CodexMemoryDreamState>
     return {
       dreamDue: parsed.dreamDue === true,
       ...(typeof parsed.lastDreamAt === 'string' ? { lastDreamAt: parsed.lastDreamAt } : {}),
@@ -50,6 +52,7 @@ export async function readCodexMemoryDreamState(memoryRoot: string): Promise<Cod
 export async function writeCodexMemoryDreamState(memoryRoot: string, state: CodexMemoryDreamState): Promise<void> {
   const root = await ensureWritableMemoryRootPath(memoryRoot)
   const targetPath = join(root, DREAM_STATE_FILE)
+  await assertSafeMemoryDataFileTarget(targetPath)
   const tempPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`
   await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
   await rename(tempPath, targetPath)

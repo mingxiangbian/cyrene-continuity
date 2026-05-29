@@ -4,7 +4,10 @@ import { join } from 'node:path'
 import { createDefaultConfig } from '../config.js'
 import {
   assertMemoryMaintenanceTargetsSafeFromRoot,
+  isMemoryMaintenanceLockTimeoutError,
+  memoryMaintenanceLockTimeoutMs,
   type MemoryMaintenanceBudget,
+  type MemoryMaintenanceLockOptions,
   type MemoryMaintenanceResult,
   runMemoryMaintenanceFromRootLocked,
   withMemoryMaintenanceLockFromRoot
@@ -70,6 +73,11 @@ const DREAM_LOCK_DIR = 'dream.lock'
 const DREAM_LOCKS_DIR = '.locks'
 const MAX_PENDING_EVIDENCE = 10
 
+interface DreamRuntimeBudget {
+  maxRuntimeMs: number
+  deadlineMs: number
+}
+
 export async function runCodexMemoryDream(input: {
   cwd: string
   stage?: CodexMemoryDreamStage
@@ -79,18 +87,34 @@ export async function runCodexMemoryDream(input: {
   const stage = input.stage ?? 'deep-preview'
   const now = input.now ?? new Date().toISOString()
   const config = createDefaultConfig(input.cwd)
-  const roots = await dreamRoots(project.projectId)
+  const roots = config.memoryDreamEnabled
+    ? await dreamRoots(project.projectId)
+    : await readableDreamRoots(project.projectId)
   const results: CodexMemoryDreamResult['roots'] = []
+  const runtimeBudget = dreamRuntimeBudget(config)
+
+  if (!config.memoryDreamEnabled) {
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      roots: await Promise.all(roots.map((memoryRoot) =>
+        skippedDreamRoot(memoryRoot, stage, 'Skipped because memory dream is disabled by CYRENE_MEMORY_DREAM_ENABLED')
+      ))
+    }
+  }
 
   for (const memoryRoot of roots) {
+    if (isDreamRuntimeExpired(runtimeBudget)) {
+      results.push(await skippedDreamRoot(memoryRoot, stage, dreamRuntimeBudgetExceededReason(runtimeBudget)))
+      continue
+    }
     if (stage === 'light') {
-      results.push(await runLightDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours))
+      results.push(await runLightDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours, runtimeBudget))
     } else if (stage === 'rem') {
-      results.push(await runRemDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours))
+      results.push(await runRemDreamRoot(memoryRoot, stage, now, config.memoryDreamIntervalHours, runtimeBudget))
     } else if (stage === 'deep-preview') {
       results.push(await runDeepPreviewDreamRoot(memoryRoot, stage, now, config.memoryRecommendPromotionEnabled))
     } else {
-      results.push(await runDeepDreamRoot(memoryRoot, now, config))
+      results.push(await runDeepDreamRoot(memoryRoot, now, config, runtimeBudget))
     }
   }
 
@@ -170,14 +194,29 @@ async function dreamRoots(projectId: string): Promise<string[]> {
   return roots
 }
 
+async function readableDreamRoots(projectId: string): Promise<string[]> {
+  const roots: string[] = []
+  const globalRoot = await getReadableCodexGlobalMemoryRoot()
+  if (globalRoot !== null) {
+    roots.push(globalRoot)
+  }
+
+  const projectRoot = await getReadableCodexProjectMemoryRoot(projectId)
+  if (projectRoot !== null && !roots.includes(projectRoot)) {
+    roots.push(projectRoot)
+  }
+  return roots
+}
+
 async function runLightDreamRoot(
   memoryRoot: string,
   stage: CodexMemoryDreamStage,
   now: string,
-  intervalHours: number
+  intervalHours: number,
+  runtimeBudget: DreamRuntimeBudget
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
-  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedRoot) => {
+  return withDreamMaintenanceLock(memoryRoot, stage, runtimeBudget, async (lockedRoot) => {
     await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot)
     const pending = await readPendingMemoriesFromRoot(lockedRoot)
     const merged = mergePendingDuplicates(pending)
@@ -207,10 +246,11 @@ async function runRemDreamRoot(
   memoryRoot: string,
   stage: CodexMemoryDreamStage,
   now: string,
-  intervalHours: number
+  intervalHours: number,
+  runtimeBudget: DreamRuntimeBudget
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
-  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedRoot) => {
+  return withDreamMaintenanceLock(memoryRoot, stage, runtimeBudget, async (lockedRoot) => {
     await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot)
     const pending = await readPendingMemoriesFromRoot(lockedRoot)
     for (const candidate of pending) {
@@ -264,7 +304,8 @@ async function runDeepPreviewDreamRoot(
 async function runDeepDreamRoot(
   memoryRoot: string,
   now: string,
-  config: ReturnType<typeof createDefaultConfig>
+  config: ReturnType<typeof createDefaultConfig>,
+  runtimeBudget: DreamRuntimeBudget
 ): Promise<CodexMemoryDreamResult['roots'][number]> {
   let acquiredLock: Extract<DreamLockResult, { acquired: true }> | undefined
   try {
@@ -282,7 +323,7 @@ async function runDeepDreamRoot(
     }
     acquiredLock = lock
 
-    const result = await withMemoryMaintenanceLockFromRoot(lock.memoryRoot, async (lockedRoot) => {
+    const result = await withDreamMaintenanceLock(lock.memoryRoot, 'deep-apply', runtimeBudget, async (lockedRoot) => {
       await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot)
       return runDeepDreamRootLocked(
         lockedRoot,
@@ -475,6 +516,68 @@ function maintenanceBudget(config: ReturnType<typeof createDefaultConfig>): Memo
   }
 }
 
+function dreamRuntimeBudget(config: ReturnType<typeof createDefaultConfig>): DreamRuntimeBudget {
+  const maxRuntimeMs = config.memoryDreamMaxRuntimeMs
+  return {
+    maxRuntimeMs,
+    deadlineMs: Date.now() + maxRuntimeMs
+  }
+}
+
+async function withDreamMaintenanceLock(
+  memoryRoot: string,
+  stage: CodexMemoryDreamStage,
+  runtimeBudget: DreamRuntimeBudget,
+  task: (memoryRoot: string) => Promise<CodexMemoryDreamResult['roots'][number]>
+): Promise<CodexMemoryDreamResult['roots'][number]> {
+  try {
+    return await withMemoryMaintenanceLockFromRoot(
+      memoryRoot,
+      task,
+      dreamMaintenanceLockOptions(runtimeBudget)
+    )
+  } catch (error) {
+    if (isMemoryMaintenanceLockTimeoutError(error)) {
+      return skippedDreamRoot(memoryRoot, stage, dreamRuntimeBudgetExceededReason(runtimeBudget))
+    }
+    throw error
+  }
+}
+
+function dreamMaintenanceLockOptions(runtimeBudget: DreamRuntimeBudget): MemoryMaintenanceLockOptions {
+  return {
+    timeoutMs: Math.min(remainingDreamRuntimeMs(runtimeBudget), memoryMaintenanceLockTimeoutMs())
+  }
+}
+
+function remainingDreamRuntimeMs(runtimeBudget: DreamRuntimeBudget): number {
+  return Math.max(1, runtimeBudget.deadlineMs - Date.now())
+}
+
+function isDreamRuntimeExpired(runtimeBudget: DreamRuntimeBudget): boolean {
+  return Date.now() >= runtimeBudget.deadlineMs
+}
+
+function dreamRuntimeBudgetExceededReason(runtimeBudget: DreamRuntimeBudget): string {
+  return `Skipped because memory dream runtime budget was exhausted after ${runtimeBudget.maxRuntimeMs} ms`
+}
+
+async function skippedDreamRoot(
+  memoryRoot: string,
+  stage: CodexMemoryDreamStage,
+  reason: string
+): Promise<CodexMemoryDreamResult['roots'][number]> {
+  return {
+    memoryRoot,
+    stage,
+    promoted: 0,
+    recommendedPromotions: 0,
+    rejected: 0,
+    keptPending: (await readPendingMemoriesFromRoot(memoryRoot)).length,
+    skipped: reason
+  }
+}
+
 async function writeDreamSuccess(memoryRoot: string, now: string, intervalHours: number): Promise<void> {
   const current = await readCodexMemoryDreamState(memoryRoot)
   await writeCodexMemoryDreamState(memoryRoot, {
@@ -534,6 +637,9 @@ async function tryAcquireDreamLock(memoryRoot: string, now: string, ttlMs: numbe
       if (owner !== undefined && isDreamLockOwnerStale(owner, now, ttlMs) && await removeDreamLockIfOwner(lockDir, owner)) {
         continue
       }
+      if (owner === undefined && await isDreamLockDirStale(lockDir, now, ttlMs) && await removeDreamLockIfUnowned(lockDir)) {
+        continue
+      }
       return { acquired: false, memoryRoot: root, reason: `Skipped because dream lock is active: ${lockDir}` }
     }
   }
@@ -577,7 +683,7 @@ async function readDreamLockOwner(lockDir: string): Promise<DreamLockOwner | und
       ...(typeof parsed.token === 'string' ? { token: parsed.token } : {})
     }
   } catch (error) {
-    if (isFileErrorCode(error, 'ENOENT')) {
+    if (isFileErrorCode(error, 'ENOENT') || error instanceof SyntaxError) {
       return undefined
     }
     throw error
@@ -594,6 +700,23 @@ async function removeDreamLockIfOwner(lockDir: string, expectedOwner: DreamLockO
     return false
   }
   if (!isSameDreamLockOwner(owner, expectedOwner)) {
+    return false
+  }
+  await rm(lockDir, { recursive: true, force: true })
+  return true
+}
+
+async function isDreamLockDirStale(lockDir: string, now: string, ttlMs: number): Promise<boolean> {
+  const stats = await lstat(lockDir)
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`)
+  }
+  return new Date(now).getTime() - stats.mtimeMs > ttlMs
+}
+
+async function removeDreamLockIfUnowned(lockDir: string): Promise<boolean> {
+  const owner = await readDreamLockOwner(lockDir)
+  if (owner !== undefined) {
     return false
   }
   await rm(lockDir, { recursive: true, force: true })

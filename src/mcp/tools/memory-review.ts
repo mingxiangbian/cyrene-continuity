@@ -10,17 +10,14 @@ import {
 import { jsonText } from '../mcp-json.js'
 
 export const memoryPendingListInputSchema = {
-  cwd: z.string().optional(),
   limit: z.number().int().positive().optional()
 }
 
 export const memoryPendingGetInputSchema = {
-  cwd: z.string().optional(),
   id: z.string()
 }
 
 export const memoryReviewDecisionInputSchema = {
-  cwd: z.string().optional(),
   id: z.string(),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
   conflictResolution: z.enum(['supersede', 'keep_both', 'reject_new']).optional(),
@@ -28,7 +25,6 @@ export const memoryReviewDecisionInputSchema = {
 }
 
 export const memoryReviewEditInputSchema = {
-  cwd: z.string().optional(),
   id: z.string(),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
   content: z.string().min(1),
@@ -37,7 +33,6 @@ export const memoryReviewEditInputSchema = {
 }
 
 export const memoryReviewDeferInputSchema = {
-  cwd: z.string().optional(),
   id: z.string(),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
   days: z.number().int().positive().optional(),

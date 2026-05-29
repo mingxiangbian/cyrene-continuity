@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ensureWritableMemoryRootPath } from '../memory/memory-store.js'
+import { assertSafeMemoryDataFileTarget, ensureWritableMemoryRootPath } from '../memory/memory-store.js'
 import {
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
@@ -61,8 +61,10 @@ export async function readDreamReport(input: {
     throw new Error(`No readable ${input.root} memory root exists`)
   }
 
-  const reportPath = join(memoryRoot, DREAM_PREVIEW_DIR, DREAM_REPORT_FILE)
   try {
+    const previewDir = await getExistingPreviewDir(memoryRoot)
+    const reportPath = join(previewDir, DREAM_REPORT_FILE)
+    await assertSafeMemoryDataFileTarget(reportPath)
     return { memoryRoot, report: await readFile(reportPath, 'utf8') }
   } catch (error) {
     if (isFileErrorCode(error, 'ENOENT')) {
@@ -136,11 +138,24 @@ async function ensurePreviewDir(memoryRoot: string): Promise<string> {
   return realpath(previewDir)
 }
 
+async function getExistingPreviewDir(memoryRoot: string): Promise<string> {
+  const previewDir = join(memoryRoot, DREAM_PREVIEW_DIR)
+  const stats = await lstat(previewDir)
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to use dream preview symlink: ${previewDir}`)
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Refusing to use non-directory dream preview path: ${previewDir}`)
+  }
+  return realpath(previewDir)
+}
+
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`)
 }
 
 async function writeTextAtomic(filePath: string, content: string): Promise<void> {
+  await assertSafeMemoryDataFileTarget(filePath)
   const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
   await writeFile(tempPath, content, 'utf8')
   await rename(tempPath, filePath)

@@ -55,7 +55,11 @@ npm run build:plugin
 npm run dev -- codex install --plugin
 ```
 
-After validating the installed plugin MCP server in a new Codex session, disable
+`codex install --plugin` installs/refreshes the Codex plugin bridge under the
+user Codex plugin directory. Start a new Codex session after this step so plugin
+discovery reloads the bundled MCP server and skill from `plugin/`.
+
+After validating the installed plugin MCP server in the new Codex session, disable
 or remove any manual Cyrene MCP config such as
 `[mcp_servers."cyrene-continuity"]` or legacy `[mcp_servers.cyrene]`. The plugin
 declares its own MCP server, so keeping a manual server enabled can create
