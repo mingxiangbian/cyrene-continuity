@@ -309,12 +309,19 @@ async function runHarvesterDryRun() {
 function renderHarvesterResult(result) {
   const candidates = Array.isArray(result.candidates) ? result.candidates : []
   const warnings = Array.isArray(result.warnings) ? result.warnings : []
+  const reason = typeof result.reason === 'string' && result.reason.trim()
+    ? `<p class="notice ${result.action === 'needs_model_config' ? 'warn' : 'muted'}">${escapeHtml(result.reason.trim())}</p>`
+    : ''
+  const emptyCopy = result.action === 'needs_model_config' || result.action === 'noop'
+    ? 'No preview candidates were produced.'
+    : 'No preview candidates returned.'
   return `
     <div class="soft-panel">
       <h3>Dry-run result</h3>
       <div class="soft-inset">Action: ${escapeHtml(result.action || 'preview')} · No pending memory was written.</div>
+      ${reason}
       ${warnings.map((warning) => `<p class="notice warn">${escapeHtml(warning)}</p>`).join('')}
-      ${candidates.map(renderMemoryRow).join('') || emptyState('No preview candidates returned.')}
+      ${candidates.map(renderMemoryRow).join('') || emptyState(emptyCopy)}
     </div>
   `
 }

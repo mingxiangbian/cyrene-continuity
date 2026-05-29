@@ -17,6 +17,11 @@ describe('Codex UI source assets', () => {
     expect(js).toContain('Write actions disabled in v1')
     expect(js).toContain('No pending memory was written')
     expect(js).toContain('/api/memory/harvest-project/dry-run')
+    expect(js).toContain("result.action === 'needs_model_config'")
+    expect(js).toContain("result.action === 'noop'")
+    expect(js).toContain("typeof result.reason === 'string'")
+    expect(js).toContain('result.reason.trim()')
+    expect(js).toContain('No preview candidates were produced.')
 
     for (const unsafeRoute of [
       '/api/memory/approve',
