@@ -7,6 +7,7 @@ import { appendCodexReviewSummary } from './review-summary-store.js'
 import { recentTranscriptMessages, type TranscriptMessage } from './transcript.js'
 import type { AppConfig } from '../config.js'
 import type { CallModelInput, ModelResponse } from '../llm-client.js'
+import { isMemoryCandidateKind } from '../memory/candidate-kind.js'
 import type { MemoryDomain, MemoryEvidence, MemoryScope, MemorySource, MemoryStrength, MemoryType } from '../memory/types.js'
 
 export type CodexReviewSummaryResult =
@@ -188,9 +189,15 @@ function redactCandidate(
   }
 
   const source = parseEnum(value.source, SOURCES)
+  const candidateKind = isMemoryCandidateKind(value.candidateKind)
+    ? value.candidateKind
+    : isMemoryCandidateKind(value.candidate_kind)
+      ? value.candidate_kind
+      : undefined
   const candidate: CodexMemoryCandidateInput = {
     domain,
     type,
+    ...(candidateKind === undefined ? {} : { candidateKind }),
     strength: parseEnum(value.strength, STRENGTHS),
     scope: parseEnum(value.scope, SCOPES),
     content: redactor.redact(content),

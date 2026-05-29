@@ -118,6 +118,64 @@ describe('Codex review summary runtime', () => {
     expect(summaries).toContain(result.candidateIds[0])
   })
 
+  it('preserves candidateKind from review summary candidates', async () => {
+    const home = await createTempDir('cyrene-review-runtime-kind-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-runtime-kind-project-')
+
+    const result = await runCodexReviewSummary({
+      cwd,
+      messages: [{ role: 'assistant', content: 'Implemented plugin hook packaging decision.' }],
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          summary: 'The session established a plugin packaging decision.',
+          candidates: [{
+            domain: 'project',
+            type: 'project_fact',
+            content: 'Plugin lifecycle hooks are bundled through plugin/hooks/hooks.json.',
+            candidateKind: 'project_decision',
+            evidence: [{ summary: 'The assistant described bundled lifecycle hooks.' }]
+          }]
+        })),
+      now: '2026-05-29T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('pending')
+    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('"candidateKind":"project_decision"')
+  })
+
+  it('preserves candidate_kind from review summary candidates', async () => {
+    const home = await createTempDir('cyrene-review-runtime-kind-snake-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-runtime-kind-snake-project-')
+
+    const result = await runCodexReviewSummary({
+      cwd,
+      messages: [{ role: 'assistant', content: 'Found a repeated test failure pattern.' }],
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          summary: 'The session found a durable pitfall.',
+          candidates: [{
+            domain: 'project',
+            type: 'project_fact',
+            content: 'Malformed JSONL lines must be skipped instead of failing the whole reader.',
+            candidate_kind: 'known_pitfall',
+            evidence: [{ summary: 'A JSONL robustness issue was discussed.' }]
+          }]
+        })),
+      now: '2026-05-29T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('pending')
+    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('"candidateKind":"known_pitfall"')
+  })
+
   it('adds stable evidence grouping metadata to generated candidates', async () => {
     const home = await createTempDir('cyrene-review-runtime-home-')
     vi.stubEnv('HOME', home)
