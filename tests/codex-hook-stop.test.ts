@@ -9,6 +9,7 @@ import {
   formatCodexStopHookCommandOutput,
   handleCodexStopHookPayload
 } from '../src/codex/codex-hook-stop.js'
+import { readRecentCodexHookTrace } from '../src/codex/hook-trace-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import type { PendingMemory } from '../src/memory/types.js'
 
@@ -344,6 +345,25 @@ describe('Codex Stop hook runtime', () => {
     expect(JSON.parse(output)).toEqual({ continue: true, suppressOutput: true })
   })
 
+  it('visible mode includes a concise status hint without candidate content', async () => {
+    vi.stubEnv('CYRENE_HOOK_VISIBLE', '1')
+
+    const output = formatCodexStopHookCommandOutput({
+      action: 'pending',
+      candidateIds: ['candidate-1', 'candidate-2', 'candidate-3'],
+      reason: 'Codex project memory harvest proposed pending candidates.',
+      summaryId: 'summary-1'
+    })
+    const parsed = JSON.parse(output) as Record<string, unknown>
+
+    expect(parsed).toEqual({
+      continue: true,
+      suppressOutput: false,
+      systemMessage: 'Cyrene captured this session: summary=ok, pending=3. Review: cyrene-continuity codex memory review'
+    })
+    expect(output).not.toContain('candidate-1')
+  })
+
   it('keeps review summary when explicit durable fallback is rejected', async () => {
     const home = await createTempDir('cyrene-codex-stop-home-')
     vi.stubEnv('HOME', home)
@@ -502,6 +522,107 @@ describe('Codex Stop hook runtime', () => {
     )
 
     expect(result.action).toBe('pending')
+  })
+
+  it('appends stop trace and confirms pending project harvest candidates', async () => {
+    const home = await createTempDir('cyrene-codex-stop-harvest-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
+    vi.stubEnv('CYRENE_MODEL', 'test-model')
+    const cwd = await createTempDir('cyrene-codex-stop-harvest-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: 'This project keeps hooks in plugin/hooks/hooks.json.' }) + '\n')
+    const callModel = vi.fn(async (input: { messages: Array<{ content: string }> }) => {
+      const prompt = input.messages[0]?.content ?? ''
+      if (prompt.includes('Collected project signals:')) {
+        return {
+          content: JSON.stringify({
+            summary: 'Harvested project hook config convention.',
+            candidates: [
+              {
+                candidateKind: 'project_fact',
+                content: 'The plugin hook lifecycle config lives at plugin/hooks/hooks.json.',
+                signalIndexes: [1]
+              }
+            ]
+          }),
+          toolCalls: []
+        }
+      }
+      return {
+        content: JSON.stringify({ summary: 'Session discussed project hook config.', candidates: [] }),
+        toolCalls: []
+      }
+    })
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, transcript_path: transcript, session_id: 's-harvest', turn_id: 't-harvest' },
+      { callModel }
+    )
+
+    expect(callModel).toHaveBeenCalledTimes(2)
+    expect(result.action).toBe('pending')
+    expect(result.reason).toContain('project memory harvest')
+    expect(result).toMatchObject({ candidateIds: [expect.any(String)] })
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
+      'The plugin hook lifecycle config lives at plugin/hooks/hooks.json.'
+    )
+    const trace = await readRecentCodexHookTrace({ cwd })
+    expect(trace.records.some((record) => record.event === 'stop' && record.sessionId === 's-harvest')).toBe(true)
+  })
+
+  it('continues when project harvest model config is missing', async () => {
+    const home = await createTempDir('cyrene-codex-stop-harvest-missing-model-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-harvest-missing-model-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: 'Plain discussion.' }) + '\n')
+    const callModel = vi.fn(async () => ({
+      content: JSON.stringify({ summary: 'Summary still succeeds.', candidates: [] }),
+      toolCalls: []
+    }))
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, transcript_path: transcript, session_id: 's-missing-model', turn_id: 't-missing-model' },
+      { callModel }
+    )
+
+    expect(result).toMatchObject({ action: 'summary', reason: 'Codex review summary written.' })
+    expect(callModel).toHaveBeenCalledTimes(1)
+  })
+
+  it('continues when project harvest response is invalid', async () => {
+    const home = await createTempDir('cyrene-codex-stop-harvest-invalid-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
+    vi.stubEnv('CYRENE_MODEL', 'test-model')
+    const cwd = await createTempDir('cyrene-codex-stop-harvest-invalid-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: 'Plain discussion.' }) + '\n')
+    let callCount = 0
+    const callModel = vi.fn(async () => {
+      callCount += 1
+      return {
+        content: callCount === 1
+          ? JSON.stringify({ summary: 'Summary still succeeds.', candidates: [] })
+          : '{bad harvest response',
+        toolCalls: []
+      }
+    })
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, transcript_path: transcript, session_id: 's-invalid-harvest', turn_id: 't-invalid-harvest' },
+      { callModel }
+    )
+
+    expect(result).toMatchObject({ action: 'summary', reason: 'Codex review summary written.' })
+    expect(callModel).toHaveBeenCalledTimes(2)
+    expect(callCount).toBe(2)
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
   })
 
   it('keeps pending proposal fail-open when the dream due marker fails', async () => {

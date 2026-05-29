@@ -492,6 +492,18 @@ describe('cyrene-continuity codex CLI', () => {
     await expect(readFile(hooksPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('usage lists Codex lifecycle hook routes', async () => {
+    const home = await createTempDir('cyrene-codex-cli-hook-usage-home-')
+
+    await expect(execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'unknown-command'],
+      { env: cliEnv(home) }
+    )).rejects.toMatchObject({
+      stderr: expect.stringContaining('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
+    })
+  })
+
   it('install-hook --stop writes hooks.json and preserves existing Stop hooks', async () => {
     const home = await createTempDir('cyrene-codex-hook-install-home-')
     const hooksPath = join(home, '.codex', 'hooks.json')

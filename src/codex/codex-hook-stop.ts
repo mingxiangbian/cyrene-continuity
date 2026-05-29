@@ -4,9 +4,11 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createDefaultConfig, type AppConfig } from '../config.js'
 import { callModel as defaultCallModel } from '../llm-client.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
+import { appendCodexHookTrace } from './hook-trace-store.js'
 import { listCodexPendingMemories } from './memory-review.js'
 import { proposeCodexMemoryCandidate } from './memory-propose.js'
 import { identifyCodexProject } from './project-id.js'
+import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
 import { redactReviewText } from './review-redaction.js'
 import { runCodexReviewSummary, stableEvidenceGroupId, type RunCodexReviewSummaryInput } from './review-summary-runtime.js'
 import { appendCodexReviewSummary } from './review-summary-store.js'
@@ -37,7 +39,8 @@ export interface CodexStopHookDeps {
 
 export interface CodexStopHookCommandOutput {
   continue: true
-  suppressOutput: true
+  suppressOutput: boolean
+  systemMessage?: string
 }
 
 const DURABLE_SIGNAL = /记住|请记住|以后默认|之后默认|以后你要|以后请|from now on|please remember|remember that|default to/i
@@ -55,10 +58,14 @@ export async function handleCodexStopHookCommand(): Promise<string> {
   return formatCodexStopHookCommandOutput(result)
 }
 
-export function formatCodexStopHookCommandOutput(_result: CodexStopHookResult): string {
+export function formatCodexStopHookCommandOutput(result: CodexStopHookResult): string {
   const output: CodexStopHookCommandOutput = {
     continue: true,
     suppressOutput: true
+  }
+  if (process.env.CYRENE_HOOK_VISIBLE === '1') {
+    output.suppressOutput = false
+    output.systemMessage = visibleHookMessage(result)
   }
   return `${JSON.stringify(output)}\n`
 }
@@ -91,6 +98,7 @@ async function handleCodexStopHookPayloadUnsafe(
   cwd: string
 ): Promise<CodexStopHookResult> {
   const config = deps.config ?? createDefaultConfig(cwd)
+  await appendStopHookTrace(cwd, payload)
   if (!config.memoryAutoExtractEnabled) {
     return { action: 'noop', reason: 'Codex memory auto extraction is disabled.' }
   }
@@ -123,16 +131,28 @@ async function handleCodexStopHookPayloadUnsafe(
   const explicitResult = instruction === undefined
     ? undefined
     : await proposeExplicitMemoryCandidate(payload, cwd, instruction)
+  const harvest = await runProjectMemoryHarvestFailOpen({
+    cwd,
+    config,
+    callModel: deps.callModel ?? defaultCallModel,
+    signal: AbortSignal.timeout(20_000)
+  })
 
   const reviewCandidateIds = review.action === 'pending' ? review.candidateIds : []
   const explicitPending = explicitResult?.result.action === 'pending' ? explicitResult.result : undefined
   const explicitCandidateId = explicitPending?.candidateId
-  const proposedCandidateIds = [...reviewCandidateIds, ...(explicitCandidateId === undefined ? [] : [explicitCandidateId])]
+  const harvestCandidateIds = harvest?.action === 'pending' ? harvest.candidateIds : []
+  const proposedCandidateIds = [
+    ...reviewCandidateIds,
+    ...(explicitCandidateId === undefined ? [] : [explicitCandidateId]),
+    ...harvestCandidateIds
+  ]
   const candidateIds = proposedCandidateIds.length === 0
     ? []
     : await confirmPendingCandidateIds(deps.confirmPendingCandidateIds, cwd, proposedCandidateIds)
   const confirmedExplicitCandidateId =
     explicitCandidateId !== undefined && candidateIds.includes(explicitCandidateId) ? explicitCandidateId : undefined
+  const confirmedHarvestCandidateIds = harvestCandidateIds.filter((id) => candidateIds.includes(id))
   const summaryId = 'summaryId' in review ? review.summaryId : undefined
 
   if (candidateIds.length > 0) {
@@ -140,9 +160,10 @@ async function handleCodexStopHookPayloadUnsafe(
       action: 'pending',
       candidateId: confirmedExplicitCandidateId,
       candidateIds,
-      reason: confirmedExplicitCandidateId === undefined
-        ? 'Codex review summary proposed memory candidates.'
-        : explicitPending?.reason ?? 'Codex review summary proposed memory candidates.',
+      reason: pendingReason({
+        hasHarvestCandidates: confirmedHarvestCandidateIds.length > 0,
+        explicitReason: confirmedExplicitCandidateId === undefined ? undefined : explicitPending?.reason
+      }),
       summaryId
     }
   }
@@ -178,6 +199,53 @@ async function handleCodexStopHookPayloadUnsafe(
     return { action: 'noop', reason: review.reason }
   }
   return { action: 'noop', reason: 'Codex review summary proposed no memory candidates.' }
+}
+
+async function appendStopHookTrace(cwd: string, payload: CodexStopHookPayload): Promise<void> {
+  try {
+    const transcriptPath = asString(payload.transcript_path) ?? asString(payload.transcriptPath)
+    await appendCodexHookTrace({
+      cwd,
+      event: 'stop',
+      sessionId: asString(payload.session_id),
+      turnId: asString(payload.turn_id),
+      summary: 'Stop hook received.',
+      signals: [
+        transcriptPath === undefined ? undefined : 'transcript path provided',
+        asString(payload.last_assistant_message) === undefined ? undefined : 'last assistant message provided'
+      ].filter((signal): signal is string => signal !== undefined)
+    })
+  } catch {
+    // Trace collection must never fail the Stop hook.
+  }
+}
+
+async function runProjectMemoryHarvestFailOpen(input: Parameters<typeof runCodexProjectMemoryHarvest>[0]): Promise<Awaited<ReturnType<typeof runCodexProjectMemoryHarvest>> | undefined> {
+  try {
+    return await runCodexProjectMemoryHarvest(input)
+  } catch {
+    return undefined
+  }
+}
+
+function pendingReason(input: { hasHarvestCandidates: boolean; explicitReason?: string }): string {
+  if (input.hasHarvestCandidates) {
+    if (input.explicitReason !== undefined) {
+      return `${input.explicitReason} Codex project memory harvest proposed pending candidates.`
+    }
+    return 'Codex review summary and project memory harvest proposed pending candidates.'
+  }
+  return input.explicitReason ?? 'Codex review summary proposed memory candidates.'
+}
+
+function visibleHookMessage(result: CodexStopHookResult): string {
+  const summary = result.action === 'summary_failed'
+    ? 'failed'
+    : result.action === 'noop' ? 'none' : 'ok'
+  const candidateIds = 'candidateIds' in result && Array.isArray(result.candidateIds)
+    ? result.candidateIds
+    : 'candidateId' in result && typeof result.candidateId === 'string' ? [result.candidateId] : []
+  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder(candidateIds).length}. Review: cyrene-continuity codex memory review`
 }
 
 async function recordStopHookFailureSummary(

@@ -2,6 +2,7 @@ import { formatCodexDoctor } from './codex-doctor.js'
 import { runCodexReleaseEval, runCodexSimilarHintsEval } from './codex-eval.js'
 import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-install.js'
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
+import { handleCodexHookTraceCommand } from './codex-hook-trace.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
 import { rebuildCodexMemoryIndex } from './codex-memory-index.js'
 import { formatCodexMemoryDashboard } from './codex-memory-dashboard.js'
@@ -65,6 +66,21 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
 
   if (command === 'hook' && input.args[1] === 'stop') {
     process.stdout.write(await handleCodexStopHookCommand())
+    return
+  }
+
+  if (command === 'hook' && input.args[1] === 'session-start') {
+    process.stdout.write(await handleCodexHookTraceCommand('session_start'))
+    return
+  }
+
+  if (command === 'hook' && input.args[1] === 'user-prompt-submit') {
+    process.stdout.write(await handleCodexHookTraceCommand('user_prompt_submit'))
+    return
+  }
+
+  if (command === 'hook' && input.args[1] === 'post-tool-use') {
+    process.stdout.write(await handleCodexHookTraceCommand('post_tool_use'))
     return
   }
 
@@ -242,7 +258,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
