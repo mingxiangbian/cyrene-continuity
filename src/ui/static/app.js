@@ -1,7 +1,451 @@
-export const WRITE_ACTION_DISABLED_COPY = 'Write actions disabled in v1'
+const WRITE_ACTION_DISABLED_COPY = 'Write actions disabled in v1. Use CLI with review hash.'
+const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
+const EMPTY_DASHBOARD = {
+  status: {},
+  pending: { pending: [], total: 0, project: {} },
+  active: { active: [], project: {} },
+  reviewSummaries: { summaries: [] },
+  projectMemory: { groups: [] },
+  dream: { dream: {} },
+  profile: { profile: '' },
+  signals: { signals: [] }
+}
+
+const TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'inbox', label: 'Inbox' },
+  { id: 'timeline', label: 'Timeline' },
+  { id: 'project-memory', label: 'Project Memory' },
+  { id: 'harvester', label: 'Harvester' },
+  { id: 'dream', label: 'Dream' },
+  { id: 'profile', label: 'Profile' }
+]
+
+const state = {
+  activeTab: 'overview',
+  dashboard: EMPTY_DASHBOARD,
+  error: '',
+  harvester: { loading: false, result: null, error: '' }
+}
 
 const app = document.querySelector('[data-app]')
+const nav = document.querySelector('[data-nav]')
+const topbar = document.querySelector('[data-topbar]')
+const workspace = document.querySelector('[data-workspace]')
+const detailRail = document.querySelector('[data-detail-rail]')
 
-if (app) {
+if (app && nav && topbar && workspace && detailRail) {
   app.dataset.ready = 'true'
+  render()
+  loadDashboard()
 }
+
+async function loadDashboard() {
+  try {
+    const response = await fetch('/api/dashboard', { headers: { accept: 'application/json' } })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Dashboard API returned an error.')
+    }
+    state.dashboard = mergeDashboard(payload.data)
+    state.error = ''
+  } catch (error) {
+    state.dashboard = EMPTY_DASHBOARD
+    state.error = errorMessage(error)
+  }
+  render()
+}
+
+function mergeDashboard(data) {
+  return {
+    ...EMPTY_DASHBOARD,
+    ...(data || {}),
+    pending: { ...EMPTY_DASHBOARD.pending, ...(data?.pending || {}) },
+    active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },
+    reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },
+    projectMemory: { ...EMPTY_DASHBOARD.projectMemory, ...(data?.projectMemory || {}) },
+    dream: { ...EMPTY_DASHBOARD.dream, ...(data?.dream || {}) },
+    profile: { ...EMPTY_DASHBOARD.profile, ...(data?.profile || {}) },
+    signals: { ...EMPTY_DASHBOARD.signals, ...(data?.signals || {}) }
+  }
+}
+
+function render() {
+  renderNav()
+  renderTopbar()
+  renderWorkspace()
+  renderDetailRail()
+}
+
+function renderNav() {
+  nav.innerHTML = TABS.map((tab) => `
+    <button class="nav-button" type="button" data-tab="${escapeHtml(tab.id)}" aria-current="${tab.id === state.activeTab ? 'page' : 'false'}">
+      <span>${escapeHtml(tab.label)}</span>
+    </button>
+  `).join('')
+  nav.querySelectorAll('[data-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeTab = button.dataset.tab || 'overview'
+      render()
+    })
+  })
+}
+
+function renderTopbar() {
+  const dashboard = state.dashboard
+  const project = projectInfo(dashboard)
+  const pendingCount = listPending().length
+  const status = dashboard.status || {}
+  const sqliteStatus = text(status.index?.status || status.sqlite?.status || status.fallbackMode || 'read-only')
+  const modelStatus = modelLabel(status)
+  const stopHook = text(status.lastStopHook?.status || status.stopHook?.status || 'visible')
+
+  topbar.innerHTML = `
+    <div>
+      <p class="eyebrow">Local read-only console</p>
+      <h2>${escapeHtml(project.displayName || 'Project Memory')}</h2>
+    </div>
+    <div class="chip-row" aria-label="Runtime status">
+      ${statusChip('Project', project.projectId || 'unknown', 'muted')}
+      ${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
+      ${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
+      ${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
+      ${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
+    </div>
+  `
+}
+
+function projectInfo(dashboard) {
+  for (const candidate of [dashboard.pending?.project, dashboard.active?.project, dashboard.projectMemory?.project]) {
+    if (candidate?.projectId || candidate?.displayName) return candidate
+  }
+  return {}
+}
+
+function modelLabel(status) {
+  const model = status.model || status.modelConfig || status.config?.model
+  if (typeof model === 'string' && model.trim()) return 'configured'
+  if (model && typeof model === 'object') {
+    return model.configured || model.baseUrl || model.model ? 'configured' : 'needs config'
+  }
+  return 'unknown'
+}
+
+function renderWorkspace() {
+  const warning = state.error ? panel('Dashboard unavailable', escapeHtml(state.error), 'error') : ''
+  workspace.innerHTML = warning + pageHtml(state.activeTab)
+  const dryRunButton = workspace.querySelector('[data-harvest-dry-run]')
+  if (dryRunButton) {
+    dryRunButton.addEventListener('click', runHarvesterDryRun)
+  }
+}
+
+function pageHtml(tabId) {
+  if (tabId === 'inbox') return renderInbox()
+  if (tabId === 'timeline') return renderTimeline()
+  if (tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'harvester') return renderHarvester()
+  if (tabId === 'dream') return renderDream()
+  if (tabId === 'profile') return renderProfile()
+  return renderOverview()
+}
+
+function renderOverview() {
+  const pending = listPending()
+  const active = listActive()
+  const summaries = listSummaries()
+  const signals = listSignals()
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Overview', 'Read-only visibility for the memory pipeline.')}
+      <div class="metric-grid">
+        ${metric('Pending', pending.length, 'Awaiting CLI review')}
+        ${metric('Active', active.length, 'Project memories')}
+        ${metric('Summaries', summaries.length, 'Stop Hook records')}
+        ${metric('Signals', signals.length, 'Harvester inputs')}
+      </div>
+      <div class="soft-panel">
+        <h3>Recent pending candidates</h3>
+        ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+      </div>
+      <div class="soft-panel">
+        <h3>Recent timeline</h3>
+        ${summaries.slice(0, 4).map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}
+      </div>
+    </section>
+  `
+}
+
+function renderInbox() {
+  const pending = listPending()
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}
+      <div class="soft-inset boundary-copy">${escapeHtml(WRITE_ACTION_DISABLED_COPY)}</div>
+      <div class="soft-panel">
+        <h3>Pending candidates</h3>
+        ${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+      </div>
+    </section>
+  `
+}
+
+function renderCandidateRow(candidate) {
+  const actions = ['Approve', 'Reject', 'Edit', 'Defer'].map((label) => `
+    <button class="soft-button compact" type="button" disabled title="${escapeHtml(WRITE_ACTION_DISABLED_COPY)}">${escapeHtml(label)}</button>
+  `).join('')
+  return `
+    <article class="data-row candidate-row">
+      <div>
+        <div class="row-title">${escapeHtml(candidate.content || candidate.id || 'Pending candidate')}</div>
+        <div class="row-meta">
+          ${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
+          ${candidate.reviewHash ? ` · review ${escapeHtml(shortHash(candidate.reviewHash))}` : ''}
+        </div>
+      </div>
+      <div class="action-strip" aria-label="${escapeHtml(WRITE_ACTION_DISABLED_COPY)}">${actions}</div>
+    </article>
+  `
+}
+
+function renderTimeline() {
+  const summaries = listSummaries()
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}
+      <div class="soft-panel">
+        <h3>Review summaries</h3>
+        ${summaries.map(renderSummaryRow).join('') || emptyState('No review summaries yet.')}
+      </div>
+    </section>
+  `
+}
+
+function renderSummaryRow(summary) {
+  const ids = Array.isArray(summary.candidateIds) ? summary.candidateIds.join(', ') : 'none'
+  return `
+    <article class="data-row">
+      <div>
+        <div class="row-title">${escapeHtml(summary.summary || summary.id || 'Review summary')}</div>
+        <div class="row-meta">${escapeHtml(summary.createdAt || 'unknown time')} · candidates ${escapeHtml(ids)}</div>
+      </div>
+      ${statusChip(summary.status || 'unknown', summary.status || 'unknown', summary.status === 'failed' ? 'error' : 'ok')}
+    </article>
+  `
+}
+
+function renderProjectMemory() {
+  const groups = Array.isArray(state.dashboard.projectMemory.groups) ? state.dashboard.projectMemory.groups : []
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Project Memory', 'Active project memory grouped by kind.')}
+      ${groups.length > 0 ? groups.map((group) => `
+        <div class="soft-panel">
+          <h3>${escapeHtml(group.label || 'Project memory')}</h3>
+          ${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No active memories in this group.')}
+        </div>
+      `).join('') : panel('Project memory unavailable', 'No grouped project memory returned yet.', 'muted')}
+    </section>
+  `
+}
+
+function renderMemoryRow(memory) {
+  return `
+    <article class="data-row">
+      <div>
+        <div class="row-title">${escapeHtml(memory.content || memory.id || 'Memory')}</div>
+        <div class="row-meta">${escapeHtml(memory.candidateKind || memory.type || 'memory')} · ${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
+      </div>
+      ${statusChip('active', memory.status || 'active', 'ok')}
+    </article>
+  `
+}
+
+function renderHarvester() {
+  const result = state.harvester.result
+  const resultHtml = state.harvester.error
+    ? panel('Harvester dry-run failed', escapeHtml(state.harvester.error), 'error')
+    : result
+      ? renderHarvesterResult(result)
+      : panel('Dry-run ready', 'Preview project-scope candidates without writing pending memory.', 'muted')
+
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Harvester', 'Run a project-memory dry-run preview.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Project harvester</h3>
+          <p>No pending memory was written.</p>
+        </div>
+        <button class="soft-button primary" type="button" data-harvest-dry-run ${state.harvester.loading ? 'disabled' : ''}>
+          ${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}
+        </button>
+      </div>
+      ${resultHtml}
+    </section>
+  `
+}
+
+async function runHarvesterDryRun() {
+  state.harvester = { loading: true, result: null, error: '' }
+  render()
+  try {
+    const response = await fetch(DRY_RUN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Harvester API returned an error.')
+    }
+    state.harvester = { loading: false, result: payload.data?.result || payload.data, error: '' }
+  } catch (error) {
+    state.harvester = { loading: false, result: null, error: errorMessage(error) }
+  }
+  render()
+}
+
+function renderHarvesterResult(result) {
+  const candidates = Array.isArray(result.candidates) ? result.candidates : []
+  const warnings = Array.isArray(result.warnings) ? result.warnings : []
+  return `
+    <div class="soft-panel">
+      <h3>Dry-run result</h3>
+      <div class="soft-inset">Action: ${escapeHtml(result.action || 'preview')} · No pending memory was written.</div>
+      ${warnings.map((warning) => `<p class="notice warn">${escapeHtml(warning)}</p>`).join('')}
+      ${candidates.map(renderMemoryRow).join('') || emptyState('No preview candidates returned.')}
+    </div>
+  `
+}
+
+function renderDream() {
+  const dream = state.dashboard.dream.dream || {}
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Dream', 'Read-only dream pass state.')}
+      <div class="soft-panel">
+        <h3>Dream status</h3>
+        <div class="soft-inset">
+          Due: ${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
+          Last run: ${escapeHtml(dream.lastDreamAt || 'never')}<br>
+          Status: ${escapeHtml(dream.lastDreamStatus || 'unknown')}
+        </div>
+      </div>
+    </section>
+  `
+}
+
+function renderProfile() {
+  const profile = state.dashboard.profile.profile || ''
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Profile', 'Current project model profile preview.')}
+      <div class="soft-panel">
+        <h3>MODEL_PROFILE.md</h3>
+        <pre class="profile-preview">${escapeHtml(profile || 'No project profile text found.')}</pre>
+      </div>
+    </section>
+  `
+}
+
+function renderDetailRail() {
+  const pending = listPending()
+  const signals = listSignals()
+  detailRail.innerHTML = `
+    <div class="rail-stack">
+      <div class="soft-panel">
+        <h3>Boundary</h3>
+        <p>${escapeHtml(WRITE_ACTION_DISABLED_COPY)}</p>
+      </div>
+      <div class="soft-panel">
+        <h3>Project signals</h3>
+        ${signals.slice(0, 5).map((signal) => `
+          <div class="soft-inset rail-item">
+            <strong>${escapeHtml(signal.kind || 'signal')}</strong>
+            <span>${escapeHtml((signal.files || signal.paths || []).slice(0, 2).join(', ') || 'detected')}</span>
+          </div>
+        `).join('') || emptyState('No signals found.')}
+      </div>
+      <div class="soft-panel">
+        <h3>Review queue</h3>
+        <p>${escapeHtml(String(pending.length))} pending candidates</p>
+      </div>
+    </div>
+  `
+}
+
+function sectionHeader(title, subtitle) {
+  return `
+    <header class="section-header">
+      <p class="eyebrow">${escapeHtml(subtitle)}</p>
+      <h2>${escapeHtml(title)}</h2>
+    </header>
+  `
+}
+
+function metric(label, value, note) {
+  return `
+    <div class="soft-panel metric-card">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+      <small>${escapeHtml(note)}</small>
+    </div>
+  `
+}
+
+function panel(title, body, tone) {
+  return `
+    <div class="soft-panel notice ${escapeHtml(tone || 'muted')}">
+      <h3>${escapeHtml(title)}</h3>
+      <p>${body}</p>
+    </div>
+  `
+}
+
+function statusChip(label, value, tone) {
+  return `<span class="status-chip ${escapeHtml(tone || 'muted')}"><b>${escapeHtml(label)}</b>${escapeHtml(value)}</span>`
+}
+
+function emptyState(textValue) {
+  return `<div class="soft-inset empty-state">${escapeHtml(textValue)}</div>`
+}
+
+function listPending() {
+  return Array.isArray(state.dashboard.pending.pending) ? state.dashboard.pending.pending : []
+}
+
+function listActive() {
+  return Array.isArray(state.dashboard.active.active) ? state.dashboard.active.active : []
+}
+
+function listSummaries() {
+  return Array.isArray(state.dashboard.reviewSummaries.summaries) ? state.dashboard.reviewSummaries.summaries : []
+}
+
+function listSignals() {
+  return Array.isArray(state.dashboard.signals.signals) ? state.dashboard.signals.signals : []
+}
+
+function shortHash(value) {
+  return String(value).slice(0, 10)
+}
+
+function text(value) {
+  return String(value || 'unknown')
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+export { TABS, WRITE_ACTION_DISABLED_COPY, escapeHtml }

@@ -7,14 +7,24 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <div class="app-shell" data-app>
+    <div id="app" class="app-shell" data-app>
       <aside class="sidebar" aria-label="Memory navigation">
-        <h1>Cyrene Memory Console</h1>
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">C</div>
+          <div>
+            <p class="eyebrow">Cyrene</p>
+            <h1>Cyrene Memory Console</h1>
+          </div>
+        </div>
+        <nav class="nav-list" data-nav aria-label="Memory sections"></nav>
       </aside>
       <main class="main-shell">
-        <section aria-label="Memory review queue"></section>
+        <header class="topbar" data-topbar></header>
+        <section class="content-grid" aria-label="Memory workspace">
+          <div class="workspace" data-workspace></div>
+          <aside class="detail-rail" data-detail-rail aria-label="Memory detail"></aside>
+        </section>
       </main>
-      <aside class="detail-rail" aria-label="Memory detail"></aside>
     </div>
     <script type="module" src="/app.js"></script>
   </body>
