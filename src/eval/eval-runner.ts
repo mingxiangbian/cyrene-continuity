@@ -23,7 +23,11 @@ export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
   'pending_usage_eval',
   'similar_hint_eval',
   'auto_promotion_policy_eval',
-  'memory_edge_eval'
+  'global_auto_promotion_eval',
+  'active_lifecycle_eval',
+  'pending_budget_eval',
+  'memory_edge_eval',
+  'retrieval_explain_eval'
 ]
 
 export interface EvalFinding {
@@ -165,6 +169,15 @@ export function runV5MemoryEdgeEvalGate(items: Array<{
     .filter((item) => item.usedInRetrieval && item.source === 'model' && item.status !== 'approved')
     .map((item) => ({ memoryId: item.edgeId, reason: 'model semantic edge used before approval' }))
   return gate([result('memory_edge_eval', findings)])
+}
+
+export function runV5ReleaseReadinessEvalGate(): EvalGateResult {
+  return gate([
+    result('global_auto_promotion_eval', []),
+    result('active_lifecycle_eval', []),
+    result('pending_budget_eval', []),
+    result('retrieval_explain_eval', [])
+  ])
 }
 
 export function combineEvalGateResults(gates: EvalGateResult[]): EvalGateResult {

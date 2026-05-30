@@ -7,6 +7,7 @@ import {
   runSimilarHintsEvalGate,
   runV5AutoPromotionEvalGate,
   runV5MemoryEdgeEvalGate,
+  runV5ReleaseReadinessEvalGate,
   type EvalCheckName,
   type EvalResult
 } from '../eval/eval-runner.js'
@@ -129,7 +130,8 @@ export async function runCodexReleaseEval(): Promise<CodexReleaseEvalSummary> {
       source: 'model',
       status: 'approved',
       usedInRetrieval: true
-    }])
+    }]),
+    runV5ReleaseReadinessEvalGate()
   ])
   const results = minimumEvalResults(combined.results)
   const completedChecks = new Set(results.map((result) => result.name))

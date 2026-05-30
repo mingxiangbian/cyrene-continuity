@@ -9,7 +9,11 @@ describe('Codex release eval', () => {
     expect(result.failedChecks).toEqual([])
     expect(result.minimumChecks).toEqual(expect.arrayContaining([
       'auto_promotion_policy_eval',
-      'memory_edge_eval'
+      'global_auto_promotion_eval',
+      'active_lifecycle_eval',
+      'pending_budget_eval',
+      'memory_edge_eval',
+      'retrieval_explain_eval'
     ]))
     expect(result.results.map((item) => item.name).sort()).toEqual([...result.minimumChecks].sort())
     expect(result.results.every((item) => item.passed)).toBe(true)
