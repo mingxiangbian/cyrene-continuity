@@ -13104,7 +13104,8 @@ var MINIMUM_EVAL_CHECKS = [
   "active_lifecycle_eval",
   "pending_budget_eval",
   "memory_edge_eval",
-  "retrieval_explain_eval"
+  "retrieval_explain_eval",
+  "distillation_review_gate"
 ];
 function runSimilarHintsEvalGate(candidates) {
   return gate([
@@ -13223,6 +13224,13 @@ function runV5RetrievalExplainEvalGate(items) {
   const findings = items.filter((item) => item.usedInRetrieval && (item.explainReasons === void 0 || item.explainReasons.length === 0)).map((item) => ({ memoryId: item.memoryId, reason: "retrieved memory lacks explain reasons" }));
   return gate([result("retrieval_explain_eval", findings)]);
 }
+function runV6DistillationReviewGate(items) {
+  const findings = items.filter((item) => item.mode !== "dry_run" || item.mutatedStores.length > 0 || !hasSourceIds(item.sourceIds)).map((item) => ({
+    memoryId: item.candidateId,
+    reason: item.mode !== "dry_run" ? "distillation MVP must run in dry_run mode" : item.mutatedStores.length > 0 ? `distillation dry_run mutated stores: ${item.mutatedStores.join(", ")}` : "distillation candidate lacks source ids"
+  }));
+  return gate([result("distillation_review_gate", findings)]);
+}
 function runV5ReleaseReadinessEvalGate() {
   return gate([
     ...runV5GlobalAutoPromotionEvalGate([{
@@ -13255,6 +13263,13 @@ function runV5ReleaseReadinessEvalGate() {
       memoryId: "release-retrieved-memory",
       usedInRetrieval: true,
       explainReasons: ["exact_project", "memory_kind:workflow_rule"]
+    }]).results,
+    ...runV6DistillationReviewGate([{
+      candidateId: "release-distill-preview",
+      mode: "dry_run",
+      mutatedStores: [],
+      recommendedAction: "merge_pending",
+      sourceIds: ["pending-a", "pending-b"]
     }]).results
   ]);
 }
@@ -13446,6 +13461,9 @@ function result(name, findings) {
     severity: findings.length === 0 ? "info" : "error",
     findings
   };
+}
+function hasSourceIds(sourceIds) {
+  return sourceIds.some((sourceId) => sourceId.trim() !== "");
 }
 function isDisallowedSimilarHintDomain(domain) {
   return domain === "personal" || domain === "relationship" || domain === "affective";
@@ -15986,6 +16004,7 @@ async function getCodexContinuityContext(input) {
     fallback: legacyRetrievalInput
   });
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
+  const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory);
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join("\n\n");
   const snapshot = await buildContinuitySnapshot({
     config: {
@@ -16060,7 +16079,8 @@ async function getCodexContinuityContext(input) {
         memoryKinds: retrievalPlan.memoryKinds,
         requiredFacets: retrievalPlan.requiredFacets,
         optionalFacets: retrievalPlan.optionalFacets
-      }
+      },
+      ...retrievalExcluded.length === 0 ? {} : { retrievalExcluded }
     },
     profile: {
       global: globalProfile,
@@ -16385,6 +16405,15 @@ function toPendingHypothesisDigestItem(item) {
     status: item.memory.status,
     content: item.memory.content,
     provisional: true,
+    score: item.score
+  };
+}
+function toPendingRetrievalExcludedMemory(item) {
+  return {
+    id: item.memory.id,
+    scope: item.memory.scope,
+    content: item.memory.content,
+    reason: "pending_review_required",
     score: item.score
   };
 }
@@ -19336,7 +19365,7 @@ async function tombstoneCodexActiveMemory(input) {
       return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
     }
     const tombstone = tombstoneForActiveMemory(memory, {
-      reason: "archived",
+      reason: "deleted",
       now,
       ...input.indefinite === true ? {} : { expiresAt: addDays3(now, input.days ?? 180) }
     });
@@ -19344,7 +19373,7 @@ async function tombstoneCodexActiveMemory(input) {
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID11(),
-      action: "archive",
+      action: "tombstone",
       at: now,
       reason: input.reason,
       memoryId: memory.id,
@@ -19890,19 +19919,172 @@ function errorMessage3(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 
+// src/codex/triage-apply.ts
+import { randomUUID as randomUUID12 } from "node:crypto";
+function applySafeTriageDecisions(input) {
+  const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
+  const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
+  const tombstones = [];
+  const events = [];
+  const counts = { auto_drop: 0, auto_defer: 0, auto_merge: 0 };
+  for (const decision of input.decisions.slice().sort(compareSafeTriageDecisionApplyOrder)) {
+    if (decision.action === "auto_drop") {
+      const candidate = byId.get(decision.candidateId);
+      if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
+      retainedIds.delete(candidate.id);
+      tombstones.push(tombstoneForAutoDroppedCandidate(candidate, input.now));
+      events.push(memoryEventForTriageDecision("reject", candidate, input.now, decision.reason, {
+        reviewAction: "triage_auto_drop",
+        triageDecision: "auto_drop"
+      }));
+      counts.auto_drop += 1;
+      continue;
+    }
+    if (decision.action === "auto_merge") {
+      const memberIds = decision.candidateIds.slice().sort();
+      const keeperId = memberIds.find((id) => retainedIds.has(id) && byId.has(id));
+      if (keeperId === void 0) continue;
+      let merged = byId.get(keeperId);
+      if (merged === void 0) continue;
+      const mergedCandidateIds = [keeperId];
+      for (const memberId of memberIds) {
+        if (memberId === keeperId || !retainedIds.has(memberId)) continue;
+        const member = byId.get(memberId);
+        if (member === void 0) continue;
+        merged = mergePendingMemory(merged, member);
+        retainedIds.delete(memberId);
+        mergedCandidateIds.push(memberId);
+      }
+      if (mergedCandidateIds.length < 2) continue;
+      byId.set(keeperId, merged);
+      events.push(memoryEventForTriageDecision("pending", merged, input.now, decision.reason, {
+        reviewAction: "triage_auto_merge",
+        triageDecision: "auto_merge",
+        clusterId: decision.clusterId,
+        mergedCandidateIds: mergedCandidateIds.sort()
+      }));
+      counts.auto_merge += 1;
+      continue;
+    }
+    if (decision.action === "auto_defer") {
+      const candidate = byId.get(decision.candidateId);
+      if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
+      const deferredCandidate = {
+        ...candidate,
+        promoteAfter: addDays4(input.now, decision.days)
+      };
+      byId.set(candidate.id, deferredCandidate);
+      events.push(memoryEventForTriageDecision("pending", deferredCandidate, input.now, decision.reason, {
+        reviewAction: "triage_auto_defer",
+        triageDecision: "auto_defer",
+        days: decision.days
+      }));
+      counts.auto_defer += 1;
+    }
+  }
+  return {
+    pending: input.pending.filter((candidate) => retainedIds.has(candidate.id)).map((candidate) => byId.get(candidate.id) ?? candidate),
+    tombstones,
+    events,
+    counts
+  };
+}
+function compareSafeTriageDecisionApplyOrder(left, right) {
+  return triageApplyPriority(left.action) - triageApplyPriority(right.action);
+}
+function triageApplyPriority(action) {
+  if (action === "auto_drop") return 0;
+  if (action === "auto_merge") return 1;
+  if (action === "auto_defer") return 2;
+  return 3;
+}
+function tombstoneForAutoDroppedCandidate(candidate, now) {
+  return {
+    id: `tombstone-${candidate.id}`,
+    memoryId: candidate.id,
+    normalizedKey: candidate.normalizedKey,
+    domain: candidate.domain,
+    type: candidate.type,
+    strength: candidate.strength,
+    scope: candidate.scope,
+    reason: "rejected",
+    createdAt: now,
+    evidence: candidate.evidence
+  };
+}
+function memoryEventForTriageDecision(action, candidate, now, reason, details) {
+  return {
+    id: randomUUID12(),
+    action,
+    at: now,
+    reason,
+    candidateId: candidate.id,
+    details: {
+      ...details,
+      normalizedKey: candidate.normalizedKey,
+      candidateSnapshot: pendingCandidateAuditSnapshot(candidate)
+    }
+  };
+}
+function pendingCandidateAuditSnapshot(candidate) {
+  return {
+    id: candidate.id,
+    domain: candidate.domain,
+    type: candidate.type,
+    strength: candidate.strength,
+    scope: candidate.scope,
+    status: candidate.status,
+    content: candidate.content,
+    normalizedKey: candidate.normalizedKey,
+    source: candidate.source,
+    scores: candidate.scores,
+    seenCount: candidate.seenCount,
+    firstSeenAt: candidate.firstSeenAt,
+    lastSeenAt: candidate.lastSeenAt,
+    promoteAfter: candidate.promoteAfter,
+    expiresAt: candidate.expiresAt,
+    candidateKind: candidate.candidateKind ?? candidate.candidate_kind,
+    tags: candidate.tags,
+    evidence: candidate.evidence
+  };
+}
+function addDays4(iso, days) {
+  const date3 = new Date(iso);
+  date3.setUTCDate(date3.getUTCDate() + days);
+  return date3.toISOString();
+}
+
 // src/codex/codex-memory-triage-cli.ts
 async function runCodexMemoryTriage(input) {
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = codexProjectMemoryRoot(project.projectId);
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const [pending, active, tombstones] = await Promise.all([
-    readPendingMemoriesFromRoot(memoryRoot),
-    readActiveMemoriesFromRoot(memoryRoot),
-    readTombstonesFromRoot(memoryRoot)
-  ]);
-  const result2 = triagePendingMemories({ pending, active, tombstones, scope: "project", now });
   let reviewDerivedCandidateCount = 0;
+  let applied;
+  let result2;
   if (input.apply) {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
+    const appliedResult = await withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+      await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+      const [pending2, active2, tombstones2] = await Promise.all([
+        readPendingMemoriesFromRoot(lockedMemoryRoot),
+        readActiveMemoriesFromRoot(lockedMemoryRoot),
+        readTombstonesFromRoot(lockedMemoryRoot)
+      ]);
+      const lockedResult = triagePendingMemories({ pending: pending2, active: active2, tombstones: tombstones2, scope: "project", now });
+      const applyResult = applySafeTriageDecisions({ pending: pending2, decisions: lockedResult.decisions, now });
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, applyResult.pending);
+      for (const tombstone of applyResult.tombstones) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
+      }
+      for (const event of applyResult.events) {
+        await appendMemoryEventFromRoot(lockedMemoryRoot, event);
+      }
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+      return { result: lockedResult, applied: applyResult.counts };
+    });
+    result2 = appliedResult.result;
+    applied = appliedResult.applied;
     const reviewDerived = candidatesFromReviewEvents({
       events: await readMemoryEventsFromRoot(memoryRoot),
       now
@@ -19917,8 +20099,16 @@ async function runCodexMemoryTriage(input) {
         allowAutoPromote: false
       });
     }
+    return `${JSON.stringify({ action: "apply", project, memoryRoot, reviewDerivedCandidateCount, applied, ...result2 }, null, 2)}
+`;
   }
-  return `${JSON.stringify({ action: input.apply ? "apply" : "dry_run", project, memoryRoot, reviewDerivedCandidateCount, ...result2 }, null, 2)}
+  const [pending, active, tombstones] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ]);
+  result2 = triagePendingMemories({ pending, active, tombstones, scope: "project", now });
+  return `${JSON.stringify({ action: "dry_run", project, memoryRoot, reviewDerivedCandidateCount, ...result2 }, null, 2)}
 `;
 }
 
@@ -19927,9 +20117,90 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
 import { readFile as readFile16 } from "node:fs/promises";
 import { join as join23 } from "node:path";
+
+// src/codex/memory-distill.ts
+async function runCodexMemoryDistill(input) {
+  if (input.dryRun === false) {
+    throw new Error("Codex memory distill apply is not supported.");
+  }
+  const memoryRoot = await resolveMemoryRoot(input);
+  const [pending, active] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot)
+  ]);
+  const activeKeys = new Set(active.map((memory) => memory.normalizedKey));
+  const groups = groupPendingByNormalizedKey(pending);
+  const candidates = Array.from(groups.entries()).filter(([, items]) => items.length > 1).sort(([left], [right]) => left.localeCompare(right)).map(([normalizedKey, items]) => buildDistilledCandidate(normalizedKey, items, activeKeys.has(normalizedKey)));
+  return {
+    mode: "dry_run",
+    memoryRoot,
+    candidates,
+    summary: {
+      pendingRead: pending.length,
+      activeRead: active.length,
+      duplicateClusters: candidates.length,
+      candidates: candidates.length
+    }
+  };
+}
+async function resolveMemoryRoot(input) {
+  if (input.memoryRoot !== void 0) {
+    return input.memoryRoot;
+  }
+  const project = await identifyCodexProject(input.cwd ?? process.cwd());
+  return codexProjectMemoryRoot(project.projectId);
+}
+function groupPendingByNormalizedKey(pending) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const item of pending) {
+    const existing = groups.get(item.normalizedKey);
+    if (existing === void 0) {
+      groups.set(item.normalizedKey, [item]);
+    } else {
+      existing.push(item);
+    }
+  }
+  return groups;
+}
+function buildDistilledCandidate(normalizedKey, items, hasActiveOverlap) {
+  const sourceItems = sortById(items);
+  const highRiskDomains = Array.from(new Set(sourceItems.filter(isHighRiskDomain).map((item) => item.domain))).sort();
+  const risk = hasActiveOverlap || highRiskDomains.length > 0 ? "high" : "low";
+  const recommendedAction = risk === "high" ? "needs_review" : "merge_pending";
+  return {
+    id: `distill-${normalizedKey}`,
+    normalizedKey,
+    content: chooseRepresentativeContent(sourceItems),
+    sourceIds: sourceItems.map((item) => item.id),
+    evidence: sourceItems.flatMap((item) => item.evidence),
+    recommendedAction,
+    risk,
+    reasons: buildReasons(normalizedKey, sourceItems.length, hasActiveOverlap, highRiskDomains)
+  };
+}
+function isHighRiskDomain(item) {
+  return item.domain === "personal" || item.domain === "relationship" || item.domain === "affective";
+}
+function chooseRepresentativeContent(items) {
+  return [...items].sort((left, right) => {
+    const byLength = right.content.length - left.content.length;
+    return byLength === 0 ? left.id.localeCompare(right.id) : byLength;
+  })[0]?.content ?? "";
+}
+function sortById(items) {
+  return [...items].sort((left, right) => left.id.localeCompare(right.id));
+}
+function buildReasons(normalizedKey, pendingCount, hasActiveOverlap, highRiskDomains) {
+  return [
+    ...hasActiveOverlap ? [`active memory already has normalizedKey ${normalizedKey}`] : [],
+    ...highRiskDomains.map((domain) => `high-risk pending domain ${domain}`),
+    `duplicate normalizedKey ${normalizedKey} has ${pendingCount} pending candidates`
+  ];
+}
+
+// src/codex/codex-ui-api.ts
 var REVIEW_SUMMARIES_FILE5 = "review-summaries.jsonl";
 var PROJECT_MEMORY_LABELS = [
   "Project Facts",
@@ -19972,6 +20243,15 @@ async function handleCodexUiApiRequest(input) {
         now: input.now
       });
       return ok({ result: result2 });
+    }
+    if (input.pathname === "/api/memory/distill/dry-run") {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      const selectionRequest = parseSelectionRequest(input.searchParams);
+      if ("error" in selectionRequest) return selectionRequest.error;
+      const selection = await resolveSelection(input.cwd, selectionRequest.value);
+      return ok(await runCodexMemoryDistill({ memoryRoot: selection.memoryRoot, dryRun: true }));
     }
     if (input.pathname === "/api/memory/triage/dry-run" || input.pathname === "/api/memory/triage/apply") {
       if (input.method.toUpperCase() !== "POST") {
@@ -20480,138 +20760,6 @@ async function runUiMemoryTriage(input) {
     ...result2
   };
 }
-function applySafeTriageDecisions(input) {
-  const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
-  const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
-  const tombstones = [];
-  const events = [];
-  const counts = { auto_drop: 0, auto_defer: 0, auto_merge: 0 };
-  for (const decision of input.decisions.slice().sort(compareSafeTriageDecisionApplyOrder)) {
-    if (decision.action === "auto_drop") {
-      const candidate = byId.get(decision.candidateId);
-      if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
-      retainedIds.delete(candidate.id);
-      tombstones.push(tombstoneForAutoDroppedCandidate(candidate, input.now));
-      events.push(memoryEventForTriageDecision("reject", candidate, input.now, decision.reason, {
-        reviewAction: "triage_auto_drop",
-        triageDecision: "auto_drop"
-      }));
-      counts.auto_drop += 1;
-      continue;
-    }
-    if (decision.action === "auto_merge") {
-      const memberIds = decision.candidateIds.slice().sort();
-      const keeperId = memberIds.find((id) => retainedIds.has(id) && byId.has(id));
-      if (keeperId === void 0) continue;
-      let merged = byId.get(keeperId);
-      if (merged === void 0) continue;
-      const mergedCandidateIds = [keeperId];
-      for (const memberId of memberIds) {
-        if (memberId === keeperId || !retainedIds.has(memberId)) continue;
-        const member = byId.get(memberId);
-        if (member === void 0) continue;
-        merged = mergePendingMemory(merged, member);
-        retainedIds.delete(memberId);
-        mergedCandidateIds.push(memberId);
-      }
-      if (mergedCandidateIds.length < 2) continue;
-      byId.set(keeperId, merged);
-      events.push(memoryEventForTriageDecision("pending", merged, input.now, decision.reason, {
-        reviewAction: "triage_auto_merge",
-        triageDecision: "auto_merge",
-        clusterId: decision.clusterId,
-        mergedCandidateIds: mergedCandidateIds.sort()
-      }));
-      counts.auto_merge += 1;
-      continue;
-    }
-    if (decision.action === "auto_defer") {
-      const candidate = byId.get(decision.candidateId);
-      if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
-      const deferredCandidate = {
-        ...candidate,
-        promoteAfter: addDays4(input.now, decision.days)
-      };
-      byId.set(candidate.id, deferredCandidate);
-      events.push(memoryEventForTriageDecision("pending", deferredCandidate, input.now, decision.reason, {
-        reviewAction: "triage_auto_defer",
-        triageDecision: "auto_defer",
-        days: decision.days
-      }));
-      counts.auto_defer += 1;
-    }
-  }
-  return {
-    pending: input.pending.filter((candidate) => retainedIds.has(candidate.id)).map((candidate) => byId.get(candidate.id) ?? candidate),
-    tombstones,
-    events,
-    counts
-  };
-}
-function compareSafeTriageDecisionApplyOrder(left, right) {
-  return triageApplyPriority(left.action) - triageApplyPriority(right.action);
-}
-function triageApplyPriority(action) {
-  if (action === "auto_drop") return 0;
-  if (action === "auto_merge") return 1;
-  if (action === "auto_defer") return 2;
-  return 3;
-}
-function tombstoneForAutoDroppedCandidate(candidate, now) {
-  return {
-    id: `tombstone-${candidate.id}`,
-    memoryId: candidate.id,
-    normalizedKey: candidate.normalizedKey,
-    domain: candidate.domain,
-    type: candidate.type,
-    strength: candidate.strength,
-    scope: candidate.scope,
-    reason: "rejected",
-    createdAt: now,
-    evidence: candidate.evidence
-  };
-}
-function memoryEventForTriageDecision(action, candidate, now, reason, details) {
-  return {
-    id: randomUUID12(),
-    action,
-    at: now,
-    reason,
-    candidateId: candidate.id,
-    details: {
-      ...details,
-      normalizedKey: candidate.normalizedKey,
-      candidateSnapshot: pendingCandidateAuditSnapshot(candidate)
-    }
-  };
-}
-function pendingCandidateAuditSnapshot(candidate) {
-  return {
-    id: candidate.id,
-    domain: candidate.domain,
-    type: candidate.type,
-    strength: candidate.strength,
-    scope: candidate.scope,
-    status: candidate.status,
-    content: candidate.content,
-    normalizedKey: candidate.normalizedKey,
-    source: candidate.source,
-    scores: candidate.scores,
-    seenCount: candidate.seenCount,
-    firstSeenAt: candidate.firstSeenAt,
-    lastSeenAt: candidate.lastSeenAt,
-    promoteAfter: candidate.promoteAfter,
-    expiresAt: candidate.expiresAt,
-    candidateKind: candidate.candidateKind ?? candidate.candidate_kind,
-    tags: candidate.tags,
-    evidence: candidate.evidence
-  };
-}
-function addDays4(iso, days) {
-  const date3 = new Date(iso);
-  date3.setUTCDate(date3.getUTCDate() + days);
-  return date3.toISOString();
-}
 async function readActive(cwd, request) {
   return readActiveFromSelection(await resolveSelection(cwd, request));
 }
@@ -20989,6 +21137,7 @@ const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
 const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
+const DISTILL_DRY_RUN_ENDPOINT = '/api/memory/distill/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
   diagnostics: {},
@@ -21010,6 +21159,7 @@ const TABS = [
   { id: 'timeline', label: 'Timeline' },
   { id: 'project-memory', label: 'Project Memory' },
   { id: 'triage', label: 'Triage' },
+  { id: 'distillation', label: 'Distillation' },
   { id: 'harvester', label: 'Harvester' },
   { id: 'dream', label: 'Dream' },
   { id: 'profile', label: 'Profile' }
@@ -21040,7 +21190,8 @@ const state = {
   activeActionError: '',
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
   harvester: { loading: false, result: null, error: '' },
-  triage: { loading: false, result: null, error: '', receipt: null }
+  triage: { loading: false, result: null, error: '', receipt: null },
+  distill: { loading: false, result: null, error: '' }
 }
 
 const app = document.querySelector('[data-app]')
@@ -21270,6 +21421,10 @@ function renderWorkspace() {
   workspace.querySelectorAll('[data-triage-mode]').forEach((button) => {
     button.addEventListener('click', () => runTriage(button.dataset.triageMode || 'dry-run'))
   })
+  const distillButton = workspace.querySelector('[data-memory-distill-dry-run]')
+  if (distillButton) {
+    distillButton.addEventListener('click', runMemoryDistillDryRun)
+  }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
       state.activeTab = 'inbox'
@@ -21312,6 +21467,7 @@ function pageHtml(tabId) {
   if (tabId === 'timeline') return renderTimeline()
   if (tabId === 'project-memory') return renderProjectMemory()
   if (tabId === 'triage') return renderTriage()
+  if (tabId === 'distillation') return renderDistillPanel()
   if (tabId === 'harvester') return renderHarvester()
   if (tabId === 'dream') return renderDream()
   if (tabId === 'profile') return renderProfile()
@@ -21716,6 +21872,83 @@ function triageTone(action) {
   if (action === 'auto_drop') return 'error'
   if (action === 'auto_defer' || action === 'recommend') return 'warn'
   return 'muted'
+}
+
+function renderDistillPanel() {
+  const result = state.distill.result
+  const resultHtml = state.distill.error
+    ? panel('Distillation dry-run failed', escapeHtml(state.distill.error), 'error')
+    : result
+      ? renderDistillCandidates(result)
+      : panel('Distillation ready', 'Duplicate pending-memory preview.', 'muted')
+
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Distillation', 'Pending duplicate dry-run.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Memory distillation</h3>
+          <p>Dry-run only.</p>
+        </div>
+        <button class="soft-button primary" type="button" data-memory-distill-dry-run \${state.distill.loading ? 'disabled' : ''}>
+          \${state.distill.loading ? 'Running dry-run' : 'Run dry-run'}
+        </button>
+      </div>
+      \${resultHtml}
+    </section>
+  \`
+}
+
+async function runMemoryDistillDryRun() {
+  state.distill = { loading: true, result: null, error: '' }
+  render()
+  try {
+    const response = await apiFetch(\`\${DISTILL_DRY_RUN_ENDPOINT}\${selectionQuery()}\`, {
+      method: 'POST',
+      body: '{}'
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Distillation API returned an error.')
+    }
+    state.distill = { loading: false, result: payload.data, error: '' }
+  } catch (error) {
+    state.distill = { loading: false, result: null, error: errorMessage(error) }
+  }
+  render()
+}
+
+function renderDistillCandidates(result) {
+  const candidates = Array.isArray(result.candidates) ? result.candidates : []
+  const summary = result.summary || {}
+  return \`
+    <div class="soft-panel">
+      <h3>Dry-run result</h3>
+      <div class="soft-inset">Mode: \${escapeHtml(result.mode || 'dry_run')} \xB7 Candidates: \${escapeHtml(String(summary.candidates ?? candidates.length))}</div>
+      <ul class="distill-list">
+        \${candidates.map(renderDistillCandidate).join('') || emptyState('No distillation candidates returned.')}
+      </ul>
+    </div>
+  \`
+}
+
+function renderDistillCandidate(candidate) {
+  const sourceIds = Array.isArray(candidate.sourceIds) ? candidate.sourceIds.join(', ') : ''
+  const reasons = Array.isArray(candidate.reasons) ? candidate.reasons.join(' \xB7 ') : ''
+  return \`
+    <li class="soft-inset distill-item">
+      <div>
+        <div class="row-title">\${escapeHtml(candidate.content || candidate.id || 'Distillation candidate')}</div>
+        <div class="row-meta">\${escapeHtml(candidate.id || 'candidate')} \xB7 \${escapeHtml(candidate.normalizedKey || 'normalized key')}</div>
+        <div class="row-meta">sources \${escapeHtml(sourceIds || 'none')}</div>
+        <div class="row-meta">\${escapeHtml(reasons || 'no reasons')}</div>
+      </div>
+      <div class="row-actions">
+        \${statusChip('action', candidate.recommendedAction || 'needs_review', candidate.recommendedAction === 'merge_pending' ? 'ok' : 'warn')}
+        \${statusChip('risk', candidate.risk || 'unknown', candidate.risk === 'high' ? 'error' : 'muted')}
+      </div>
+    </li>
+  \`
 }
 
 function renderDream() {
@@ -22286,7 +22519,7 @@ export { TABS, WRITE_ACTION_COPY, escapeHtml }
   },
   "/styles.css": {
     "contentType": "text/css; charset=utf-8",
-    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.triage-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 12px;\n  margin-bottom: 12px;\n}\n\n.explain-list {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.row-actions {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 360px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.active-action-form {\n  border-color: rgba(93, 184, 166, 0.3);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n\n  .row-actions {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
+    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.triage-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 12px;\n  margin-bottom: 12px;\n}\n\n.explain-list {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-list {\n  display: grid;\n  gap: 10px;\n  margin: 12px 0 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-item {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.row-actions {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 360px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.active-action-form {\n  border-color: rgba(93, 184, 166, 0.3);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n\n  .row-actions {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
   }
 };
 
@@ -24254,6 +24487,17 @@ async function handleCodexCommand(input) {
     }));
     return;
   }
+  if (command === "memory" && input.args[1] === "distill") {
+    if (input.args.includes("--apply")) {
+      throw new Error("memory distill --apply is not supported; use --dry-run");
+    }
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryDistill({
+      cwd: input.cwd,
+      dryRun: true
+    }), null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "active" && input.args[2] === "archive") {
     process.stdout.write(await runCodexMemoryActiveArchive({
       cwd: input.cwd,
@@ -24396,7 +24640,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory distill [--dry-run]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
