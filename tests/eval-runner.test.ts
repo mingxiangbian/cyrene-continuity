@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   combineEvalGateResults,
   runDreamApplyEvalGate,
+  runV5AutoPromotionEvalGate,
+  runV5MemoryEdgeEvalGate,
   runMemoryMigrationEvalGate,
   runProfileApplyEvalGate,
   runMemoryRoutingEvalGate,
@@ -458,5 +460,33 @@ describe('dream apply eval gate', () => {
     expect(result.passed).toBe(false)
     expect(result.failedChecks).toContain('affective_boundary_eval')
     expect(JSON.stringify(result.results)).toContain('diagnostic affective claim')
+  })
+})
+
+describe('v5 eval gates', () => {
+  it('fails auto_promotion_policy_eval for personal memory auto-promotion', () => {
+    const result = runV5AutoPromotionEvalGate([{
+      candidateId: 'personal-auto',
+      domain: 'personal',
+      scope: 'global',
+      source: 'user_explicit',
+      policyId: 'low_risk_global_procedural_v1',
+      decision: 'auto_promote'
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('auto_promotion_policy_eval')
+  })
+
+  it('fails memory_edge_eval for unapproved semantic edge used in retrieval', () => {
+    const result = runV5MemoryEdgeEvalGate([{
+      edgeId: 'edge-pending',
+      source: 'model',
+      status: 'pending',
+      usedInRetrieval: true
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('memory_edge_eval')
   })
 })

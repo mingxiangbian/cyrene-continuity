@@ -7,6 +7,10 @@ describe('Codex release eval', () => {
 
     expect(result.passed).toBe(true)
     expect(result.failedChecks).toEqual([])
+    expect(result.minimumChecks).toEqual(expect.arrayContaining([
+      'auto_promotion_policy_eval',
+      'memory_edge_eval'
+    ]))
     expect(result.results.map((item) => item.name).sort()).toEqual([...result.minimumChecks].sort())
     expect(result.results.every((item) => item.passed)).toBe(true)
   })

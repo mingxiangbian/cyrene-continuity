@@ -8,6 +8,12 @@ export type EvalCheckName =
   | 'pending_usage_eval'
   | 'profile_pollution_eval'
   | 'affective_boundary_eval'
+  | 'auto_promotion_policy_eval'
+  | 'global_auto_promotion_eval'
+  | 'active_lifecycle_eval'
+  | 'pending_budget_eval'
+  | 'memory_edge_eval'
+  | 'retrieval_explain_eval'
 
 export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
   'memory_routing_eval',
@@ -15,7 +21,9 @@ export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
   'affective_boundary_eval',
   'cross_project_leak_eval',
   'pending_usage_eval',
-  'similar_hint_eval'
+  'similar_hint_eval',
+  'auto_promotion_policy_eval',
+  'memory_edge_eval'
 ]
 
 export interface EvalFinding {
@@ -122,6 +130,41 @@ export function runDreamApplyEvalGate(input: {
     runProfilePollutionEval(input.proposedChanges, input.pending, input.profilePreview),
     runAffectiveBoundaryEval(input.proposedChanges, input.pending)
   ])
+}
+
+export function runV5AutoPromotionEvalGate(items: Array<{
+  candidateId: string
+  domain: string
+  scope: string
+  source: string
+  policyId: string
+  decision: string
+}>): EvalGateResult {
+  const findings = items.flatMap((item) => {
+    if (item.decision !== 'auto_promote') {
+      return []
+    }
+    if (['personal', 'relationship', 'affective'].includes(item.domain)) {
+      return [{ memoryId: item.candidateId, reason: 'high-risk domain cannot auto-promote' }]
+    }
+    if (item.scope === 'global' && !['procedural', 'system'].includes(item.domain)) {
+      return [{ memoryId: item.candidateId, reason: 'global auto-promotion allows only procedural/system domains' }]
+    }
+    return []
+  })
+  return gate([result('auto_promotion_policy_eval', findings)])
+}
+
+export function runV5MemoryEdgeEvalGate(items: Array<{
+  edgeId: string
+  source: string
+  status: string
+  usedInRetrieval: boolean
+}>): EvalGateResult {
+  const findings = items
+    .filter((item) => item.usedInRetrieval && item.source === 'model' && item.status !== 'approved')
+    .map((item) => ({ memoryId: item.edgeId, reason: 'model semantic edge used before approval' }))
+  return gate([result('memory_edge_eval', findings)])
 }
 
 export function combineEvalGateResults(gates: EvalGateResult[]): EvalGateResult {
