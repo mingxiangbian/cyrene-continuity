@@ -179,7 +179,7 @@ export async function tombstoneCodexActiveMemory(input: {
       return { project, memoryRoot: lockedMemoryRoot, result: confirmation }
     }
     const tombstone = tombstoneForActiveMemory(memory, {
-      reason: 'archived',
+      reason: 'deleted',
       now,
       ...(input.indefinite === true ? {} : { expiresAt: addDays(now, input.days ?? 180) })
     })
@@ -187,7 +187,7 @@ export async function tombstoneCodexActiveMemory(input: {
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone)
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID(),
-      action: 'archive',
+      action: 'tombstone',
       at: now,
       reason: input.reason,
       memoryId: memory.id,

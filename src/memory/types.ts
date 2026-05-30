@@ -155,6 +155,7 @@ export interface MemoryEvent {
     | 'pending'
     | 'reject'
     | 'archive'
+    | 'tombstone'
     | 'expire'
     | 'supersede'
     | 'snapshot'

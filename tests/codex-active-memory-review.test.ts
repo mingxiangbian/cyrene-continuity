@@ -198,13 +198,14 @@ describe('Codex active memory lifecycle', () => {
     expect(tombstones[0]).toMatchObject({
       memoryId: memory.id,
       normalizedKey: memory.normalizedKey,
-      reason: 'archived'
+      reason: 'deleted'
     })
     expect(tombstones[0]?.expiresAt).toBe('2026-11-26T01:00:00.000Z')
     const events = jsonl<MemoryEvent>(await readFile(join(root, 'events.jsonl'), 'utf8'))
     expect(events[0]).toMatchObject({
-      action: 'archive',
+      action: 'tombstone',
       memoryId: memory.id,
+      reason: 'Wrong memory.',
       details: expect.objectContaining({ reviewAction: 'tombstone' })
     })
     expect(events[0]?.details?.previousMemory).toMatchObject({
