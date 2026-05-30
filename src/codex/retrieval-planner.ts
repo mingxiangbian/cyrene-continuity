@@ -89,5 +89,13 @@ function memoryKindFromType(type: MemoryType): MemoryCandidateKind | MemoryType 
 }
 
 function matches(text: string, terms: string[]): boolean {
-  return terms.some((term) => text.includes(term))
+  const tokens = new Set(tokenize(text))
+  return terms.some((term) => term.includes(' ') ? text.includes(term) : tokens.has(term))
+}
+
+function tokenize(text: string): string[] {
+  return text
+    .split(/[^a-z0-9_]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
 }

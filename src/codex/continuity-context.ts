@@ -441,8 +441,14 @@ async function retrieveRoutedMemory(input: {
     })
     const evalGate = combineEvalGateResults([similarHintGate, memoryRoutingGate])
     const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : []
-    const eligibleGlobalMemory = globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task))
-    const eligibleProjectMemory = projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task))
+    const eligibleGlobalMemory = globalMemory.filter(({ memory }) => (
+      isMemoryEligibleForRetrieval(memory, input.fallback, input.task) &&
+      !input.retrievalPlan.excludeDomains.includes(memory.domain)
+    ))
+    const eligibleProjectMemory = projectMemory.filter(({ memory }) => (
+      isMemoryEligibleForRetrieval(memory, input.fallback, input.task) &&
+      !input.retrievalPlan.excludeDomains.includes(memory.domain)
+    ))
     const graphEdgeTypesByMemoryKey = input.retrievalPlan.includeGraphNeighbors
       ? await queryGraphEdgeTypes(adapter, [
         ...eligibleGlobalMemory,

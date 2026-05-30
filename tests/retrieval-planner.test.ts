@@ -15,6 +15,15 @@ describe('retrieval planner', () => {
     expect(plan.excludeDomains).toEqual(expect.arrayContaining(['affective', 'relationship']))
   })
 
+  it('matches short planner terms as whole tokens', () => {
+    const plan = buildRetrievalPlan({
+      query: 'router continuity guidance local project',
+      task: 'planning'
+    })
+
+    expect(plan.taskIntent).not.toContain('ui')
+  })
+
   it('explains retrieval reasons from matched facets and edges', () => {
     const reasons = explainRetrievalReasons({
       exactProject: true,
