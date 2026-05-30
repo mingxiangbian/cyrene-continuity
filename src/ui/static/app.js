@@ -2,7 +2,6 @@ const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
-const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
 const EMPTY_DASHBOARD = {
   status: {},
   diagnostics: {},
@@ -284,10 +283,6 @@ function renderWorkspace() {
   const triageDryRunButton = workspace.querySelector('[data-triage-dry-run]')
   if (triageDryRunButton) {
     triageDryRunButton.addEventListener('click', () => runTriage('dry-run'))
-  }
-  const triageApplyButton = workspace.querySelector('[data-triage-apply]')
-  if (triageApplyButton) {
-    triageApplyButton.addEventListener('click', () => runTriage('apply'))
   }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
@@ -623,41 +618,35 @@ function renderTriage() {
     ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
     : result
       ? renderTriageResult(result)
-      : panel('Triage ready', 'Preview or apply safe pending-memory cleanup decisions for the current project.', 'muted')
+      : panel('Triage ready', 'Preview pending-memory cleanup recommendations for the selected scope.', 'muted')
 
   return `
     <section class="page-stack">
-      ${sectionHeader('Triage', 'Cluster duplicate pending memory and apply safe cleanup only.')}
+      ${sectionHeader('Triage', 'Cluster duplicate pending memory for review.')}
       <div class="soft-panel action-panel">
         <div>
           <h3>Pending triage</h3>
-          <p>Safe apply handles drop, defer, and merge decisions. Batch approval remains unavailable.</p>
+          <p>Preview duplicate, defer, and drop recommendations. Use per-candidate review actions for any write.</p>
         </div>
         <div class="detail-actions">
           <button class="soft-button primary" type="button" data-triage-dry-run ${state.triage.loading ? 'disabled' : ''}>
             ${state.triage.loading ? 'Running triage' : 'Run triage dry-run'}
           </button>
-          <button class="soft-button" type="button" data-triage-apply ${state.triage.loading ? 'disabled' : ''}>Apply safe triage</button>
         </div>
       </div>
-      ${state.triage.receipt ? renderTriageReceipt(state.triage.receipt) : ''}
       ${resultHtml}
     </section>
   `
 }
 
 async function runTriage(mode) {
-  const endpoint = mode === 'apply' ? TRIAGE_APPLY_ENDPOINT : TRIAGE_DRY_RUN_ENDPOINT
   state.triage = { loading: true, result: null, error: '', receipt: null }
   render()
   try {
-    const response = await apiFetch(endpoint, { method: 'POST', body: '{}' })
+    const response = await apiFetch(`${TRIAGE_DRY_RUN_ENDPOINT}${selectionQuery()}`, { method: 'POST', body: '{}' })
     const payload = await response.json()
     if (!payload.ok) {
       throw new Error(payload.error?.message || 'Triage API returned an error.')
-    }
-    if (mode === 'apply') {
-      await loadDashboard({ renderAfter: false })
     }
     state.triage = {
       loading: false,
@@ -677,30 +666,13 @@ function renderTriageResult(result) {
   const actions = ['auto_drop', 'auto_merge', 'auto_defer', 'recommend', 'auto_promote', 'manual_review']
   return `
     <div class="soft-panel">
-      <h3>${escapeHtml(result.action === 'apply' ? 'Applied triage result' : 'Triage dry-run result')}</h3>
+      <h3>Triage dry-run result</h3>
       <div class="triage-grid">
         ${actions.map((action) => metric(triageActionLabel(action), countTriageDecision(decisions, action), 'decisions')).join('')}
       </div>
       <div class="soft-inset">Clusters: ${escapeHtml(String(clusters.length))}</div>
+      <div class="soft-inset">Scope: ${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} · preview only</div>
       ${decisions.slice(0, 8).map(renderTriageDecisionRow).join('') || emptyState('No triage decisions returned.')}
-    </div>
-  `
-}
-
-function renderTriageReceipt(receipt) {
-  const applied = receipt.applied || {}
-  const skipped = receipt.skipped || {}
-  return `
-    <div class="soft-panel receipt-panel">
-      <p class="eyebrow">triage receipt</p>
-      <h3>Safe triage applied</h3>
-      <div class="triage-grid">
-        ${metric('Dropped', applied.auto_drop || 0, 'safe cleanup')}
-        ${metric('Deferred', applied.auto_defer || 0, 'safe cleanup')}
-        ${metric('Merged', applied.auto_merge || 0, 'duplicate clusters')}
-        ${metric('Skipped approval', skipped.auto_promote || 0, 'manual review only')}
-      </div>
-      <p>${escapeHtml(receipt.summary || 'Safe triage completed.')}</p>
     </div>
   `
 }
@@ -1205,6 +1177,7 @@ function renderRetrievalExplainPanel() {
     <div class="soft-panel">
       <h3>Retrieval Explain</h3>
       ${renderRetrievalPlan(state.dashboard.diagnostics?.retrievalPlan)}
+      ${renderRetrievalReasons(state.dashboard.diagnostics?.retrievalExplain)}
     </div>
   `
 }
@@ -1224,6 +1197,23 @@ function renderRetrievalPlan(plan) {
 function explainListItem(label, values) {
   const textValue = Array.isArray(values) && values.length > 0 ? values.join(', ') : 'none'
   return `<li class="soft-inset rail-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(textValue)}</span></li>`
+}
+
+function renderRetrievalReasons(explain) {
+  const rows = [
+    ...(Array.isArray(explain?.projectMemory) ? explain.projectMemory : []),
+    ...(Array.isArray(explain?.globalMemory) ? explain.globalMemory : []),
+    ...(Array.isArray(explain?.similarProjectHints) ? explain.similarProjectHints : [])
+  ]
+  if (rows.length === 0) return emptyState('No retrieved memory reasons returned.')
+  return `
+    <ul class="explain-list">
+      ${rows.slice(0, 6).map((item) => {
+        const reasons = Array.isArray(item.explain) && item.explain.length > 0 ? item.explain.join(', ') : 'none'
+        return `<li class="soft-inset rail-item"><strong>${escapeHtml(item.id || 'memory')}</strong><span>${escapeHtml(reasons)}</span></li>`
+      }).join('')}
+    </ul>
+  `
 }
 
 function renderTimelineDiagnostic() {

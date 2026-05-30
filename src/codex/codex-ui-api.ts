@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createDefaultConfig } from '../config.js'
@@ -10,24 +9,17 @@ import {
 } from '../llm-client.js'
 import { openMemoryIndexAdapter } from '../memory/memory-index.js'
 import {
-  appendMemoryEventFromRoot,
   assertSafeMemoryDataFileTarget,
-  mergePendingMemory,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
-  readTombstonesFromRoot,
-  writePendingMemoriesFromRoot
+  readTombstonesFromRoot
 } from '../memory/memory-store.js'
-import {
-  assertMemoryMaintenanceTargetsSafeFromRoot,
-  withMemoryMaintenanceLockFromRoot
-} from '../memory/memory-maintenance.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
 import { isMemoryCandidateKind } from '../memory/candidate-kind.js'
-import type { CyreneMemory, MemoryCandidateKind, MemoryScores, PendingMemory } from '../memory/types.js'
-import { buildRetrievalPlan } from './retrieval-planner.js'
-import { codexMemoryDbPath, syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
+import type { CyreneMemory, MemoryCandidateKind, MemoryScores } from '../memory/types.js'
+import { codexMemoryDbPath } from './codex-memory-index.js'
 import { readCodexMemoryStatus } from './codex-memory-status.js'
+import { getCodexContinuityContext, type CodexContinuityContext } from './continuity-context.js'
 import {
   archiveCodexActiveMemory,
   contentHashForActiveMemory,
@@ -200,17 +192,6 @@ interface CodexUiResolvedSelection {
   projectMemoryRoot: string
 }
 
-type SafeTriageAction = 'auto_drop' | 'auto_defer' | 'auto_merge'
-type SkippedTriageAction = 'auto_promote' | 'manual_review' | 'recommend'
-
-interface TriageApplyReceipt {
-  action: 'triage_apply'
-  createdAt: string
-  applied: Record<SafeTriageAction, number>
-  skipped: Record<SkippedTriageAction, number>
-  summary: string
-}
-
 export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInput): Promise<CodexUiApiResult<unknown>> {
   try {
     if (input.pathname === '/api/session') {
@@ -238,10 +219,18 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       if (input.method.toUpperCase() !== 'POST') {
         return methodNotAllowed()
       }
+      const selection = parseSelectionRequest(input.searchParams)
+      if ('error' in selection) return selection.error
+      if (input.pathname.endsWith('/apply')) {
+        return failure(
+          400,
+          'batch_triage_disabled',
+          'Batch triage apply is disabled. Use per-candidate review actions with reviewHash validation.'
+        )
+      }
       return ok(await runUiMemoryTriage({
         cwd: input.cwd,
-        dryRun: input.pathname.endsWith('/dry-run'),
-        apply: input.pathname.endsWith('/apply'),
+        selection: selection.value,
         now: input.now
       }))
     }
@@ -687,6 +676,11 @@ async function readProjects(cwd: string): Promise<CodexUiProjectsResult> {
 }
 
 async function readDashboard(cwd: string, now: string | undefined, request: CodexUiSelectionRequest) {
+  const continuity = await getCodexContinuityContext({
+    cwd,
+    userMessage: 'memory review web ui route button',
+    task: 'memory'
+  })
   const selection = await resolveSelection(cwd, request)
   const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals, projects] = await Promise.all([
     readCodexMemoryStatus({ cwd }),
@@ -703,7 +697,7 @@ async function readDashboard(cwd: string, now: string | undefined, request: Code
     selection: publicSelection(selection),
     projects,
     modelConfig: readModelConfigDiagnostic(cwd),
-    diagnostics: readDashboardDiagnostics(status),
+    diagnostics: readDashboardDiagnostics(status, continuity),
     status,
     pending,
     active,
@@ -715,156 +709,63 @@ async function readDashboard(cwd: string, now: string | undefined, request: Code
   }
 }
 
-function readDashboardDiagnostics(status: Awaited<ReturnType<typeof readCodexMemoryStatus>>): {
+function readDashboardDiagnostics(
+  status: Awaited<ReturnType<typeof readCodexMemoryStatus>>,
+  continuity: CodexContinuityContext
+): {
   memoryIndex: typeof status.index
-  retrievalPlan: Pick<ReturnType<typeof buildRetrievalPlan>, 'taskIntent' | 'memoryKinds' | 'requiredFacets' | 'optionalFacets'>
+  retrievalPlan: NonNullable<CodexContinuityContext['diagnostics']>['retrievalPlan']
+  retrievalExplain: {
+    globalMemory: CodexContinuityContext['globalMemory']
+    projectMemory: CodexContinuityContext['projectMemory']
+    similarProjectHints: CodexContinuityContext['similarProjectHints']
+  }
 } {
-  const retrievalPlan = buildRetrievalPlan({
-    query: 'memory review web ui route button',
-    task: 'coding'
-  })
   return {
     memoryIndex: status.index,
-    retrievalPlan: {
-      taskIntent: retrievalPlan.taskIntent,
-      memoryKinds: retrievalPlan.memoryKinds,
-      requiredFacets: retrievalPlan.requiredFacets,
-      optionalFacets: retrievalPlan.optionalFacets
+    retrievalPlan: continuity.diagnostics?.retrievalPlan,
+    retrievalExplain: {
+      globalMemory: continuity.globalMemory,
+      projectMemory: continuity.projectMemory,
+      similarProjectHints: continuity.similarProjectHints
     }
   }
 }
 
 async function runUiMemoryTriage(input: {
   cwd: string
-  dryRun: boolean
-  apply: boolean
+  selection: CodexUiSelectionRequest
   now?: string
 }): Promise<{
-  action: 'dry_run' | 'apply'
-  project: CodexProjectIdentity
+  action: 'dry_run'
+  project: CodexUiProjectIdentity
+  selection: ReturnType<typeof publicSelection>
   memoryRoot: string
   decisions: TriageDecision[]
   clusters: ReturnType<typeof triagePendingMemories>['clusters']
-  receipt?: TriageApplyReceipt
 }> {
-  const project = await identifyCodexProject(input.cwd)
-  const memoryRoot = codexProjectMemoryRoot(project.projectId)
+  const selection = await resolveSelection(input.cwd, input.selection)
+  const memoryRoot = selection.memoryRoot
   const now = input.now ?? new Date().toISOString()
-
-  if (!input.apply) {
-    const [pending, active, tombstones] = await Promise.all([
-      readPendingMemoriesFromRoot(memoryRoot),
-      readActiveMemoriesFromRoot(memoryRoot),
-      readTombstonesFromRoot(memoryRoot)
-    ])
-    const result = triagePendingMemories({ pending, active, tombstones, scope: 'project', now })
-    return { action: 'dry_run', project, memoryRoot, ...result }
-  }
-
-  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
-  return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
-    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot)
-    const [pending, active, tombstones] = await Promise.all([
-      readPendingMemoriesFromRoot(lockedMemoryRoot),
-      readActiveMemoriesFromRoot(lockedMemoryRoot),
-      readTombstonesFromRoot(lockedMemoryRoot)
-    ])
-    const result = triagePendingMemories({ pending, active, tombstones, scope: 'project', now })
-    const { nextPending, receipt } = applySafeTriageDecisions(pending, result.decisions, now)
-    await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending)
-    await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID(),
-      action: 'audit',
-      at: now,
-      reason: 'Applied safe Web UI memory triage decisions',
-      details: {
-        reviewAction: 'triage_apply',
-        applied: receipt.applied,
-        skipped: receipt.skipped
-      }
-    })
-    await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
-    return { action: 'apply', project, memoryRoot: lockedMemoryRoot, ...result, receipt }
+  const [pending, active, tombstones] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ])
+  const result = triagePendingMemories({
+    pending,
+    active,
+    tombstones,
+    scope: selection.scope === 'global' ? 'global' : 'project',
+    now
   })
-}
-
-function applySafeTriageDecisions(
-  pending: PendingMemory[],
-  decisions: TriageDecision[],
-  now: string
-): { nextPending: PendingMemory[]; receipt: TriageApplyReceipt } {
-  const byId = new Map(pending.map((candidate) => [candidate.id, candidate]))
-  const removedIds = new Set<string>()
-  const applied = zeroSafeTriageCounts()
-  const skipped = zeroSkippedTriageCounts()
-
-  for (const decision of decisions) {
-    if (decision.action === 'auto_merge') {
-      const winnerId = decision.candidateIds[0]
-      const winner = winnerId === undefined ? undefined : byId.get(winnerId)
-      if (winner === undefined || removedIds.has(winner.id)) continue
-      let merged = winner
-      let mergedCount = 0
-      for (const candidateId of decision.candidateIds.slice(1)) {
-        const candidate = byId.get(candidateId)
-        if (candidate === undefined || removedIds.has(candidate.id)) continue
-        merged = mergePendingMemory(merged, candidate)
-        removedIds.add(candidate.id)
-        mergedCount += 1
-      }
-      if (mergedCount > 0) {
-        byId.set(winner.id, merged)
-        applied.auto_merge += 1
-      }
-      continue
-    }
-
-    if (decision.action === 'auto_drop') {
-      if (byId.has(decision.candidateId) && !removedIds.has(decision.candidateId)) {
-        removedIds.add(decision.candidateId)
-        applied.auto_drop += 1
-      }
-      continue
-    }
-
-    if (decision.action === 'auto_defer') {
-      const candidate = byId.get(decision.candidateId)
-      if (candidate !== undefined && !removedIds.has(candidate.id)) {
-        byId.set(candidate.id, { ...candidate, promoteAfter: addDays(now, decision.days) })
-        applied.auto_defer += 1
-      }
-      continue
-    }
-
-    skipped[decision.action] += 1
-  }
-
   return {
-    nextPending: pending
-      .filter((candidate) => !removedIds.has(candidate.id))
-      .map((candidate) => byId.get(candidate.id) ?? candidate),
-    receipt: {
-      action: 'triage_apply',
-      createdAt: now,
-      applied,
-      skipped,
-      summary: 'Applied safe triage decisions; manual approval remains unavailable for batch actions.'
-    }
+    action: 'dry_run',
+    project: selection.project,
+    selection: publicSelection(selection),
+    memoryRoot,
+    ...result
   }
-}
-
-function zeroSafeTriageCounts(): Record<SafeTriageAction, number> {
-  return { auto_drop: 0, auto_defer: 0, auto_merge: 0 }
-}
-
-function zeroSkippedTriageCounts(): Record<SkippedTriageAction, number> {
-  return { auto_promote: 0, manual_review: 0, recommend: 0 }
-}
-
-function addDays(isoDate: string, days: number): string {
-  const date = new Date(isoDate)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString()
 }
 
 async function readActive(cwd: string, request: CodexUiSelectionRequest): Promise<ActiveMemoryResult> {

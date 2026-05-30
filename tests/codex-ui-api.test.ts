@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -64,8 +64,8 @@ function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
     strength: 'soft',
     scope: 'project',
     status: 'active',
-    content: 'Project Facts should be grouped for the UI.',
-    normalizedKey: 'project-facts-grouped-for-ui',
+    content: 'Memory review Web UI route button facts should be grouped for the UI.',
+    normalizedKey: 'memory-review-web-ui-route-button-facts-grouped',
     evidence: [{ summary: 'Seeded active memory.' }],
     source: 'file',
     scores: {
@@ -186,6 +186,9 @@ describe('handleCodexUiApiRequest', () => {
             requiredFacets: string[]
             optionalFacets: string[]
           }
+          retrievalExplain?: {
+            projectMemory?: Array<{ id: string; explain: string[] }>
+          }
         }
       }
       expect(data.diagnostics?.retrievalPlan).toMatchObject({
@@ -194,6 +197,12 @@ describe('handleCodexUiApiRequest', () => {
         requiredFacets: expect.arrayContaining(['exact_project', 'memory_kind', 'evidence']),
         optionalFacets: expect.arrayContaining(['graph_edges', 'recency'])
       })
+      expect(data.diagnostics?.retrievalExplain?.projectMemory).toEqual([
+        expect.objectContaining({
+          id: 'active-1',
+          explain: expect.arrayContaining(['exact_project'])
+        })
+      ])
     }
   })
 
@@ -551,7 +560,7 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
-  it('applies only safe triage decisions through the Web UI route', async () => {
+  it('rejects batch triage apply and leaves pending memory unchanged', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
@@ -593,6 +602,7 @@ describe('handleCodexUiApiRequest', () => {
         duplicateA
       ].map((item) => JSON.stringify(item)).join('\n') + '\n'
     )
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -601,29 +611,54 @@ describe('handleCodexUiApiRequest', () => {
       now: '2026-05-30T00:00:00.000Z'
     })
 
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error.code).toBe('batch_triage_disabled')
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
+  it('runs triage dry-run for the selected global scope', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeFile(join(globalRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+      id: 'global-triage-noise',
+      scope: 'global',
+      domain: 'procedural',
+      content: 'Ran npm test today.',
+      normalizedKey: 'global-ran-npm-test-today',
+      evidence: [{ summary: 'temporary command result' }]
+    }))}\n`)
+    const projectBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/triage/dry-run',
+      searchParams: new URLSearchParams('scope=global'),
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
     expect(result.status).toBe(200)
     expect(result.body.ok).toBe(true)
     if (result.body.ok) {
       const data = result.body.data as {
-        action: string
-        receipt?: { action: string; applied: Record<string, number>; skipped: Record<string, number> }
+        selection: { scope: string }
+        memoryRoot: string
+        decisions: Array<{ action: string; candidateId?: string }>
       }
-      expect(data.action).toBe('apply')
-      expect(data.receipt).toMatchObject({
-        action: 'triage_apply',
-        applied: { auto_drop: 1, auto_defer: 1, auto_merge: 1 },
-        skipped: { auto_promote: 0, manual_review: 0, recommend: 0 }
-      })
+      expect(data.selection.scope).toBe('global')
+      expect(data.memoryRoot).toBe(await realpath(globalRoot))
+      expect(data.decisions).toContainEqual(expect.objectContaining({
+        action: 'auto_drop',
+        candidateId: 'global-triage-noise'
+      }))
     }
-
-    const pendingAfter = JSON.parse(`[${(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim().split(/\n/).join(',')}]`) as PendingMemory[]
-    expect(pendingAfter.map((item) => item.id).sort()).toEqual(['triage-duplicate-a', 'triage-weak'])
-    expect(pendingAfter.find((item) => item.id === 'triage-noise')).toBeUndefined()
-    expect(pendingAfter.find((item) => item.id === 'triage-weak')?.promoteAfter).toBe('2026-06-13T00:00:00.000Z')
-    expect(pendingAfter.find((item) => item.id === 'triage-duplicate-a')).toMatchObject({
-      seenCount: duplicateA.seenCount + duplicateB.seenCount,
-      tags: expect.arrayContaining(['first', 'second'])
-    })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(projectBefore)
   })
 
   it('reports DeepSeek model config incomplete when the API key is missing', async () => {
@@ -807,7 +842,7 @@ describe('handleCodexUiApiRequest', () => {
       })
     }
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('Keep Web UI write actions hash-checked')
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Project Facts should be grouped for the UI.')
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Memory review Web UI route button facts should be grouped for the UI.')
   })
 
   it('returns structured method errors for non-GET read routes', async () => {
