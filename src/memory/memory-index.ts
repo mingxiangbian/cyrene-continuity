@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
@@ -51,6 +52,27 @@ export interface MemoryIndexPendingQuery {
   query: string
   maxItems: number
   maxTokens: number
+}
+
+export interface MemoryEdge {
+  id: string
+  fromId: string
+  fromKind: string
+  toId: string
+  toKind: string
+  edgeType: string
+  weight: number
+  source: 'deterministic' | 'model'
+  status: 'approved' | 'pending' | 'rejected'
+  evidenceId?: string
+  createdAt: string
+  approvedAt?: string
+}
+
+export interface MemoryEdgeQuery {
+  fromId?: string
+  toId?: string
+  status?: MemoryEdge['status']
 }
 
 export interface ProjectMetadata {
@@ -118,6 +140,8 @@ export interface MemoryIndexAdapter {
   listProjectMetadata(): Promise<ProjectMetadata[]>
   upsertProjectSimilarity(similarity: ProjectSimilarity): Promise<MemoryIndexDiagnostics>
   listProjectSimilarities(sourceProjectId: string): Promise<ProjectSimilarity[]>
+  upsertMemoryEdge(edge: MemoryEdge): Promise<MemoryIndexDiagnostics>
+  queryMemoryEdges(input: MemoryEdgeQuery): Promise<MemoryEdge[]>
   queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]>
   queryPending(input: MemoryIndexPendingQuery): Promise<IndexedPendingMemory[]>
   querySimilarActive(input: MemoryIndexSimilarQuery): Promise<IndexedSimilarMemory[]>
@@ -199,6 +223,24 @@ export function deriveMemoryPortability(
   return memory.scope === 'global' ? 'global' : 'local_only'
 }
 
+export function deriveDeterministicMemoryEdges(memory: CyreneMemory | PendingMemory, now: string): MemoryEdge[] {
+  const refs = new Set(memory.evidence.flatMap((entry) => entry.traceRefs ?? []))
+  return Array.from(refs)
+    .filter(isSafeFileTraceRef)
+    .map((ref) => ({
+      id: `edge-${memory.id}-${hashText(ref, 12)}`,
+      fromId: memory.id,
+      fromKind: 'memory',
+      toId: ref,
+      toKind: 'file',
+      edgeType: 'memory_mentions_file',
+      weight: 1,
+      source: 'deterministic',
+      status: 'approved',
+      createdAt: now
+    }))
+}
+
 class UnavailableMemoryIndexAdapter implements MemoryIndexAdapter {
   constructor(private readonly dbPath: string, private readonly reason: string) {}
 
@@ -227,6 +269,14 @@ class UnavailableMemoryIndexAdapter implements MemoryIndexAdapter {
   }
 
   async listProjectSimilarities(_sourceProjectId: string): Promise<ProjectSimilarity[]> {
+    return []
+  }
+
+  async upsertMemoryEdge(_edge: MemoryEdge): Promise<MemoryIndexDiagnostics> {
+    return this.diagnostics()
+  }
+
+  async queryMemoryEdges(_input: MemoryEdgeQuery): Promise<MemoryEdge[]> {
     return []
   }
 
@@ -338,6 +388,21 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         vector_json text not null,
         updated_at text not null
       );
+
+      create table if not exists memory_edges (
+        id text primary key,
+        from_id text not null,
+        from_kind text not null,
+        to_id text not null,
+        to_kind text not null,
+        edge_type text not null,
+        weight real not null,
+        source text not null,
+        status text not null,
+        evidence_id text,
+        created_at text not null,
+        approved_at text
+      );
     `)
     this.ensureProjectColumns(db)
     if (!this.initialized) {
@@ -355,7 +420,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
   async rebuildFromRoots(input: MemoryIndexRebuildInput): Promise<MemoryIndexDiagnostics> {
     const diagnostics = await this.initialize()
     const db = this.requireDatabase()
-    db.exec('delete from memory_evidence; delete from memories;')
+    db.exec('delete from memory_edges; delete from memory_evidence; delete from memories;')
     for (const root of input.roots) {
       await this.syncRootRecords(root)
     }
@@ -372,6 +437,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
   private async syncRootRecords(root: MemoryIndexRoot): Promise<MemoryIndexDiagnostics> {
     const diagnostics = await this.initialize()
     const db = this.requireDatabase()
+    db.prepare('delete from memory_edges where from_id in (select id from memories where memory_root = ?)').run(root.memoryRoot)
     db.prepare('delete from memory_evidence where memory_id in (select id from memories where memory_root = ?)').run(root.memoryRoot)
     db.prepare('delete from memories where memory_root = ?').run(root.memoryRoot)
 
@@ -388,11 +454,18 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       readActiveMemoriesFromRoot(root.memoryRoot),
       readPendingMemoriesFromRoot(root.memoryRoot)
     ])
+    const indexedAt = new Date().toISOString()
     for (const memory of active) {
-      this.insertMemory(root, memory)
+      const indexId = this.insertMemory(root, memory)
+      for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory, indexedAt)) {
+        this.upsertMemoryEdgeRecord(edge)
+      }
     }
     for (const memory of pending) {
-      this.insertMemory(root, memory)
+      const indexId = this.insertMemory(root, memory)
+      for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory, indexedAt)) {
+        this.upsertMemoryEdgeRecord(edge)
+      }
     }
     return diagnostics
   }
@@ -496,6 +569,49 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       where source_project_id = ?
       order by score desc, target_project_id asc
     `).all(sourceProjectId).map(projectSimilarityFromRecord)
+  }
+
+  async upsertMemoryEdge(edge: MemoryEdge): Promise<MemoryIndexDiagnostics> {
+    const diagnostics = await this.initialize()
+    this.upsertMemoryEdgeRecord(edge)
+    return diagnostics
+  }
+
+  async queryMemoryEdges(input: MemoryEdgeQuery): Promise<MemoryEdge[]> {
+    await this.initialize()
+    const conditions: string[] = []
+    const values: unknown[] = []
+    if (input.fromId !== undefined) {
+      conditions.push('from_id = ?')
+      values.push(input.fromId)
+    }
+    if (input.toId !== undefined) {
+      conditions.push('to_id = ?')
+      values.push(input.toId)
+    }
+    if (input.status !== undefined) {
+      conditions.push('status = ?')
+      values.push(input.status)
+    }
+    const where = conditions.length === 0 ? '' : `where ${conditions.join(' and ')}`
+    return this.requireDatabase().prepare(`
+      select
+        id,
+        from_id,
+        from_kind,
+        to_id,
+        to_kind,
+        edge_type,
+        weight,
+        source,
+        status,
+        evidence_id,
+        created_at,
+        approved_at
+      from memory_edges
+      ${where}
+      order by created_at asc, id asc
+    `).all(...values).map(memoryEdgeFromRecord)
   }
 
   async queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]> {
@@ -704,7 +820,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     }
   }
 
-  private insertMemory(root: MemoryIndexRoot, memory: CyreneMemory | PendingMemory): void {
+  private insertMemory(root: MemoryIndexRoot, memory: CyreneMemory | PendingMemory): string {
     const db = this.requireDatabase()
     const indexId = memoryIndexId(root, memory.id)
     const portability = deriveMemoryPortability(memory)
@@ -812,6 +928,51 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         now
       )
     }
+    return indexId
+  }
+
+  private upsertMemoryEdgeRecord(edge: MemoryEdge): void {
+    this.requireDatabase().prepare(`
+      insert into memory_edges (
+        id,
+        from_id,
+        from_kind,
+        to_id,
+        to_kind,
+        edge_type,
+        weight,
+        source,
+        status,
+        evidence_id,
+        created_at,
+        approved_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set
+        from_id = excluded.from_id,
+        from_kind = excluded.from_kind,
+        to_id = excluded.to_id,
+        to_kind = excluded.to_kind,
+        edge_type = excluded.edge_type,
+        weight = excluded.weight,
+        source = excluded.source,
+        status = excluded.status,
+        evidence_id = excluded.evidence_id,
+        approved_at = excluded.approved_at
+    `).run(
+      edge.id,
+      edge.fromId,
+      edge.fromKind,
+      edge.toId,
+      edge.toKind,
+      edge.edgeType,
+      edge.weight,
+      edge.source,
+      edge.status,
+      edge.evidenceId ?? null,
+      edge.createdAt,
+      edge.approvedAt ?? null
+    )
   }
 
   private rebuildFts(): void {
@@ -912,6 +1073,43 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
 
 function memoryIndexId(root: MemoryIndexRoot, memoryId: string): string {
   return JSON.stringify([root.scope, root.projectId, memoryId])
+}
+
+function deriveIndexedDeterministicMemoryEdges(
+  indexId: string,
+  memory: CyreneMemory | PendingMemory,
+  now: string
+): MemoryEdge[] {
+  return deriveDeterministicMemoryEdges(memory, now).map((edge) => ({
+    ...edge,
+    id: `edge-${hashText(`${indexId}\0${edge.toId}`, 24)}`,
+    fromId: indexId
+  }))
+}
+
+function memoryEdgeFromRecord(row: Record<string, unknown>): MemoryEdge {
+  return {
+    id: readString(row.id, 'id'),
+    fromId: readString(row.from_id, 'from_id'),
+    fromKind: readString(row.from_kind, 'from_kind'),
+    toId: readString(row.to_id, 'to_id'),
+    toKind: readString(row.to_kind, 'to_kind'),
+    edgeType: readString(row.edge_type, 'edge_type'),
+    weight: Number(row.weight),
+    source: readString(row.source, 'source') as MemoryEdge['source'],
+    status: readString(row.status, 'status') as MemoryEdge['status'],
+    evidenceId: row.evidence_id === null ? undefined : readString(row.evidence_id, 'evidence_id'),
+    createdAt: readString(row.created_at, 'created_at'),
+    approvedAt: row.approved_at === null ? undefined : readString(row.approved_at, 'approved_at')
+  }
+}
+
+function isSafeFileTraceRef(ref: string): boolean {
+  return /^[\w./-]+\.[\w]+$/.test(ref) && !ref.includes('..')
+}
+
+function hashText(value: string, length: number): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, length)
 }
 
 function dependencyFingerprint(dependencyNames: string[]): string {
