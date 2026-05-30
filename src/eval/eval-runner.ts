@@ -14,6 +14,7 @@ export type EvalCheckName =
   | 'pending_budget_eval'
   | 'memory_edge_eval'
   | 'retrieval_explain_eval'
+  | 'distillation_review_gate'
 
 export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
   'memory_routing_eval',
@@ -27,7 +28,8 @@ export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
   'active_lifecycle_eval',
   'pending_budget_eval',
   'memory_edge_eval',
-  'retrieval_explain_eval'
+  'retrieval_explain_eval',
+  'distillation_review_gate'
 ]
 
 export interface EvalFinding {
@@ -122,6 +124,14 @@ export interface V5RetrievalExplainEvalItem {
   memoryId: string
   usedInRetrieval: boolean
   explainReasons?: string[]
+}
+
+export interface V6DistillationReviewGateItem {
+  candidateId: string
+  mode: 'dry_run' | 'apply'
+  mutatedStores: string[]
+  recommendedAction: string
+  sourceIds: string[]
 }
 
 export interface ProfileApplyEvalCandidate {
@@ -278,6 +288,20 @@ export function runV5RetrievalExplainEvalGate(items: V5RetrievalExplainEvalItem[
   return gate([result('retrieval_explain_eval', findings)])
 }
 
+export function runV6DistillationReviewGate(items: V6DistillationReviewGateItem[]): EvalGateResult {
+  const findings = items
+    .filter((item) => item.mode !== 'dry_run' || item.mutatedStores.length > 0 || !hasSourceIds(item.sourceIds))
+    .map((item) => ({
+      memoryId: item.candidateId,
+      reason: item.mode !== 'dry_run'
+        ? 'distillation MVP must run in dry_run mode'
+        : item.mutatedStores.length > 0
+          ? `distillation dry_run mutated stores: ${item.mutatedStores.join(', ')}`
+          : 'distillation candidate lacks source ids'
+    }))
+  return gate([result('distillation_review_gate', findings)])
+}
+
 export function runV5ReleaseReadinessEvalGate(): EvalGateResult {
   return gate([
     ...runV5GlobalAutoPromotionEvalGate([{
@@ -310,6 +334,13 @@ export function runV5ReleaseReadinessEvalGate(): EvalGateResult {
       memoryId: 'release-retrieved-memory',
       usedInRetrieval: true,
       explainReasons: ['exact_project', 'memory_kind:workflow_rule']
+    }]).results,
+    ...runV6DistillationReviewGate([{
+      candidateId: 'release-distill-preview',
+      mode: 'dry_run',
+      mutatedStores: [],
+      recommendedAction: 'merge_pending',
+      sourceIds: ['pending-a', 'pending-b']
     }]).results
   ])
 }
@@ -539,6 +570,10 @@ function result(name: EvalCheckName, findings: EvalFinding[]): EvalResult {
     severity: findings.length === 0 ? 'info' : 'error',
     findings
   }
+}
+
+function hasSourceIds(sourceIds: string[]): boolean {
+  return sourceIds.some((sourceId) => sourceId.trim() !== '')
 }
 
 function isDisallowedSimilarHintDomain(domain: MemoryDomain): boolean {

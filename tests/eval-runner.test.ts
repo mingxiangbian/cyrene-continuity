@@ -8,6 +8,7 @@ import {
   runV5MemoryEdgeEvalGate,
   runV5PendingBudgetEvalGate,
   runV5RetrievalExplainEvalGate,
+  runV6DistillationReviewGate,
   runMemoryMigrationEvalGate,
   runProfileApplyEvalGate,
   runMemoryRoutingEvalGate,
@@ -561,5 +562,43 @@ describe('v5 eval gates', () => {
 
     expect(result.passed).toBe(false)
     expect(result.failedChecks).toContain('retrieval_explain_eval')
+  })
+})
+
+describe('v6 distillation eval gate', () => {
+  it('passes distillation_review_gate for dry-run candidates with sources', () => {
+    const result = runV6DistillationReviewGate([{
+      candidateId: 'distill-1',
+      mode: 'dry_run',
+      mutatedStores: [],
+      recommendedAction: 'merge_pending',
+      sourceIds: ['p1', 'p2']
+    }])
+
+    expect(result.passed).toBe(true)
+  })
+
+  it('fails distillation_review_gate when dry-run mutates stores', () => {
+    const result = runV6DistillationReviewGate([{
+      candidateId: 'distill-1',
+      mode: 'dry_run',
+      mutatedStores: ['pending.jsonl'],
+      recommendedAction: 'merge_pending',
+      sourceIds: ['p1', 'p2']
+    }])
+
+    expect(result.failedChecks).toContain('distillation_review_gate')
+  })
+
+  it('fails distillation_review_gate when source ids are blank', () => {
+    const result = runV6DistillationReviewGate([{
+      candidateId: 'distill-1',
+      mode: 'dry_run',
+      mutatedStores: [],
+      recommendedAction: 'merge_pending',
+      sourceIds: ['', '   ']
+    }])
+
+    expect(result.failedChecks).toContain('distillation_review_gate')
   })
 })

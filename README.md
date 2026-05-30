@@ -106,6 +106,7 @@ npm run dev -- codex memory reject <candidateId> --review-hash <hash>
 npm run dev -- codex memory edit <candidateId> --review-hash <hash> --content <text>
 npm run dev -- codex memory defer <candidateId> --review-hash <hash> --days 7
 npm run dev -- codex memory db rebuild
+npm run dev -- codex memory distill --dry-run
 npm run dev -- codex memory harvest-project [--dry-run] [--changed-files] [--since last-summary]
 npm run dev -- codex memory dream --stage deep-preview
 npm run dev -- codex memory dream report --root project
@@ -176,6 +177,13 @@ is missing, the command returns
 `needs_model_config` and does not write pending candidates; dry-run remains safe
 for diagnostics.
 
+### Memory distillation
+
+`codex memory distill --dry-run` previews evidence-backed distillation
+candidates. It does not mutate pending memory, active memory, tombstones, or
+events. Apply flows remain gated by v5 review policy and review-hash
+validation.
+
 Profile reflection writes reviewable candidates to `profile_candidates.jsonl`;
 applying a candidate requires the matching review hash and regenerates
 `MODEL_PROFILE.md` from structured memory. Similar-project memory must be
@@ -226,6 +234,8 @@ Deterministic gates protect retrieval, review, apply, and release paths:
   not migrated across project IDs.
 - `similar_hint_eval`: similar-project hints must be explicitly transferable and
   scrubbed of absolute paths, raw remotes, and secret-like values.
+- `distillation_review_gate`: distillation MVP output must remain dry-run,
+  avoid memory-store mutation, and retain source IDs for every candidate.
 
 `codex eval run --check similar-hints` reports the live similar-project hint
 boundary result. `codex eval run --check release` reports the minimum gate

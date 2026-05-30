@@ -1944,7 +1944,8 @@ describe('cyrene-continuity codex CLI', () => {
         'active_lifecycle_eval',
         'pending_budget_eval',
         'memory_edge_eval',
-        'retrieval_explain_eval'
+        'retrieval_explain_eval',
+        'distillation_review_gate'
       ]
     })
     expect(parsed.results.map((item) => item.name)).toEqual(parsed.minimumChecks)
