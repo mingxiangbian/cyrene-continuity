@@ -20,7 +20,7 @@ import {
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
 import { activateCandidate, validateMemoryCandidate } from '../memory/memory-validator.js'
-import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../memory/types.js'
+import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../memory/types.js'
 
 export type ActiveMemoryLifecycleAction = 'archive' | 'tombstone' | 'propose_edit' | 'supersede'
 
