@@ -55,6 +55,14 @@ function pending(overrides: Partial<PendingMemory> = {}): PendingMemory {
   }
 }
 
+function jsonl<T>(text: string): T[] {
+  return text
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as T)
+}
+
 describe('memory triage', () => {
   it('auto-drops transient command status noise', () => {
     const result = triagePendingMemories({
@@ -293,6 +301,50 @@ describe('memory triage', () => {
     expect(pending).toContain('"source":"review_event"')
     expect(pending).toContain('一次性命令结果')
     await expect(readFile(join(codexGlobalMemoryRoot(), 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('applies safe merge decisions from CLI apply', async () => {
+    const home = await createTempDir('cyrene-triage-apply-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-triage-apply-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'triage-apply-project' }))
+    const project = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), [
+      pending({
+        id: 'merge-a',
+        normalizedKey: 'same-normalized-key',
+        content: 'Project uses a shared normalized memory key.',
+        evidence: [{ summary: 'first duplicate', sourceKind: 'file' }]
+      }),
+      pending({
+        id: 'merge-b',
+        normalizedKey: 'same-normalized-key',
+        content: 'Project uses a shared normalized memory key.',
+        evidence: [{ summary: 'second duplicate', sourceKind: 'file' }]
+      })
+    ].map((candidate) => JSON.stringify(candidate)).join('\n') + '\n')
+
+    const output = await runCodexMemoryTriage({
+      cwd,
+      dryRun: false,
+      apply: true,
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    const parsed = JSON.parse(output) as { applied?: { auto_drop: number; auto_defer: number; auto_merge: number } }
+    expect(parsed.applied).toEqual({ auto_drop: 0, auto_defer: 0, auto_merge: 1 })
+    const pendingCandidates = jsonl<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const events = jsonl<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
+    expect(pendingCandidates.map((candidate) => candidate.id)).toEqual(['merge-a'])
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'pending',
+        candidateId: 'merge-a',
+        details: expect.objectContaining({ reviewAction: 'triage_auto_merge' })
+      })
+    ]))
   })
 
   it('records transient review pattern metadata when rejecting command status memory', async () => {
