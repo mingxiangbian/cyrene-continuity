@@ -305,6 +305,52 @@ describe('Codex continuity context', () => {
     )
   })
 
+  it('returns retrieval planner diagnostics and graph-edge explain reasons', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-retrieval-explain-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-retrieval-explain-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'route-workflow',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      candidateKind: 'workflow_rule',
+      content: 'Memory review UI route implementation must keep delete button actions explicit.',
+      normalizedKey: 'memory-review-ui-route-delete-button-actions',
+      evidence: [{
+        runId: 'run-route',
+        summary: 'Route implementation evidence.',
+        traceRefs: ['src/codex/codex-ui-api.ts']
+      }]
+    })) + '\n')
+
+    await rebuildCodexMemoryIndex({ cwd: repo })
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'active memory delete button does not work in Web UI route',
+      task: 'memory'
+    })
+
+    expect(context.diagnostics?.retrievalPlan).toMatchObject({
+      taskIntent: expect.arrayContaining(['memory_review', 'ui']),
+      memoryKinds: expect.arrayContaining(['workflow_rule']),
+      requiredFacets: expect.arrayContaining(['exact_project', 'memory_kind', 'evidence']),
+      optionalFacets: expect.arrayContaining(['graph_edges', 'transferability'])
+    })
+    expect(context.projectMemory).toEqual([
+      expect.objectContaining({
+        id: 'route-workflow',
+        explain: expect.arrayContaining([
+          'exact_project',
+          'memory_kind:workflow_rule',
+          'edge:memory_mentions_file'
+        ])
+      })
+    ])
+  })
+
   it('keeps current and global indexed retrieval when all-project root scanning hits an unsafe unrelated project', async () => {
     const home = await createTempDir('cyrene-codex-continuity-unsafe-scan-home-')
     process.env.HOME = home

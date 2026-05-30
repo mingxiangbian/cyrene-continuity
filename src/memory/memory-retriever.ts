@@ -1,4 +1,11 @@
 import { estimateTokens } from '../token-counter.js'
+import {
+  buildRetrievalPlan,
+  explainRetrievalReasons,
+  memoryKindForRetrieval,
+  retrievalPlanMemoryKindBoost,
+  type RetrievalPlan
+} from '../codex/retrieval-planner.js'
 import { readActiveMemories, readActiveMemoriesFromRoot } from './memory-store.js'
 import type { CyreneMemory, MemoryDomain, MemoryScope, MemoryStrength, MemoryType } from './types.js'
 
@@ -21,6 +28,7 @@ export interface RetrieveMemoriesInput {
 export interface RetrievedMemory {
   memory: CyreneMemory
   score: number
+  explain?: string[]
 }
 
 export interface MemoryRetrievalBudget {
@@ -38,10 +46,27 @@ export function memoryRetrievalBudgetForTask(task: NonNullable<RetrieveMemoriesI
 export async function retrieveMemories(input: RetrieveMemoriesInput): Promise<RetrievedMemory[]> {
   const memories = await readInputMemories(input)
   const task = input.task ?? 'conversation'
+  const retrievalPlan = buildRetrievalPlan({ query: input.query, task })
   const queryTokens = tokenize(input.query)
-  const filtered = memories.filter((memory) => isMemoryEligibleForRetrieval(memory, input, task))
+  const filtered = memories.filter((memory) => (
+    isMemoryEligibleForRetrieval(memory, input, task) &&
+    !retrievalPlan.excludeDomains.includes(memory.domain)
+  ))
   const scored = filtered
-    .map((memory) => ({ memory, score: scoreMemory(memory, queryTokens) }))
+    .map((memory) => {
+      const score = scoreMemory(memory, queryTokens, retrievalPlan)
+      return {
+        memory,
+        score,
+        explain: explainRetrievalReasons({
+          exactProject: memory.scope !== 'global',
+          globalPolicy: memory.scope === 'global',
+          memoryKind: memoryKindForRetrieval(memory),
+          taskIntent: retrievalPlan.taskIntent,
+          score
+        })
+      }
+    })
     .filter((item) => input.query.trim() === '' || item.score > 0)
     .sort(compareRetrievedMemories)
 
@@ -134,19 +159,21 @@ function defaultDomainsForTask(task: NonNullable<RetrieveMemoriesInput['task']>)
   return ['project', 'personal', 'relationship', 'affective', 'procedural', 'system']
 }
 
-function scoreMemory(memory: CyreneMemory, queryTokens: string[]): number {
+function scoreMemory(memory: CyreneMemory, queryTokens: string[], retrievalPlan: RetrievalPlan): number {
   const relevance = queryTokens.length === 0 ? 0.2 : relevanceScore(memory, queryTokens)
   const recency = memory.lastUsedAt === undefined ? 0.5 : 1
   const sensitivityPenalty = memory.scores.sensitivity > 0.3
     ? memory.scores.sensitivity * (memory.domain === 'affective' ? 0.35 : 0.2)
     : 0
+  const plannerBoost = retrievalPlanMemoryKindBoost(retrievalPlan, memory)
   return (
     relevance * 0.35 +
     memory.scores.usefulness * 0.25 +
     memory.scores.evidenceStrength * 0.2 +
     memory.scores.safety * 0.1 +
     recency * 0.1 -
-    sensitivityPenalty
+    sensitivityPenalty +
+    plannerBoost
   )
 }
 
