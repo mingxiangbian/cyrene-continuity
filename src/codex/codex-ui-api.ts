@@ -226,7 +226,10 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       if (input.method.toUpperCase() !== 'POST') {
         return methodNotAllowed()
       }
-      return ok(await runCodexMemoryDistill({ cwd: input.cwd, dryRun: true }))
+      const selectionRequest = parseSelectionRequest(input.searchParams)
+      if ('error' in selectionRequest) return selectionRequest.error
+      const selection = await resolveSelection(input.cwd, selectionRequest.value)
+      return ok(await runCodexMemoryDistill({ memoryRoot: selection.memoryRoot, dryRun: true }))
     }
 
     if (input.pathname === '/api/memory/triage/dry-run' || input.pathname === '/api/memory/triage/apply') {

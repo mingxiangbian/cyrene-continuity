@@ -567,6 +567,66 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
+  it('runs memory distillation dry-run against the selected global scope', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    await writeFile(
+      join(memoryRoot, 'pending.jsonl'),
+      [
+        createPending({
+          id: 'project-distill-a',
+          content: 'Project-only distillation memory should stay project scoped.',
+          normalizedKey: 'project-only-distill',
+          evidence: [{ summary: 'first project duplicate' }]
+        }),
+        createPending({
+          id: 'project-distill-b',
+          content: 'Project-only distillation memory should not appear in global scope.',
+          normalizedKey: 'project-only-distill',
+          evidence: [{ summary: 'second project duplicate' }]
+        })
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeFile(
+      join(globalRoot, 'pending.jsonl'),
+      [
+        createPending({
+          id: 'global-distill-a',
+          scope: 'global',
+          content: 'Global distillation memory should appear for global scope.',
+          normalizedKey: 'global-distill',
+          evidence: [{ summary: 'first global duplicate' }]
+        }),
+        createPending({
+          id: 'global-distill-b',
+          scope: 'global',
+          content: 'Global distillation memory should appear for selected global scope.',
+          normalizedKey: 'global-distill',
+          evidence: [{ summary: 'second global duplicate' }]
+        })
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/distill/dry-run',
+      searchParams: new URLSearchParams('scope=global')
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { candidates: Array<{ normalizedKey: string }> }
+      const normalizedKeys = data.candidates.map((candidate) => candidate.normalizedKey)
+      expect(normalizedKeys).toContain('global-distill')
+      expect(normalizedKeys).not.toContain('project-only-distill')
+    }
+  })
+
   it('runs triage dry-run without mutating pending memory', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)

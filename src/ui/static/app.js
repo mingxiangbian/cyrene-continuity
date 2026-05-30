@@ -769,7 +769,7 @@ async function runMemoryDistillDryRun() {
   state.distill = { loading: true, result: null, error: '' }
   render()
   try {
-    const response = await apiFetch(DISTILL_DRY_RUN_ENDPOINT, {
+    const response = await apiFetch(`${DISTILL_DRY_RUN_ENDPOINT}${selectionQuery()}`, {
       method: 'POST',
       body: '{}'
     })
