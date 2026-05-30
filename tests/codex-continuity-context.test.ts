@@ -351,6 +351,47 @@ describe('Codex continuity context', () => {
     ])
   })
 
+  it('explains pending-only memory as excluded from confirmed retrieval context', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-retrieval-excluded-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-retrieval-excluded-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'active-route-memory',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      candidateKind: 'workflow_rule',
+      content: 'Active memory delete button route guidance is confirmed project context.',
+      normalizedKey: 'active-memory-delete-button-route-guidance'
+    })) + '\n')
+    await writeFile(join(projectMemoryRoot, 'pending.jsonl'), JSON.stringify({
+      ...createPendingMemory(),
+      id: 'pending-route-memory',
+      scope: 'project',
+      content: 'Pending route guidance must not be treated as confirmed memory.',
+      normalizedKey: 'pending-route-guidance-not-confirmed'
+    }) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'active memory delete button does not work in Web UI route',
+      task: 'memory'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).toContain('active-route-memory')
+    expect(context.memory.items.map((item) => item.id)).not.toContain('pending-route-memory')
+    expect(context.diagnostics?.retrievalExcluded).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'pending-route-memory',
+          reason: 'pending_review_required'
+        })
+      ])
+    )
+  })
+
   it('applies planner domain exclusions to fresh SQLite routed memory', async () => {
     const home = await createTempDir('cyrene-codex-continuity-sqlite-domain-home-')
     process.env.HOME = home

@@ -109,6 +109,15 @@ interface EvalGateDiagnostics {
 
 type RetrievalSource = 'sqlite' | 'jsonl'
 type RetrievalRoute = 'global' | 'project' | 'pending' | 'similar_project'
+type RetrievalExcludedReason = 'pending_review_required' | 'domain_excluded' | 'tombstoned' | 'below_score_threshold'
+
+export interface RetrievalExcludedMemory {
+  id: string
+  scope: string
+  content: string
+  reason: RetrievalExcludedReason
+  score?: number
+}
 
 interface RetrievalDiagnostics extends MemoryIndexDiagnostics {
   source: RetrievalSource
@@ -174,6 +183,7 @@ export interface CodexContinuityContext {
       requiredFacets: RetrievalFacet[]
       optionalFacets: RetrievalFacet[]
     }
+    retrievalExcluded?: RetrievalExcludedMemory[]
   }
   profile: {
     global?: string
@@ -230,6 +240,7 @@ export async function getCodexContinuityContext(input: {
     fallback: legacyRetrievalInput
   })
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory]
+  const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory)
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join('\n\n')
   const snapshot = await buildContinuitySnapshot({
     config: {
@@ -305,7 +316,8 @@ export async function getCodexContinuityContext(input: {
         memoryKinds: retrievalPlan.memoryKinds,
         requiredFacets: retrievalPlan.requiredFacets,
         optionalFacets: retrievalPlan.optionalFacets
-      }
+      },
+      ...(retrievalExcluded.length === 0 ? {} : { retrievalExcluded })
     },
     profile: {
       global: globalProfile,
@@ -699,6 +711,16 @@ function toPendingHypothesisDigestItem(item: IndexedPendingMemory): PendingHypot
     status: item.memory.status,
     content: item.memory.content,
     provisional: true,
+    score: item.score
+  }
+}
+
+function toPendingRetrievalExcludedMemory(item: IndexedPendingMemory): RetrievalExcludedMemory {
+  return {
+    id: item.memory.id,
+    scope: item.memory.scope,
+    content: item.memory.content,
+    reason: 'pending_review_required',
     score: item.score
   }
 }
