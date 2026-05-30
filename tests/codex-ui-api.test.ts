@@ -527,6 +527,46 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
+  it('runs memory distillation dry-run for duplicate pending entries', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    await writeFile(
+      join(memoryRoot, 'pending.jsonl'),
+      [
+        createPending({
+          id: 'distill-duplicate-a',
+          content: 'Duplicate distillation memory should be merged.',
+          normalizedKey: 'duplicate-distillation-memory',
+          evidence: [{ summary: 'first duplicate evidence' }]
+        }),
+        createPending({
+          id: 'distill-duplicate-b',
+          content: 'Duplicate distillation memory should be merged with the longer candidate.',
+          normalizedKey: 'duplicate-distillation-memory',
+          evidence: [{ summary: 'second duplicate evidence' }]
+        })
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/distill/dry-run'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        mode: string
+        candidates: Array<{ recommendedAction: string }>
+      }
+      expect(data.mode).toBe('dry_run')
+      expect(data.candidates[0]?.recommendedAction).toBe('merge_pending')
+    }
+  })
+
   it('runs triage dry-run without mutating pending memory', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)

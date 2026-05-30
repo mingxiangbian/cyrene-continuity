@@ -24,6 +24,7 @@ import type { CyreneMemory, MemoryCandidateKind, MemoryScores } from '../memory/
 import { codexMemoryDbPath, syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { readCodexMemoryStatus } from './codex-memory-status.js'
 import { getCodexContinuityContext, type CodexContinuityContext } from './continuity-context.js'
+import { runCodexMemoryDistill } from './memory-distill.js'
 import {
   archiveCodexActiveMemory,
   activeMemoryRequiresDestructiveConfirmation,
@@ -219,6 +220,13 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
         now: input.now
       })
       return ok({ result })
+    }
+
+    if (input.pathname === '/api/memory/distill/dry-run') {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      return ok(await runCodexMemoryDistill({ cwd: input.cwd, dryRun: true }))
     }
 
     if (input.pathname === '/api/memory/triage/dry-run' || input.pathname === '/api/memory/triage/apply') {

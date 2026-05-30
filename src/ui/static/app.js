@@ -3,6 +3,7 @@ const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
 const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
+const DISTILL_DRY_RUN_ENDPOINT = '/api/memory/distill/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
   diagnostics: {},
@@ -24,6 +25,7 @@ const TABS = [
   { id: 'timeline', label: 'Timeline' },
   { id: 'project-memory', label: 'Project Memory' },
   { id: 'triage', label: 'Triage' },
+  { id: 'distillation', label: 'Distillation' },
   { id: 'harvester', label: 'Harvester' },
   { id: 'dream', label: 'Dream' },
   { id: 'profile', label: 'Profile' }
@@ -54,7 +56,8 @@ const state = {
   activeActionError: '',
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
   harvester: { loading: false, result: null, error: '' },
-  triage: { loading: false, result: null, error: '', receipt: null }
+  triage: { loading: false, result: null, error: '', receipt: null },
+  distill: { loading: false, result: null, error: '' }
 }
 
 const app = document.querySelector('[data-app]')
@@ -284,6 +287,10 @@ function renderWorkspace() {
   workspace.querySelectorAll('[data-triage-mode]').forEach((button) => {
     button.addEventListener('click', () => runTriage(button.dataset.triageMode || 'dry-run'))
   })
+  const distillButton = workspace.querySelector('[data-memory-distill-dry-run]')
+  if (distillButton) {
+    distillButton.addEventListener('click', runMemoryDistillDryRun)
+  }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
       state.activeTab = 'inbox'
@@ -326,6 +333,7 @@ function pageHtml(tabId) {
   if (tabId === 'timeline') return renderTimeline()
   if (tabId === 'project-memory') return renderProjectMemory()
   if (tabId === 'triage') return renderTriage()
+  if (tabId === 'distillation') return renderDistillPanel()
   if (tabId === 'harvester') return renderHarvester()
   if (tabId === 'dream') return renderDream()
   if (tabId === 'profile') return renderProfile()
@@ -730,6 +738,83 @@ function triageTone(action) {
   if (action === 'auto_drop') return 'error'
   if (action === 'auto_defer' || action === 'recommend') return 'warn'
   return 'muted'
+}
+
+function renderDistillPanel() {
+  const result = state.distill.result
+  const resultHtml = state.distill.error
+    ? panel('Distillation dry-run failed', escapeHtml(state.distill.error), 'error')
+    : result
+      ? renderDistillCandidates(result)
+      : panel('Distillation ready', 'Duplicate pending-memory preview.', 'muted')
+
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Distillation', 'Pending duplicate dry-run.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Memory distillation</h3>
+          <p>Dry-run only.</p>
+        </div>
+        <button class="soft-button primary" type="button" data-memory-distill-dry-run ${state.distill.loading ? 'disabled' : ''}>
+          ${state.distill.loading ? 'Running dry-run' : 'Run dry-run'}
+        </button>
+      </div>
+      ${resultHtml}
+    </section>
+  `
+}
+
+async function runMemoryDistillDryRun() {
+  state.distill = { loading: true, result: null, error: '' }
+  render()
+  try {
+    const response = await apiFetch(DISTILL_DRY_RUN_ENDPOINT, {
+      method: 'POST',
+      body: '{}'
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Distillation API returned an error.')
+    }
+    state.distill = { loading: false, result: payload.data, error: '' }
+  } catch (error) {
+    state.distill = { loading: false, result: null, error: errorMessage(error) }
+  }
+  render()
+}
+
+function renderDistillCandidates(result) {
+  const candidates = Array.isArray(result.candidates) ? result.candidates : []
+  const summary = result.summary || {}
+  return `
+    <div class="soft-panel">
+      <h3>Dry-run result</h3>
+      <div class="soft-inset">Mode: ${escapeHtml(result.mode || 'dry_run')} · Candidates: ${escapeHtml(String(summary.candidates ?? candidates.length))}</div>
+      <ul class="distill-list">
+        ${candidates.map(renderDistillCandidate).join('') || emptyState('No distillation candidates returned.')}
+      </ul>
+    </div>
+  `
+}
+
+function renderDistillCandidate(candidate) {
+  const sourceIds = Array.isArray(candidate.sourceIds) ? candidate.sourceIds.join(', ') : ''
+  const reasons = Array.isArray(candidate.reasons) ? candidate.reasons.join(' · ') : ''
+  return `
+    <li class="soft-inset distill-item">
+      <div>
+        <div class="row-title">${escapeHtml(candidate.content || candidate.id || 'Distillation candidate')}</div>
+        <div class="row-meta">${escapeHtml(candidate.id || 'candidate')} · ${escapeHtml(candidate.normalizedKey || 'normalized key')}</div>
+        <div class="row-meta">sources ${escapeHtml(sourceIds || 'none')}</div>
+        <div class="row-meta">${escapeHtml(reasons || 'no reasons')}</div>
+      </div>
+      <div class="row-actions">
+        ${statusChip('action', candidate.recommendedAction || 'needs_review', candidate.recommendedAction === 'merge_pending' ? 'ok' : 'warn')}
+        ${statusChip('risk', candidate.risk || 'unknown', candidate.risk === 'high' ? 'error' : 'muted')}
+      </div>
+    </li>
+  `
 }
 
 function renderDream() {

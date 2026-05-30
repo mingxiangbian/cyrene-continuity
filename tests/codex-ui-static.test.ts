@@ -44,6 +44,13 @@ describe('Codex UI static assets', () => {
     expect(getCodexUiStaticAsset('/styles.css')?.body).toContain('--canvas: #f4efe7')
   })
 
+  it('bundles the distillation dry-run UI surface', () => {
+    const js = getCodexUiStaticAsset('/app.js')?.body
+
+    expect(js).toContain('data-memory-distill-dry-run')
+    expect(js).toContain('renderDistillCandidates')
+  })
+
   it('wires static asset generation into plugin build', async () => {
     const buildScript = await readFile('scripts/build-plugin.mjs', 'utf8')
     const generatedSource = await readFile('src/codex/codex-ui-static.generated.ts', 'utf8')
