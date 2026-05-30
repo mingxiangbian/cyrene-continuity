@@ -7,7 +7,7 @@
     "cyrene-continuity": "src/main.ts"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=22.5.0",
     "npm": ">=10"
   },
   "scripts": {
