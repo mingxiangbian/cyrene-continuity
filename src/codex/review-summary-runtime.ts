@@ -100,7 +100,8 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         cwd: input.cwd,
         candidate: globalCandidate,
         now: input.now,
-        recordRejectedCandidate: false
+        recordRejectedCandidate: false,
+        allowAutoPromote: false
       })
       if (result.result.action === 'pending') {
         candidateIds.push(result.result.candidateId)

@@ -33,7 +33,8 @@ export async function runCodexMemoryTriage(input: {
         cwd: input.cwd,
         candidate,
         now,
-        recordRejectedCandidate: false
+        recordRejectedCandidate: false,
+        allowAutoPromote: false
       })
     }
   }

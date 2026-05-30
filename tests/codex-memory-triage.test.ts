@@ -164,10 +164,17 @@ describe('memory triage', () => {
 
     const parsed = JSON.parse(output) as { reviewDerivedCandidateCount?: number }
     expect(parsed.reviewDerivedCandidateCount).toBe(1)
+    await runCodexMemoryTriage({
+      cwd,
+      dryRun: false,
+      apply: true,
+      now: '2026-05-31T00:00:00.000Z'
+    })
     const pending = await readFile(join(codexGlobalMemoryRoot(), 'pending.jsonl'), 'utf8')
     expect(pending).toContain('review-derived-reject-transient-test-status')
     expect(pending).toContain('"source":"review_event"')
     expect(pending).toContain('一次性命令结果')
+    await expect(readFile(join(codexGlobalMemoryRoot(), 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('records transient review pattern metadata when rejecting command status memory', async () => {

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import type { CodexMemoryCandidateInput } from './memory-propose.js'
 import type { MemoryEvent } from '../memory/types.js'
 
-const GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|all projects|always|by default|默认|长期记住|remember globally)/i
+const GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i
+const PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i
 
 export function candidateFromExplicitGlobalInstruction(input: {
   text: string
@@ -10,6 +11,9 @@ export function candidateFromExplicitGlobalInstruction(input: {
 }): CodexMemoryCandidateInput | undefined {
   const text = input.text.trim()
   if (!GLOBAL_INSTRUCTION_PATTERN.test(text)) {
+    return undefined
+  }
+  if (PERSONAL_PREFERENCE_PATTERN.test(text)) {
     return undefined
   }
 
@@ -82,8 +86,8 @@ export function candidatesFromReviewEvents(input: {
   }>()
 
   for (const event of input.events) {
-    const patternId = typeof event.details?.reviewPatternId === 'string' ? event.details.reviewPatternId : undefined
     const action = reviewActionForEvent(event)
+    const patternId = action === undefined ? undefined : reviewPatternIdForEvent(event, action)
     if (patternId === undefined || action === undefined) {
       continue
     }
@@ -108,6 +112,17 @@ export function candidatesFromReviewEvents(input: {
         now: input.now
       }) ?? []
     )
+}
+
+function reviewPatternIdForEvent(event: MemoryEvent, action: 'reject' | 'edit' | 'approve'): string | undefined {
+  if (typeof event.details?.reviewPatternId === 'string') {
+    return event.details.reviewPatternId
+  }
+  const candidateKind = typeof event.details?.candidateKind === 'string' ? event.details.candidateKind : undefined
+  if (action === 'approve' && candidateKind !== undefined) {
+    return `approve-${candidateKind}`
+  }
+  return undefined
 }
 
 function reviewActionForEvent(event: MemoryEvent): 'reject' | 'edit' | 'approve' | undefined {

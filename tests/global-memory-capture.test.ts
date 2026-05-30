@@ -22,6 +22,13 @@ describe('global memory capture', () => {
     expect(candidateFromExplicitGlobalInstruction({ text: '这个项目先跑测试。', now: '2026-05-30T00:00:00.000Z' })).toBeUndefined()
   })
 
+  it('does not turn personal preference wording into global procedural memory', () => {
+    expect(candidateFromExplicitGlobalInstruction({
+      text: 'I always prefer concise status updates.',
+      now: '2026-05-30T00:00:00.000Z'
+    })).toBeUndefined()
+  })
+
   it('creates review-derived global candidate from repeated rejection pattern', () => {
     const candidate = candidateFromReviewPattern({
       patternId: 'reject-transient-test-status',
@@ -53,6 +60,20 @@ describe('global memory capture', () => {
 
     expect(candidates).toHaveLength(1)
     expect(candidates[0]).toMatchObject({ source: 'review_event', normalizedKey: 'review-derived-reject-transient-test-status' })
+  })
+
+  it('aggregates repeated approved project memory events without explicit pattern metadata', () => {
+    const candidates = candidatesFromReviewEvents({
+      events: [
+        { id: 'event-1', action: 'promote', at: '2026-05-28T00:00:00.000Z', reason: 'approved durable project fact', candidateId: 'a', memoryId: 'memory-a', details: { candidateKind: 'project_fact' } },
+        { id: 'event-2', action: 'promote', at: '2026-05-29T00:00:00.000Z', reason: 'approved another durable project fact', candidateId: 'b', memoryId: 'memory-b', details: { candidateKind: 'project_fact' } },
+        { id: 'event-3', action: 'promote', at: '2026-05-30T00:00:00.000Z', reason: 'approved third durable project fact', candidateId: 'c', memoryId: 'memory-c', details: { candidateKind: 'project_fact' } }
+      ],
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({ source: 'review_event', normalizedKey: 'review-derived-approve-project_fact' })
   })
 
   it('aggregates edit review events stored as pending review actions', () => {

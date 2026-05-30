@@ -1028,7 +1028,8 @@ function reviewEventDetails(
     ...base,
     reviewAction,
     ...(reviewPatternId === undefined ? {} : { reviewPatternId }),
-    candidateKind: deriveMemoryCandidateKind(candidate)
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    normalizedKey: candidate.normalizedKey
   }
 }
 

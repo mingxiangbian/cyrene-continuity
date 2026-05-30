@@ -94,6 +94,7 @@ export async function proposeCodexMemoryCandidate(input: {
   candidate: CodexMemoryCandidateInput
   now?: string
   recordRejectedCandidate?: boolean
+  allowAutoPromote?: boolean
 }): Promise<CodexMemoryProposeResult> {
   const now = input.now ?? new Date().toISOString()
   const project = await identifyCodexProject(input.cwd)
@@ -160,7 +161,7 @@ export async function proposeCodexMemoryCandidate(input: {
       now
     })
 
-    if (autoPromotion.allowed) {
+    if (autoPromotion.allowed && input.allowAutoPromote !== false) {
       const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now)
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted])
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged)
