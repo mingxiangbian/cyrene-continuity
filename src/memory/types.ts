@@ -1,60 +1,57 @@
-export type MemoryDomain =
-  | 'project'
-  | 'personal'
-  | 'relationship'
-  | 'affective'
-  | 'procedural'
-  | 'system'
+export const MEMORY_DOMAINS = ['project', 'personal', 'relationship', 'affective', 'procedural', 'system'] as const
+export type MemoryDomain = typeof MEMORY_DOMAINS[number]
 
-export type MemoryType =
-  | 'project_fact'
-  | 'user_preference'
-  | 'interaction_style'
-  | 'relationship_boundary'
-  | 'affective_pattern'
-  | 'procedural_rule'
-  | 'episode'
-  | 'system_policy'
-  | 'reference'
+export const MEMORY_TYPES = [
+  'project_fact',
+  'user_preference',
+  'interaction_style',
+  'relationship_boundary',
+  'affective_pattern',
+  'procedural_rule',
+  'episode',
+  'system_policy',
+  'reference'
+] as const
+export type MemoryType = typeof MEMORY_TYPES[number]
 
-export type MemoryStrength = 'hard' | 'soft' | 'session'
+export const MEMORY_STRENGTHS = ['hard', 'soft', 'session'] as const
+export type MemoryStrength = typeof MEMORY_STRENGTHS[number]
 
-export type MemoryScope = 'global' | 'project' | 'session'
+export const MEMORY_SCOPES = ['global', 'project', 'session'] as const
+export type MemoryScope = typeof MEMORY_SCOPES[number]
 
-export type MemoryPortability =
-  | 'local_only'
-  | 'project_family'
-  | 'similar_project'
-  | 'global'
+const MEMORY_PORTABILITIES = ['local_only', 'project_family', 'similar_project', 'global'] as const
+export type MemoryPortability = typeof MEMORY_PORTABILITIES[number]
 
-export type MemoryStatus =
-  | 'active'
-  | 'pending'
-  | 'archived'
-  | 'rejected'
-  | 'expired'
-  | 'superseded'
+const MEMORY_STATUSES = ['active', 'pending', 'archived', 'rejected', 'expired', 'superseded'] as const
+export type MemoryStatus = typeof MEMORY_STATUSES[number]
 
-export type MemorySource =
-  | 'user_explicit'
-  | 'user_implicit'
-  | 'assistant_observed'
-  | 'tool_trace'
-  | 'file'
-  | 'legacy_markdown'
+export const MEMORY_SOURCES = [
+  'user_explicit',
+  'user_implicit',
+  'assistant_observed',
+  'tool_trace',
+  'file',
+  'legacy_markdown'
+] as const
+export type MemorySource = typeof MEMORY_SOURCES[number]
 
-export type MemoryProfileVisibility = 'always' | 'safe_summary' | 'retrieval_only' | 'never'
+const MEMORY_PROFILE_VISIBILITIES = ['always', 'safe_summary', 'retrieval_only', 'never'] as const
+export type MemoryProfileVisibility = typeof MEMORY_PROFILE_VISIBILITIES[number]
 
-export type MemoryCandidateKind =
-  | 'project_fact'
-  | 'project_decision'
-  | 'user_instruction'
-  | 'workflow_rule'
-  | 'known_pitfall'
-  | 'rejected_approach'
-  | 'open_question'
+export const MEMORY_CANDIDATE_KINDS = [
+  'project_fact',
+  'project_decision',
+  'user_instruction',
+  'workflow_rule',
+  'known_pitfall',
+  'rejected_approach',
+  'open_question'
+] as const
+export type MemoryCandidateKind = typeof MEMORY_CANDIDATE_KINDS[number]
 
-export type MemoryConflictResolution = 'supersede' | 'keep_both' | 'reject_new'
+export const MEMORY_CONFLICT_RESOLUTIONS = ['supersede', 'keep_both', 'reject_new'] as const
+export type MemoryConflictResolution = typeof MEMORY_CONFLICT_RESOLUTIONS[number]
 
 export interface MemoryScores {
   evidenceStrength: number

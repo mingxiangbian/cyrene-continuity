@@ -37,6 +37,7 @@ import type {
   MemoryTombstone,
   PendingMemory
 } from '../memory/types.js'
+import { MEMORY_CONFLICT_RESOLUTIONS } from '../memory/types.js'
 
 export type CodexMemoryCandidateKind = MemoryCandidateKind
 export type CodexMemoryConflictResolution = MemoryConflictResolution
@@ -235,7 +236,7 @@ export interface CodexPendingMemoryDeferResult {
       }
 }
 
-const NORMALIZED_KEY_CONFLICT_RESOLUTIONS: MemoryConflictResolution[] = ['supersede', 'keep_both', 'reject_new']
+const NORMALIZED_KEY_CONFLICT_RESOLUTIONS: MemoryConflictResolution[] = [...MEMORY_CONFLICT_RESOLUTIONS]
 
 export function reviewHashForPendingMemory(candidate: PendingMemory): string {
   const payload = {

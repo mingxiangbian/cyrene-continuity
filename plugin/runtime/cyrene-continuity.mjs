@@ -5981,7 +5981,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve8.call(this, root, ref);
+      let _sch = resolve7.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -6008,7 +6008,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve8(root, ref) {
+    function resolve7(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -6639,7 +6639,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve8(baseURI, relativeURI, options) {
+    function resolve7(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -6897,7 +6897,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve8,
+      resolve: resolve7,
       resolveComponent,
       equal,
       serialize,
@@ -10099,7 +10099,7 @@ import { join as join4 } from "node:path";
 
 // src/memory/paths.ts
 import { lstat as lstat2, mkdir, realpath } from "node:fs/promises";
-import { isAbsolute, join as join3, relative, resolve as resolve2 } from "node:path";
+import { isAbsolute, join as join3, relative } from "node:path";
 async function getReadableMemoryRoot(cwd) {
   const cwdRealPath = await realpath(cwd);
   const cyreneDir = await getSafeDirectoryOrNull(join3(cwdRealPath, ".cyrene"), cwdRealPath);
@@ -10310,7 +10310,13 @@ async function readJsonLines(filePath) {
     }
     throw error2;
   }
-  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
 }
 async function writeJsonLinesAtomic(filePath, values) {
   await assertSafeMemoryDataFileTarget(filePath);
@@ -11539,11 +11545,11 @@ function hashShort(value) {
 import { execFile } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { realpath as realpath4 } from "node:fs/promises";
-import { basename, resolve as resolve3 } from "node:path";
+import { basename, resolve as resolve2 } from "node:path";
 import { promisify } from "node:util";
 var execFileAsync = promisify(execFile);
 async function identifyCodexProject(cwd) {
-  const resolvedCwd = await realpath4(resolve3(cwd));
+  const resolvedCwd = await realpath4(resolve2(cwd));
   const gitRootRaw = await tryGit(["rev-parse", "--show-toplevel"], resolvedCwd);
   const gitRoot = gitRootRaw?.trim();
   const root = gitRoot ?? resolvedCwd;
@@ -11750,12 +11756,12 @@ import { dirname as dirname5, join as join9 } from "node:path";
 
 // src/codex/stable-shim.ts
 import { access, chmod, mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname4, resolve as resolve4 } from "node:path";
+import { dirname as dirname4, resolve as resolve3 } from "node:path";
 function codexStableBinRoot() {
-  return resolve4(codexGlobalRoot(), "bin");
+  return resolve3(codexGlobalRoot(), "bin");
 }
 function codexStableExecutablePath() {
-  return resolve4(codexStableBinRoot(), "cyrene-continuity");
+  return resolve3(codexStableBinRoot(), "cyrene-continuity");
 }
 async function assertRuntimeExists(runtimePath) {
   try {
@@ -12260,28 +12266,28 @@ function errorMessage2(error2) {
 }
 
 // src/codex/runtime-paths.ts
-import { basename as basename4, dirname as dirname7, resolve as resolve5 } from "node:path";
+import { basename as basename4, dirname as dirname7, resolve as resolve4 } from "node:path";
 var PLUGIN_RUNTIME_FILE = "cyrene-continuity.mjs";
 function isPluginRuntimeEntryPath(runtimeEntryPath) {
-  const entryPath = resolve5(runtimeEntryPath);
+  const entryPath = resolve4(runtimeEntryPath);
   return basename4(entryPath) === PLUGIN_RUNTIME_FILE && basename4(dirname7(entryPath)) === "runtime";
 }
 function resolvePluginRoot(runtimeEntryPath) {
-  const entryPath = resolve5(runtimeEntryPath);
+  const entryPath = resolve4(runtimeEntryPath);
   if (isPluginRuntimeEntryPath(entryPath)) {
     return dirname7(dirname7(entryPath));
   }
-  return resolve5(requireDevRepoRoot(entryPath), "plugin");
+  return resolve4(requireDevRepoRoot(entryPath), "plugin");
 }
 function resolvePluginRuntimePath(runtimeEntryPath) {
-  const entryPath = resolve5(runtimeEntryPath);
+  const entryPath = resolve4(runtimeEntryPath);
   if (isPluginRuntimeEntryPath(entryPath)) {
     return entryPath;
   }
-  return resolve5(resolvePluginRoot(entryPath), "runtime", PLUGIN_RUNTIME_FILE);
+  return resolve4(resolvePluginRoot(entryPath), "runtime", PLUGIN_RUNTIME_FILE);
 }
 function resolveDevRepoRoot(runtimeEntryPath) {
-  const entryPath = resolve5(runtimeEntryPath);
+  const entryPath = resolve4(runtimeEntryPath);
   if (isPluginRuntimeEntryPath(entryPath)) {
     return null;
   }
@@ -12292,7 +12298,7 @@ function resolveDevRepoRoot(runtimeEntryPath) {
   if (basename4(entryDir) === "codex" && basename4(dirname7(entryDir)) === "src") {
     return dirname7(dirname7(entryDir));
   }
-  return resolve5(entryDir, "..", "..");
+  return resolve4(entryDir, "..", "..");
 }
 function requireDevRepoRoot(runtimeEntryPath) {
   const repoRoot = resolveDevRepoRoot(runtimeEntryPath);
@@ -12300,6 +12306,109 @@ function requireDevRepoRoot(runtimeEntryPath) {
     throw new Error("Cyrene dev bridge install requires a source checkout. Use cyrene-continuity codex install --plugin from the installed plugin.");
   }
   return repoRoot;
+}
+
+// src/codex/toml-lite.ts
+function hasEnabledTomlTable(configText, heading) {
+  const block = readTomlBlock(configText, heading);
+  if (block === void 0) {
+    return false;
+  }
+  return readTomlBooleanValue(block, "enabled") !== false;
+}
+function readTomlStringValue(block, key) {
+  const value = readTomlAssignmentValue(block, key);
+  if (value === void 0) {
+    return void 0;
+  }
+  return parseTomlString(value);
+}
+function readTomlStringArrayValue(block, key) {
+  const value = readTomlAssignmentValue(block, key);
+  if (value === void 0) {
+    return void 0;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function readTomlBooleanValue(block, key) {
+  const value = readTomlAssignmentValue(block, key);
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return void 0;
+}
+function readTomlAssignmentValue(block, key) {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const value = block.match(new RegExp(`^\\s*${escapedKey}\\s*=\\s*(.+?)\\s*$`, "m"))?.[1];
+  return value === void 0 ? void 0 : stripTomlInlineComment(value).trim();
+}
+function readTomlBlock(configText, heading) {
+  const lines2 = configText.split(/\r?\n/);
+  const start = lines2.findIndex((line) => stripTomlInlineComment(line).trim() === heading);
+  if (start < 0) {
+    return void 0;
+  }
+  const body = [];
+  for (let index = start + 1; index < lines2.length; index += 1) {
+    if (/^\s*\[/.test(stripTomlInlineComment(lines2[index] ?? ""))) {
+      break;
+    }
+    body.push(lines2[index] ?? "");
+  }
+  return body.join("\n");
+}
+function parseTomlString(value) {
+  if (value.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(value);
+      return typeof parsed === "string" ? parsed : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  return void 0;
+}
+function stripTomlInlineComment(value) {
+  let quote;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote === '"') {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        quote = void 0;
+      }
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") {
+        quote = void 0;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "#") {
+      return value.slice(0, index);
+    }
+  }
+  return value;
 }
 
 // src/codex/codex-doctor.ts
@@ -12590,44 +12699,6 @@ function formatDoctorMcpCommand(mcpCommand) {
 function formatCommandPart(value) {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : JSON.stringify(value);
 }
-function readTomlStringValue(block, key) {
-  const value = readTomlAssignmentValue(block, key);
-  if (value === void 0) {
-    return void 0;
-  }
-  return parseTomlString(value);
-}
-function readTomlStringArrayValue(block, key) {
-  const value = readTomlAssignmentValue(block, key);
-  if (value === void 0) {
-    return void 0;
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function readTomlAssignmentValue(block, key) {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const value = block.match(new RegExp(`^\\s*${escapedKey}\\s*=\\s*(.+?)\\s*$`, "m"))?.[1];
-  return value === void 0 ? void 0 : stripTomlInlineComment(value).trim();
-}
-function parseTomlString(value) {
-  if (value.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(value);
-      return typeof parsed === "string" ? parsed : void 0;
-    } catch {
-      return void 0;
-    }
-  }
-  if (value.startsWith("'") && value.endsWith("'")) {
-    return value.slice(1, -1);
-  }
-  return void 0;
-}
 function parseJsonObject(value) {
   if (value === "") {
     return void 0;
@@ -12640,67 +12711,7 @@ function parseJsonObject(value) {
   }
 }
 function hasEnabledMcpServer(configText, name) {
-  const block = readTomlBlock(configText, `[mcp_servers.${name}]`);
-  if (block === void 0) {
-    return false;
-  }
-  return readTomlBooleanValue(block, "enabled") !== false;
-}
-function readTomlBooleanValue(block, key) {
-  const value = readTomlAssignmentValue(block, key);
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  return void 0;
-}
-function readTomlBlock(configText, heading) {
-  const lines2 = configText.split(/\r?\n/);
-  const start = lines2.findIndex((line) => stripTomlInlineComment(line).trim() === heading);
-  if (start < 0) {
-    return void 0;
-  }
-  const body = [];
-  for (let index = start + 1; index < lines2.length; index += 1) {
-    if (/^\s*\[/.test(stripTomlInlineComment(lines2[index]))) {
-      break;
-    }
-    body.push(lines2[index]);
-  }
-  return body.join("\n");
-}
-function stripTomlInlineComment(value) {
-  let quote;
-  let escaped = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-    if (quote === '"') {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        quote = void 0;
-      }
-      continue;
-    }
-    if (quote === "'") {
-      if (char === "'") {
-        quote = void 0;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === "#") {
-      return value.slice(0, index);
-    }
-  }
-  return value;
+  return hasEnabledTomlTable(configText, `[mcp_servers.${name}]`);
 }
 async function readOptional(path) {
   try {
@@ -14654,8 +14665,42 @@ function isFileErrorCode9(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/memory/types.ts
+var MEMORY_DOMAINS = ["project", "personal", "relationship", "affective", "procedural", "system"];
+var MEMORY_TYPES = [
+  "project_fact",
+  "user_preference",
+  "interaction_style",
+  "relationship_boundary",
+  "affective_pattern",
+  "procedural_rule",
+  "episode",
+  "system_policy",
+  "reference"
+];
+var MEMORY_STRENGTHS = ["hard", "soft", "session"];
+var MEMORY_SCOPES = ["global", "project", "session"];
+var MEMORY_SOURCES = [
+  "user_explicit",
+  "user_implicit",
+  "assistant_observed",
+  "tool_trace",
+  "file",
+  "legacy_markdown"
+];
+var MEMORY_CANDIDATE_KINDS2 = [
+  "project_fact",
+  "project_decision",
+  "user_instruction",
+  "workflow_rule",
+  "known_pitfall",
+  "rejected_approach",
+  "open_question"
+];
+var MEMORY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
+
 // src/codex/memory-review.ts
-var NORMALIZED_KEY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
+var NORMALIZED_KEY_CONFLICT_RESOLUTIONS = [...MEMORY_CONFLICT_RESOLUTIONS];
 function reviewHashForPendingMemory(candidate) {
   const payload = {
     id: candidate.id,
@@ -15417,7 +15462,6 @@ async function getCodexContinuityContext(input) {
   const globalMemoryRoot = codexGlobalMemoryRoot();
   const projectMemoryRoot = codexProjectMemoryRoot(project.projectId);
   const budget = memoryRetrievalBudgetForTask(task);
-  await markProjectDreamDueIfOverdue(project.projectId, config2);
   const legacyRetrievalInput = {
     cwd: input.cwd,
     userCyreneDir: config2.userCyreneDir,
@@ -15836,23 +15880,6 @@ function formatReviewReminders(pendingReview) {
     content: pendingReview.newestPreview
   }];
 }
-async function markProjectDreamDueIfOverdue(projectId, config2) {
-  if (!config2.memoryDreamCatchUpEnabled) {
-    return;
-  }
-  const root = await getReadableCodexProjectMemoryRoot(projectId);
-  if (root === null) {
-    return;
-  }
-  try {
-    const state = await readCodexMemoryDreamState(root);
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    if (state.dreamDue !== true && state.nextDreamDueAt !== void 0 && state.nextDreamDueAt <= now) {
-      await markCodexMemoryDreamDue(root, now);
-    }
-  } catch {
-  }
-}
 async function readGlobalCodexProfileIfExists() {
   const root = await getReadableCodexGlobalMemoryRoot();
   if (root === null) {
@@ -15905,43 +15932,154 @@ async function runCodexSimilarHintsEval(input) {
   };
 }
 async function runCodexReleaseEval() {
+  const combined = combineEvalGateResults([
+    runMemoryRoutingEvalGate({
+      currentProjectId: "release-current",
+      globalMemory: [{
+        id: "release-global-active",
+        status: "active",
+        scope: "global",
+        homeProjectId: null
+      }],
+      projectMemory: [{
+        id: "release-project-active",
+        status: "active",
+        scope: "project",
+        homeProjectId: "release-current"
+      }],
+      pendingHypotheses: [{
+        id: "release-pending",
+        status: "pending",
+        provisional: true
+      }],
+      similarProjectHints: [{
+        id: "release-similar-hint",
+        status: "active",
+        domain: "procedural",
+        homeProjectId: "release-other",
+        notCurrentProjectFact: true
+      }]
+    }),
+    runSimilarHintsEvalGate([{
+      id: "release-similar-hint",
+      currentProjectId: "release-current",
+      homeProjectId: "release-other",
+      domain: "procedural",
+      portability: "similar_project",
+      scope: "project",
+      content: "Release checks keep similar-project hints transferable and non-current.",
+      transferable: true,
+      notCurrentProjectFact: true
+    }]),
+    runDreamApplyEvalGate({
+      proposedChanges: [{
+        action: "promote",
+        candidateId: "release-pending",
+        memoryId: "release-memory",
+        normalizedKey: "release-pending",
+        reason: "Synthetic release eval promotion with auditable evidence.",
+        distinctEvidenceCount: 1
+      }],
+      pending: [{
+        id: "release-pending",
+        domain: "procedural",
+        type: "procedural_rule",
+        strength: "hard",
+        scope: "project",
+        status: "pending",
+        content: "Release eval candidates stay auditable.",
+        normalizedKey: "release-pending",
+        evidence: [{ runId: "release-run", sourceKind: "user_explicit", summary: "Release eval fixture." }],
+        source: "user_explicit",
+        scores: {
+          evidenceStrength: 0.95,
+          stability: 0.9,
+          usefulness: 0.9,
+          safety: 0.95,
+          sensitivity: 0.1
+        },
+        seenCount: 1,
+        firstSeenAt: "2026-05-29T00:00:00.000Z",
+        lastSeenAt: "2026-05-29T00:00:00.000Z",
+        expiresAt: "2026-06-29T00:00:00.000Z",
+        tags: ["release_eval"]
+      }],
+      profilePreview: "Release eval candidates stay auditable."
+    })
+  ]);
+  const results = minimumEvalResults(combined.results);
+  const completedChecks = new Set(results.map((result2) => result2.name));
+  const missingChecks = MINIMUM_EVAL_CHECKS.filter((check2) => !completedChecks.has(check2));
   return {
     check: "release",
-    passed: true,
-    failedChecks: [],
-    minimumChecks: [...MINIMUM_EVAL_CHECKS]
+    passed: combined.passed && missingChecks.length === 0,
+    failedChecks: uniqueChecks([...combined.failedChecks, ...missingChecks]),
+    minimumChecks: [...MINIMUM_EVAL_CHECKS],
+    results
   };
+}
+function minimumEvalResults(results) {
+  const firstByName = /* @__PURE__ */ new Map();
+  for (const result2 of results) {
+    if (MINIMUM_EVAL_CHECKS.includes(result2.name) && !firstByName.has(result2.name)) {
+      firstByName.set(result2.name, result2);
+    }
+  }
+  return MINIMUM_EVAL_CHECKS.flatMap((check2) => {
+    const result2 = firstByName.get(check2);
+    return result2 === void 0 ? [] : [result2];
+  });
+}
+function uniqueChecks(checks) {
+  return Array.from(new Set(checks));
 }
 
 // src/codex/codex-hook-stop.ts
 import { randomUUID as randomUUID10 } from "node:crypto";
 import { lstat as lstat12, open as open3, readFile as readFile14, realpath as realpath6 } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join20, relative as relative5, resolve as resolve6 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join20, relative as relative5, resolve as resolve5 } from "node:path";
 
 // src/llm-client.ts
 async function callModel(input) {
   const model = modelForUseCase(input.config, input.useCase ?? "chat");
   validateModelConfig(input.config, model);
-  const response = await fetch(`${input.config.model.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: requestHeaders(input.config),
-    signal: mergeAbortSignals(AbortSignal.timeout(input.config.llmRequestTimeoutMs), input.signal),
-    body: JSON.stringify({
-      model,
-      messages: input.messages.map(formatRequestMessage),
-      ...input.tools.length > 0 ? { tools: input.tools } : {},
-      temperature: input.config.model.temperature
-    })
-  });
-  if (!response.ok) {
-    throw new Error(`LLM request failed with HTTP ${response.status}: ${await response.text()}`);
+  const attempts = input.config.llmRetryMaxAttempts;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${input.config.model.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: requestHeaders(input.config),
+        signal: mergeAbortSignals(AbortSignal.timeout(input.config.llmRequestTimeoutMs), input.signal),
+        body: JSON.stringify({
+          model,
+          messages: input.messages.map(formatRequestMessage),
+          ...input.tools.length > 0 ? { tools: input.tools } : {},
+          temperature: input.config.model.temperature
+        })
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        if (attempt < attempts && isRetryableStatus(response.status)) {
+          await waitForRetry(input.config.llmRetryBaseDelayMs, attempt, input.signal);
+          continue;
+        }
+        throw new Error(`LLM request failed with HTTP ${response.status}: ${body}`);
+      }
+      const data = await response.json();
+      const message = data.choices?.[0]?.message;
+      return {
+        content: message?.content ?? "",
+        toolCalls: message?.tool_calls ?? []
+      };
+    } catch (error2) {
+      if (attempt < attempts && isRetryableFetchError(error2)) {
+        await waitForRetry(input.config.llmRetryBaseDelayMs, attempt, input.signal);
+        continue;
+      }
+      throw error2;
+    }
   }
-  const data = await response.json();
-  const message = data.choices?.[0]?.message;
-  return {
-    content: message?.content ?? "",
-    toolCalls: message?.tool_calls ?? []
-  };
+  throw new Error("LLM request failed without returning a response.");
 }
 function formatRequestMessage(message) {
   return {
@@ -15967,6 +16105,37 @@ function validateModelConfig(config2, routeModel) {
     missing.push("CYRENE_API_KEY");
   }
   if (missing.length > 0) throw new Error(`Model config is incomplete: set ${missing.join(" and ")}.`);
+}
+function isRetryableStatus(status) {
+  return status === 429 || status >= 500;
+}
+function isRetryableFetchError(error2) {
+  if (error2 instanceof DOMException && (error2.name === "AbortError" || error2.name === "TimeoutError")) {
+    return false;
+  }
+  return error2 instanceof TypeError;
+}
+async function waitForRetry(baseDelayMs, attempt, signal) {
+  const delayMs = baseDelayMs * 2 ** (attempt - 1);
+  await new Promise((resolve7, reject2) => {
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve7();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      cleanup();
+      reject2(signal?.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+    };
+    if (signal !== void 0) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
 }
 function modelBaseUrlRequiresApiKey(baseUrl) {
   const trimmed = baseUrl.trim();
@@ -17133,28 +17302,6 @@ function isRecord4(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-var DOMAINS = ["project", "personal", "relationship", "affective", "procedural", "system"];
-var TYPES = [
-  "project_fact",
-  "user_preference",
-  "interaction_style",
-  "relationship_boundary",
-  "affective_pattern",
-  "procedural_rule",
-  "episode",
-  "system_policy",
-  "reference"
-];
-var STRENGTHS = ["hard", "soft", "session"];
-var SCOPES = ["global", "project", "session"];
-var SOURCES = [
-  "user_explicit",
-  "user_implicit",
-  "assistant_observed",
-  "tool_trace",
-  "file",
-  "legacy_markdown"
-];
 var FAILED_SUMMARY = "Codex review summary failed; no transcript content persisted.";
 async function runCodexReviewSummary(input) {
   const window = recentTranscriptMessages(input.messages, 40);
@@ -17264,20 +17411,20 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
   if (!isRecord5(value)) {
     return void 0;
   }
-  const domain = parseEnum(value.domain, DOMAINS);
-  const type = parseEnum(value.type, TYPES);
+  const domain = parseEnum(value.domain, MEMORY_DOMAINS);
+  const type = parseEnum(value.type, MEMORY_TYPES);
   const content = parseString(value.content);
   if (domain === void 0 || type === void 0 || content === void 0) {
     return void 0;
   }
-  const source = parseEnum(value.source, SOURCES);
+  const source = parseEnum(value.source, MEMORY_SOURCES);
   const candidateKind = isMemoryCandidateKind(value.candidateKind) ? value.candidateKind : isMemoryCandidateKind(value.candidate_kind) ? value.candidate_kind : void 0;
   const candidate = {
     domain,
     type,
     ...candidateKind === void 0 ? {} : { candidateKind },
-    strength: parseEnum(value.strength, STRENGTHS),
-    scope: parseEnum(value.scope, SCOPES),
+    strength: parseEnum(value.strength, MEMORY_STRENGTHS),
+    scope: parseEnum(value.scope, MEMORY_SCOPES),
     content: redactor.redact(content),
     normalizedKey: redactOptionalString(value.normalizedKey, redactor),
     source,
@@ -17745,7 +17892,7 @@ async function readTranscriptText(cwd, transcriptPath) {
   }
 }
 async function resolveSafeTranscriptPath(cwd, transcriptPath) {
-  const resolved = isAbsolute5(transcriptPath) ? transcriptPath : resolve6(cwd, transcriptPath);
+  const resolved = isAbsolute5(transcriptPath) ? transcriptPath : resolve5(cwd, transcriptPath);
   const stats = await lstat12(resolved);
   if (stats.isSymbolicLink()) {
     throw new Error("Transcript path is a symlink.");
@@ -17983,13 +18130,13 @@ function isRecord6(value) {
 // src/codex/codex-install.ts
 import { lstat as lstat13, mkdir as mkdir10, rm as rm4, symlink, writeFile as writeFile8 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname10, join as join21, resolve as resolve7 } from "node:path";
+import { dirname as dirname10, join as join21, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
 async function installCodexDevBridge(input = {}) {
   const repoRoot = requireDevRepoRoot(input.runtimeEntryPath ?? fileURLToPath2(import.meta.url));
-  const skillSource = resolve7(
+  const skillSource = resolve6(
     repoRoot,
     "plugin",
     "skills",
@@ -18249,72 +18396,7 @@ function isOlderThan(value, now, maxAgeMs) {
   return Number.isFinite(valueTime) && Number.isFinite(nowTime) && nowTime - valueTime > maxAgeMs;
 }
 function hasEnabledMcpServer2(configText, name) {
-  const block = readTomlBlock2(configText, `[mcp_servers.${name}]`);
-  if (block === void 0) {
-    return false;
-  }
-  return readTomlBooleanValue2(block, "enabled") !== false;
-}
-function readTomlBooleanValue2(block, key) {
-  const value = readTomlAssignmentValue2(block, key);
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  return void 0;
-}
-function readTomlAssignmentValue2(block, key) {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const value = block.match(new RegExp(`^\\s*${escapedKey}\\s*=\\s*(.+?)\\s*$`, "m"))?.[1];
-  return value === void 0 ? void 0 : stripTomlInlineComment2(value).trim();
-}
-function readTomlBlock2(configText, heading) {
-  const lines2 = configText.split(/\r?\n/);
-  const start = lines2.findIndex((line) => stripTomlInlineComment2(line).trim() === heading);
-  if (start < 0) {
-    return void 0;
-  }
-  const body = [];
-  for (let index = start + 1; index < lines2.length; index += 1) {
-    if (/^\s*\[/.test(stripTomlInlineComment2(lines2[index] ?? ""))) {
-      break;
-    }
-    body.push(lines2[index] ?? "");
-  }
-  return body.join("\n");
-}
-function stripTomlInlineComment2(value) {
-  let quote;
-  let escaped = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-    if (quote === '"') {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        quote = void 0;
-      }
-      continue;
-    }
-    if (quote === "'") {
-      if (char === "'") {
-        quote = void 0;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === "#") {
-      return value.slice(0, index);
-    }
-  }
-  return value;
+  return hasEnabledTomlTable(configText, `[mcp_servers.${name}]`);
 }
 async function readOptional2(path) {
   try {
@@ -20132,7 +20214,7 @@ async function listenWithFallback(input, requestedPort) {
   throw lastError;
 }
 function listen(input, port) {
-  return new Promise((resolve8, reject2) => {
+  return new Promise((resolve7, reject2) => {
     const context = {
       ...input,
       uiToken: input.uiToken ?? createUiToken()
@@ -20155,7 +20237,7 @@ function listen(input, port) {
         reject2(new Error("Codex UI server did not bind to a TCP port."));
         return;
       }
-      resolve8(createCodexUiServer(server, address.port));
+      resolve7(createCodexUiServer(server, address.port));
     });
   });
 }
@@ -20165,15 +20247,15 @@ function createCodexUiServer(server, port) {
     host: HOST,
     port,
     url: `http://${HOST}:${port}`,
-    close: () => new Promise((resolve8, reject2) => {
+    close: () => new Promise((resolve7, reject2) => {
       if (closed) {
-        resolve8();
+        resolve7();
         return;
       }
       closed = true;
       server.close((error2) => {
         if (error2) reject2(error2);
-        else resolve8();
+        else resolve7();
       });
     })
   };
@@ -20713,7 +20795,6 @@ function isFileErrorCode13(error2, code) {
 // src/codex/memory-dream.ts
 var DREAM_LOCK_DIR = "dream.lock";
 var DREAM_LOCKS_DIR = ".locks";
-var MAX_PENDING_EVIDENCE2 = 10;
 async function runCodexMemoryDream(input) {
   const project = await identifyCodexProject(input.cwd);
   const stage = input.stage ?? "deep-preview";
@@ -21018,46 +21099,10 @@ function mergePendingDuplicates(pending) {
     if (index === -1) {
       merged.push(candidate);
     } else {
-      merged[index] = mergePendingMemory2(merged[index], candidate);
+      merged[index] = mergePendingMemory(merged[index], candidate);
     }
   }
   return { changed: merged.length !== pending.length, pending: merged };
-}
-function mergePendingMemory2(existing, candidate) {
-  const seenCount = existing.seenCount + candidate.seenCount;
-  return {
-    ...existing,
-    scores: averageScores2(existing.scores, existing.seenCount, candidate.scores, candidate.seenCount),
-    seenCount,
-    lastSeenAt: latestIso3(existing.lastSeenAt, candidate.lastSeenAt),
-    expiresAt: latestIso3(existing.expiresAt, candidate.expiresAt),
-    promoteAfter: candidate.promoteAfter ?? existing.promoteAfter,
-    evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE2),
-    candidateKind: existing.candidateKind ?? candidate.candidateKind,
-    candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
-    tags: Array.from(/* @__PURE__ */ new Set([...existing.tags, ...candidate.tags])),
-    conflictsWith: uniqueOptional3([...existing.conflictsWith ?? [], ...candidate.conflictsWith ?? []])
-  };
-}
-function averageScores2(left, leftWeight, right, rightWeight) {
-  const total = leftWeight + rightWeight;
-  return {
-    evidenceStrength: weightedAverage2(left.evidenceStrength, leftWeight, right.evidenceStrength, rightWeight, total),
-    stability: weightedAverage2(left.stability, leftWeight, right.stability, rightWeight, total),
-    usefulness: weightedAverage2(left.usefulness, leftWeight, right.usefulness, rightWeight, total),
-    safety: weightedAverage2(left.safety, leftWeight, right.safety, rightWeight, total),
-    sensitivity: weightedAverage2(left.sensitivity, leftWeight, right.sensitivity, rightWeight, total)
-  };
-}
-function weightedAverage2(left, leftWeight, right, rightWeight, total) {
-  return total === 0 ? right : (left * leftWeight + right * rightWeight) / total;
-}
-function latestIso3(left, right) {
-  return left >= right ? left : right;
-}
-function uniqueOptional3(values) {
-  const unique2 = Array.from(new Set(values));
-  return unique2.length === 0 ? void 0 : unique2;
 }
 function proposedActionForPending(candidate, reason) {
   if (shouldRejectWithoutMoreEvidence(reason)) {
@@ -22197,7 +22242,7 @@ async function handleCodexCommand(input) {
   process.exit(1);
 }
 function waitForProcessTermination(server) {
-  return new Promise((resolve8, reject2) => {
+  return new Promise((resolve7, reject2) => {
     let settled = false;
     const cleanup = () => {
       process.off("SIGINT", onSignal);
@@ -22209,7 +22254,7 @@ function waitForProcessTermination(server) {
       }
       settled = true;
       cleanup();
-      server.close().then(resolve8, reject2);
+      server.close().then(resolve7, reject2);
     };
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
@@ -34465,7 +34510,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
+        await new Promise((resolve7) => setTimeout(resolve7, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34482,7 +34527,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve8, reject2) => {
+    return new Promise((resolve7, reject2) => {
       const earlyReject = (error2) => {
         reject2(error2);
       };
@@ -34560,7 +34605,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject2(parseResult.error);
           } else {
-            resolve8(parseResult.data);
+            resolve7(parseResult.data);
           }
         } catch (error2) {
           reject2(error2);
@@ -34821,12 +34866,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve8, reject2) => {
+    return new Promise((resolve7, reject2) => {
       if (signal.aborted) {
         reject2(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve8, interval);
+      const timeoutId = setTimeout(resolve7, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject2(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -35926,7 +35971,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve8) => setTimeout(resolve8, pollInterval));
+      await new Promise((resolve7) => setTimeout(resolve7, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -36575,12 +36620,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve7) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve8();
+        resolve7();
       } else {
-        this._stdout.once("drain", resolve8);
+        this._stdout.once("drain", resolve7);
       }
     });
   }
@@ -36633,35 +36678,17 @@ async function handleMemoryProfileGet(input, fallbackCwd) {
 }
 
 // src/mcp/tools/memory-propose.ts
-var memoryCandidateKindSchema = external_exports.enum([
-  "project_fact",
-  "project_decision",
-  "user_instruction",
-  "workflow_rule",
-  "known_pitfall",
-  "rejected_approach",
-  "open_question"
-]);
+var memoryCandidateKindSchema = external_exports.enum(MEMORY_CANDIDATE_KINDS2);
 var memoryCandidateSchema = external_exports.object({
-  domain: external_exports.enum(["project", "personal", "relationship", "affective", "procedural", "system"]),
-  type: external_exports.enum([
-    "project_fact",
-    "user_preference",
-    "interaction_style",
-    "relationship_boundary",
-    "affective_pattern",
-    "procedural_rule",
-    "episode",
-    "system_policy",
-    "reference"
-  ]),
-  strength: external_exports.enum(["hard", "soft", "session"]).optional(),
-  scope: external_exports.enum(["global", "project", "session"]).optional(),
+  domain: external_exports.enum(MEMORY_DOMAINS),
+  type: external_exports.enum(MEMORY_TYPES),
+  strength: external_exports.enum(MEMORY_STRENGTHS).optional(),
+  scope: external_exports.enum(MEMORY_SCOPES).optional(),
   candidateKind: memoryCandidateKindSchema.optional(),
   candidate_kind: memoryCandidateKindSchema.optional(),
   content: external_exports.string(),
   normalizedKey: external_exports.string().optional(),
-  source: external_exports.enum(["user_explicit", "user_implicit", "assistant_observed", "tool_trace", "file", "legacy_markdown"]).optional(),
+  source: external_exports.enum(MEMORY_SOURCES).optional(),
   evidence: external_exports.array(
     external_exports.object({
       runId: external_exports.string().optional(),
@@ -36671,7 +36698,7 @@ var memoryCandidateSchema = external_exports.object({
       sessionId: external_exports.string().optional(),
       taskHash: external_exports.string().optional(),
       quoteHash: external_exports.string().optional(),
-      sourceKind: external_exports.enum(["user_explicit", "user_implicit", "assistant_observed", "tool_trace", "file", "legacy_markdown"]).optional()
+      sourceKind: external_exports.enum(MEMORY_SOURCES).optional()
     })
   ),
   scores: external_exports.object({
@@ -36737,7 +36764,7 @@ var memoryPendingGetInputSchema = {
 var memoryReviewDecisionInputSchema = {
   id: external_exports.string(),
   reviewHash: external_exports.string().regex(/^[a-f0-9]{64}$/),
-  conflictResolution: external_exports.enum(["supersede", "keep_both", "reject_new"]).optional(),
+  conflictResolution: external_exports.enum(MEMORY_CONFLICT_RESOLUTIONS).optional(),
   reason: external_exports.string().optional()
 };
 var memoryReviewEditInputSchema = {

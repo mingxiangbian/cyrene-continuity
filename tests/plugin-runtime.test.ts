@@ -36,9 +36,18 @@ describe('plugin runtime package', () => {
   })
 
   it('builds a standalone plugin runtime bundle', async () => {
-    await execFileAsync('npm', ['run', 'build:plugin'])
+    const outDir = await createTempDir('cyrene-plugin-runtime-out-')
+    const runtimePath = join(outDir, 'cyrene-continuity.mjs')
+    const staticOutfile = join(outDir, 'codex-ui-static.generated.ts')
 
-    const runtimePath = join(process.cwd(), 'plugin', 'runtime', 'cyrene-continuity.mjs')
+    await execFileAsync('npm', ['run', 'build:plugin'], {
+      env: {
+        ...process.env,
+        CYRENE_PLUGIN_RUNTIME_OUTFILE: runtimePath,
+        CYRENE_UI_STATIC_OUTFILE: staticOutfile
+      }
+    })
+
     const stats = await stat(runtimePath)
     const source = await readFile(runtimePath, 'utf8')
     expect(stats.isFile()).toBe(true)
@@ -49,10 +58,19 @@ describe('plugin runtime package', () => {
 
   it('builds the plugin runtime relative to the repo when invoked from another directory', async () => {
     const otherCwd = await createTempDir('cyrene-plugin-build-cwd-')
+    const outDir = await createTempDir('cyrene-plugin-runtime-out-')
+    const runtimePath = join(outDir, 'cyrene-continuity.mjs')
+    const staticOutfile = join(outDir, 'codex-ui-static.generated.ts')
 
-    await execFileAsync(process.execPath, [join(process.cwd(), 'scripts', 'build-plugin.mjs')], { cwd: otherCwd })
+    await execFileAsync(process.execPath, [join(process.cwd(), 'scripts', 'build-plugin.mjs')], {
+      cwd: otherCwd,
+      env: {
+        ...process.env,
+        CYRENE_PLUGIN_RUNTIME_OUTFILE: runtimePath,
+        CYRENE_UI_STATIC_OUTFILE: staticOutfile
+      }
+    })
 
-    const runtimePath = join(process.cwd(), 'plugin', 'runtime', 'cyrene-continuity.mjs')
     const source = await readFile(runtimePath, 'utf8')
     expect(source.startsWith('#!/usr/bin/env node')).toBe(true)
     await expect(stat(join(otherCwd, 'plugin', 'runtime', 'cyrene-continuity.mjs'))).rejects.toMatchObject({

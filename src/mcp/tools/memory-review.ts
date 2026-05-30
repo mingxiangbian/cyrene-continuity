@@ -7,6 +7,7 @@ import {
   promoteCodexPendingMemory,
   rejectCodexPendingMemory
 } from '../../codex/memory-review.js'
+import { MEMORY_CONFLICT_RESOLUTIONS } from '../../memory/types.js'
 import { jsonText } from '../mcp-json.js'
 
 export const memoryPendingListInputSchema = {
@@ -20,7 +21,7 @@ export const memoryPendingGetInputSchema = {
 export const memoryReviewDecisionInputSchema = {
   id: z.string(),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
-  conflictResolution: z.enum(['supersede', 'keep_both', 'reject_new']).optional(),
+  conflictResolution: z.enum(MEMORY_CONFLICT_RESOLUTIONS).optional(),
   reason: z.string().optional()
 }
 

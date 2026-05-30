@@ -38,7 +38,6 @@ import {
   getReadableCodexProjectMemoryRoot,
   getReadableCodexProjectMemoryRoots
 } from './codex-memory-root.js'
-import { markCodexMemoryDreamDue, readCodexMemoryDreamState } from './memory-dream-state.js'
 import { getCodexPendingReviewNotice } from './memory-review.js'
 import { buildCodexProjectFingerprint } from './project-fingerprint.js'
 import { identifyCodexProject } from './project-id.js'
@@ -191,7 +190,6 @@ export async function getCodexContinuityContext(input: {
   const globalMemoryRoot = codexGlobalMemoryRoot()
   const projectMemoryRoot = codexProjectMemoryRoot(project.projectId)
   const budget = memoryRetrievalBudgetForTask(task)
-  await markProjectDreamDueIfOverdue(project.projectId, config)
   const legacyRetrievalInput: RetrieveMemoriesInput = {
       cwd: input.cwd,
       userCyreneDir: config.userCyreneDir,
@@ -667,26 +665,6 @@ function formatReviewReminders(pendingReview: CodexPendingReviewNotice): ReviewR
     candidateId: pendingReview.newestCandidateId,
     content: pendingReview.newestPreview
   }]
-}
-
-async function markProjectDreamDueIfOverdue(projectId: string, config: ReturnType<typeof createDefaultConfig>): Promise<void> {
-  if (!config.memoryDreamCatchUpEnabled) {
-    return
-  }
-  const root = await getReadableCodexProjectMemoryRoot(projectId)
-  if (root === null) {
-    return
-  }
-
-  try {
-    const state = await readCodexMemoryDreamState(root)
-    const now = new Date().toISOString()
-    if (state.dreamDue !== true && state.nextDreamDueAt !== undefined && state.nextDreamDueAt <= now) {
-      await markCodexMemoryDreamDue(root, now)
-    }
-  } catch {
-    // Continuity reads must not fail just because dream scheduling metadata is unavailable.
-  }
 }
 
 async function readGlobalCodexProfileIfExists(): Promise<string | undefined> {

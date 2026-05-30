@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const staticRoot = resolve(repoRoot, 'src/ui/static')
-const outfile = resolve(repoRoot, 'src/codex/codex-ui-static.generated.ts')
+const outfile = resolve(repoRoot, process.env.CYRENE_UI_STATIC_OUTFILE ?? 'src/codex/codex-ui-static.generated.ts')
 
 const assets = {
   '/': {

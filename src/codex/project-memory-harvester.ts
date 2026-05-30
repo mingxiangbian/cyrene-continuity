@@ -50,7 +50,6 @@ const PROJECT_CANDIDATE_KINDS = [
   'open_question'
 ] as const satisfies readonly ProjectMemoryHarvesterCandidateKind[]
 
-const PROJECT_SOURCES = ['file', 'tool_trace', 'assistant_observed'] as const satisfies readonly MemorySource[]
 const SIGNAL_EVIDENCE_LIMIT = 6
 const CONTENT_MAX_LENGTH = 500
 const EVIDENCE_MAX_LENGTH = 320

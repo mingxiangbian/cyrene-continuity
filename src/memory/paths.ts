@@ -1,5 +1,5 @@
 import { lstat, mkdir, realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
 
 export async function ensureMemoryRoot(cwd: string): Promise<string> {
   const cwdRealPath = await realpath(cwd)
@@ -15,22 +15,6 @@ export async function getReadableMemoryRoot(cwd: string): Promise<string | null>
   }
 
   return getSafeDirectoryOrNull(join(cyreneDir, 'memory'), cyreneDir)
-}
-
-export async function getMemoryRoot(cwd: string): Promise<string> {
-  const root = await getReadableMemoryRoot(cwd)
-  if (root === null) {
-    throw new Error('Memory root does not exist')
-  }
-  return root
-}
-
-export function resolveMemoryFile(memoryRoot: string, relativePath: string): string {
-  const resolved = resolve(memoryRoot, relativePath)
-  if (!isPathInside(memoryRoot, resolved)) {
-    throw new Error(`Memory file must stay inside memory directory: ${relativePath}`)
-  }
-  return resolved
 }
 
 async function ensureSafeDirectory(dirPath: string, parentRealPath: string): Promise<string> {

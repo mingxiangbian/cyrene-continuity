@@ -44,26 +44,43 @@ interface ChatCompletionResponse {
 export async function callModel(input: CallModelInput): Promise<ModelResponse> {
   const model = modelForUseCase(input.config, input.useCase ?? 'chat')
   validateModelConfig(input.config, model)
-  const response = await fetch(`${input.config.model.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: requestHeaders(input.config),
-    signal: mergeAbortSignals(AbortSignal.timeout(input.config.llmRequestTimeoutMs), input.signal),
-    body: JSON.stringify({
-      model,
-      messages: input.messages.map(formatRequestMessage),
-      ...(input.tools.length > 0 ? { tools: input.tools } : {}),
-      temperature: input.config.model.temperature
-    })
-  })
-  if (!response.ok) {
-    throw new Error(`LLM request failed with HTTP ${response.status}: ${await response.text()}`)
+  const attempts = input.config.llmRetryMaxAttempts
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${input.config.model.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: requestHeaders(input.config),
+        signal: mergeAbortSignals(AbortSignal.timeout(input.config.llmRequestTimeoutMs), input.signal),
+        body: JSON.stringify({
+          model,
+          messages: input.messages.map(formatRequestMessage),
+          ...(input.tools.length > 0 ? { tools: input.tools } : {}),
+          temperature: input.config.model.temperature
+        })
+      })
+      if (!response.ok) {
+        const body = await response.text()
+        if (attempt < attempts && isRetryableStatus(response.status)) {
+          await waitForRetry(input.config.llmRetryBaseDelayMs, attempt, input.signal)
+          continue
+        }
+        throw new Error(`LLM request failed with HTTP ${response.status}: ${body}`)
+      }
+      const data = await response.json() as ChatCompletionResponse
+      const message = data.choices?.[0]?.message
+      return {
+        content: message?.content ?? '',
+        toolCalls: message?.tool_calls ?? []
+      }
+    } catch (error) {
+      if (attempt < attempts && isRetryableFetchError(error)) {
+        await waitForRetry(input.config.llmRetryBaseDelayMs, attempt, input.signal)
+        continue
+      }
+      throw error
+    }
   }
-  const data = await response.json() as ChatCompletionResponse
-  const message = data.choices?.[0]?.message
-  return {
-    content: message?.content ?? '',
-    toolCalls: message?.tool_calls ?? []
-  }
+  throw new Error('LLM request failed without returning a response.')
 }
 
 function formatRequestMessage(message: ChatMessage): ChatMessage {
@@ -95,6 +112,40 @@ function validateModelConfig(config: AppConfig, routeModel: string): void {
     missing.push('CYRENE_API_KEY')
   }
   if (missing.length > 0) throw new Error(`Model config is incomplete: set ${missing.join(' and ')}.`)
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500
+}
+
+function isRetryableFetchError(error: unknown): boolean {
+  if (error instanceof DOMException && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+    return false
+  }
+  return error instanceof TypeError
+}
+
+async function waitForRetry(baseDelayMs: number, attempt: number, signal?: AbortSignal): Promise<void> {
+  const delayMs = baseDelayMs * 2 ** (attempt - 1)
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    const timeout = setTimeout(() => {
+      cleanup()
+      resolve()
+    }, delayMs)
+    const onAbort = () => {
+      clearTimeout(timeout)
+      cleanup()
+      reject(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'))
+    }
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+  })
 }
 
 export function modelBaseUrlRequiresApiKey(baseUrl: string): boolean {

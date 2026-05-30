@@ -8,7 +8,15 @@ import { recentTranscriptMessages, type TranscriptMessage } from './transcript.j
 import type { AppConfig } from '../config.js'
 import type { CallModelInput, ModelResponse } from '../llm-client.js'
 import { isMemoryCandidateKind } from '../memory/candidate-kind.js'
-import type { MemoryDomain, MemoryEvidence, MemoryScope, MemorySource, MemoryStrength, MemoryType } from '../memory/types.js'
+import {
+  MEMORY_DOMAINS,
+  MEMORY_SCOPES,
+  MEMORY_SOURCES,
+  MEMORY_STRENGTHS,
+  MEMORY_TYPES,
+  type MemoryEvidence,
+  type MemorySource
+} from '../memory/types.js'
 
 export type CodexReviewSummaryResult =
   | { action: 'noop'; reason: string }
@@ -31,29 +39,6 @@ interface ParsedReviewSummary {
   summary: string
   candidates: unknown[]
 }
-
-const DOMAINS = ['project', 'personal', 'relationship', 'affective', 'procedural', 'system'] as const satisfies readonly MemoryDomain[]
-const TYPES = [
-  'project_fact',
-  'user_preference',
-  'interaction_style',
-  'relationship_boundary',
-  'affective_pattern',
-  'procedural_rule',
-  'episode',
-  'system_policy',
-  'reference'
-] as const satisfies readonly MemoryType[]
-const STRENGTHS = ['hard', 'soft', 'session'] as const satisfies readonly MemoryStrength[]
-const SCOPES = ['global', 'project', 'session'] as const satisfies readonly MemoryScope[]
-const SOURCES = [
-  'user_explicit',
-  'user_implicit',
-  'assistant_observed',
-  'tool_trace',
-  'file',
-  'legacy_markdown'
-] as const satisfies readonly MemorySource[]
 
 const FAILED_SUMMARY = 'Codex review summary failed; no transcript content persisted.'
 
@@ -183,14 +168,14 @@ function redactCandidate(
     return undefined
   }
 
-  const domain = parseEnum(value.domain, DOMAINS)
-  const type = parseEnum(value.type, TYPES)
+  const domain = parseEnum(value.domain, MEMORY_DOMAINS)
+  const type = parseEnum(value.type, MEMORY_TYPES)
   const content = parseString(value.content)
   if (domain === undefined || type === undefined || content === undefined) {
     return undefined
   }
 
-  const source = parseEnum(value.source, SOURCES)
+  const source = parseEnum(value.source, MEMORY_SOURCES)
   const candidateKind = isMemoryCandidateKind(value.candidateKind)
     ? value.candidateKind
     : isMemoryCandidateKind(value.candidate_kind)
@@ -200,8 +185,8 @@ function redactCandidate(
     domain,
     type,
     ...(candidateKind === undefined ? {} : { candidateKind }),
-    strength: parseEnum(value.strength, STRENGTHS),
-    scope: parseEnum(value.scope, SCOPES),
+    strength: parseEnum(value.strength, MEMORY_STRENGTHS),
+    scope: parseEnum(value.scope, MEMORY_SCOPES),
     content: redactor.redact(content),
     normalizedKey: redactOptionalString(value.normalizedKey, redactor),
     source,

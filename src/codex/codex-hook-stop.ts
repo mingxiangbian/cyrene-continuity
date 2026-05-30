@@ -446,22 +446,6 @@ async function proposeExplicitMemoryCandidate(
   })
 }
 
-export async function extractRecentExplicitMemoryInstruction(payload: CodexStopHookPayload): Promise<string | undefined> {
-  const transcriptPath = asString(payload.transcript_path) ?? asString(payload.transcriptPath)
-  if (transcriptPath === undefined) {
-    return undefined
-  }
-
-  const cwd = asString(payload.cwd) ?? process.cwd()
-  const transcriptText = await readTranscriptText(cwd, transcriptPath)
-  if (transcriptText === undefined) {
-    return undefined
-  }
-
-  const messages = parseTranscriptMessages(transcriptText)
-  return extractRecentExplicitMemoryInstructionFromMessages(messages)
-}
-
 function extractRecentExplicitMemoryInstructionFromMessages(messages: TranscriptMessage[]): string | undefined {
   const userMessages = messages.filter((message) => message.role === 'user')
   return userMessages.reverse().find((message) => DURABLE_SIGNAL.test(message.content))?.content

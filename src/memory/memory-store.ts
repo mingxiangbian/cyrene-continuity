@@ -77,11 +77,6 @@ export async function writePendingMemories(cwd: string, memories: PendingMemory[
   await writePendingMemoriesFromRoot(root, memories)
 }
 
-export async function upsertPendingMemory(cwd: string, candidate: PendingMemory): Promise<PendingMemory> {
-  const root = await ensureMemoryRoot(cwd)
-  return upsertPendingMemoryFromRoot(root, candidate)
-}
-
 export async function writePendingMemoriesFromRoot(memoryRoot: string, memories: PendingMemory[]): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
   await writeJsonLinesAtomic(join(root, PENDING_FILE), memories.filter((memory) => memory.status === 'pending'))
@@ -115,15 +110,6 @@ export async function appendMemoryEventFromRoot(memoryRoot: string, event: Memor
   await appendJsonLine(join(root, EVENTS_FILE), event)
 }
 
-export async function readMemoryEvents(cwd: string, limit?: number): Promise<MemoryEvent[]> {
-  const root = await getReadableMemoryRoot(cwd)
-  if (root === null) {
-    return []
-  }
-  const events = await readJsonLines<MemoryEvent>(join(root, EVENTS_FILE))
-  return limit === undefined ? events : events.slice(Math.max(0, events.length - limit))
-}
-
 export async function readTombstones(cwd: string): Promise<MemoryTombstone[]> {
   const root = await getReadableMemoryRoot(cwd)
   if (root === null) {
@@ -145,17 +131,12 @@ export async function writeTombstones(cwd: string, tombstones: MemoryTombstone[]
   await writeJsonLinesAtomic(join(root, TOMBSTONES_FILE), tombstones)
 }
 
-export async function appendTombstone(cwd: string, tombstone: MemoryTombstone): Promise<void> {
-  const root = await ensureMemoryRoot(cwd)
-  await appendTombstoneFromRoot(root, tombstone)
-}
-
 export async function appendTombstoneFromRoot(memoryRoot: string, tombstone: MemoryTombstone): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
   await appendJsonLine(join(root, TOMBSTONES_FILE), tombstone)
 }
 
-function mergePendingMemory(existing: PendingMemory, candidate: PendingMemory): PendingMemory {
+export function mergePendingMemory(existing: PendingMemory, candidate: PendingMemory): PendingMemory {
   const seenCount = existing.seenCount + candidate.seenCount
   return {
     ...existing,
@@ -260,7 +241,13 @@ async function readJsonLines<T>(filePath: string): Promise<T[]> {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as T)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as T]
+      } catch {
+        return []
+      }
+    })
 }
 
 async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promise<void> {

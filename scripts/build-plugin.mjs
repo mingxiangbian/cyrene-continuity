@@ -7,7 +7,7 @@ import { promisify } from 'node:util'
 import { build } from 'esbuild'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const outfile = resolve(repoRoot, 'plugin/runtime/cyrene-continuity.mjs')
+const outfile = resolve(repoRoot, process.env.CYRENE_PLUGIN_RUNTIME_OUTFILE ?? 'plugin/runtime/cyrene-continuity.mjs')
 const execFileAsync = promisify(execFile)
 
 await execFileAsync(process.execPath, [resolve(repoRoot, 'scripts/generate-ui-static.mjs')], { cwd: repoRoot })

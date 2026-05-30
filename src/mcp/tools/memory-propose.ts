@@ -1,37 +1,27 @@
 import { z } from 'zod'
 import { proposeCodexMemoryCandidate } from '../../codex/memory-propose.js'
+import {
+  MEMORY_CANDIDATE_KINDS,
+  MEMORY_DOMAINS,
+  MEMORY_SCOPES,
+  MEMORY_SOURCES,
+  MEMORY_STRENGTHS,
+  MEMORY_TYPES
+} from '../../memory/types.js'
 import { jsonText } from '../mcp-json.js'
 
-const memoryCandidateKindSchema = z.enum([
-  'project_fact',
-  'project_decision',
-  'user_instruction',
-  'workflow_rule',
-  'known_pitfall',
-  'rejected_approach',
-  'open_question'
-])
+const memoryCandidateKindSchema = z.enum(MEMORY_CANDIDATE_KINDS)
 
 const memoryCandidateSchema = z.object({
-  domain: z.enum(['project', 'personal', 'relationship', 'affective', 'procedural', 'system']),
-  type: z.enum([
-    'project_fact',
-    'user_preference',
-    'interaction_style',
-    'relationship_boundary',
-    'affective_pattern',
-    'procedural_rule',
-    'episode',
-    'system_policy',
-    'reference'
-  ]),
-  strength: z.enum(['hard', 'soft', 'session']).optional(),
-  scope: z.enum(['global', 'project', 'session']).optional(),
+  domain: z.enum(MEMORY_DOMAINS),
+  type: z.enum(MEMORY_TYPES),
+  strength: z.enum(MEMORY_STRENGTHS).optional(),
+  scope: z.enum(MEMORY_SCOPES).optional(),
   candidateKind: memoryCandidateKindSchema.optional(),
   candidate_kind: memoryCandidateKindSchema.optional(),
   content: z.string(),
   normalizedKey: z.string().optional(),
-  source: z.enum(['user_explicit', 'user_implicit', 'assistant_observed', 'tool_trace', 'file', 'legacy_markdown']).optional(),
+  source: z.enum(MEMORY_SOURCES).optional(),
   evidence: z.array(
     z.object({
       runId: z.string().optional(),
@@ -41,7 +31,7 @@ const memoryCandidateSchema = z.object({
       sessionId: z.string().optional(),
       taskHash: z.string().optional(),
       quoteHash: z.string().optional(),
-      sourceKind: z.enum(['user_explicit', 'user_implicit', 'assistant_observed', 'tool_trace', 'file', 'legacy_markdown']).optional()
+      sourceKind: z.enum(MEMORY_SOURCES).optional()
     })
   ),
   scores: z

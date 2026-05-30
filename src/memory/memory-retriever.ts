@@ -80,13 +80,6 @@ function dedupeMemories(memories: CyreneMemory[]): CyreneMemory[] {
   return [...byKey.values()]
 }
 
-export function formatMemoryContext(memories: RetrievedMemory[]): string {
-  if (memories.length === 0) {
-    return ''
-  }
-  return ['## Relevant Memory', ...memories.map(({ memory }) => `- ${memory.content}`)].join('\n')
-}
-
 export function isMemoryEligibleForRetrieval(
   memory: CyreneMemory,
   input: RetrieveMemoriesInput,

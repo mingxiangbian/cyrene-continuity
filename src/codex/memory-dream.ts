@@ -17,6 +17,7 @@ import {
   appendMemoryEventFromRoot,
   appendTombstoneFromRoot,
   ensureWritableMemoryRootPath,
+  mergePendingMemory,
   readPendingMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
@@ -24,7 +25,7 @@ import {
   distinctEvidenceCount,
   evaluatePendingPromotion
 } from '../memory/memory-validator.js'
-import type { MemoryEvent, MemoryScores, MemoryTombstone, PendingMemory } from '../memory/types.js'
+import type { MemoryEvent, MemoryTombstone, PendingMemory } from '../memory/types.js'
 import {
   ensureCodexProjectMemoryRoot,
   getReadableCodexGlobalMemoryRoot,
@@ -71,7 +72,6 @@ export interface CodexMemoryMaintenanceResult {
 
 const DREAM_LOCK_DIR = 'dream.lock'
 const DREAM_LOCKS_DIR = '.locks'
-const MAX_PENDING_EVIDENCE = 10
 
 interface DreamRuntimeBudget {
   maxRuntimeMs: number
@@ -451,47 +451,6 @@ function mergePendingDuplicates(pending: PendingMemory[]): { changed: boolean; p
     }
   }
   return { changed: merged.length !== pending.length, pending: merged }
-}
-
-function mergePendingMemory(existing: PendingMemory, candidate: PendingMemory): PendingMemory {
-  const seenCount = existing.seenCount + candidate.seenCount
-  return {
-    ...existing,
-    scores: averageScores(existing.scores, existing.seenCount, candidate.scores, candidate.seenCount),
-    seenCount,
-    lastSeenAt: latestIso(existing.lastSeenAt, candidate.lastSeenAt),
-    expiresAt: latestIso(existing.expiresAt, candidate.expiresAt),
-    promoteAfter: candidate.promoteAfter ?? existing.promoteAfter,
-    evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE),
-    candidateKind: existing.candidateKind ?? candidate.candidateKind,
-    candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
-    tags: Array.from(new Set([...existing.tags, ...candidate.tags])),
-    conflictsWith: uniqueOptional([...(existing.conflictsWith ?? []), ...(candidate.conflictsWith ?? [])])
-  }
-}
-
-function averageScores(left: MemoryScores, leftWeight: number, right: MemoryScores, rightWeight: number): MemoryScores {
-  const total = leftWeight + rightWeight
-  return {
-    evidenceStrength: weightedAverage(left.evidenceStrength, leftWeight, right.evidenceStrength, rightWeight, total),
-    stability: weightedAverage(left.stability, leftWeight, right.stability, rightWeight, total),
-    usefulness: weightedAverage(left.usefulness, leftWeight, right.usefulness, rightWeight, total),
-    safety: weightedAverage(left.safety, leftWeight, right.safety, rightWeight, total),
-    sensitivity: weightedAverage(left.sensitivity, leftWeight, right.sensitivity, rightWeight, total)
-  }
-}
-
-function weightedAverage(left: number, leftWeight: number, right: number, rightWeight: number, total: number): number {
-  return total === 0 ? right : (left * leftWeight + right * rightWeight) / total
-}
-
-function latestIso(left: string, right: string): string {
-  return left >= right ? left : right
-}
-
-function uniqueOptional(values: string[]): string[] | undefined {
-  const unique = Array.from(new Set(values))
-  return unique.length === 0 ? undefined : unique
 }
 
 function proposedActionForPending(candidate: PendingMemory, reason: string): string {

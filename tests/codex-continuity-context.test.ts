@@ -226,7 +226,7 @@ describe('Codex continuity context', () => {
     expect(context.profile.content).not.toContain(pending.content)
   })
 
-  it('marks overdue dream state due without running deep promotion', async () => {
+  it('does not mutate overdue dream state while reading continuity context', async () => {
     const home = await createTempDir('cyrene-codex-continuity-dream-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-continuity-dream-repo-')
@@ -259,8 +259,11 @@ describe('Codex continuity context', () => {
       task: 'memory'
     })
 
-    const state = JSON.parse(await readFile(join(memoryRoot, 'dream-state.json'), 'utf8')) as { dreamDue: boolean }
-    expect(state.dreamDue).toBe(true)
+    const state = JSON.parse(await readFile(join(memoryRoot, 'dream-state.json'), 'utf8')) as {
+      dreamDue: boolean
+      nextDreamDueAt?: string
+    }
+    expect(state).toEqual({ dreamDue: false, nextDreamDueAt: '2000-01-01T00:00:00.000Z' })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(JSON.stringify(context)).not.toContain('nextDreamDueAt')
   })

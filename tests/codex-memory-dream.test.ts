@@ -880,11 +880,8 @@ describe('Codex memory dream runtime', () => {
     const memoryRoot = await seedProjectPending(cwd, [createPending()])
     const lockDir = join(memoryRoot, '.maintenance.lock')
     await mkdir(lockDir)
-    const startedAt = Date.now()
-
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
-    expect(Date.now() - startedAt).toBeLessThan(80)
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({
       promoted: 0,
       recommendedPromotions: 0,

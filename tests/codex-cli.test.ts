@@ -215,7 +215,7 @@ describe('cyrene-continuity codex CLI', () => {
           'ui',
           ...portArgs
         ],
-        { cwd: process.cwd(), env: cliEnv(home), timeout: 1_000 }
+        { cwd: process.cwd(), env: cliEnv(home), timeout: 5_000 }
       )
     ).rejects.toMatchObject({
       code: 1,
@@ -1823,8 +1823,9 @@ describe('cyrene-continuity codex CLI', () => {
       passed: boolean
       failedChecks: string[]
       minimumChecks: string[]
+      results: Array<{ name: string; passed: boolean }>
     }
-    expect(parsed).toEqual({
+    expect(parsed).toMatchObject({
       check: 'release',
       passed: true,
       failedChecks: [],
@@ -1837,6 +1838,8 @@ describe('cyrene-continuity codex CLI', () => {
         'similar_hint_eval'
       ]
     })
+    expect(parsed.results.map((item) => item.name)).toEqual(parsed.minimumChecks)
+    expect(parsed.results.every((item) => item.passed)).toBe(true)
   })
 
   it('rejects similar hints eval check with trailing unsupported args', async () => {

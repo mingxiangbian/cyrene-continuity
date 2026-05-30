@@ -3,6 +3,7 @@ import { createDefaultConfig } from '../src/config.js'
 import { callModel, type ModelToolCall } from '../src/llm-client.js'
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -115,5 +116,65 @@ describe('llm client', () => {
       tools: []
     })).rejects.toThrow('CYRENE_API_KEY')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('retries transient LLM failures before returning a successful response', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('rate limited', { status: 429 }))
+      .mockResolvedValueOnce(new Response('server unavailable', { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{ message: { content: 'ok' } }]
+      })))
+    vi.stubGlobal('fetch', fetchMock)
+    const config = {
+      ...createDefaultConfig(process.cwd()),
+      llmRetryMaxAttempts: 3,
+      llmRetryBaseDelayMs: 25,
+      model: {
+        baseUrl: 'https://llm.example.test',
+        model: 'strong',
+        apiKey: 'test-key',
+        temperature: 0,
+        strongModel: 'strong',
+        cheapModel: 'cheap'
+      }
+    }
+
+    const promise = callModel({
+      config,
+      messages: [{ role: 'user', content: 'Summarize.' }],
+      tools: []
+    })
+    await vi.advanceTimersByTimeAsync(25)
+    await vi.advanceTimersByTimeAsync(50)
+
+    await expect(promise).resolves.toMatchObject({ content: 'ok' })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not retry non-transient LLM request failures', async () => {
+    const fetchMock = vi.fn(async () => new Response('bad request', { status: 400 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const config = {
+      ...createDefaultConfig(process.cwd()),
+      llmRetryMaxAttempts: 3,
+      llmRetryBaseDelayMs: 1,
+      model: {
+        baseUrl: 'https://llm.example.test',
+        model: 'strong',
+        apiKey: 'test-key',
+        temperature: 0,
+        strongModel: 'strong',
+        cheapModel: 'cheap'
+      }
+    }
+
+    await expect(callModel({
+      config,
+      messages: [{ role: 'user', content: 'Summarize.' }],
+      tools: []
+    })).rejects.toThrow('HTTP 400')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

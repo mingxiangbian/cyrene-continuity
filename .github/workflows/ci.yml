@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Strict unused-code typecheck
+        run: npx tsc --noEmit --noUnusedLocals --noUnusedParameters
+
+      - name: Release eval
+        run: npm run dev -- codex eval run --check release
+
+      - name: Build plugin runtime
+        run: npm run build:plugin
+
+      - name: Check generated artifacts
+        run: git diff --exit-code -- src/codex/codex-ui-static.generated.ts plugin/runtime/cyrene-continuity.mjs
+
+      - name: Check diff whitespace
+        run: git diff --check
