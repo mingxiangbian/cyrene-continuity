@@ -156,6 +156,38 @@ describe('root memory maintenance', () => {
     await expect(readdir(lockDir)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('removes maintenance locks owned by dead processes before running maintenance', async () => {
+    vi.stubEnv('CYRENE_MEMORY_MAINTENANCE_LOCK_TIMEOUT_MS', '20')
+    vi.stubEnv('CYRENE_MEMORY_MAINTENANCE_LOCK_STALE_MS', '3600000')
+    const memoryRoot = await createMemoryRoot()
+    const expired = createMemory({
+      id: 'expired-1',
+      normalizedKey: 'expired-memory',
+      expiresAt: '2026-05-25T00:00:00.000Z'
+    })
+    await seedMemoryRoot({ memoryRoot, active: [expired] })
+    const lockDir = join(memoryRoot, '.maintenance.lock')
+    await mkdir(lockDir)
+    await writeFile(
+      join(lockDir, 'owner.json'),
+      `${JSON.stringify({
+        acquiredAt: new Date().toISOString(),
+        pid: 2147483647,
+        token: 'dead-owner'
+      })}\n`,
+      'utf8'
+    )
+
+    const result = await runMemoryMaintenanceFromRoot({
+      memoryRoot,
+      budget: createBudget(),
+      now: '2026-05-26T00:01:00.000Z'
+    })
+
+    expect(result).toMatchObject({ expired: 1, activeCount: 0 })
+    await expect(readdir(lockDir)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('dedupes active memories by normalizedKey and keeps stronger newer evidence', async () => {
     const memoryRoot = await createMemoryRoot()
     const weaker = createMemory({

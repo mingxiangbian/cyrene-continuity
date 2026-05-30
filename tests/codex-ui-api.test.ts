@@ -533,13 +533,27 @@ describe('handleCodexUiApiRequest', () => {
     const { cwd, memoryRoot } = await seedProject()
     await writeFile(
       join(memoryRoot, 'pending.jsonl'),
-      `${JSON.stringify(createPending({
-        id: 'triage-noise',
-        content: 'Ran npm test today.',
-        normalizedKey: 'ran-npm-test-today',
-        evidence: [{ summary: 'temporary command result' }],
-        seenCount: 1
-      }))}\n`
+      [
+        createPending({
+          id: 'triage-noise',
+          content: 'Ran npm test today.',
+          normalizedKey: 'ran-npm-test-today',
+          evidence: [{ summary: 'temporary command result' }],
+          seenCount: 1
+        }),
+        createPending({
+          id: 'triage-review',
+          domain: 'project',
+          type: 'project_fact',
+          content: 'Project memory triage should show ordinary pending candidates for review.',
+          normalizedKey: 'project-memory-triage-review-recommendations',
+          evidence: [{ summary: 'ordinary pending candidate', sourceKind: 'file' }],
+          source: 'file',
+          candidateKind: 'project_fact',
+          scores: { evidenceStrength: 0.75, stability: 0.7, usefulness: 0.7, safety: 0.9, sensitivity: 0.2 },
+          seenCount: 1
+        })
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
     )
     const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
 
@@ -556,6 +570,7 @@ describe('handleCodexUiApiRequest', () => {
       const data = result.body.data as { action: string; decisions: Array<{ action: string; candidateId?: string }> }
       expect(data.action).toBe('dry_run')
       expect(data.decisions).toContainEqual(expect.objectContaining({ action: 'auto_drop', candidateId: 'triage-noise' }))
+      expect(data.decisions).toContainEqual(expect.objectContaining({ action: 'recommend', candidateId: 'triage-review' }))
     }
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })

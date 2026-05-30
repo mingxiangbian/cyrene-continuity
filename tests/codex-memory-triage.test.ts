@@ -85,6 +85,100 @@ describe('memory triage', () => {
     expect(clusters).toEqual([expect.objectContaining({ memberIds: ['a', 'b'], normalizedKey: 'same-key' })])
   })
 
+  it('recommends ordinary pending candidates for explicit review', () => {
+    const result = triagePendingMemories({
+      pending: [
+        pending({
+          id: 'ordinary',
+          evidence: [{ summary: 'AGENTS.md documents project working rules.', sourceKind: 'file' }],
+          scores: { evidenceStrength: 0.75, stability: 0.7, usefulness: 0.7, safety: 0.9, sensitivity: 0.2 },
+          seenCount: 1
+        })
+      ],
+      active: [],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.clusters).toEqual([])
+    expect(result.decisions).toEqual([
+      expect.objectContaining({
+        action: 'recommend',
+        candidateId: 'ordinary',
+        reason: 'ranked pending candidate for explicit review'
+      })
+    ])
+  })
+
+  it('routes protected pending candidates to manual review', () => {
+    const result = triagePendingMemories({
+      pending: [
+        pending({
+          id: 'explicit',
+          source: 'user_explicit',
+          candidateKind: 'user_instruction',
+          evidence: [{ summary: 'User explicitly requested a durable rule.', sourceKind: 'user_explicit' }]
+        })
+      ],
+      active: [],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.decisions).toEqual([
+      expect.objectContaining({
+        action: 'manual_review',
+        candidateId: 'explicit',
+        reason: 'protected pending candidate requires explicit review'
+      })
+    ])
+  })
+
+  it('does not add review recommendations for cleanup decisions', () => {
+    const result = triagePendingMemories({
+      pending: [
+        pending({
+          id: 'noise',
+          content: 'Ran npm test today.',
+          normalizedKey: 'ran-npm-test-today',
+          evidence: [{ summary: 'temporary command result' }],
+          seenCount: 1
+        })
+      ],
+      active: [],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.decisions).toEqual([
+      expect.objectContaining({ action: 'auto_drop', candidateId: 'noise' })
+    ])
+  })
+
+  it('caps review recommendations to keep triage output bounded', () => {
+    const result = triagePendingMemories({
+      pending: Array.from({ length: 25 }, (_, index) =>
+        pending({
+          id: `ordinary-${index}`,
+          normalizedKey: `ordinary-${index}`,
+          evidence: [{ summary: `ordinary pending candidate ${index}`, sourceKind: 'file' }],
+          scores: { evidenceStrength: 0.75, stability: 0.7, usefulness: 0.7, safety: 0.9, sensitivity: 0.2 },
+          seenCount: 1
+        })
+      ),
+      active: [],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.decisions).toHaveLength(20)
+    expect(result.decisions.every((decision) => decision.action === 'recommend')).toBe(true)
+  })
+
   it('allows strict low-risk project auto-promotion', () => {
     const result = evaluateAutoPromotionPolicy({
       candidate: pending(),

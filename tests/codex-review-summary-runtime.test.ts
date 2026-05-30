@@ -57,6 +57,8 @@ describe('Codex review summary runtime', () => {
 
     expect(prompt).toContain('Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.')
     expect(prompt).toContain('Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.')
+    expect(prompt).toContain('Candidate content must be 240 characters or fewer.')
+    expect(prompt).toContain('Evidence summaries and quotes must be 320 characters or fewer.')
   })
 
   it('writes a redacted summary without pending candidates', async () => {
@@ -123,6 +125,46 @@ describe('Codex review summary runtime', () => {
     expect(pending).toContain('"source":"user_implicit"')
     const summaries = await readReviewSummaries(cwd)
     expect(summaries).toContain(result.candidateIds[0])
+  })
+
+  it('bounds generated pending candidate content and evidence for reviewability', async () => {
+    const home = await createTempDir('cyrene-review-runtime-bounds-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-runtime-bounds-project-')
+    const longContent = `Generated review memory candidate should keep durable context readable for maintainers. ${'context '.repeat(40)}`
+    const longEvidence = `The transcript repeatedly supported the durable project memory candidate. ${'evidence '.repeat(45)}`
+
+    const result = await runCodexReviewSummary({
+      cwd,
+      messages: [{ role: 'assistant', content: 'Generated a verbose memory candidate.' }],
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          summary: 'Generated verbose candidate.',
+          candidates: [{
+            domain: 'project',
+            type: 'project_fact',
+            content: longContent,
+            source: 'assistant_observed',
+            evidence: [{ summary: longEvidence }]
+          }]
+        })),
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('pending')
+    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    const [pendingRecord] = (await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as {
+        content: string
+        evidence: Array<{ summary?: string }>
+      })
+    expect(pendingRecord.content).toHaveLength(240)
+    expect(pendingRecord.content).toMatch(/\.\.\.$/)
+    expect(pendingRecord.evidence[0]?.summary).toHaveLength(320)
+    expect(pendingRecord.evidence[0]?.summary).toMatch(/\.\.\.$/)
   })
 
   it('captures explicit global instructions through memory proposal policy', async () => {

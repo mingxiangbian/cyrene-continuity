@@ -618,15 +618,15 @@ function renderTriage() {
     ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
     : result
       ? renderTriageResult(result)
-      : panel('Triage ready', 'Preview pending-memory cleanup recommendations for the selected scope.', 'muted')
+      : panel('Triage ready', 'Preview pending-memory cleanup and review recommendations for the selected scope.', 'muted')
 
   return `
     <section class="page-stack">
-      ${sectionHeader('Triage', 'Cluster duplicate pending memory for review.')}
+      ${sectionHeader('Triage', 'Cluster and rank pending memory for review.')}
       <div class="soft-panel action-panel">
         <div>
           <h3>Pending triage</h3>
-          <p>Preview duplicate, defer, and drop recommendations. Use per-candidate review actions for any write.</p>
+          <p>Preview duplicate, defer, drop, and review recommendations. Use per-candidate review actions for any write.</p>
         </div>
         <div class="detail-actions">
           <button class="soft-button primary" type="button" data-triage-dry-run ${state.triage.loading ? 'disabled' : ''}>

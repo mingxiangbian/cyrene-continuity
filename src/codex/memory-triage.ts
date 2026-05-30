@@ -42,6 +42,9 @@ export interface PendingEvictionRank {
   candidate: PendingMemory
 }
 
+const MAX_REVIEW_RECOMMENDATIONS = 20
+const HIGH_PRIORITY_RECOMMENDATION_SCORE = 1_000
+
 export function buildCandidateClusters(pending: PendingMemory[]): CandidateCluster[] {
   const byKey = new Map<string, PendingMemory[]>()
   for (const candidate of pending) {
@@ -167,6 +170,26 @@ export function triagePendingMemories(input: {
       decisions.push({ action: 'auto_defer', candidateId: candidate.id, days: 14, reason: 'weak single-evidence candidate' })
     }
   }
+  const decidedCandidateIds = candidateIdsForDecisions(decisions)
+  for (const item of rankPendingForEviction(input.pending, input.now)
+    .filter((ranked) => !decidedCandidateIds.has(ranked.candidateId))
+    .sort((left, right) => right.score - left.score || left.candidateId.localeCompare(right.candidateId))
+    .slice(0, MAX_REVIEW_RECOMMENDATIONS)) {
+    if (item.protected) {
+      decisions.push({
+        action: 'manual_review',
+        candidateId: item.candidateId,
+        reason: 'protected pending candidate requires explicit review'
+      })
+    } else {
+      decisions.push({
+        action: 'recommend',
+        candidateId: item.candidateId,
+        priority: item.score >= HIGH_PRIORITY_RECOMMENDATION_SCORE ? 'high' : 'normal',
+        reason: 'ranked pending candidate for explicit review'
+      })
+    }
+  }
   return { decisions, clusters }
 }
 
@@ -186,6 +209,17 @@ export function rankPendingForEviction(pending: PendingMemory[], now: string): P
 
 function denied(reason: string, distinctEvidenceCount: number): AutoPromotionPolicyResult {
   return { allowed: false, reason, distinctEvidenceCount }
+}
+
+function candidateIdsForDecisions(decisions: TriageDecision[]): Set<string> {
+  const ids = new Set<string>()
+  for (const decision of decisions) {
+    if ('candidateId' in decision) ids.add(decision.candidateId)
+    if ('candidateIds' in decision) {
+      for (const candidateId of decision.candidateIds) ids.add(candidateId)
+    }
+  }
+  return ids
 }
 
 function isTransientNoise(candidate: PendingMemory): boolean {

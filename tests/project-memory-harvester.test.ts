@@ -215,6 +215,33 @@ describe('runCodexProjectMemoryHarvest', () => {
     await expect(readPending(cwd)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('bounds generated project candidate content for reviewability', async () => {
+    const home = await createTempDir('cyrene-harvester-bounds-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-harvester-bounds-project-')
+    collectSignals.mockResolvedValue({ signals: sampleSignals(), warnings: [] })
+    const longContent = `Project memory generated candidate should preserve durable review policy context for maintainers. ${'context '.repeat(40)}`
+
+    const result = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd),
+      dryRun: true,
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          candidates: [{
+            candidateKind: 'workflow_rule',
+            content: longContent,
+            signalIndexes: [1]
+          }]
+        }))
+    })
+
+    expect(result.action).toBe('preview')
+    if (result.action !== 'preview') throw new Error(`Expected preview, got ${result.action}`)
+    expect(result.candidates[0]?.content).toHaveLength(240)
+    expect(result.candidates[0]?.content).toMatch(/\.\.\.$/)
+  })
+
   it('writes sanitized project pending memory in normal mode', async () => {
     const home = await createTempDir('cyrene-harvester-home-')
     vi.stubEnv('HOME', home)
@@ -512,6 +539,7 @@ describe('runCodexProjectMemoryHarvest', () => {
     }
     expect(prompt).toContain('Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.')
     expect(prompt).toContain('Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.')
+    expect(prompt).toContain('Candidate content must be 240 characters or fewer.')
     expect(prompt).toContain('repository_policy')
     expect(prompt).toContain('preserve pending-only memory review model')
     expect(prompt).toContain('hook_trace')

@@ -288,9 +288,24 @@ async function readMaintenanceLockOwner(lockDir: string): Promise<MaintenanceLoc
 }
 
 function isMaintenanceLockStale(state: MaintenanceLockState, nowMs: number, staleMs: number): boolean {
+  if (state.owner?.pid !== undefined && !isProcessAlive(state.owner.pid)) {
+    return true
+  }
   const acquiredAtMs = state.owner === undefined ? undefined : new Date(state.owner.acquiredAt).getTime()
   const lockAgeMs = Number.isFinite(acquiredAtMs) ? nowMs - (acquiredAtMs as number) : nowMs - state.mtimeMs
   return lockAgeMs > staleMs
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false
+  }
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return !isProcessErrorCode(error, 'ESRCH')
+  }
 }
 
 function isSameMaintenanceLockState(left: MaintenanceLockState, right: MaintenanceLockState): boolean {
@@ -576,5 +591,9 @@ function uniqueOptional(values: string[]): string[] | undefined {
 }
 
 function isFileErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code
+}
+
+function isProcessErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
 }

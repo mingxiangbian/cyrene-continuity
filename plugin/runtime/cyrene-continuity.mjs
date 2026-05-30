@@ -11675,18 +11675,43 @@ function tokenize3(text) {
 import { createHash as createHash2 } from "node:crypto";
 import { readdir as readdir2, readFile as readFile3, stat } from "node:fs/promises";
 import { join as join6 } from "node:path";
+var MAX_PROJECT_SCAN_FILES = 1e3;
+var MAX_PROJECT_SCAN_DEPTH = 6;
+var SKIPPED_SCAN_DIRS = /* @__PURE__ */ new Set([
+  ".git",
+  ".codegraph",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".superpowers",
+  ".tox",
+  ".venv",
+  ".worktrees",
+  "build",
+  "coverage",
+  "dist",
+  "external",
+  "node_modules",
+  "site-packages",
+  "venv",
+  "__pycache__"
+]);
 async function buildCodexProjectFingerprint(input) {
   const root = input.project.gitRoot ?? input.cwd;
+  const scannedFiles = await scanProjectFiles(root);
   const packageJson = await readPackageJson(root);
-  const dependencyNames2 = packageJson === void 0 ? [] : Object.keys({
-    ...readObject(packageJson.dependencies),
-    ...readObject(packageJson.devDependencies)
-  }).sort();
-  const packageManager = await detectPackageManager(root);
+  const dependencyNames2 = Array.from(/* @__PURE__ */ new Set([
+    ...packageJson === void 0 ? [] : Object.keys({
+      ...readObject(packageJson.dependencies),
+      ...readObject(packageJson.devDependencies)
+    }),
+    ...await readPythonRequirementNames(root, scannedFiles)
+  ])).sort();
+  const packageManager = await detectPackageManager(root, scannedFiles);
   const rootEntries = await safeReaddir(root);
-  const languages = detectLanguages(rootEntries, dependencyNames2);
-  const frameworks = detectFrameworks(rootEntries, dependencyNames2);
-  const domainTags = detectDomainTags(rootEntries, frameworks, dependencyNames2, languages);
+  const languages = detectLanguages(rootEntries, scannedFiles, dependencyNames2);
+  const frameworks = detectFrameworks(rootEntries, scannedFiles, dependencyNames2);
+  const domainTags = detectDomainTags(rootEntries, scannedFiles, frameworks, dependencyNames2, languages);
   return {
     projectId: input.project.projectId,
     displayName: input.project.displayName,
@@ -11710,11 +11735,12 @@ async function readPackageJson(cwd) {
 function readObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-async function detectPackageManager(cwd) {
+async function detectPackageManager(cwd, scannedFiles) {
   if (await exists(join6(cwd, "pnpm-lock.yaml"))) return "pnpm";
   if (await exists(join6(cwd, "yarn.lock"))) return "yarn";
   if (await exists(join6(cwd, "bun.lockb")) || await exists(join6(cwd, "bun.lock"))) return "bun";
   if (await exists(join6(cwd, "package-lock.json"))) return "npm";
+  if (scannedFiles.some((file) => file.endsWith("requirements.txt") || file.endsWith("pyproject.toml"))) return "pip";
   return "unknown";
 }
 async function safeReaddir(cwd) {
@@ -11724,7 +11750,55 @@ async function safeReaddir(cwd) {
     return [];
   }
 }
-function detectLanguages(rootEntries, dependencyNames2) {
+async function scanProjectFiles(cwd) {
+  const files = [];
+  await scanProjectDirectory(cwd, "", 0, files);
+  return files.sort();
+}
+async function scanProjectDirectory(cwd, relativeDir, depth, files) {
+  if (files.length >= MAX_PROJECT_SCAN_FILES || depth > MAX_PROJECT_SCAN_DEPTH) return;
+  let entries;
+  try {
+    entries = await readdir2(join6(cwd, relativeDir), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (files.length >= MAX_PROJECT_SCAN_FILES) return;
+    const relativePath = relativeDir === "" ? entry.name : `${relativeDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (!SKIPPED_SCAN_DIRS.has(entry.name)) {
+        await scanProjectDirectory(cwd, relativePath, depth + 1, files);
+      }
+      continue;
+    }
+    if (entry.isFile()) files.push(relativePath);
+  }
+}
+async function readPythonRequirementNames(cwd, scannedFiles) {
+  const names = /* @__PURE__ */ new Set();
+  const requirementsFiles = scannedFiles.filter((file) => file.endsWith("requirements.txt")).slice(0, 20);
+  for (const relativePath of requirementsFiles) {
+    let content;
+    try {
+      content = await readFile3(join6(cwd, relativePath), "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of content.split(/\r?\n/)) {
+      const name = parseRequirementName(line);
+      if (name !== void 0) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+function parseRequirementName(line) {
+  const cleaned = line.split("#")[0]?.trim();
+  if (!cleaned || cleaned.startsWith("-") || cleaned.includes("://")) return void 0;
+  const match = cleaned.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/);
+  return match?.[1]?.toLowerCase().replace(/_/g, "-");
+}
+function detectLanguages(rootEntries, scannedFiles, dependencyNames2) {
   const languages = /* @__PURE__ */ new Set();
   const dependencies = new Set(dependencyNames2);
   if (rootEntries.includes("tsconfig.json") || rootEntries.some((entry) => entry.endsWith(".ts")) || dependencies.has("typescript")) {
@@ -11733,9 +11807,14 @@ function detectLanguages(rootEntries, dependencyNames2) {
   if (rootEntries.some((entry) => entry.endsWith(".js"))) {
     languages.add("javascript");
   }
+  if (scannedFiles.some(
+    (file) => file.endsWith(".py") || file.endsWith(".ipynb") || file.endsWith("requirements.txt") || file.endsWith("pyproject.toml")
+  ) || ["numpy", "pandas", "pytest"].some((dependency) => dependencies.has(dependency))) {
+    languages.add("python");
+  }
   return [...languages].sort();
 }
-function detectFrameworks(rootEntries, dependencyNames2) {
+function detectFrameworks(rootEntries, scannedFiles, dependencyNames2) {
   const frameworks = /* @__PURE__ */ new Set();
   const dependencies = new Set(dependencyNames2);
   if (dependencies.has("@modelcontextprotocol/sdk")) frameworks.add("mcp");
@@ -11746,9 +11825,13 @@ function detectFrameworks(rootEntries, dependencyNames2) {
     frameworks.add("vitest");
   }
   if (dependencies.has("tsx")) frameworks.add("tsx");
+  if (scannedFiles.some((file) => file.endsWith(".ipynb"))) frameworks.add("jupyter");
+  if (dependencies.has("pytest") || scannedFiles.some((file) => file.includes("/tests/test_") || file.split("/").at(-1)?.startsWith("test_"))) {
+    frameworks.add("pytest");
+  }
   return [...frameworks].sort();
 }
-function detectDomainTags(rootEntries, frameworks, dependencyNames2, languages) {
+function detectDomainTags(rootEntries, scannedFiles, frameworks, dependencyNames2, languages) {
   const tags = /* @__PURE__ */ new Set();
   const frameworkSet = new Set(frameworks);
   const dependencySet = new Set(dependencyNames2);
@@ -11757,6 +11840,14 @@ function detectDomainTags(rootEntries, frameworks, dependencyNames2, languages) 
   }
   if (frameworkSet.has("mcp")) tags.add("mcp");
   if (languages.includes("typescript")) tags.add("typescript");
+  if (languages.includes("python")) tags.add("python");
+  const projectTerms = [...rootEntries, ...scannedFiles].join(" ").toLowerCase().replace(/[_./-]+/g, " ");
+  if (/\b(finance|financial|portfolio|cashflow|cash-flow|investment|trades?|positions?)\b/.test(projectTerms)) {
+    tags.add("finance");
+  }
+  if (/\b(quant|backtest|factor|simulation|portfolio)\b/.test(projectTerms)) {
+    tags.add("quant");
+  }
   return [...tags].sort();
 }
 async function exists(path) {
@@ -14433,9 +14524,23 @@ async function readMaintenanceLockOwner(lockDir) {
   }
 }
 function isMaintenanceLockStale(state, nowMs, staleMs) {
+  if (state.owner?.pid !== void 0 && !isProcessAlive(state.owner.pid)) {
+    return true;
+  }
   const acquiredAtMs = state.owner === void 0 ? void 0 : new Date(state.owner.acquiredAt).getTime();
   const lockAgeMs = Number.isFinite(acquiredAtMs) ? nowMs - acquiredAtMs : nowMs - state.mtimeMs;
   return lockAgeMs > staleMs;
+}
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return !isProcessErrorCode(error2, "ESRCH");
+  }
 }
 function isSameMaintenanceLockState(left, right) {
   if (left.owner?.token !== void 0 || right.owner?.token !== void 0) {
@@ -14648,6 +14753,9 @@ function uniqueOptional2(values) {
   return uniqueValues.length === 0 ? void 0 : uniqueValues;
 }
 function isFileErrorCode8(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+function isProcessErrorCode(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -16862,6 +16970,8 @@ function isFileErrorCode10(error2, code) {
 import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
 
 // src/codex/memory-triage.ts
+var MAX_REVIEW_RECOMMENDATIONS = 20;
+var HIGH_PRIORITY_RECOMMENDATION_SCORE = 1e3;
 function buildCandidateClusters(pending) {
   const byKey = /* @__PURE__ */ new Map();
   for (const candidate of pending) {
@@ -16958,6 +17068,23 @@ function triagePendingMemories(input) {
       decisions.push({ action: "auto_defer", candidateId: candidate.id, days: 14, reason: "weak single-evidence candidate" });
     }
   }
+  const decidedCandidateIds = candidateIdsForDecisions(decisions);
+  for (const item of rankPendingForEviction(input.pending, input.now).filter((ranked) => !decidedCandidateIds.has(ranked.candidateId)).sort((left, right) => right.score - left.score || left.candidateId.localeCompare(right.candidateId)).slice(0, MAX_REVIEW_RECOMMENDATIONS)) {
+    if (item.protected) {
+      decisions.push({
+        action: "manual_review",
+        candidateId: item.candidateId,
+        reason: "protected pending candidate requires explicit review"
+      });
+    } else {
+      decisions.push({
+        action: "recommend",
+        candidateId: item.candidateId,
+        priority: item.score >= HIGH_PRIORITY_RECOMMENDATION_SCORE ? "high" : "normal",
+        reason: "ranked pending candidate for explicit review"
+      });
+    }
+  }
   return { decisions, clusters };
 }
 function rankPendingForEviction(pending, now) {
@@ -16973,6 +17100,16 @@ function rankPendingForEviction(pending, now) {
 }
 function denied(reason, distinctEvidenceCount2) {
   return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
+}
+function candidateIdsForDecisions(decisions) {
+  const ids = /* @__PURE__ */ new Set();
+  for (const decision of decisions) {
+    if ("candidateId" in decision) ids.add(decision.candidateId);
+    if ("candidateIds" in decision) {
+      for (const candidateId of decision.candidateIds) ids.add(candidateId);
+    }
+  }
+  return ids;
 }
 function isTransientNoise(candidate) {
   const text = `${candidate.content} ${candidate.evidence.map((entry) => `${entry.summary ?? ""} ${entry.quote ?? ""}`).join(" ")}`.toLowerCase();
@@ -17647,7 +17784,7 @@ var PROJECT_CANDIDATE_KINDS = [
   "open_question"
 ];
 var SIGNAL_EVIDENCE_LIMIT = 6;
-var CONTENT_MAX_LENGTH = 500;
+var GENERATED_MEMORY_CONTENT_MAX_LENGTH = 240;
 var EVIDENCE_MAX_LENGTH2 = 320;
 var SENSITIVE_PROJECT_HARVEST_PATTERN = /\b(?:personal|private|family|medical|password|secret|token|api[_\s-]?key|bearer|sk-[a-z0-9_-]*)\b/i;
 async function runCodexProjectMemoryHarvest(input) {
@@ -17715,6 +17852,7 @@ function buildCodexProjectMemoryHarvestPrompt(signals) {
     "Good candidates capture design decisions, confirmed workflows, rejected approaches, repeated pitfalls, project boundaries, and repository policies.",
     "Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.",
     "Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.",
+    `Candidate content must be ${GENERATED_MEMORY_CONTENT_MAX_LENGTH} characters or fewer.`,
     "Reject one-time status, vague impressions, assistant self-praise, user psychology, private data, secrets, credentials, temporary output, and raw command dumps.",
     "Each candidate should include candidateKind or candidate_kind, content, signalIndexes, and optional tags.",
     "signalIndexes must be 1-based indexes of the collected signals that support that specific candidate.",
@@ -17742,7 +17880,10 @@ function sanitizeProjectMemoryCandidate(value, signals, config2) {
   if (candidateKind === void 0) {
     return void 0;
   }
-  const content = cleanString2(value.content, Math.min(config2.memorySingleContentMaxChars, CONTENT_MAX_LENGTH));
+  const content = cleanString2(
+    value.content,
+    Math.min(config2.memorySingleContentMaxChars, GENERATED_MEMORY_CONTENT_MAX_LENGTH)
+  );
   if (content === void 0) {
     return void 0;
   }
@@ -17872,7 +18013,13 @@ function cleanString2(value, maxLength) {
 }
 function cleanRequiredString(value, maxLength) {
   const redacted = redactReviewText(value.replace(/\s+/g, " ").trim()).text;
-  return redacted.length <= maxLength ? redacted : `${redacted.slice(0, Math.max(0, maxLength - 1))}...`;
+  return truncateWithSuffix2(redacted, maxLength);
+}
+function truncateWithSuffix2(value, maxChars) {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 0) return "";
+  if (maxChars <= 3) return ".".repeat(maxChars);
+  return `${value.slice(0, maxChars - 3)}...`;
 }
 function cleanTag(value) {
   const cleaned = cleanRequiredString(value, 48).toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
@@ -18135,6 +18282,8 @@ function isRecord4(value) {
 
 // src/codex/review-summary-runtime.ts
 var FAILED_SUMMARY = "Codex review summary failed; no transcript content persisted.";
+var GENERATED_MEMORY_CONTENT_MAX_LENGTH2 = 240;
+var GENERATED_MEMORY_EVIDENCE_MAX_LENGTH = 320;
 async function runCodexReviewSummary(input) {
   const window = recentTranscriptMessages(input.messages, 40);
   if (window.length === 0) {
@@ -18160,7 +18309,7 @@ async function runCodexReviewSummary(input) {
     const summary = outputRedaction.redact(parsed.summary);
     const candidateIds = [];
     for (const candidate of parsed.candidates) {
-      const safeCandidate = redactCandidate(candidate, runId, input.sessionId, summary, outputRedaction);
+      const safeCandidate = redactCandidate(candidate, runId, input.sessionId, summary, outputRedaction, input.config);
       if (safeCandidate === void 0) {
         continue;
       }
@@ -18237,6 +18386,8 @@ function buildCodexReviewSummaryPrompt(redactedTranscript) {
     "Do not store secrets, credentials, raw quotes, psychological diagnoses, or assistant-only suggestions.",
     "Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.",
     "Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.",
+    `Candidate content must be ${GENERATED_MEMORY_CONTENT_MAX_LENGTH2} characters or fewer.`,
+    `Evidence summaries and quotes must be ${GENERATED_MEMORY_EVIDENCE_MAX_LENGTH} characters or fewer.`,
     "Memory candidates must match the existing memory candidate schema.",
     "Candidates may include domain, type, strength, scope, content, normalizedKey, source, scores, evidence, and tags.",
     "",
@@ -18258,13 +18409,17 @@ function parseReviewSummaryResponse(content) {
 function formatMessages(messages) {
   return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
 }
-function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
+function redactCandidate(value, runId, sessionId, redactedSummary, redactor, config2) {
   if (!isRecord5(value)) {
     return void 0;
   }
   const domain = parseEnum(value.domain, MEMORY_DOMAINS);
   const type = parseEnum(value.type, MEMORY_TYPES);
-  const content = parseString(value.content);
+  const content = parseBoundedString(
+    value.content,
+    redactor,
+    Math.min(config2.memorySingleContentMaxChars, GENERATED_MEMORY_CONTENT_MAX_LENGTH2)
+  );
   if (domain === void 0 || type === void 0 || content === void 0) {
     return void 0;
   }
@@ -18276,22 +18431,30 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
     ...candidateKind === void 0 ? {} : { candidateKind },
     strength: parseEnum(value.strength, MEMORY_STRENGTHS),
     scope: parseEnum(value.scope, MEMORY_SCOPES),
-    content: redactor.redact(content),
+    content,
     normalizedKey: redactOptionalString(value.normalizedKey, redactor),
     source,
-    evidence: redactEvidence(value.evidence, runId, sessionId, redactedSummary, source ?? "assistant_observed", redactor),
+    evidence: redactEvidence(
+      value.evidence,
+      runId,
+      sessionId,
+      redactedSummary,
+      source ?? "assistant_observed",
+      redactor,
+      Math.min(config2.memorySingleEvidenceMaxChars, GENERATED_MEMORY_EVIDENCE_MAX_LENGTH)
+    ),
     scores: parseScores(value.scores),
     tags: redactTags(value.tags, redactor)
   };
   return candidate;
 }
-function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor) {
+function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor, maxLength) {
   const evidence = Array.isArray(value) ? value.flatMap((entry) => {
     if (!isRecord5(entry)) {
       return [];
     }
-    const summary = redactOptionalString(entry.summary, redactor);
-    const quote = redactOptionalString(entry.quote, redactor);
+    const summary = parseBoundedString(entry.summary, redactor, maxLength);
+    const quote = parseBoundedString(entry.quote, redactor, maxLength);
     if (summary === void 0 && quote === void 0) {
       return [];
     }
@@ -18300,7 +18463,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   if (evidence.length > 0) {
     return evidence;
   }
-  return [evidenceEntry({ runId, sessionId, summary: redactedSummary, sourceKind })];
+  return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
   return createHash9("sha256").update(JSON.stringify({
@@ -18332,6 +18495,19 @@ function redactTags(value, redactor) {
 function redactOptionalString(value, redactor) {
   const text = parseString(value);
   return text === void 0 ? void 0 : redactor.redact(text);
+}
+function parseBoundedString(value, redactor, maxLength) {
+  const text = parseString(value);
+  if (text === void 0) {
+    return void 0;
+  }
+  return truncateWithSuffix3(redactor.redact(text.replace(/\s+/g, " ").trim()), maxLength);
+}
+function truncateWithSuffix3(value, maxChars) {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 0) return "";
+  if (maxChars <= 3) return ".".repeat(maxChars);
+  return `${value.slice(0, maxChars - 3)}...`;
 }
 function parseScores(value) {
   if (!isRecord5(value)) {
@@ -21144,15 +21320,15 @@ function renderTriage() {
     ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
     : result
       ? renderTriageResult(result)
-      : panel('Triage ready', 'Preview pending-memory cleanup recommendations for the selected scope.', 'muted')
+      : panel('Triage ready', 'Preview pending-memory cleanup and review recommendations for the selected scope.', 'muted')
 
   return \`
     <section class="page-stack">
-      \${sectionHeader('Triage', 'Cluster duplicate pending memory for review.')}
+      \${sectionHeader('Triage', 'Cluster and rank pending memory for review.')}
       <div class="soft-panel action-panel">
         <div>
           <h3>Pending triage</h3>
-          <p>Preview duplicate, defer, and drop recommendations. Use per-candidate review actions for any write.</p>
+          <p>Preview duplicate, defer, drop, and review recommendations. Use per-candidate review actions for any write.</p>
         </div>
         <div class="detail-actions">
           <button class="soft-button primary" type="button" data-triage-dry-run \${state.triage.loading ? 'disabled' : ''}>
