@@ -1,5 +1,5 @@
 import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot } from '../memory/memory-store.js'
-import type { PendingMemory } from '../memory/types.js'
+import type { MemoryEvidence, PendingMemory } from '../memory/types.js'
 import { codexProjectMemoryRoot } from './codex-memory-root.js'
 import { identifyCodexProject } from './project-id.js'
 
@@ -7,11 +7,14 @@ export type DistillationRisk = 'low' | 'medium' | 'high'
 export type DistillationRecommendedAction = 'merge_pending' | 'needs_review'
 
 export interface DistilledMemoryCandidate {
+  id: string
   normalizedKey: string
   content: string
   sourceIds: string[]
+  evidence: MemoryEvidence[]
   recommendedAction: DistillationRecommendedAction
   risk: DistillationRisk
+  reasons: string[]
 }
 
 export interface CodexMemoryDistillResult {
@@ -87,15 +90,20 @@ function buildDistilledCandidate(
   items: PendingMemory[],
   hasActiveOverlap: boolean
 ): DistilledMemoryCandidate {
-  const risk = hasActiveOverlap || items.some(isHighRiskDomain) ? 'high' : 'low'
+  const sourceItems = sortById(items)
+  const highRiskDomains = Array.from(new Set(sourceItems.filter(isHighRiskDomain).map((item) => item.domain))).sort()
+  const risk = hasActiveOverlap || highRiskDomains.length > 0 ? 'high' : 'low'
   const recommendedAction = risk === 'high' ? 'needs_review' : 'merge_pending'
 
   return {
+    id: `distill-${normalizedKey}`,
     normalizedKey,
-    content: chooseRepresentativeContent(items),
-    sourceIds: items.map((item) => item.id).sort(),
+    content: chooseRepresentativeContent(sourceItems),
+    sourceIds: sourceItems.map((item) => item.id),
+    evidence: sourceItems.flatMap((item) => item.evidence),
     recommendedAction,
-    risk
+    risk,
+    reasons: buildReasons(normalizedKey, sourceItems.length, hasActiveOverlap, highRiskDomains)
   }
 }
 
@@ -105,7 +113,24 @@ function isHighRiskDomain(item: PendingMemory): boolean {
 
 function chooseRepresentativeContent(items: PendingMemory[]): string {
   return [...items].sort((left, right) => {
-    const byContent = left.content.localeCompare(right.content)
-    return byContent === 0 ? left.id.localeCompare(right.id) : byContent
+    const byLength = right.content.length - left.content.length
+    return byLength === 0 ? left.id.localeCompare(right.id) : byLength
   })[0]?.content ?? ''
+}
+
+function sortById(items: PendingMemory[]): PendingMemory[] {
+  return [...items].sort((left, right) => left.id.localeCompare(right.id))
+}
+
+function buildReasons(
+  normalizedKey: string,
+  pendingCount: number,
+  hasActiveOverlap: boolean,
+  highRiskDomains: string[]
+): string[] {
+  return [
+    ...(hasActiveOverlap ? [`active memory already has normalizedKey ${normalizedKey}`] : []),
+    ...highRiskDomains.map((domain) => `high-risk pending domain ${domain}`),
+    `duplicate normalizedKey ${normalizedKey} has ${pendingCount} pending candidates`
+  ]
 }
