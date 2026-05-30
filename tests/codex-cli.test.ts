@@ -1584,6 +1584,35 @@ describe('cyrene-continuity codex CLI', () => {
     expect(parsed.decisions).toContainEqual(expect.objectContaining({ action: 'auto_drop', candidateId: 'triage-noise' }))
   })
 
+  it('runs memory distill dry-run from the CLI', async () => {
+    const home = await createTempDir('cyrene-distill-cli-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-distill-cli-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'distill-cli-test' }), 'utf8')
+    await seedCliPending(cwd, [
+      createPending({ id: 'distill-a', normalizedKey: 'release-typecheck', content: 'Use npm run typecheck before release.' }),
+      createPending({ id: 'distill-b', normalizedKey: 'release-typecheck', content: 'Release verification includes npm run typecheck.' })
+    ])
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        cwd,
+        'codex',
+        'memory',
+        'distill',
+        '--dry-run'
+      ],
+      { cwd: process.cwd(), env: cliEnv(home), timeout: 5_000 }
+    )
+
+    expect(result.stdout).toContain('"mode": "dry_run"')
+    expect(result.stdout).toContain('"recommendedAction": "merge_pending"')
+  })
+
   it('memory approve accepts explicit normalizedKey conflict resolution', async () => {
     const home = await createTempDir('cyrene-codex-cli-conflict-resolution-home-')
     const repo = await createTempDir('cyrene-codex-cli-conflict-resolution-project-')
