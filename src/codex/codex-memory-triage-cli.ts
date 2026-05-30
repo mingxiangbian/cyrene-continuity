@@ -1,5 +1,7 @@
-import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot, readTombstonesFromRoot } from '../memory/memory-store.js'
+import { readActiveMemoriesFromRoot, readMemoryEventsFromRoot, readPendingMemoriesFromRoot, readTombstonesFromRoot } from '../memory/memory-store.js'
 import { codexProjectMemoryRoot } from './codex-memory-root.js'
+import { candidatesFromReviewEvents } from './global-memory-capture.js'
+import { proposeCodexMemoryCandidate } from './memory-propose.js'
 import { triagePendingMemories } from './memory-triage.js'
 import { identifyCodexProject } from './project-id.js'
 
@@ -19,5 +21,22 @@ export async function runCodexMemoryTriage(input: {
     readTombstonesFromRoot(memoryRoot)
   ])
   const result = triagePendingMemories({ pending, active, tombstones, scope: 'project', now })
-  return `${JSON.stringify({ action: input.apply ? 'apply' : 'dry_run', project, memoryRoot, ...result }, null, 2)}\n`
+  let reviewDerivedCandidateCount = 0
+  if (input.apply) {
+    const reviewDerived = candidatesFromReviewEvents({
+      events: await readMemoryEventsFromRoot(memoryRoot),
+      now
+    })
+    reviewDerivedCandidateCount = reviewDerived.length
+    for (const candidate of reviewDerived) {
+      await proposeCodexMemoryCandidate({
+        cwd: input.cwd,
+        candidate,
+        now,
+        recordRejectedCandidate: false
+      })
+    }
+  }
+
+  return `${JSON.stringify({ action: input.apply ? 'apply' : 'dry_run', project, memoryRoot, reviewDerivedCandidateCount, ...result }, null, 2)}\n`
 }

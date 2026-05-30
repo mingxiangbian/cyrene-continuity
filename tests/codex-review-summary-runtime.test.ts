@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { buildCodexReviewSummaryPrompt, runCodexReviewSummary } from '../src/codex/review-summary-runtime.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { createDefaultConfig, type AppConfig } from '../src/config.js'
@@ -123,6 +123,28 @@ describe('Codex review summary runtime', () => {
     expect(pending).toContain('"source":"user_implicit"')
     const summaries = await readReviewSummaries(cwd)
     expect(summaries).toContain(result.candidateIds[0])
+  })
+
+  it('captures explicit global instructions through memory proposal policy', async () => {
+    const home = await createTempDir('cyrene-review-runtime-global-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-runtime-global-project-')
+
+    const result = await runCodexReviewSummary({
+      cwd,
+      messages: [{ role: 'user', content: '以后所有项目都默认先运行 git diff --check。' }],
+      config: createConfig(cwd),
+      callModel: async () => modelResponse(JSON.stringify({ summary: '用户给出全局 workflow 指令。', candidates: [] })),
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('pending')
+    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    expect(result.candidateIds).toHaveLength(1)
+    const pending = await readFile(join(codexGlobalMemoryRoot(), 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('以后所有项目都默认先运行 git diff --check。')
+    expect(pending).toContain('"source":"user_explicit"')
+    expect(pending).toContain('"scope":"global"')
   })
 
   it('preserves candidateKind from review summary candidates', async () => {

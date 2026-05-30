@@ -1,11 +1,33 @@
-import { describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { runCodexMemoryTriage } from '../src/codex/codex-memory-triage-cli.js'
+import { rejectCodexPendingMemory, reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import {
   buildCandidateClusters,
   evaluateAutoPromotionPolicy,
   rankPendingForEviction,
   triagePendingMemories
 } from '../src/codex/memory-triage.js'
-import type { PendingMemory } from '../src/memory/types.js'
+import { identifyCodexProject } from '../src/codex/project-id.js'
+import type { MemoryEvent, PendingMemory } from '../src/memory/types.js'
+
+const originalHome = process.env.HOME
+const tempDirs: string[] = []
+
+afterEach(async () => {
+  vi.unstubAllEnvs()
+  process.env.HOME = originalHome
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+})
+
+async function createTempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix))
+  tempDirs.push(dir)
+  return dir
+}
 
 function pending(overrides: Partial<PendingMemory> = {}): PendingMemory {
   return {
@@ -118,5 +140,69 @@ describe('memory triage', () => {
 
     expect(ranked[0]).toMatchObject({ candidateId: 'weak', protected: false })
     expect(ranked[1]).toMatchObject({ candidateId: 'explicit', protected: true })
+  })
+
+  it('applies review-derived global candidates through memory proposal policy', async () => {
+    const home = await createTempDir('cyrene-triage-global-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-triage-global-project-')
+    const project = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'events.jsonl'), [
+      { id: 'event-1', action: 'reject', at: '2026-05-28T00:00:00.000Z', reason: 'temporary status', candidateId: 'a', details: { reviewPatternId: 'reject-transient-test-status', candidateKind: 'project_fact' } },
+      { id: 'event-2', action: 'reject', at: '2026-05-29T00:00:00.000Z', reason: 'not durable memory', candidateId: 'b', details: { reviewPatternId: 'reject-transient-test-status', candidateKind: 'project_fact' } },
+      { id: 'event-3', action: 'reject', at: '2026-05-30T00:00:00.000Z', reason: 'one-off command output', candidateId: 'c', details: { reviewPatternId: 'reject-transient-test-status', candidateKind: 'project_fact' } }
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n')
+
+    const output = await runCodexMemoryTriage({
+      cwd,
+      dryRun: false,
+      apply: true,
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    const parsed = JSON.parse(output) as { reviewDerivedCandidateCount?: number }
+    expect(parsed.reviewDerivedCandidateCount).toBe(1)
+    const pending = await readFile(join(codexGlobalMemoryRoot(), 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('review-derived-reject-transient-test-status')
+    expect(pending).toContain('"source":"review_event"')
+    expect(pending).toContain('一次性命令结果')
+  })
+
+  it('records transient review pattern metadata when rejecting command status memory', async () => {
+    const home = await createTempDir('cyrene-triage-review-event-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-triage-review-event-project-')
+    const project = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    const candidate = pending({
+      id: 'transient-review',
+      content: 'Ran npm test today.',
+      normalizedKey: 'ran-npm-test-today',
+      evidence: [{ summary: 'temporary command result' }]
+    })
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(candidate)}\n`)
+
+    await rejectCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    const events = (await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as MemoryEvent)
+    expect(events[0]).toMatchObject({
+      action: 'reject',
+      candidateId: candidate.id,
+      details: {
+        reviewPatternId: 'reject-transient-test-status',
+        candidateKind: 'project_fact'
+      }
+    })
   })
 })
