@@ -345,6 +345,7 @@ describe('memory triage', () => {
         details: expect.objectContaining({ reviewAction: 'triage_auto_merge' })
       })
     ]))
+    await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'))).resolves.toBeInstanceOf(Buffer)
   })
 
   it('records transient review pattern metadata when rejecting command status memory', async () => {

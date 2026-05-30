@@ -1,4 +1,8 @@
 import {
+  assertMemoryMaintenanceTargetsSafeFromRoot,
+  withMemoryMaintenanceLockFromRoot
+} from '../memory/memory-maintenance.js'
+import {
   appendMemoryEventFromRoot,
   appendTombstoneFromRoot,
   readActiveMemoriesFromRoot,
@@ -7,6 +11,7 @@ import {
   readTombstonesFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
+import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { codexProjectMemoryRoot } from './codex-memory-root.js'
 import { candidatesFromReviewEvents } from './global-memory-capture.js'
 import { proposeCodexMemoryCandidate } from './memory-propose.js'
@@ -24,24 +29,34 @@ export async function runCodexMemoryTriage(input: {
   const project = await identifyCodexProject(input.cwd)
   const memoryRoot = codexProjectMemoryRoot(project.projectId)
   const now = input.now ?? new Date().toISOString()
-  const [pending, active, tombstones] = await Promise.all([
-    readPendingMemoriesFromRoot(memoryRoot),
-    readActiveMemoriesFromRoot(memoryRoot),
-    readTombstonesFromRoot(memoryRoot)
-  ])
-  const result = triagePendingMemories({ pending, active, tombstones, scope: 'project', now })
   let reviewDerivedCandidateCount = 0
   let applied: ReturnType<typeof applySafeTriageDecisions>['counts'] | undefined
+  let result: ReturnType<typeof triagePendingMemories>
+
   if (input.apply) {
-    const applyResult = applySafeTriageDecisions({ pending, decisions: result.decisions, now })
-    await writePendingMemoriesFromRoot(memoryRoot, applyResult.pending)
-    for (const tombstone of applyResult.tombstones) {
-      await appendTombstoneFromRoot(memoryRoot, tombstone)
-    }
-    for (const event of applyResult.events) {
-      await appendMemoryEventFromRoot(memoryRoot, event)
-    }
-    applied = applyResult.counts
+    await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
+    const appliedResult = await withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+      await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot)
+      const [pending, active, tombstones] = await Promise.all([
+        readPendingMemoriesFromRoot(lockedMemoryRoot),
+        readActiveMemoriesFromRoot(lockedMemoryRoot),
+        readTombstonesFromRoot(lockedMemoryRoot)
+      ])
+      const lockedResult = triagePendingMemories({ pending, active, tombstones, scope: 'project', now })
+      const applyResult = applySafeTriageDecisions({ pending, decisions: lockedResult.decisions, now })
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, applyResult.pending)
+      for (const tombstone of applyResult.tombstones) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, tombstone)
+      }
+      for (const event of applyResult.events) {
+        await appendMemoryEventFromRoot(lockedMemoryRoot, event)
+      }
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+
+      return { result: lockedResult, applied: applyResult.counts }
+    })
+    result = appliedResult.result
+    applied = appliedResult.applied
 
     const reviewDerived = candidatesFromReviewEvents({
       events: await readMemoryEventsFromRoot(memoryRoot),
@@ -57,7 +72,16 @@ export async function runCodexMemoryTriage(input: {
         allowAutoPromote: false
       })
     }
+
+    return `${JSON.stringify({ action: 'apply', project, memoryRoot, reviewDerivedCandidateCount, applied, ...result }, null, 2)}\n`
   }
 
-  return `${JSON.stringify({ action: input.apply ? 'apply' : 'dry_run', project, memoryRoot, reviewDerivedCandidateCount, ...(applied === undefined ? {} : { applied }), ...result }, null, 2)}\n`
+  const [pending, active, tombstones] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ])
+  result = triagePendingMemories({ pending, active, tombstones, scope: 'project', now })
+
+  return `${JSON.stringify({ action: 'dry_run', project, memoryRoot, reviewDerivedCandidateCount, ...result }, null, 2)}\n`
 }
