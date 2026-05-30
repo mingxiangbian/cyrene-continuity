@@ -21,6 +21,7 @@ export async function runCodexMemoryActiveTombstone(input: {
   reason: string
   days?: number
   indefinite?: boolean
+  confirmText?: string
 }): Promise<string> {
   return `${JSON.stringify(await tombstoneCodexActiveMemory(input), null, 2)}\n`
 }
@@ -42,6 +43,7 @@ export async function runCodexMemoryActiveSupersede(input: {
   contentHash: string
   reviewHash: string
   reason: string
+  confirmText?: string
 }): Promise<string> {
   return `${JSON.stringify(await supersedeCodexActiveMemory(input), null, 2)}\n`
 }

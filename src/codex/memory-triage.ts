@@ -228,7 +228,8 @@ function isTransientNoise(candidate: PendingMemory): boolean {
     /\bran\s+npm\s+(test|run|install|ci)\b/.test(text) ||
     /\bgit\s+status\b/.test(text) ||
     /\bcurrent\s+branch\b/.test(text) ||
-    /\btoday\b/.test(text)
+    /\btemporary\s+command\s+result\b/.test(text) ||
+    /\bone-off\s+command\s+output\b/.test(text)
   )
 }
 

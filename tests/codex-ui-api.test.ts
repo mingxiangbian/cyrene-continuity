@@ -575,7 +575,7 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
-  it('rejects batch triage apply and leaves pending memory unchanged', async () => {
+  it('applies safe triage decisions and leaves review-only candidates pending', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
@@ -617,8 +617,6 @@ describe('handleCodexUiApiRequest', () => {
         duplicateA
       ].map((item) => JSON.stringify(item)).join('\n') + '\n'
     )
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
-
     const result = await handleCodexUiApiRequest({
       cwd,
       method: 'POST',
@@ -626,12 +624,27 @@ describe('handleCodexUiApiRequest', () => {
       now: '2026-05-30T00:00:00.000Z'
     })
 
-    expect(result.status).toBe(400)
-    expect(result.body.ok).toBe(false)
-    if (!result.body.ok) {
-      expect(result.body.error.code).toBe('batch_triage_disabled')
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        action: 'apply',
+        applied: {
+          auto_drop: 1,
+          auto_defer: 1,
+          auto_merge: 1
+        }
+      })
     }
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    const pendingAfter = (await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as PendingMemory)
+    expect(pendingAfter.map((item) => item.id).sort()).toEqual(['triage-duplicate-a', 'triage-weak'])
+    expect(pendingAfter.find((item) => item.id === 'triage-weak')?.promoteAfter).toBe('2026-06-13T00:00:00.000Z')
+    expect(pendingAfter.find((item) => item.id === 'triage-duplicate-a')?.seenCount).toBe(2)
+    await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).resolves.toContain('triage-noise')
   })
 
   it('runs triage dry-run for the selected global scope', async () => {
@@ -921,6 +934,71 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.summaries.map((record) => record.id)).toEqual(['summary-2', 'summary-1'])
       expect(data.reviewSummaries).toBeUndefined()
     }
+  })
+
+  it('returns 400 for malformed active memory propose-edit payloads', async () => {
+    const home = await createTempDir('cyrene-ui-active-malformed-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, active } = await seedProject()
+    const { contentHashForActiveMemory } = await import('../src/codex/active-memory-review.js')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/active-memory/${active.id}/propose-edit`,
+      body: { contentHash: contentHashForActiveMemory(active), reason: 'Edit without replacement content.' },
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error.code).toBe('invalid_request')
+    }
+  })
+
+  it('requires confirmText before tombstoning high-risk active memory through the UI API', async () => {
+    const home = await createTempDir('cyrene-ui-high-risk-active-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const active = createActive({
+      id: 'ui-high-risk-active',
+      domain: 'personal',
+      type: 'user_preference',
+      content: 'High-risk UI memory requires explicit destructive confirmation.',
+      normalizedKey: 'ui-high-risk-active-memory'
+    })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(active)}\n`)
+    const { contentHashForActiveMemory } = await import('../src/codex/active-memory-review.js')
+
+    const blocked = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/active-memory/${active.id}/tombstone`,
+      body: { contentHash: contentHashForActiveMemory(active), reason: 'Remove high-risk active memory.' },
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(blocked.status).toBe(400)
+    expect(blocked.body.ok).toBe(false)
+    if (!blocked.body.ok) {
+      expect(blocked.body.error.code).toBe('confirmation_required')
+    }
+
+    const confirmed = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/active-memory/${active.id}/tombstone`,
+      body: {
+        contentHash: contentHashForActiveMemory(active),
+        reason: 'Remove high-risk active memory.',
+        confirmText: active.id
+      },
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(confirmed.status).toBe(200)
+    expect(confirmed.body.ok).toBe(true)
   })
 })
 

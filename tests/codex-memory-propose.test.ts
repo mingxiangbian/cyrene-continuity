@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { proposeCodexMemoryCandidate } from '../src/codex/memory-propose.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
-import type { PendingMemory } from '../src/memory/types.js'
+import type { MemoryEvent, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -313,9 +313,29 @@ describe('Codex memory propose', () => {
     const active = await readFile(join(second.memoryRoot, 'index.jsonl'), 'utf8')
     expect(active).toContain('Project uses SQLite FTS for memory retrieval.')
     await expect(readFile(join(second.memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
-    const events = await readFile(join(second.memoryRoot, 'events.jsonl'), 'utf8')
-    expect(events).toContain('"decision":"auto_promote"')
-    expect(events).toContain('"policyId":"low_risk_project_memory_v1"')
+    const events = (await readFile(join(second.memoryRoot, 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as MemoryEvent)
+    const promoteEvent = events.find((event) => event.action === 'promote')
+    expect(promoteEvent?.details).toMatchObject({
+      decision: 'auto_promote',
+      policyId: 'low_risk_project_memory_v1',
+      evidenceCount: 2,
+      distinctEvidenceCount: 2,
+      scoreSnapshot: candidate.scores,
+      capStatus: {
+        scope: 'project',
+        usedToday: 0,
+        dailyCap: 5
+      },
+      thresholds: expect.any(Object),
+      evalGate: {
+        passed: true,
+        failedChecks: [],
+        results: [expect.objectContaining({ name: 'auto_promotion_policy_eval', passed: true })]
+      }
+    })
   })
 
   it('evicts the weakest pending candidate before writing a stronger incoming candidate over budget', async () => {

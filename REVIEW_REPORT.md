@@ -43,6 +43,12 @@ the current fix batch.
 | R24 | P3 | Cleanup | Fixed | Duplicated TOML parsing helpers in doctor and dashboard. |
 | R25 | P3 | Documentation | Fixed | Historical plan/spec docs contain stale active-task state. |
 | R26 | P3 | Documentation | Fixed | Repository lacks checked-in `AGENTS.md` / `.agents/skills` guidance. |
+| R27 | P1 | Memory/promotion | Fixed | Auto-promotion receipts recorded an eval gate as passed without running the gate and omitted policy audit fields. |
+| R28 | P1 | Persistence | Fixed | Active memory archive, tombstone, and supersede events removed active records without full previous-memory snapshots. |
+| R29 | P2 | Security/privacy | Fixed | High-risk active memory destructive actions did not require explicit confirm text across UI, CLI, MCP, and core paths. |
+| R30 | P2 | Runtime | Fixed | Malformed active-memory Web UI write payloads could throw internal errors instead of returning 400 responses. |
+| R31 | P2 | Agent behavior | Fixed | The Web UI promised safe triage apply, but `/api/memory/triage/apply` rejected all apply requests. |
+| R32 | P3 | Agent behavior | Fixed | Pending triage treated any memory mentioning `today` as transient command-status noise. |
 
 ## Fix Coordination
 
@@ -80,6 +86,12 @@ hygiene, documentation archive notes, and this coordinator report.
 - R24: Doctor and dashboard TOML parsing now share `src/codex/toml-lite.ts`.
 - R25: Added `docs/superpowers/README.md` to mark plan/spec artifacts as historical, not current task state.
 - R26: Added root `AGENTS.md` repository guidance and updated the checked-in Cyrene skill guidance.
+- R27: Auto-promotion now runs the v5 eval gate before promotion and records policy id, thresholds, evidence counts, score snapshot, cap status, and eval results in the promote event.
+- R28: Active memory archive, tombstone, pending-review supersede, and normalized-key supersede events now include previous/superseded memory snapshots.
+- R29: Personal, relationship, and affective active memory tombstone/supersede paths require `confirmText` matching the memory id; UI, CLI, and MCP schemas expose the confirmation field.
+- R30: Active-memory Web UI write routes now validate action-specific payload fields and return structured 400 errors instead of throwing.
+- R31: `/api/memory/triage/apply` now applies only safe decisions: auto-drop transient noise with tombstones, auto-merge duplicate pending candidates, and auto-defer weak candidates, with audit events.
+- R32: Transient noise detection no longer auto-drops durable candidates merely because their content includes `today`.
 
 ### Caveats
 
@@ -87,6 +99,7 @@ hygiene, documentation archive notes, and this coordinator report.
 - R14 bounds dream lock waits and skips roots after the configured budget is exhausted. It does not preempt work that has already started inside a root.
 - R23 cleanup was limited to confirmed unreferenced helpers; it did not remove exported types or add new snapshot/restore feature wiring.
 - R25 preserves historical plan/spec content instead of rewriting old task checkboxes, and adds an archive-level status disclaimer.
+- R31 safe triage apply intentionally does not auto-promote candidates or perform manual review actions; those still require per-candidate review.
 
 ### Remaining recommended fix order
 
@@ -94,11 +107,12 @@ No review IDs remain open.
 
 ### Verification after batch
 
+- `npm test -- tests/codex-memory-propose.test.ts tests/codex-active-memory-review.test.ts tests/codex-ui-api.test.ts tests/codex-memory-triage.test.ts tests/codex-ui-assets.test.ts`: passed, 5 files / 67 tests.
 - `npm run build:plugin`: passed.
 - `python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin`: passed.
+- `npm test`: passed, 42 files / 491 tests.
 - `npm run typecheck`: passed.
 - `npx tsc --noEmit --noUnusedLocals --noUnusedParameters`: passed.
-- `npm run dev -- codex eval run --check release`: passed all six minimum checks.
-- `npm test`: passed, 37 files / 417 tests.
+- `npm run dev -- codex eval run --check release`: passed all 12 minimum checks.
 - `git diff --check`: passed.
 - Lint: no lint script is defined in `package.json`.

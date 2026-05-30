@@ -82,6 +82,10 @@ export type CodexActiveMemorySupersedeResult = CodexActiveMemoryResultBase & {
         latest?: CodexPendingMemorySummary
       }
     | {
+        action: 'confirmation_required'
+        reason: string
+      }
+    | {
         action: 'rejected_by_validator'
         candidateId: string
         reason: string
@@ -96,6 +100,10 @@ type ActiveMemoryNotFoundOrConflict =
     }
   | {
       action: 'conflict'
+      reason: string
+    }
+  | {
+      action: 'confirmation_required'
       reason: string
     }
 
@@ -117,6 +125,10 @@ export function contentHashForActiveMemory(memory: CyreneMemory): string {
   })).digest('hex')
 }
 
+export function activeMemoryRequiresDestructiveConfirmation(memory: CyreneMemory): boolean {
+  return memory.domain === 'personal' || memory.domain === 'relationship' || memory.domain === 'affective'
+}
+
 export async function archiveCodexActiveMemory(input: {
   cwd: string
   id: string
@@ -134,7 +146,8 @@ export async function archiveCodexActiveMemory(input: {
       memoryId: memory.id,
       details: {
         previousStatus: memory.status,
-        normalizedKey: memory.normalizedKey
+        normalizedKey: memory.normalizedKey,
+        previousMemory: lifecycleMemorySnapshot(memory, 'archived')
       }
     })
     await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot })
@@ -157,9 +170,14 @@ export async function tombstoneCodexActiveMemory(input: {
   reason: string
   days?: number
   indefinite?: boolean
+  confirmText?: string
   now?: string
 }): Promise<CodexActiveMemoryTombstoneResult> {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const confirmation = requireDestructiveConfirmation(memory, input.confirmText)
+    if (confirmation !== undefined) {
+      return { project, memoryRoot: lockedMemoryRoot, result: confirmation }
+    }
     const tombstone = tombstoneForActiveMemory(memory, {
       reason: 'archived',
       now,
@@ -176,7 +194,8 @@ export async function tombstoneCodexActiveMemory(input: {
       details: {
         reviewAction: 'tombstone',
         tombstoneId: tombstone.id,
-        indefinite: input.indefinite === true
+        indefinite: input.indefinite === true,
+        previousMemory: lifecycleMemorySnapshot(memory, 'archived')
       }
     })
     await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot })
@@ -260,9 +279,14 @@ export async function supersedeCodexActiveMemory(input: {
   contentHash: string
   reviewHash: string
   reason: string
+  confirmText?: string
   now?: string
 }): Promise<CodexActiveMemorySupersedeResult> {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const confirmation = requireDestructiveConfirmation(memory, input.confirmText)
+    if (confirmation !== undefined) {
+      return { project, memoryRoot: lockedMemoryRoot, result: confirmation }
+    }
     const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot)
     const candidate = lockedPending.find((item) => item.id === input.candidateId)
     if (candidate === undefined) {
@@ -360,7 +384,8 @@ export async function supersedeCodexActiveMemory(input: {
       candidateId: candidate.id,
       details: {
         supersededMemoryId: memory.id,
-        tombstoneId: tombstone.id
+        tombstoneId: tombstone.id,
+        supersededMemory: lifecycleMemorySnapshot(memory, 'superseded')
       }
     })
     await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot })
@@ -472,6 +497,22 @@ function tombstoneForActiveMemory(
     ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
     ...(input.replacementMemoryId === undefined ? {} : { replacementMemoryId: input.replacementMemoryId }),
     evidence: memory.evidence
+  }
+}
+
+function requireDestructiveConfirmation(memory: CyreneMemory, confirmText: string | undefined): ActiveMemoryNotFoundOrConflict | undefined {
+  if (!activeMemoryRequiresDestructiveConfirmation(memory)) return undefined
+  if (confirmText?.trim() === memory.id) return undefined
+  return {
+    action: 'confirmation_required',
+    reason: `High-risk active memory requires confirmText to exactly match memory id ${memory.id}.`
+  }
+}
+
+function lifecycleMemorySnapshot(memory: CyreneMemory, status: 'archived' | 'superseded'): Record<string, unknown> {
+  return {
+    ...memory,
+    status
   }
 }
 

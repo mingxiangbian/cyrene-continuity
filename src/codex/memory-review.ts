@@ -1014,7 +1014,17 @@ function conflictResolutionDetails(
     resolution,
     normalizedKey,
     conflictingMemoryIds: conflicts.map((memory) => memory.id),
-    conflicts: conflicts.map(summarizeNormalizedKeyConflict)
+    conflicts: conflicts.map(summarizeNormalizedKeyConflict),
+    ...(resolution === 'supersede'
+      ? { supersededMemories: conflicts.map((memory) => lifecycleMemorySnapshot(memory, 'superseded')) }
+      : {})
+  }
+}
+
+function lifecycleMemorySnapshot(memory: CyreneMemory, status: 'superseded'): Record<string, unknown> {
+  return {
+    ...memory,
+    status
   }
 }
 

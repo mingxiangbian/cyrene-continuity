@@ -59,6 +59,7 @@ export const activeMemoryTombstoneInputSchema = {
   reason: z.string().min(1),
   days: z.number().int().positive().optional(),
   indefinite: z.boolean().optional(),
+  confirmText: z.string().optional(),
   cwd: z.string().optional()
 }
 
@@ -76,6 +77,7 @@ export const activeMemorySupersedeInputSchema = {
   contentHash: z.string().min(1),
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
   reason: z.string().min(1),
+  confirmText: z.string().optional(),
   cwd: z.string().optional()
 }
 
@@ -164,7 +166,7 @@ export async function handleActiveMemoryArchive(
 }
 
 export async function handleActiveMemoryTombstone(
-  input: { cwd?: string; id: string; contentHash: string; reason: string; days?: number; indefinite?: boolean },
+  input: { cwd?: string; id: string; contentHash: string; reason: string; days?: number; indefinite?: boolean; confirmText?: string },
   fallbackCwd: string
 ) {
   return jsonText(await tombstoneCodexActiveMemory({
@@ -173,7 +175,8 @@ export async function handleActiveMemoryTombstone(
     contentHash: input.contentHash,
     reason: input.reason,
     days: input.days,
-    indefinite: input.indefinite
+    indefinite: input.indefinite,
+    confirmText: input.confirmText
   }))
 }
 
@@ -191,7 +194,7 @@ export async function handleActiveMemoryProposeEdit(
 }
 
 export async function handleActiveMemorySupersede(
-  input: { cwd?: string; id: string; candidateId: string; contentHash: string; reviewHash: string; reason: string },
+  input: { cwd?: string; id: string; candidateId: string; contentHash: string; reviewHash: string; reason: string; confirmText?: string },
   fallbackCwd: string
 ) {
   return jsonText(await supersedeCodexActiveMemory({
@@ -200,6 +203,7 @@ export async function handleActiveMemorySupersede(
     candidateId: input.candidateId,
     contentHash: input.contentHash,
     reviewHash: input.reviewHash,
-    reason: input.reason
+    reason: input.reason,
+    confirmText: input.confirmText
   }))
 }

@@ -136,6 +136,11 @@ describe('Codex active memory lifecycle', () => {
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.not.toContain(memory.content)
     const events = jsonl<MemoryEvent>(await readFile(join(root, 'events.jsonl'), 'utf8'))
     expect(events[0]).toMatchObject({ action: 'archive', memoryId: memory.id, reason: 'Stale.' })
+    expect(events[0]?.details?.previousMemory).toMatchObject({
+      id: memory.id,
+      content: memory.content,
+      status: 'archived'
+    })
   })
 
   it('archives global active memory from the global root before a same-id project memory', async () => {
@@ -202,6 +207,49 @@ describe('Codex active memory lifecycle', () => {
       memoryId: memory.id,
       details: expect.objectContaining({ reviewAction: 'tombstone' })
     })
+    expect(events[0]?.details?.previousMemory).toMatchObject({
+      id: memory.id,
+      content: memory.content,
+      status: 'archived'
+    })
+  })
+
+  it('requires explicit confirmation before tombstoning high-risk active memory', async () => {
+    const home = await createTempDir('cyrene-high-risk-tombstone-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-high-risk-tombstone-project-')
+    const memory = active({
+      id: 'high-risk-active',
+      domain: 'personal',
+      type: 'user_preference',
+      content: 'High-risk personal memory needs stronger destructive confirmation.',
+      normalizedKey: 'high-risk-personal-memory'
+    })
+    await seed(cwd, [memory])
+
+    const blocked = await tombstoneCodexActiveMemory({
+      cwd,
+      id: memory.id,
+      contentHash: contentHashForActiveMemory(memory),
+      reason: 'Remove high-risk memory.',
+      now: '2026-05-30T01:00:00.000Z'
+    })
+
+    expect(blocked.result).toMatchObject({
+      action: 'confirmation_required',
+      reason: expect.stringContaining(memory.id)
+    })
+
+    const confirmed = await tombstoneCodexActiveMemory({
+      cwd,
+      id: memory.id,
+      contentHash: contentHashForActiveMemory(memory),
+      reason: 'Remove high-risk memory.',
+      confirmText: memory.id,
+      now: '2026-05-30T01:00:00.000Z'
+    })
+
+    expect(confirmed.result.action).toBe('tombstone')
   })
 
   it('proposes active edit as a distinct pending replacement', async () => {
@@ -274,6 +322,13 @@ describe('Codex active memory lifecycle', () => {
       memoryId: memory.id,
       reason: 'superseded',
       replacementMemoryId: activeLines[0]?.id
+    })
+    const events = jsonl<MemoryEvent>(await readFile(join(root, 'events.jsonl'), 'utf8'))
+    const supersedeEvent = events.find((event) => event.action === 'supersede')
+    expect(supersedeEvent?.details?.supersededMemory).toMatchObject({
+      id: memory.id,
+      content: memory.content,
+      status: 'superseded'
     })
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('Replacement active memory.')
   })

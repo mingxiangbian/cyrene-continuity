@@ -9,6 +9,12 @@ import { evaluateAutoPromotionPolicy } from './memory-triage.js'
 import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import {
+  combineEvalGateResults,
+  runV5AutoPromotionEvalGate,
+  runV5GlobalAutoPromotionEvalGate,
+  type EvalGateResult
+} from '../eval/eval-runner.js'
+import {
   assertMemoryMaintenanceTargetsSafeFromRoot,
   withMemoryMaintenanceLockFromRoot
 } from '../memory/memory-maintenance.js'
@@ -150,18 +156,33 @@ export async function proposeCodexMemoryCandidate(input: {
       : mergePendingMemory(existingPending, pendingCandidate)
     const pendingWithoutMerged = lockedPending.filter((item) => item.normalizedKey !== mergedCandidate.normalizedKey)
     const config = createDefaultConfig(input.cwd)
+    const promotionScope = mergedCandidate.scope === 'global' ? 'global' : 'project'
+    const promotionsUsedToday = countAutoPromotionsForDay(events, now)
+    const dailyCap = promotionScope === 'global'
+      ? config.memoryAutoReviewGlobalPromotePerDay
+      : config.memoryAutoReviewProjectPromotePerDay
     const autoPromotion = evaluateAutoPromotionPolicy({
       candidate: mergedCandidate,
-      scope: mergedCandidate.scope === 'global' ? 'global' : 'project',
+      scope: promotionScope,
       active: existingMemories,
       tombstones,
-      promotionsUsedToday: countAutoPromotionsForDay(events, now),
+      promotionsUsedToday,
       projectDailyCap: config.memoryAutoReviewProjectPromotePerDay,
       globalDailyCap: config.memoryAutoReviewGlobalPromotePerDay,
       now
     })
+    const autoPromotionEval = autoPromotion.allowed
+      ? runAutoPromotionEvalGate({
+          candidate: mergedCandidate,
+          policyId: autoPromotion.policyId,
+          scope: promotionScope,
+          distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
+          usedToday: promotionsUsedToday,
+          dailyCap
+        })
+      : undefined
 
-    if (autoPromotion.allowed && input.allowAutoPromote !== false) {
+    if (autoPromotion.allowed && autoPromotionEval?.passed === true && input.allowAutoPromote !== false) {
       const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now)
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted])
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged)
@@ -175,8 +196,16 @@ export async function proposeCodexMemoryCandidate(input: {
         details: {
           decision: 'auto_promote',
           policyId: autoPromotion.policyId,
+          thresholds: autoPromotionThresholds(promotionScope),
+          evidenceCount: mergedCandidate.evidence.length,
           distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
-          evalGate: { passed: true, failedChecks: [] }
+          scoreSnapshot: mergedCandidate.scores,
+          capStatus: {
+            scope: promotionScope,
+            usedToday: promotionsUsedToday,
+            dailyCap
+          },
+          evalGate: autoPromotionEval
         }
       })
       await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
@@ -220,7 +249,11 @@ export async function proposeCodexMemoryCandidate(input: {
     await markDreamDueFailOpen(lockedMemoryRoot, now)
     const reason =
       decision.action === 'auto_write'
-        ? `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.`
+        ? input.allowAutoPromote === false
+          ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.`
+          : autoPromotion.allowed && autoPromotionEval?.passed === false
+          ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(', ')}; pending for manual review.`
+          : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.`
         : decision.reason
 
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
@@ -238,6 +271,55 @@ export async function proposeCodexMemoryCandidate(input: {
       memoryRoot: lockedMemoryRoot
     }
   })
+}
+
+function runAutoPromotionEvalGate(input: {
+  candidate: PendingMemory
+  policyId: string
+  scope: 'project' | 'global'
+  distinctEvidenceCount: number
+  usedToday: number
+  dailyCap: number
+}): EvalGateResult {
+  const item = {
+    candidateId: input.candidate.id,
+    domain: input.candidate.domain,
+    scope: input.scope,
+    source: input.candidate.source,
+    policyId: input.policyId,
+    decision: 'auto_promote',
+    evidenceCount: input.candidate.evidence.length,
+    distinctEvidenceCount: input.distinctEvidenceCount,
+    usedToday: input.usedToday,
+    dailyCap: input.dailyCap
+  }
+  const gates = [runV5AutoPromotionEvalGate([item])]
+  if (input.scope === 'global') {
+    gates.push(runV5GlobalAutoPromotionEvalGate([item]))
+  }
+  return combineEvalGateResults(gates)
+}
+
+function autoPromotionThresholds(scope: 'project' | 'global'): Record<string, number> {
+  return scope === 'global'
+    ? {
+        evidenceStrength: 0.9,
+        stability: 0.85,
+        usefulness: 0.7,
+        safety: 0.95,
+        maxSensitivity: 0.1,
+        minSeenCount: 2,
+        minDistinctEvidence: 2
+      }
+    : {
+        evidenceStrength: 0.85,
+        stability: 0.8,
+        usefulness: 0.7,
+        safety: 0.9,
+        maxSensitivity: 0.2,
+        minSeenCount: 2,
+        minDistinctEvidence: 2
+      }
 }
 
 async function markDreamDueFailOpen(memoryRoot: string, now: string): Promise<void> {

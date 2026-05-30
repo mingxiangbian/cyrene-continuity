@@ -15827,7 +15827,14 @@ function conflictResolutionDetails(resolution, normalizedKey, conflicts) {
     resolution,
     normalizedKey,
     conflictingMemoryIds: conflicts.map((memory) => memory.id),
-    conflicts: conflicts.map(summarizeNormalizedKeyConflict)
+    conflicts: conflicts.map(summarizeNormalizedKeyConflict),
+    ...resolution === "supersede" ? { supersededMemories: conflicts.map((memory) => lifecycleMemorySnapshot(memory, "superseded")) } : {}
+  };
+}
+function lifecycleMemorySnapshot(memory, status) {
+  return {
+    ...memory,
+    status
   };
 }
 function reviewEventDetails(candidate, reviewAction, base = {}) {
@@ -17113,7 +17120,7 @@ function candidateIdsForDecisions(decisions) {
 }
 function isTransientNoise(candidate) {
   const text = `${candidate.content} ${candidate.evidence.map((entry) => `${entry.summary ?? ""} ${entry.quote ?? ""}`).join(" ")}`.toLowerCase();
-  return /\bran\s+npm\s+(test|run|install|ci)\b/.test(text) || /\bgit\s+status\b/.test(text) || /\bcurrent\s+branch\b/.test(text) || /\btoday\b/.test(text);
+  return /\bran\s+npm\s+(test|run|install|ci)\b/.test(text) || /\bgit\s+status\b/.test(text) || /\bcurrent\s+branch\b/.test(text) || /\btemporary\s+command\s+result\b/.test(text) || /\bone-off\s+command\s+output\b/.test(text);
 }
 function isProtectedPending(candidate, now) {
   if (candidate.source === "user_explicit") return true;
@@ -17234,17 +17241,28 @@ async function proposeCodexMemoryCandidate(input) {
     const mergedCandidate = existingPending === void 0 ? pendingCandidate : mergePendingMemory(existingPending, pendingCandidate);
     const pendingWithoutMerged = lockedPending.filter((item) => item.normalizedKey !== mergedCandidate.normalizedKey);
     const config2 = createDefaultConfig(input.cwd);
+    const promotionScope = mergedCandidate.scope === "global" ? "global" : "project";
+    const promotionsUsedToday = countAutoPromotionsForDay(events, now);
+    const dailyCap = promotionScope === "global" ? config2.memoryAutoReviewGlobalPromotePerDay : config2.memoryAutoReviewProjectPromotePerDay;
     const autoPromotion = evaluateAutoPromotionPolicy({
       candidate: mergedCandidate,
-      scope: mergedCandidate.scope === "global" ? "global" : "project",
+      scope: promotionScope,
       active: existingMemories,
       tombstones,
-      promotionsUsedToday: countAutoPromotionsForDay(events, now),
+      promotionsUsedToday,
       projectDailyCap: config2.memoryAutoReviewProjectPromotePerDay,
       globalDailyCap: config2.memoryAutoReviewGlobalPromotePerDay,
       now
     });
-    if (autoPromotion.allowed && input.allowAutoPromote !== false) {
+    const autoPromotionEval = autoPromotion.allowed ? runAutoPromotionEvalGate({
+      candidate: mergedCandidate,
+      policyId: autoPromotion.policyId,
+      scope: promotionScope,
+      distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
+      usedToday: promotionsUsedToday,
+      dailyCap
+    }) : void 0;
+    if (autoPromotion.allowed && autoPromotionEval?.passed === true && input.allowAutoPromote !== false) {
       const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now);
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
@@ -17258,8 +17276,16 @@ async function proposeCodexMemoryCandidate(input) {
         details: {
           decision: "auto_promote",
           policyId: autoPromotion.policyId,
+          thresholds: autoPromotionThresholds(promotionScope),
+          evidenceCount: mergedCandidate.evidence.length,
           distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
-          evalGate: { passed: true, failedChecks: [] }
+          scoreSnapshot: mergedCandidate.scores,
+          capStatus: {
+            scope: promotionScope,
+            usedToday: promotionsUsedToday,
+            dailyCap
+          },
+          evalGate: autoPromotionEval
         }
       });
       await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
@@ -17300,7 +17326,7 @@ async function proposeCodexMemoryCandidate(input) {
       });
     }
     await markDreamDueFailOpen(lockedMemoryRoot, now);
-    const reason = decision.action === "auto_write" ? `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision.reason;
+    const reason = decision.action === "auto_write" ? input.allowAutoPromote === false ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.` : autoPromotion.allowed && autoPromotionEval?.passed === false ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.` : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision.reason;
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID8(),
       action: "pending",
@@ -17315,6 +17341,44 @@ async function proposeCodexMemoryCandidate(input) {
       memoryRoot: lockedMemoryRoot
     };
   });
+}
+function runAutoPromotionEvalGate(input) {
+  const item = {
+    candidateId: input.candidate.id,
+    domain: input.candidate.domain,
+    scope: input.scope,
+    source: input.candidate.source,
+    policyId: input.policyId,
+    decision: "auto_promote",
+    evidenceCount: input.candidate.evidence.length,
+    distinctEvidenceCount: input.distinctEvidenceCount,
+    usedToday: input.usedToday,
+    dailyCap: input.dailyCap
+  };
+  const gates = [runV5AutoPromotionEvalGate([item])];
+  if (input.scope === "global") {
+    gates.push(runV5GlobalAutoPromotionEvalGate([item]));
+  }
+  return combineEvalGateResults(gates);
+}
+function autoPromotionThresholds(scope) {
+  return scope === "global" ? {
+    evidenceStrength: 0.9,
+    stability: 0.85,
+    usefulness: 0.7,
+    safety: 0.95,
+    maxSensitivity: 0.1,
+    minSeenCount: 2,
+    minDistinctEvidence: 2
+  } : {
+    evidenceStrength: 0.85,
+    stability: 0.8,
+    usefulness: 0.7,
+    safety: 0.9,
+    maxSensitivity: 0.2,
+    minSeenCount: 2,
+    minDistinctEvidence: 2
+  };
 }
 async function markDreamDueFailOpen(memoryRoot, now) {
   try {
@@ -19236,6 +19300,9 @@ function contentHashForActiveMemory(memory) {
     status: memory.status
   })).digest("hex");
 }
+function activeMemoryRequiresDestructiveConfirmation(memory) {
+  return memory.domain === "personal" || memory.domain === "relationship" || memory.domain === "affective";
+}
 async function archiveCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
@@ -19247,7 +19314,8 @@ async function archiveCodexActiveMemory(input) {
       memoryId: memory.id,
       details: {
         previousStatus: memory.status,
-        normalizedKey: memory.normalizedKey
+        normalizedKey: memory.normalizedKey,
+        previousMemory: lifecycleMemorySnapshot2(memory, "archived")
       }
     });
     await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
@@ -19263,6 +19331,10 @@ async function archiveCodexActiveMemory(input) {
 }
 async function tombstoneCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const confirmation = requireDestructiveConfirmation(memory, input.confirmText);
+    if (confirmation !== void 0) {
+      return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
+    }
     const tombstone = tombstoneForActiveMemory(memory, {
       reason: "archived",
       now,
@@ -19279,7 +19351,8 @@ async function tombstoneCodexActiveMemory(input) {
       details: {
         reviewAction: "tombstone",
         tombstoneId: tombstone.id,
-        indefinite: input.indefinite === true
+        indefinite: input.indefinite === true,
+        previousMemory: lifecycleMemorySnapshot2(memory, "archived")
       }
     });
     await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
@@ -19347,6 +19420,10 @@ async function proposeEditCodexActiveMemory(input) {
 }
 async function supersedeCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const confirmation = requireDestructiveConfirmation(memory, input.confirmText);
+    if (confirmation !== void 0) {
+      return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
+    }
     const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
     const candidate = lockedPending.find((item) => item.id === input.candidateId);
     if (candidate === void 0) {
@@ -19439,7 +19516,8 @@ async function supersedeCodexActiveMemory(input) {
       candidateId: candidate.id,
       details: {
         supersededMemoryId: memory.id,
-        tombstoneId: tombstone.id
+        tombstoneId: tombstone.id,
+        supersededMemory: lifecycleMemorySnapshot2(memory, "superseded")
       }
     });
     await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
@@ -19524,6 +19602,20 @@ function tombstoneForActiveMemory(memory, input) {
     ...input.expiresAt === void 0 ? {} : { expiresAt: input.expiresAt },
     ...input.replacementMemoryId === void 0 ? {} : { replacementMemoryId: input.replacementMemoryId },
     evidence: memory.evidence
+  };
+}
+function requireDestructiveConfirmation(memory, confirmText) {
+  if (!activeMemoryRequiresDestructiveConfirmation(memory)) return void 0;
+  if (confirmText?.trim() === memory.id) return void 0;
+  return {
+    action: "confirmation_required",
+    reason: `High-risk active memory requires confirmText to exactly match memory id ${memory.id}.`
+  };
+}
+function lifecycleMemorySnapshot2(memory, status) {
+  return {
+    ...memory,
+    status
   };
 }
 function addDays3(iso, days) {
@@ -19835,6 +19927,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
+import { randomUUID as randomUUID12 } from "node:crypto";
 import { readFile as readFile16 } from "node:fs/promises";
 import { join as join23 } from "node:path";
 var REVIEW_SUMMARIES_FILE5 = "review-summaries.jsonl";
@@ -19886,17 +19979,11 @@ async function handleCodexUiApiRequest(input) {
       }
       const selection = parseSelectionRequest(input.searchParams);
       if ("error" in selection) return selection.error;
-      if (input.pathname.endsWith("/apply")) {
-        return failure(
-          400,
-          "batch_triage_disabled",
-          "Batch triage apply is disabled. Use per-candidate review actions with reviewHash validation."
-        );
-      }
       return ok(await runUiMemoryTriage({
         cwd: input.cwd,
         selection: selection.value,
-        now: input.now
+        now: input.now,
+        apply: input.pathname.endsWith("/apply")
       }));
     }
     const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname);
@@ -20098,19 +20185,35 @@ async function handleActiveMemoryWriteRoute(input, route) {
     reason: body.reason.trim(),
     now: input.now
   };
-  const result2 = route.action === "archive" ? await archiveCodexActiveMemory(base) : route.action === "tombstone" ? await tombstoneCodexActiveMemory({
+  if (route.action === "archive") {
+    return activeResultToApi(await archiveCodexActiveMemory(base), route.action, route.id, input.now);
+  }
+  if (route.action === "tombstone") {
+    return activeResultToApi(await tombstoneCodexActiveMemory({
+      ...base,
+      days: optionalPositiveInteger(body.days, 180),
+      indefinite: body.indefinite === true,
+      confirmText: optionalBodyString(body.confirmText)
+    }), route.action, route.id, input.now);
+  }
+  if (route.action === "propose-edit") {
+    const content = bodyStringOrError(body.content, "Active memory propose-edit requires content.");
+    if ("error" in content) return content.error;
+    return activeResultToApi(await proposeEditCodexActiveMemory({
+      ...base,
+      content: content.value
+    }), route.action, route.id, input.now);
+  }
+  const candidateId = bodyStringOrError(body.candidateId, "Active memory supersede requires candidateId.");
+  if ("error" in candidateId) return candidateId.error;
+  const reviewHash = bodyStringOrError(body.reviewHash, "Active memory supersede requires reviewHash.");
+  if ("error" in reviewHash) return reviewHash.error;
+  return activeResultToApi(await supersedeCodexActiveMemory({
     ...base,
-    days: optionalPositiveInteger(body.days, 180),
-    indefinite: body.indefinite === true
-  }) : route.action === "propose-edit" ? await proposeEditCodexActiveMemory({
-    ...base,
-    content: requiredBodyString(body.content, "Active memory propose-edit requires content.")
-  }) : await supersedeCodexActiveMemory({
-    ...base,
-    candidateId: requiredBodyString(body.candidateId, "Active memory supersede requires candidateId."),
-    reviewHash: requiredBodyString(body.reviewHash, "Active memory supersede requires reviewHash.")
-  });
-  return activeResultToApi(result2, route.action, route.id, input.now);
+    candidateId: candidateId.value,
+    reviewHash: reviewHash.value,
+    confirmText: optionalBodyString(body.confirmText)
+  }), route.action, route.id, input.now);
 }
 function activeResultToApi(lifecycleResult, action, id, now) {
   const result2 = lifecycleResult.result;
@@ -20119,6 +20222,9 @@ function activeResultToApi(lifecycleResult, action, id, now) {
   }
   if (result2.action === "conflict") {
     return failure(409, "active_memory_conflict", result2.reason, { result: result2 });
+  }
+  if (result2.action === "confirmation_required") {
+    return failure(400, "confirmation_required", result2.reason, { result: result2 });
   }
   if (result2.action === "rejected_by_validator") {
     return failure(400, "rejected_by_validator", result2.reason, { result: result2 });
@@ -20133,11 +20239,16 @@ function activeResultToApi(lifecycleResult, action, id, now) {
     result: result2
   });
 }
-function requiredBodyString(value, message) {
+function bodyStringOrError(value, message) {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(message);
+    return { error: failure(400, "invalid_request", message) };
   }
-  return value.trim();
+  return { value: value.trim() };
+}
+function optionalBodyString(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
 }
 function parseEditPatch(value) {
   if (typeof value.content !== "string" || value.content.trim() === "") {
@@ -20309,6 +20420,46 @@ async function runUiMemoryTriage(input) {
   const selection = await resolveSelection(input.cwd, input.selection);
   const memoryRoot = selection.memoryRoot;
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  if (input.apply === true) {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
+    return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
+      await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+      const [pending2, active2, tombstones2] = await Promise.all([
+        readPendingMemoriesFromRoot(lockedMemoryRoot),
+        readActiveMemoriesFromRoot(lockedMemoryRoot),
+        readTombstonesFromRoot(lockedMemoryRoot)
+      ]);
+      const result3 = triagePendingMemories({
+        pending: pending2,
+        active: active2,
+        tombstones: tombstones2,
+        scope: selection.scope === "global" ? "global" : "project",
+        now
+      });
+      const applied = applySafeTriageDecisions({
+        pending: pending2,
+        decisions: result3.decisions,
+        now
+      });
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, applied.pending);
+      for (const tombstone of applied.tombstones) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
+      }
+      for (const event of applied.events) {
+        await appendMemoryEventFromRoot(lockedMemoryRoot, event);
+      }
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+      return {
+        action: "apply",
+        project: selection.project,
+        selection: publicSelection(selection),
+        memoryRoot: lockedMemoryRoot,
+        decisions: result3.decisions,
+        clusters: result3.clusters,
+        applied: applied.counts
+      };
+    });
+  }
   const [pending, active, tombstones] = await Promise.all([
     readPendingMemoriesFromRoot(memoryRoot),
     readActiveMemoriesFromRoot(memoryRoot),
@@ -20328,6 +20479,138 @@ async function runUiMemoryTriage(input) {
     memoryRoot,
     ...result2
   };
+}
+function applySafeTriageDecisions(input) {
+  const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
+  const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
+  const tombstones = [];
+  const events = [];
+  const counts = { auto_drop: 0, auto_defer: 0, auto_merge: 0 };
+  for (const decision of input.decisions.slice().sort(compareSafeTriageDecisionApplyOrder)) {
+    if (decision.action === "auto_drop") {
+      const candidate = byId.get(decision.candidateId);
+      if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
+      retainedIds.delete(candidate.id);
+      tombstones.push(tombstoneForAutoDroppedCandidate(candidate, input.now));
+      events.push(memoryEventForTriageDecision("reject", candidate, input.now, decision.reason, {
+        reviewAction: "triage_auto_drop",
+        triageDecision: "auto_drop"
+      }));
+      counts.auto_drop += 1;
+      continue;
+    }
+    if (decision.action === "auto_merge") {
+      const memberIds = decision.candidateIds.slice().sort();
+      const keeperId = memberIds.find((id) => retainedIds.has(id) && byId.has(id));
+      if (keeperId === void 0) continue;
+      let merged = byId.get(keeperId);
+      if (merged === void 0) continue;
+      const mergedCandidateIds = [keeperId];
+      for (const memberId of memberIds) {
+        if (memberId === keeperId || !retainedIds.has(memberId)) continue;
+        const member = byId.get(memberId);
+        if (member === void 0) continue;
+        merged = mergePendingMemory(merged, member);
+        retainedIds.delete(memberId);
+        mergedCandidateIds.push(memberId);
+      }
+      if (mergedCandidateIds.length < 2) continue;
+      byId.set(keeperId, merged);
+      events.push(memoryEventForTriageDecision("pending", merged, input.now, decision.reason, {
+        reviewAction: "triage_auto_merge",
+        triageDecision: "auto_merge",
+        clusterId: decision.clusterId,
+        mergedCandidateIds: mergedCandidateIds.sort()
+      }));
+      counts.auto_merge += 1;
+      continue;
+    }
+    if (decision.action === "auto_defer") {
+      const candidate = byId.get(decision.candidateId);
+      if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
+      const deferredCandidate = {
+        ...candidate,
+        promoteAfter: addDays4(input.now, decision.days)
+      };
+      byId.set(candidate.id, deferredCandidate);
+      events.push(memoryEventForTriageDecision("pending", deferredCandidate, input.now, decision.reason, {
+        reviewAction: "triage_auto_defer",
+        triageDecision: "auto_defer",
+        days: decision.days
+      }));
+      counts.auto_defer += 1;
+    }
+  }
+  return {
+    pending: input.pending.filter((candidate) => retainedIds.has(candidate.id)).map((candidate) => byId.get(candidate.id) ?? candidate),
+    tombstones,
+    events,
+    counts
+  };
+}
+function compareSafeTriageDecisionApplyOrder(left, right) {
+  return triageApplyPriority(left.action) - triageApplyPriority(right.action);
+}
+function triageApplyPriority(action) {
+  if (action === "auto_drop") return 0;
+  if (action === "auto_merge") return 1;
+  if (action === "auto_defer") return 2;
+  return 3;
+}
+function tombstoneForAutoDroppedCandidate(candidate, now) {
+  return {
+    id: `tombstone-${candidate.id}`,
+    memoryId: candidate.id,
+    normalizedKey: candidate.normalizedKey,
+    domain: candidate.domain,
+    type: candidate.type,
+    strength: candidate.strength,
+    scope: candidate.scope,
+    reason: "rejected",
+    createdAt: now,
+    evidence: candidate.evidence
+  };
+}
+function memoryEventForTriageDecision(action, candidate, now, reason, details) {
+  return {
+    id: randomUUID12(),
+    action,
+    at: now,
+    reason,
+    candidateId: candidate.id,
+    details: {
+      ...details,
+      normalizedKey: candidate.normalizedKey,
+      candidateSnapshot: pendingCandidateAuditSnapshot(candidate)
+    }
+  };
+}
+function pendingCandidateAuditSnapshot(candidate) {
+  return {
+    id: candidate.id,
+    domain: candidate.domain,
+    type: candidate.type,
+    strength: candidate.strength,
+    scope: candidate.scope,
+    status: candidate.status,
+    content: candidate.content,
+    normalizedKey: candidate.normalizedKey,
+    source: candidate.source,
+    scores: candidate.scores,
+    seenCount: candidate.seenCount,
+    firstSeenAt: candidate.firstSeenAt,
+    lastSeenAt: candidate.lastSeenAt,
+    promoteAfter: candidate.promoteAfter,
+    expiresAt: candidate.expiresAt,
+    candidateKind: candidate.candidateKind ?? candidate.candidate_kind,
+    tags: candidate.tags,
+    evidence: candidate.evidence
+  };
+}
+function addDays4(iso, days) {
+  const date3 = new Date(iso);
+  date3.setUTCDate(date3.getUTCDate() + days);
+  return date3.toISOString();
 }
 async function readActive(cwd, request) {
   return readActiveFromSelection(await resolveSelection(cwd, request));
@@ -20380,7 +20663,8 @@ async function readActiveFromSelection(selection) {
     project: selection.project,
     active: sortMemoriesNewestFirst(active).map((memory) => ({
       ...memory,
-      contentHash: contentHashForActiveMemory(memory)
+      contentHash: contentHashForActiveMemory(memory),
+      destructiveConfirmationRequired: activeMemoryRequiresDestructiveConfirmation(memory)
     })),
     memoryRoot: selection.memoryRoot
   };
@@ -20704,6 +20988,7 @@ var CODEX_UI_STATIC_ASSETS = {
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
+const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
 const EMPTY_DASHBOARD = {
   status: {},
   diagnostics: {},
@@ -20982,10 +21267,9 @@ function renderWorkspace() {
   if (dryRunButton) {
     dryRunButton.addEventListener('click', runHarvesterDryRun)
   }
-  const triageDryRunButton = workspace.querySelector('[data-triage-dry-run]')
-  if (triageDryRunButton) {
-    triageDryRunButton.addEventListener('click', () => runTriage('dry-run'))
-  }
+  workspace.querySelectorAll('[data-triage-mode]').forEach((button) => {
+    button.addEventListener('click', () => runTriage(button.dataset.triageMode || 'dry-run'))
+  })
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
       state.activeTab = 'inbox'
@@ -21174,6 +21458,13 @@ function renderActiveActionForm() {
       </label>
     \`
     : ''
+  const confirmField = (action === 'tombstone' || action === 'supersede') && memory.destructiveConfirmationRequired
+    ? \`
+      <label>Confirm memory id
+        <input name="confirmText" type="text" autocomplete="off" placeholder="\${escapeHtml(memory.id)}" required>
+      </label>
+    \`
+    : ''
   return \`
     <div class="soft-panel active-action-form">
       <h3>\${escapeHtml(activeActionLabel(action))}</h3>
@@ -21183,6 +21474,7 @@ function renderActiveActionForm() {
         </label>
         \${editField}
         \${tombstoneField}
+        \${confirmField}
         <div class="detail-actions">
           <button class="soft-button primary compact" type="submit">\${escapeHtml(activeActionLabel(action))}</button>
           <button class="soft-button compact" type="button" data-cancel-active-action>Cancel</button>
@@ -21218,6 +21510,10 @@ async function submitActiveAction(formData) {
   if (activeAction.action === 'tombstone') {
     const days = Number(formData.get('days') || 180)
     body.days = Number.isFinite(days) ? days : 180
+  }
+  const confirmText = String(formData.get('confirmText') || '').trim()
+  if (confirmText) {
+    body.confirmText = confirmText
   }
   try {
     const response = await apiFetch(\`/api/active-memory/\${encodeURIComponent(activeAction.id)}/\${activeAction.action}\`, {
@@ -21328,11 +21624,14 @@ function renderTriage() {
       <div class="soft-panel action-panel">
         <div>
           <h3>Pending triage</h3>
-          <p>Preview duplicate, defer, drop, and review recommendations. Use per-candidate review actions for any write.</p>
+          <p>Preview duplicate, defer, drop, and review recommendations. Safe apply only drops transient noise, merges duplicate pending items, and defers weak candidates.</p>
         </div>
         <div class="detail-actions">
-          <button class="soft-button primary" type="button" data-triage-dry-run \${state.triage.loading ? 'disabled' : ''}>
+          <button class="soft-button primary" type="button" data-triage-mode="dry-run" \${state.triage.loading ? 'disabled' : ''}>
             \${state.triage.loading ? 'Running triage' : 'Run triage dry-run'}
+          </button>
+          <button class="soft-button" type="button" data-triage-mode="apply" \${state.triage.loading ? 'disabled' : ''}>
+            \${state.triage.loading ? 'Applying triage' : 'Apply safe triage'}
           </button>
         </div>
       </div>
@@ -21345,10 +21644,14 @@ async function runTriage(mode) {
   state.triage = { loading: true, result: null, error: '', receipt: null }
   render()
   try {
-    const response = await apiFetch(\`\${TRIAGE_DRY_RUN_ENDPOINT}\${selectionQuery()}\`, { method: 'POST', body: '{}' })
+    const endpoint = mode === 'apply' ? TRIAGE_APPLY_ENDPOINT : TRIAGE_DRY_RUN_ENDPOINT
+    const response = await apiFetch(\`\${endpoint}\${selectionQuery()}\`, { method: 'POST', body: '{}' })
     const payload = await response.json()
     if (!payload.ok) {
       throw new Error(payload.error?.message || 'Triage API returned an error.')
+    }
+    if (mode === 'apply') {
+      await loadDashboard({ renderAfter: false })
     }
     state.triage = {
       loading: false,
@@ -21366,14 +21669,18 @@ function renderTriageResult(result) {
   const decisions = Array.isArray(result.decisions) ? result.decisions : []
   const clusters = Array.isArray(result.clusters) ? result.clusters : []
   const actions = ['auto_drop', 'auto_merge', 'auto_defer', 'recommend', 'auto_promote', 'manual_review']
+  const applied = result.applied || {}
+  const resultTitle = result.action === 'apply' ? 'Triage apply result' : 'Triage dry-run result'
+  const scopeNote = result.action === 'apply' ? 'safe changes applied' : 'preview only'
   return \`
     <div class="soft-panel">
-      <h3>Triage dry-run result</h3>
+      <h3>\${escapeHtml(resultTitle)}</h3>
       <div class="triage-grid">
         \${actions.map((action) => metric(triageActionLabel(action), countTriageDecision(decisions, action), 'decisions')).join('')}
       </div>
       <div class="soft-inset">Clusters: \${escapeHtml(String(clusters.length))}</div>
-      <div class="soft-inset">Scope: \${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} \xB7 preview only</div>
+      \${result.action === 'apply' ? \`<div class="soft-inset">Applied: drop \${escapeHtml(String(applied.auto_drop || 0))} \xB7 merge \${escapeHtml(String(applied.auto_merge || 0))} \xB7 defer \${escapeHtml(String(applied.auto_defer || 0))}</div>\` : ''}
+      <div class="soft-inset">Scope: \${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} \xB7 \${escapeHtml(scopeNote)}</div>
       \${decisions.slice(0, 8).map(renderTriageDecisionRow).join('') || emptyState('No triage decisions returned.')}
     </div>
   \`
@@ -22301,7 +22608,7 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { lstat as lstat14, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
@@ -22309,7 +22616,7 @@ var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID12();
+  const proposalId = randomUUID13();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
     reportPath: join24(previewDir, DREAM_REPORT_FILE),
@@ -22422,7 +22729,7 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID12()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID13()}.tmp`;
   await writeFile9(tempPath, content, "utf8");
   await rename5(tempPath, filePath);
 }
@@ -22431,7 +22738,7 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { lstat as lstat16, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
@@ -22725,7 +23032,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID13(),
+      id: randomUUID14(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -22750,7 +23057,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID13(),
+        id: randomUUID14(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -22876,7 +23183,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID13(),
+        id: randomUUID14(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -23011,7 +23318,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
   const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID13();
+  const token = randomUUID14();
   while (true) {
     try {
       await mkdir12(lockDir);
@@ -23122,7 +23429,7 @@ function isFileErrorCode14(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash11, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID15 } from "node:crypto";
 import { lstat as lstat17, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -23252,7 +23559,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID14(),
+      id: randomUUID15(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -23499,7 +23806,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID14()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID15()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -23509,7 +23816,7 @@ async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID14()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID15()}.tmp`;
   await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename6(tempPath, targetPath);
 }
@@ -23649,7 +23956,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash12, randomUUID as randomUUID15 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID16 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -23764,7 +24071,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID15(),
+      id: randomUUID16(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -23974,7 +24281,8 @@ async function handleCodexCommand(input) {
       contentHash: parseRequiredOption(input.args, "--content-hash", "active content hash"),
       reason: parseRequiredOption(input.args, "--reason", "tombstone reason"),
       days: parseOptionalPositiveInteger(input.args, "--days"),
-      indefinite: input.args.includes("--indefinite")
+      indefinite: input.args.includes("--indefinite"),
+      confirmText: parseOptionalOption(input.args, "--confirm-text")
     }));
     return;
   }
@@ -23995,7 +24303,8 @@ async function handleCodexCommand(input) {
       candidateId: parseRequiredOption(input.args, "--candidate", "replacement candidate id"),
       contentHash: parseRequiredOption(input.args, "--content-hash", "active content hash"),
       reviewHash: parseRequiredOption(input.args, "--review-hash", "replacement review hash"),
-      reason: parseRequiredOption(input.args, "--reason", "supersede reason")
+      reason: parseRequiredOption(input.args, "--reason", "supersede reason"),
+      confirmText: parseOptionalOption(input.args, "--confirm-text")
     }));
     return;
   }
@@ -24098,7 +24407,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text>|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -38652,6 +38961,7 @@ var activeMemoryTombstoneInputSchema = {
   reason: external_exports.string().min(1),
   days: external_exports.number().int().positive().optional(),
   indefinite: external_exports.boolean().optional(),
+  confirmText: external_exports.string().optional(),
   cwd: external_exports.string().optional()
 };
 var activeMemoryProposeEditInputSchema = {
@@ -38667,6 +38977,7 @@ var activeMemorySupersedeInputSchema = {
   contentHash: external_exports.string().min(1),
   reviewHash: external_exports.string().regex(/^[a-f0-9]{64}$/),
   reason: external_exports.string().min(1),
+  confirmText: external_exports.string().optional(),
   cwd: external_exports.string().optional()
 };
 async function handleMemoryPendingList(input, fallbackCwd) {
@@ -38738,7 +39049,8 @@ async function handleActiveMemoryTombstone(input, fallbackCwd) {
     contentHash: input.contentHash,
     reason: input.reason,
     days: input.days,
-    indefinite: input.indefinite
+    indefinite: input.indefinite,
+    confirmText: input.confirmText
   }));
 }
 async function handleActiveMemoryProposeEdit(input, fallbackCwd) {
@@ -38757,7 +39069,8 @@ async function handleActiveMemorySupersede(input, fallbackCwd) {
     candidateId: input.candidateId,
     contentHash: input.contentHash,
     reviewHash: input.reviewHash,
-    reason: input.reason
+    reason: input.reason,
+    confirmText: input.confirmText
   }));
 }
 
@@ -38865,7 +39178,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_active_tombstone",
     {
-      description: "Tombstone a hash-checked active Cyrene memory and block matching future candidates.",
+      description: "Tombstone a hash-checked active Cyrene memory and block matching future candidates; high-risk memory requires confirmText matching the memory id.",
       inputSchema: activeMemoryTombstoneInputSchema
     },
     async (input) => handleActiveMemoryTombstone(input, options.cwd)
@@ -38881,7 +39194,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_active_supersede",
     {
-      description: "Supersede a hash-checked active Cyrene memory with a reviewed pending replacement candidate.",
+      description: "Supersede a hash-checked active Cyrene memory with a reviewed pending replacement candidate; high-risk memory requires confirmText matching the memory id.",
       inputSchema: activeMemorySupersedeInputSchema
     },
     async (input) => handleActiveMemorySupersede(input, options.cwd)

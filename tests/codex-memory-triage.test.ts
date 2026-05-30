@@ -76,6 +76,30 @@ describe('memory triage', () => {
     expect(result.decisions).toContainEqual(expect.objectContaining({ action: 'auto_drop', candidateId: 'noise' }))
   })
 
+  it('does not auto-drop durable candidates merely because they mention today', () => {
+    const result = triagePendingMemories({
+      pending: [
+        pending({
+          id: 'durable-today',
+          content: 'Today we decided to keep the memory review UI pending-only.',
+          normalizedKey: 'durable-today-review-decision',
+          source: 'user_explicit',
+          evidence: [{ summary: 'User stated a durable project decision today.', sourceKind: 'user_explicit' }],
+          seenCount: 1
+        })
+      ],
+      active: [],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.decisions).not.toContainEqual(expect.objectContaining({
+      action: 'auto_drop',
+      candidateId: 'durable-today'
+    }))
+  })
+
   it('clusters duplicate normalized keys', () => {
     const clusters = buildCandidateClusters([
       pending({ id: 'a', normalizedKey: 'same-key' }),

@@ -145,7 +145,7 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
   server.registerTool(
     'cyrene_memory_active_tombstone',
     {
-      description: 'Tombstone a hash-checked active Cyrene memory and block matching future candidates.',
+      description: 'Tombstone a hash-checked active Cyrene memory and block matching future candidates; high-risk memory requires confirmText matching the memory id.',
       inputSchema: activeMemoryTombstoneInputSchema
     },
     async (input) => handleActiveMemoryTombstone(input, options.cwd)
@@ -163,7 +163,7 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
   server.registerTool(
     'cyrene_memory_active_supersede',
     {
-      description: 'Supersede a hash-checked active Cyrene memory with a reviewed pending replacement candidate.',
+      description: 'Supersede a hash-checked active Cyrene memory with a reviewed pending replacement candidate; high-risk memory requires confirmText matching the memory id.',
       inputSchema: activeMemorySupersedeInputSchema
     },
     async (input) => handleActiveMemorySupersede(input, options.cwd)

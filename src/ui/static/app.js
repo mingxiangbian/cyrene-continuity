@@ -2,6 +2,7 @@ const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
+const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
 const EMPTY_DASHBOARD = {
   status: {},
   diagnostics: {},
@@ -280,10 +281,9 @@ function renderWorkspace() {
   if (dryRunButton) {
     dryRunButton.addEventListener('click', runHarvesterDryRun)
   }
-  const triageDryRunButton = workspace.querySelector('[data-triage-dry-run]')
-  if (triageDryRunButton) {
-    triageDryRunButton.addEventListener('click', () => runTriage('dry-run'))
-  }
+  workspace.querySelectorAll('[data-triage-mode]').forEach((button) => {
+    button.addEventListener('click', () => runTriage(button.dataset.triageMode || 'dry-run'))
+  })
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
       state.activeTab = 'inbox'
@@ -472,6 +472,13 @@ function renderActiveActionForm() {
       </label>
     `
     : ''
+  const confirmField = (action === 'tombstone' || action === 'supersede') && memory.destructiveConfirmationRequired
+    ? `
+      <label>Confirm memory id
+        <input name="confirmText" type="text" autocomplete="off" placeholder="${escapeHtml(memory.id)}" required>
+      </label>
+    `
+    : ''
   return `
     <div class="soft-panel active-action-form">
       <h3>${escapeHtml(activeActionLabel(action))}</h3>
@@ -481,6 +488,7 @@ function renderActiveActionForm() {
         </label>
         ${editField}
         ${tombstoneField}
+        ${confirmField}
         <div class="detail-actions">
           <button class="soft-button primary compact" type="submit">${escapeHtml(activeActionLabel(action))}</button>
           <button class="soft-button compact" type="button" data-cancel-active-action>Cancel</button>
@@ -516,6 +524,10 @@ async function submitActiveAction(formData) {
   if (activeAction.action === 'tombstone') {
     const days = Number(formData.get('days') || 180)
     body.days = Number.isFinite(days) ? days : 180
+  }
+  const confirmText = String(formData.get('confirmText') || '').trim()
+  if (confirmText) {
+    body.confirmText = confirmText
   }
   try {
     const response = await apiFetch(`/api/active-memory/${encodeURIComponent(activeAction.id)}/${activeAction.action}`, {
@@ -626,11 +638,14 @@ function renderTriage() {
       <div class="soft-panel action-panel">
         <div>
           <h3>Pending triage</h3>
-          <p>Preview duplicate, defer, drop, and review recommendations. Use per-candidate review actions for any write.</p>
+          <p>Preview duplicate, defer, drop, and review recommendations. Safe apply only drops transient noise, merges duplicate pending items, and defers weak candidates.</p>
         </div>
         <div class="detail-actions">
-          <button class="soft-button primary" type="button" data-triage-dry-run ${state.triage.loading ? 'disabled' : ''}>
+          <button class="soft-button primary" type="button" data-triage-mode="dry-run" ${state.triage.loading ? 'disabled' : ''}>
             ${state.triage.loading ? 'Running triage' : 'Run triage dry-run'}
+          </button>
+          <button class="soft-button" type="button" data-triage-mode="apply" ${state.triage.loading ? 'disabled' : ''}>
+            ${state.triage.loading ? 'Applying triage' : 'Apply safe triage'}
           </button>
         </div>
       </div>
@@ -643,10 +658,14 @@ async function runTriage(mode) {
   state.triage = { loading: true, result: null, error: '', receipt: null }
   render()
   try {
-    const response = await apiFetch(`${TRIAGE_DRY_RUN_ENDPOINT}${selectionQuery()}`, { method: 'POST', body: '{}' })
+    const endpoint = mode === 'apply' ? TRIAGE_APPLY_ENDPOINT : TRIAGE_DRY_RUN_ENDPOINT
+    const response = await apiFetch(`${endpoint}${selectionQuery()}`, { method: 'POST', body: '{}' })
     const payload = await response.json()
     if (!payload.ok) {
       throw new Error(payload.error?.message || 'Triage API returned an error.')
+    }
+    if (mode === 'apply') {
+      await loadDashboard({ renderAfter: false })
     }
     state.triage = {
       loading: false,
@@ -664,14 +683,18 @@ function renderTriageResult(result) {
   const decisions = Array.isArray(result.decisions) ? result.decisions : []
   const clusters = Array.isArray(result.clusters) ? result.clusters : []
   const actions = ['auto_drop', 'auto_merge', 'auto_defer', 'recommend', 'auto_promote', 'manual_review']
+  const applied = result.applied || {}
+  const resultTitle = result.action === 'apply' ? 'Triage apply result' : 'Triage dry-run result'
+  const scopeNote = result.action === 'apply' ? 'safe changes applied' : 'preview only'
   return `
     <div class="soft-panel">
-      <h3>Triage dry-run result</h3>
+      <h3>${escapeHtml(resultTitle)}</h3>
       <div class="triage-grid">
         ${actions.map((action) => metric(triageActionLabel(action), countTriageDecision(decisions, action), 'decisions')).join('')}
       </div>
       <div class="soft-inset">Clusters: ${escapeHtml(String(clusters.length))}</div>
-      <div class="soft-inset">Scope: ${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} · preview only</div>
+      ${result.action === 'apply' ? `<div class="soft-inset">Applied: drop ${escapeHtml(String(applied.auto_drop || 0))} · merge ${escapeHtml(String(applied.auto_merge || 0))} · defer ${escapeHtml(String(applied.auto_defer || 0))}</div>` : ''}
+      <div class="soft-inset">Scope: ${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} · ${escapeHtml(scopeNote)}</div>
       ${decisions.slice(0, 8).map(renderTriageDecisionRow).join('') || emptyState('No triage decisions returned.')}
     </div>
   `
