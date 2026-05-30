@@ -2,6 +2,23 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('Codex UI source assets', () => {
+  it('includes triage and retrieval explain UI surfaces', async () => {
+    const [source, css] = await Promise.all([
+      readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8'),
+      readFile(new URL('../src/ui/static/styles.css', import.meta.url), 'utf8')
+    ])
+
+    expect(source).toContain("{ id: 'triage', label: 'Triage' }")
+    expect(source).toContain('Run triage dry-run')
+    expect(source).toContain('Apply safe triage')
+    expect(source).toContain('Retrieval Explain')
+    expect(source).toContain('/api/memory/triage/dry-run')
+    expect(source).toContain('/api/memory/triage/apply')
+    expect(source).toContain('renderRetrievalPlan')
+    expect(css).toContain('.triage-grid')
+    expect(css).toContain('.explain-list')
+  })
+
   it('contains the Warm Cream Coral console shell and write-confirm review labels', async () => {
     const [html, js, css] = await Promise.all([
       readFile(new URL('../src/ui/static/index.html', import.meta.url), 'utf8'),

@@ -1,8 +1,11 @@
 const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
+const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
+const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
 const EMPTY_DASHBOARD = {
   status: {},
+  diagnostics: {},
   selection: { scope: 'project', label: 'Project', projectId: '' },
   projects: { projects: [], global: { counts: {} }, currentProjectId: '' },
   modelConfig: { configured: false, missing: [] },
@@ -20,6 +23,7 @@ const TABS = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'timeline', label: 'Timeline' },
   { id: 'project-memory', label: 'Project Memory' },
+  { id: 'triage', label: 'Triage' },
   { id: 'harvester', label: 'Harvester' },
   { id: 'dream', label: 'Dream' },
   { id: 'profile', label: 'Profile' }
@@ -49,7 +53,8 @@ const state = {
   activeReceipt: null,
   activeActionError: '',
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
-  harvester: { loading: false, result: null, error: '' }
+  harvester: { loading: false, result: null, error: '' },
+  triage: { loading: false, result: null, error: '', receipt: null }
 }
 
 const app = document.querySelector('[data-app]')
@@ -127,6 +132,7 @@ function mergeDashboard(data) {
   return {
     ...EMPTY_DASHBOARD,
     ...(data || {}),
+    diagnostics: { ...EMPTY_DASHBOARD.diagnostics, ...(data?.diagnostics || {}) },
     selection: { ...EMPTY_DASHBOARD.selection, ...(data?.selection || {}) },
     projects: { ...EMPTY_DASHBOARD.projects, ...(data?.projects || {}) },
     modelConfig: { ...EMPTY_DASHBOARD.modelConfig, ...(data?.modelConfig || {}) },
@@ -275,6 +281,14 @@ function renderWorkspace() {
   if (dryRunButton) {
     dryRunButton.addEventListener('click', runHarvesterDryRun)
   }
+  const triageDryRunButton = workspace.querySelector('[data-triage-dry-run]')
+  if (triageDryRunButton) {
+    triageDryRunButton.addEventListener('click', () => runTriage('dry-run'))
+  }
+  const triageApplyButton = workspace.querySelector('[data-triage-apply]')
+  if (triageApplyButton) {
+    triageApplyButton.addEventListener('click', () => runTriage('apply'))
+  }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
       state.activeTab = 'inbox'
@@ -316,6 +330,7 @@ function pageHtml(tabId) {
   if (tabId === 'inbox') return renderInbox()
   if (tabId === 'timeline') return renderTimeline()
   if (tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'triage') return renderTriage()
   if (tabId === 'harvester') return renderHarvester()
   if (tabId === 'dream') return renderDream()
   if (tabId === 'profile') return renderProfile()
@@ -339,6 +354,7 @@ function renderOverview() {
       </div>
       ${renderModelConfigPanel()}
       ${renderTimelineDiagnostic()}
+      ${renderRetrievalExplainPanel()}
       <div class="soft-panel">
         <h3>Recent pending candidates</h3>
         ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
@@ -599,6 +615,126 @@ function renderHarvesterResult(result) {
       ${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}
     </div>
   `
+}
+
+function renderTriage() {
+  const result = state.triage.result
+  const resultHtml = state.triage.error
+    ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
+    : result
+      ? renderTriageResult(result)
+      : panel('Triage ready', 'Preview or apply safe pending-memory cleanup decisions for the current project.', 'muted')
+
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Triage', 'Cluster duplicate pending memory and apply safe cleanup only.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Pending triage</h3>
+          <p>Safe apply handles drop, defer, and merge decisions. Batch approval remains unavailable.</p>
+        </div>
+        <div class="detail-actions">
+          <button class="soft-button primary" type="button" data-triage-dry-run ${state.triage.loading ? 'disabled' : ''}>
+            ${state.triage.loading ? 'Running triage' : 'Run triage dry-run'}
+          </button>
+          <button class="soft-button" type="button" data-triage-apply ${state.triage.loading ? 'disabled' : ''}>Apply safe triage</button>
+        </div>
+      </div>
+      ${state.triage.receipt ? renderTriageReceipt(state.triage.receipt) : ''}
+      ${resultHtml}
+    </section>
+  `
+}
+
+async function runTriage(mode) {
+  const endpoint = mode === 'apply' ? TRIAGE_APPLY_ENDPOINT : TRIAGE_DRY_RUN_ENDPOINT
+  state.triage = { loading: true, result: null, error: '', receipt: null }
+  render()
+  try {
+    const response = await apiFetch(endpoint, { method: 'POST', body: '{}' })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Triage API returned an error.')
+    }
+    if (mode === 'apply') {
+      await loadDashboard({ renderAfter: false })
+    }
+    state.triage = {
+      loading: false,
+      result: payload.data,
+      error: '',
+      receipt: payload.data?.receipt || null
+    }
+  } catch (error) {
+    state.triage = { loading: false, result: null, error: errorMessage(error), receipt: null }
+  }
+  render()
+}
+
+function renderTriageResult(result) {
+  const decisions = Array.isArray(result.decisions) ? result.decisions : []
+  const clusters = Array.isArray(result.clusters) ? result.clusters : []
+  const actions = ['auto_drop', 'auto_merge', 'auto_defer', 'recommend', 'auto_promote', 'manual_review']
+  return `
+    <div class="soft-panel">
+      <h3>${escapeHtml(result.action === 'apply' ? 'Applied triage result' : 'Triage dry-run result')}</h3>
+      <div class="triage-grid">
+        ${actions.map((action) => metric(triageActionLabel(action), countTriageDecision(decisions, action), 'decisions')).join('')}
+      </div>
+      <div class="soft-inset">Clusters: ${escapeHtml(String(clusters.length))}</div>
+      ${decisions.slice(0, 8).map(renderTriageDecisionRow).join('') || emptyState('No triage decisions returned.')}
+    </div>
+  `
+}
+
+function renderTriageReceipt(receipt) {
+  const applied = receipt.applied || {}
+  const skipped = receipt.skipped || {}
+  return `
+    <div class="soft-panel receipt-panel">
+      <p class="eyebrow">triage receipt</p>
+      <h3>Safe triage applied</h3>
+      <div class="triage-grid">
+        ${metric('Dropped', applied.auto_drop || 0, 'safe cleanup')}
+        ${metric('Deferred', applied.auto_defer || 0, 'safe cleanup')}
+        ${metric('Merged', applied.auto_merge || 0, 'duplicate clusters')}
+        ${metric('Skipped approval', skipped.auto_promote || 0, 'manual review only')}
+      </div>
+      <p>${escapeHtml(receipt.summary || 'Safe triage completed.')}</p>
+    </div>
+  `
+}
+
+function renderTriageDecisionRow(decision) {
+  const ids = decision.candidateIds || [decision.candidateId].filter(Boolean)
+  return `
+    <article class="data-row">
+      <div>
+        <div class="row-title">${escapeHtml(triageActionLabel(decision.action || 'manual_review'))}</div>
+        <div class="row-meta">${escapeHtml(ids.join(', ') || decision.clusterId || 'candidate')} · ${escapeHtml(decision.reason || 'triage decision')}</div>
+      </div>
+      ${statusChip('triage', decision.action || 'review', triageTone(decision.action))}
+    </article>
+  `
+}
+
+function countTriageDecision(decisions, action) {
+  return decisions.filter((decision) => decision.action === action).length
+}
+
+function triageActionLabel(action) {
+  if (action === 'auto_drop') return 'Auto drop'
+  if (action === 'auto_merge') return 'Auto merge'
+  if (action === 'auto_defer') return 'Auto defer'
+  if (action === 'auto_promote') return 'Auto promote'
+  if (action === 'manual_review') return 'Manual review'
+  return 'Recommend'
+}
+
+function triageTone(action) {
+  if (action === 'auto_drop') return 'error'
+  if (action === 'auto_defer' || action === 'recommend') return 'warn'
+  return 'muted'
 }
 
 function renderDream() {
@@ -1062,6 +1198,32 @@ function renderModelConfigPanel() {
     ? `Model ${escapeHtml(config.model || 'configured')} at ${escapeHtml(config.baseUrl || 'configured endpoint')}. API key: ${escapeHtml(config.apiKeyPreview || 'not set')}.`
     : `Reviewing existing memory works without a key. Harvest and model summaries need ${escapeHtml(missing.join(', ') || 'CYRENE_BASE_URL and CYRENE_MODEL')}; set CYRENE_API_KEY if the provider requires bearer auth.`
   return panel(title, body, config.configured ? 'muted' : 'warn')
+}
+
+function renderRetrievalExplainPanel() {
+  return `
+    <div class="soft-panel">
+      <h3>Retrieval Explain</h3>
+      ${renderRetrievalPlan(state.dashboard.diagnostics?.retrievalPlan)}
+    </div>
+  `
+}
+
+function renderRetrievalPlan(plan) {
+  if (!plan) return emptyState('No retrieval diagnostics returned.')
+  return `
+    <ul class="explain-list">
+      ${explainListItem('Task intent', plan.taskIntent)}
+      ${explainListItem('Memory kinds', plan.memoryKinds)}
+      ${explainListItem('Required facets', plan.requiredFacets)}
+      ${explainListItem('Optional facets', plan.optionalFacets)}
+    </ul>
+  `
+}
+
+function explainListItem(label, values) {
+  const textValue = Array.isArray(values) && values.length > 0 ? values.join(', ') : 'none'
+  return `<li class="soft-inset rail-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(textValue)}</span></li>`
 }
 
 function renderTimelineDiagnostic() {

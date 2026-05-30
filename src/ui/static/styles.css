@@ -359,6 +359,21 @@ p {
   gap: 12px;
 }
 
+.triage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.explain-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .metric-card {
   display: grid;
   gap: 6px;
