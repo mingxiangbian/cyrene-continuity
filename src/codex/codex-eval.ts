@@ -5,6 +5,9 @@ import {
   runDreamApplyEvalGate,
   runMemoryRoutingEvalGate,
   runSimilarHintsEvalGate,
+  runV5AutoPromotionEvalGate,
+  runV5MemoryEdgeEvalGate,
+  runV5ReleaseReadinessEvalGate,
   type EvalCheckName,
   type EvalResult
 } from '../eval/eval-runner.js'
@@ -113,7 +116,22 @@ export async function runCodexReleaseEval(): Promise<CodexReleaseEvalSummary> {
         tags: ['release_eval']
       }],
       profilePreview: 'Release eval candidates stay auditable.'
-    })
+    }),
+    runV5AutoPromotionEvalGate([{
+      candidateId: 'release-auto-promote',
+      domain: 'procedural',
+      scope: 'global',
+      source: 'user_explicit',
+      policyId: 'low_risk_global_procedural_v1',
+      decision: 'auto_promote'
+    }]),
+    runV5MemoryEdgeEvalGate([{
+      edgeId: 'release-memory-edge',
+      source: 'model',
+      status: 'approved',
+      usedInRetrieval: true
+    }]),
+    runV5ReleaseReadinessEvalGate()
   ])
   const results = minimumEvalResults(combined.results)
   const completedChecks = new Set(results.map((result) => result.name))

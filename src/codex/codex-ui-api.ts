@@ -19,12 +19,21 @@ import { isMemoryCandidateKind } from '../memory/candidate-kind.js'
 import type { CyreneMemory, MemoryCandidateKind, MemoryScores } from '../memory/types.js'
 import { codexMemoryDbPath } from './codex-memory-index.js'
 import { readCodexMemoryStatus } from './codex-memory-status.js'
+import { getCodexContinuityContext, type CodexContinuityContext } from './continuity-context.js'
+import {
+  archiveCodexActiveMemory,
+  contentHashForActiveMemory,
+  proposeEditCodexActiveMemory,
+  supersedeCodexActiveMemory,
+  tombstoneCodexActiveMemory
+} from './active-memory-review.js'
 import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
+import { triagePendingMemories, type TriageDecision } from './memory-triage.js'
 import {
   deferCodexPendingMemory,
   editCodexPendingMemory,
@@ -74,9 +83,11 @@ interface CodexUiProjectIdentity {
 
 interface ActiveMemoryResult {
   project: CodexUiProjectIdentity
-  active: CyreneMemory[]
+  active: CodexUiActiveMemorySummary[]
   memoryRoot: string
 }
+
+type CodexUiActiveMemorySummary = CyreneMemory & { contentHash: string }
 
 interface ProjectMemoryGroup {
   label: string
@@ -111,6 +122,7 @@ type ProjectMemoryLabel = typeof PROJECT_MEMORY_LABELS[number]
 type GlobalMemoryLabel = typeof GLOBAL_MEMORY_LABELS[number]
 type CodexUiMemoryScope = 'project' | 'global' | 'all'
 type MemoryWriteAction = 'approve' | 'reject' | 'defer' | 'edit'
+type ActiveMemoryWriteAction = 'archive' | 'tombstone' | 'propose-edit' | 'supersede'
 type MemoryWriteReviewResult =
   | CodexPendingMemoryPromoteResult
   | CodexPendingMemoryRejectResult
@@ -120,6 +132,11 @@ type MemoryWriteReviewResult =
 interface MemoryWriteRoute {
   id: string
   action: MemoryWriteAction
+}
+
+interface ActiveMemoryWriteRoute {
+  id: string
+  action: ActiveMemoryWriteAction
 }
 
 interface EditPatch {
@@ -198,6 +215,34 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       return ok({ result })
     }
 
+    if (input.pathname === '/api/memory/triage/dry-run' || input.pathname === '/api/memory/triage/apply') {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      const selection = parseSelectionRequest(input.searchParams)
+      if ('error' in selection) return selection.error
+      if (input.pathname.endsWith('/apply')) {
+        return failure(
+          400,
+          'batch_triage_disabled',
+          'Batch triage apply is disabled. Use per-candidate review actions with reviewHash validation.'
+        )
+      }
+      return ok(await runUiMemoryTriage({
+        cwd: input.cwd,
+        selection: selection.value,
+        now: input.now
+      }))
+    }
+
+    const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname)
+    if (activeWriteRoute !== undefined) {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      return handleActiveMemoryWriteRoute(input, activeWriteRoute)
+    }
+
     const writeRoute = parseMemoryWriteRoute(input.pathname)
     if (writeRoute !== undefined) {
       if (input.method.toUpperCase() !== 'POST') {
@@ -272,6 +317,12 @@ function parseMemoryWriteRoute(pathname: string): MemoryWriteRoute | undefined {
   const match = /^\/api\/memory\/([^/]+)\/(approve|reject|defer|edit)$/.exec(pathname)
   if (match === null) return undefined
   return { id: decodeURIComponent(match[1]), action: match[2] as MemoryWriteAction }
+}
+
+function parseActiveMemoryWriteRoute(pathname: string): ActiveMemoryWriteRoute | undefined {
+  const match = /^\/api\/active-memory\/([^/]+)\/(archive|tombstone|propose-edit|supersede)$/.exec(pathname)
+  if (match === null) return undefined
+  return { id: decodeURIComponent(match[1]), action: match[2] as ActiveMemoryWriteAction }
 }
 
 function parseProjectDeleteRoute(pathname: string): { projectId: string } | undefined {
@@ -388,6 +439,86 @@ async function handleMemoryWriteRoute(
     reviewHash,
     input.now
   )
+}
+
+async function handleActiveMemoryWriteRoute(
+  input: HandleCodexUiApiRequestInput,
+  route: ActiveMemoryWriteRoute
+): Promise<CodexUiApiResult<unknown>> {
+  const body = input.body
+  if (!isRecord(body) || typeof body.contentHash !== 'string' || body.contentHash.trim() === '') {
+    return failure(400, 'invalid_request', 'Active memory write requests require contentHash.')
+  }
+  if (typeof body.reason !== 'string' || body.reason.trim() === '') {
+    return failure(400, 'invalid_request', 'Active memory write requests require reason.')
+  }
+
+  const base = {
+    cwd: input.cwd,
+    id: route.id,
+    contentHash: body.contentHash.trim(),
+    reason: body.reason.trim(),
+    now: input.now
+  }
+  const result = route.action === 'archive'
+    ? await archiveCodexActiveMemory(base)
+    : route.action === 'tombstone'
+      ? await tombstoneCodexActiveMemory({
+          ...base,
+          days: optionalPositiveInteger(body.days, 180),
+          indefinite: body.indefinite === true
+        })
+      : route.action === 'propose-edit'
+        ? await proposeEditCodexActiveMemory({
+            ...base,
+            content: requiredBodyString(body.content, 'Active memory propose-edit requires content.')
+          })
+        : await supersedeCodexActiveMemory({
+            ...base,
+            candidateId: requiredBodyString(body.candidateId, 'Active memory supersede requires candidateId.'),
+            reviewHash: requiredBodyString(body.reviewHash, 'Active memory supersede requires reviewHash.')
+          })
+
+  return activeResultToApi(result, route.action, route.id, input.now)
+}
+
+function activeResultToApi(
+  lifecycleResult: Awaited<
+    ReturnType<typeof archiveCodexActiveMemory> |
+    ReturnType<typeof tombstoneCodexActiveMemory> |
+    ReturnType<typeof proposeEditCodexActiveMemory> |
+    ReturnType<typeof supersedeCodexActiveMemory>
+  >,
+  action: ActiveMemoryWriteAction,
+  id: string,
+  now?: string
+): CodexUiApiResult<unknown> {
+  const result = lifecycleResult.result
+  if (result.action === 'not_found') {
+    return failure(404, 'not_found', result.reason)
+  }
+  if (result.action === 'conflict') {
+    return failure(409, 'active_memory_conflict', result.reason, { result })
+  }
+  if (result.action === 'rejected_by_validator') {
+    return failure(400, 'rejected_by_validator', result.reason, { result })
+  }
+  return ok({
+    receipt: {
+      action: `${action.replace('-', '_')}_active_memory`,
+      id,
+      createdAt: now ?? new Date().toISOString(),
+      summary: 'Active memory action applied.'
+    },
+    result
+  })
+}
+
+function requiredBodyString(value: unknown, message: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(message)
+  }
+  return value.trim()
 }
 
 function parseEditPatch(value: Record<string, unknown>): { value: EditPatch } | { error: CodexUiApiResult<never> } {
@@ -545,6 +676,11 @@ async function readProjects(cwd: string): Promise<CodexUiProjectsResult> {
 }
 
 async function readDashboard(cwd: string, now: string | undefined, request: CodexUiSelectionRequest) {
+  const continuity = await getCodexContinuityContext({
+    cwd,
+    userMessage: 'memory review web ui route button',
+    task: 'memory'
+  })
   const selection = await resolveSelection(cwd, request)
   const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals, projects] = await Promise.all([
     readCodexMemoryStatus({ cwd }),
@@ -561,6 +697,7 @@ async function readDashboard(cwd: string, now: string | undefined, request: Code
     selection: publicSelection(selection),
     projects,
     modelConfig: readModelConfigDiagnostic(cwd),
+    diagnostics: readDashboardDiagnostics(status, continuity),
     status,
     pending,
     active,
@@ -569,6 +706,65 @@ async function readDashboard(cwd: string, now: string | undefined, request: Code
     dream,
     profile,
     signals
+  }
+}
+
+function readDashboardDiagnostics(
+  status: Awaited<ReturnType<typeof readCodexMemoryStatus>>,
+  continuity: CodexContinuityContext
+): {
+  memoryIndex: typeof status.index
+  retrievalPlan: NonNullable<CodexContinuityContext['diagnostics']>['retrievalPlan']
+  retrievalExplain: {
+    globalMemory: CodexContinuityContext['globalMemory']
+    projectMemory: CodexContinuityContext['projectMemory']
+    similarProjectHints: CodexContinuityContext['similarProjectHints']
+  }
+} {
+  return {
+    memoryIndex: status.index,
+    retrievalPlan: continuity.diagnostics?.retrievalPlan,
+    retrievalExplain: {
+      globalMemory: continuity.globalMemory,
+      projectMemory: continuity.projectMemory,
+      similarProjectHints: continuity.similarProjectHints
+    }
+  }
+}
+
+async function runUiMemoryTriage(input: {
+  cwd: string
+  selection: CodexUiSelectionRequest
+  now?: string
+}): Promise<{
+  action: 'dry_run'
+  project: CodexUiProjectIdentity
+  selection: ReturnType<typeof publicSelection>
+  memoryRoot: string
+  decisions: TriageDecision[]
+  clusters: ReturnType<typeof triagePendingMemories>['clusters']
+}> {
+  const selection = await resolveSelection(input.cwd, input.selection)
+  const memoryRoot = selection.memoryRoot
+  const now = input.now ?? new Date().toISOString()
+  const [pending, active, tombstones] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ])
+  const result = triagePendingMemories({
+    pending,
+    active,
+    tombstones,
+    scope: selection.scope === 'global' ? 'global' : 'project',
+    now
+  })
+  return {
+    action: 'dry_run',
+    project: selection.project,
+    selection: publicSelection(selection),
+    memoryRoot,
+    ...result
   }
 }
 
@@ -673,7 +869,14 @@ async function readDreamFromSelection(selection: CodexUiResolvedSelection): Prom
 
 async function readActiveFromSelection(selection: CodexUiResolvedSelection): Promise<ActiveMemoryResult> {
   const active = (await Promise.all(selection.memoryRoots.map((root) => readActiveMemoriesFromRoot(root)))).flat()
-  return { project: selection.project, active: sortMemoriesNewestFirst(active), memoryRoot: selection.memoryRoot }
+  return {
+    project: selection.project,
+    active: sortMemoriesNewestFirst(active).map((memory) => ({
+      ...memory,
+      contentHash: contentHashForActiveMemory(memory)
+    })),
+    memoryRoot: selection.memoryRoot
+  }
 }
 
 async function readPendingFromSelection(selection: CodexUiResolvedSelection): Promise<{

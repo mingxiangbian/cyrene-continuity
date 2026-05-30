@@ -1,8 +1,10 @@
 const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
+const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
+  diagnostics: {},
   selection: { scope: 'project', label: 'Project', projectId: '' },
   projects: { projects: [], global: { counts: {} }, currentProjectId: '' },
   modelConfig: { configured: false, missing: [] },
@@ -20,6 +22,7 @@ const TABS = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'timeline', label: 'Timeline' },
   { id: 'project-memory', label: 'Project Memory' },
+  { id: 'triage', label: 'Triage' },
   { id: 'harvester', label: 'Harvester' },
   { id: 'dream', label: 'Dream' },
   { id: 'profile', label: 'Profile' }
@@ -45,8 +48,12 @@ const state = {
   pendingAction: null,
   receipt: null,
   actionError: '',
+  activeAction: null,
+  activeReceipt: null,
+  activeActionError: '',
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
-  harvester: { loading: false, result: null, error: '' }
+  harvester: { loading: false, result: null, error: '' },
+  triage: { loading: false, result: null, error: '', receipt: null }
 }
 
 const app = document.querySelector('[data-app]')
@@ -124,6 +131,7 @@ function mergeDashboard(data) {
   return {
     ...EMPTY_DASHBOARD,
     ...(data || {}),
+    diagnostics: { ...EMPTY_DASHBOARD.diagnostics, ...(data?.diagnostics || {}) },
     selection: { ...EMPTY_DASHBOARD.selection, ...(data?.selection || {}) },
     projects: { ...EMPTY_DASHBOARD.projects, ...(data?.projects || {}) },
     modelConfig: { ...EMPTY_DASHBOARD.modelConfig, ...(data?.modelConfig || {}) },
@@ -155,6 +163,8 @@ function renderNav() {
       state.activeTab = button.dataset.tab || 'overview'
       state.pendingAction = null
       state.actionError = ''
+      state.activeAction = null
+      state.activeActionError = ''
       render()
     })
   })
@@ -270,6 +280,10 @@ function renderWorkspace() {
   if (dryRunButton) {
     dryRunButton.addEventListener('click', runHarvesterDryRun)
   }
+  const triageDryRunButton = workspace.querySelector('[data-triage-dry-run]')
+  if (triageDryRunButton) {
+    triageDryRunButton.addEventListener('click', () => runTriage('dry-run'))
+  }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
       state.activeTab = 'inbox'
@@ -280,12 +294,38 @@ function renderWorkspace() {
       render()
     })
   })
+  workspace.querySelectorAll('[data-active-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeAction = {
+        id: button.dataset.memoryId || '',
+        action: button.dataset.activeAction || ''
+      }
+      state.activeActionError = ''
+      state.activeReceipt = null
+      render()
+    })
+  })
+  workspace.querySelectorAll('[data-cancel-active-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeAction = null
+      state.activeActionError = ''
+      render()
+    })
+  })
+  const activeForm = workspace.querySelector('[data-active-action-form]')
+  if (activeForm) {
+    activeForm.addEventListener('submit', (event) => {
+      event.preventDefault()
+      submitActiveAction(new FormData(activeForm))
+    })
+  }
 }
 
 function pageHtml(tabId) {
   if (tabId === 'inbox') return renderInbox()
   if (tabId === 'timeline') return renderTimeline()
   if (tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'triage') return renderTriage()
   if (tabId === 'harvester') return renderHarvester()
   if (tabId === 'dream') return renderDream()
   if (tabId === 'profile') return renderProfile()
@@ -309,6 +349,7 @@ function renderOverview() {
       </div>
       ${renderModelConfigPanel()}
       ${renderTimelineDiagnostic()}
+      ${renderRetrievalExplainPanel()}
       <div class="soft-panel">
         <h3>Recent pending candidates</h3>
         ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
@@ -384,6 +425,8 @@ function renderProjectMemory() {
   return `
     <section class="page-stack">
       ${sectionHeader('Project Memory', `Active memory for ${selection.label || 'selected scope'}.`)}
+      ${state.activeReceipt ? renderActiveReceipt(state.activeReceipt) : ''}
+      ${state.activeAction ? renderActiveActionForm() : ''}
       ${groups.length > 0 ? groups.map((group) => `
         <div class="soft-panel">
           <h3>${escapeHtml(group.label || 'Project memory')}</h3>
@@ -401,9 +444,96 @@ function renderMemoryRow(memory) {
         <div class="row-title">${escapeHtml(memory.content || memory.id || 'Memory')}</div>
         <div class="row-meta">${escapeHtml(memory.candidateKind || memory.type || 'memory')} · ${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
       </div>
-      ${statusChip('active', memory.status || 'active', 'ok')}
+      <div class="row-actions">
+        ${statusChip('active', memory.status || 'active', 'ok')}
+        <button class="soft-button compact" type="button" data-active-action="archive" data-memory-id="${escapeHtml(memory.id)}">Archive</button>
+        <button class="soft-button compact" type="button" data-active-action="tombstone" data-memory-id="${escapeHtml(memory.id)}">Tombstone</button>
+        <button class="soft-button compact" type="button" data-active-action="propose-edit" data-memory-id="${escapeHtml(memory.id)}">Propose edit</button>
+      </div>
     </article>
   `
+}
+
+function renderActiveActionForm() {
+  const memory = findActiveMemoryById(state.activeAction.id)
+  if (!memory) return panel('Active memory unavailable', 'Refresh the dashboard and try again.', 'error')
+  const action = state.activeAction.action
+  const editField = action === 'propose-edit'
+    ? `
+      <label>Replacement content
+        <textarea name="content" rows="4" required>${escapeHtml(memory.content || '')}</textarea>
+      </label>
+    `
+    : ''
+  const tombstoneField = action === 'tombstone'
+    ? `
+      <label>Days
+        <input name="days" type="number" min="1" step="1" value="180">
+      </label>
+    `
+    : ''
+  return `
+    <div class="soft-panel active-action-form">
+      <h3>${escapeHtml(activeActionLabel(action))}</h3>
+      <form class="confirm-form" data-active-action-form>
+        <label>Reason
+          <textarea name="reason" rows="3" required></textarea>
+        </label>
+        ${editField}
+        ${tombstoneField}
+        <div class="detail-actions">
+          <button class="soft-button primary compact" type="submit">${escapeHtml(activeActionLabel(action))}</button>
+          <button class="soft-button compact" type="button" data-cancel-active-action>Cancel</button>
+        </div>
+      </form>
+      ${state.activeActionError ? `<p class="notice error">${escapeHtml(state.activeActionError)}</p>` : ''}
+    </div>
+  `
+}
+
+function renderActiveReceipt(receipt) {
+  return `
+    <div class="soft-panel receipt-panel">
+      <p class="eyebrow">active memory receipt</p>
+      <h3>${escapeHtml(activeActionLabel(receipt.action || 'archive'))}</h3>
+      <div class="soft-inset rail-item"><strong>${escapeHtml(receipt.id || 'memory')}</strong><span>${escapeHtml(receipt.summary || 'Active memory action applied.')}</span></div>
+    </div>
+  `
+}
+
+async function submitActiveAction(formData) {
+  const activeAction = state.activeAction
+  if (!activeAction) return
+  const memory = findActiveMemoryById(activeAction.id)
+  if (!memory) return
+  const body = {
+    contentHash: memory.contentHash || '',
+    reason: String(formData.get('reason') || '').trim()
+  }
+  if (activeAction.action === 'propose-edit') {
+    body.content = String(formData.get('content') || '').trim()
+  }
+  if (activeAction.action === 'tombstone') {
+    const days = Number(formData.get('days') || 180)
+    body.days = Number.isFinite(days) ? days : 180
+  }
+  try {
+    const response = await apiFetch(`/api/active-memory/${encodeURIComponent(activeAction.id)}/${activeAction.action}`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Active memory action failed.')
+    }
+    await loadDashboard({ renderAfter: false })
+    state.activeReceipt = payload.data?.receipt || { id: activeAction.id, action: activeAction.action, summary: 'Active memory action applied.' }
+    state.activeAction = null
+    state.activeActionError = ''
+  } catch (error) {
+    state.activeActionError = errorMessage(error)
+  }
+  render()
 }
 
 function renderPreviewCandidateRow(candidate) {
@@ -480,6 +610,103 @@ function renderHarvesterResult(result) {
       ${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}
     </div>
   `
+}
+
+function renderTriage() {
+  const result = state.triage.result
+  const resultHtml = state.triage.error
+    ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
+    : result
+      ? renderTriageResult(result)
+      : panel('Triage ready', 'Preview pending-memory cleanup and review recommendations for the selected scope.', 'muted')
+
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Triage', 'Cluster and rank pending memory for review.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Pending triage</h3>
+          <p>Preview duplicate, defer, drop, and review recommendations. Use per-candidate review actions for any write.</p>
+        </div>
+        <div class="detail-actions">
+          <button class="soft-button primary" type="button" data-triage-dry-run ${state.triage.loading ? 'disabled' : ''}>
+            ${state.triage.loading ? 'Running triage' : 'Run triage dry-run'}
+          </button>
+        </div>
+      </div>
+      ${resultHtml}
+    </section>
+  `
+}
+
+async function runTriage(mode) {
+  state.triage = { loading: true, result: null, error: '', receipt: null }
+  render()
+  try {
+    const response = await apiFetch(`${TRIAGE_DRY_RUN_ENDPOINT}${selectionQuery()}`, { method: 'POST', body: '{}' })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Triage API returned an error.')
+    }
+    state.triage = {
+      loading: false,
+      result: payload.data,
+      error: '',
+      receipt: payload.data?.receipt || null
+    }
+  } catch (error) {
+    state.triage = { loading: false, result: null, error: errorMessage(error), receipt: null }
+  }
+  render()
+}
+
+function renderTriageResult(result) {
+  const decisions = Array.isArray(result.decisions) ? result.decisions : []
+  const clusters = Array.isArray(result.clusters) ? result.clusters : []
+  const actions = ['auto_drop', 'auto_merge', 'auto_defer', 'recommend', 'auto_promote', 'manual_review']
+  return `
+    <div class="soft-panel">
+      <h3>Triage dry-run result</h3>
+      <div class="triage-grid">
+        ${actions.map((action) => metric(triageActionLabel(action), countTriageDecision(decisions, action), 'decisions')).join('')}
+      </div>
+      <div class="soft-inset">Clusters: ${escapeHtml(String(clusters.length))}</div>
+      <div class="soft-inset">Scope: ${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} · preview only</div>
+      ${decisions.slice(0, 8).map(renderTriageDecisionRow).join('') || emptyState('No triage decisions returned.')}
+    </div>
+  `
+}
+
+function renderTriageDecisionRow(decision) {
+  const ids = decision.candidateIds || [decision.candidateId].filter(Boolean)
+  return `
+    <article class="data-row">
+      <div>
+        <div class="row-title">${escapeHtml(triageActionLabel(decision.action || 'manual_review'))}</div>
+        <div class="row-meta">${escapeHtml(ids.join(', ') || decision.clusterId || 'candidate')} · ${escapeHtml(decision.reason || 'triage decision')}</div>
+      </div>
+      ${statusChip('triage', decision.action || 'review', triageTone(decision.action))}
+    </article>
+  `
+}
+
+function countTriageDecision(decisions, action) {
+  return decisions.filter((decision) => decision.action === action).length
+}
+
+function triageActionLabel(action) {
+  if (action === 'auto_drop') return 'Auto drop'
+  if (action === 'auto_merge') return 'Auto merge'
+  if (action === 'auto_defer') return 'Auto defer'
+  if (action === 'auto_promote') return 'Auto promote'
+  if (action === 'manual_review') return 'Manual review'
+  return 'Recommend'
+}
+
+function triageTone(action) {
+  if (action === 'auto_drop') return 'error'
+  if (action === 'auto_defer' || action === 'recommend') return 'warn'
+  return 'muted'
 }
 
 function renderDream() {
@@ -882,6 +1109,10 @@ function selectedPending() {
   return listPending().find((candidate) => candidate.id === state.selectedPendingId)
 }
 
+function findActiveMemoryById(id) {
+  return listActive().find((memory) => memory.id === id)
+}
+
 function selectedProjectOption() {
   const projects = Array.isArray(state.dashboard.projects?.projects) ? state.dashboard.projects.projects : []
   const selectedProjectId = state.selectedProjectId || selectionInfo(state.dashboard).projectId || state.dashboard.projects?.currentProjectId || ''
@@ -894,6 +1125,13 @@ function actionLabel(action) {
   if (action === 'defer') return 'Defer'
   if (action === 'edit') return 'Edit'
   return 'Review'
+}
+
+function activeActionLabel(action) {
+  if (action === 'tombstone') return 'Tombstone'
+  if (action === 'propose-edit') return 'Propose edit'
+  if (action === 'supersede') return 'Supersede'
+  return 'Archive'
 }
 
 function sectionHeader(title, subtitle) {
@@ -932,6 +1170,50 @@ function renderModelConfigPanel() {
     ? `Model ${escapeHtml(config.model || 'configured')} at ${escapeHtml(config.baseUrl || 'configured endpoint')}. API key: ${escapeHtml(config.apiKeyPreview || 'not set')}.`
     : `Reviewing existing memory works without a key. Harvest and model summaries need ${escapeHtml(missing.join(', ') || 'CYRENE_BASE_URL and CYRENE_MODEL')}; set CYRENE_API_KEY if the provider requires bearer auth.`
   return panel(title, body, config.configured ? 'muted' : 'warn')
+}
+
+function renderRetrievalExplainPanel() {
+  return `
+    <div class="soft-panel">
+      <h3>Retrieval Explain</h3>
+      ${renderRetrievalPlan(state.dashboard.diagnostics?.retrievalPlan)}
+      ${renderRetrievalReasons(state.dashboard.diagnostics?.retrievalExplain)}
+    </div>
+  `
+}
+
+function renderRetrievalPlan(plan) {
+  if (!plan) return emptyState('No retrieval diagnostics returned.')
+  return `
+    <ul class="explain-list">
+      ${explainListItem('Task intent', plan.taskIntent)}
+      ${explainListItem('Memory kinds', plan.memoryKinds)}
+      ${explainListItem('Required facets', plan.requiredFacets)}
+      ${explainListItem('Optional facets', plan.optionalFacets)}
+    </ul>
+  `
+}
+
+function explainListItem(label, values) {
+  const textValue = Array.isArray(values) && values.length > 0 ? values.join(', ') : 'none'
+  return `<li class="soft-inset rail-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(textValue)}</span></li>`
+}
+
+function renderRetrievalReasons(explain) {
+  const rows = [
+    ...(Array.isArray(explain?.projectMemory) ? explain.projectMemory : []),
+    ...(Array.isArray(explain?.globalMemory) ? explain.globalMemory : []),
+    ...(Array.isArray(explain?.similarProjectHints) ? explain.similarProjectHints : [])
+  ]
+  if (rows.length === 0) return emptyState('No retrieved memory reasons returned.')
+  return `
+    <ul class="explain-list">
+      ${rows.slice(0, 6).map((item) => {
+        const reasons = Array.isArray(item.explain) && item.explain.length > 0 ? item.explain.join(', ') : 'none'
+        return `<li class="soft-inset rail-item"><strong>${escapeHtml(item.id || 'memory')}</strong><span>${escapeHtml(reasons)}</span></li>`
+      }).join('')}
+    </ul>
+  `
 }
 
 function renderTimelineDiagnostic() {

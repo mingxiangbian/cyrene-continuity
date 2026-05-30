@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
+import { candidateFromExplicitGlobalInstruction } from './global-memory-capture.js'
 import { type CodexMemoryCandidateInput, proposeCodexMemoryCandidate } from './memory-propose.js'
 import { identifyCodexProject } from './project-id.js'
 import { redactReviewText, mergeRedactionCounts } from './review-redaction.js'
@@ -41,6 +42,8 @@ interface ParsedReviewSummary {
 }
 
 const FAILED_SUMMARY = 'Codex review summary failed; no transcript content persisted.'
+const GENERATED_MEMORY_CONTENT_MAX_LENGTH = 240
+const GENERATED_MEMORY_EVIDENCE_MAX_LENGTH = 320
 
 export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): Promise<CodexReviewSummaryResult> {
   const window = recentTranscriptMessages(input.messages, 40)
@@ -70,7 +73,7 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
     const candidateIds: string[] = []
 
     for (const candidate of parsed.candidates) {
-      const safeCandidate = redactCandidate(candidate, runId, input.sessionId, summary, outputRedaction)
+      const safeCandidate = redactCandidate(candidate, runId, input.sessionId, summary, outputRedaction, input.config)
       if (safeCandidate === undefined) {
         continue
       }
@@ -80,6 +83,27 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         candidate: safeCandidate,
         now: input.now,
         recordRejectedCandidate: false
+      })
+      if (result.result.action === 'pending') {
+        candidateIds.push(result.result.candidateId)
+      }
+    }
+
+    for (const message of window.filter((entry) => entry.role === 'user')) {
+      const globalCandidate = candidateFromExplicitGlobalInstruction({
+        text: redactReviewText(message.content).text,
+        now: createdAt
+      })
+      if (globalCandidate === undefined) {
+        continue
+      }
+
+      const result = await proposeCodexMemoryCandidate({
+        cwd: input.cwd,
+        candidate: globalCandidate,
+        now: input.now,
+        recordRejectedCandidate: false,
+        allowAutoPromote: false
       })
       if (result.result.action === 'pending') {
         candidateIds.push(result.result.candidateId)
@@ -132,6 +156,8 @@ export function buildCodexReviewSummaryPrompt(redactedTranscript: string): strin
     'Do not store secrets, credentials, raw quotes, psychological diagnoses, or assistant-only suggestions.',
     'Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.',
     'Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.',
+    `Candidate content must be ${GENERATED_MEMORY_CONTENT_MAX_LENGTH} characters or fewer.`,
+    `Evidence summaries and quotes must be ${GENERATED_MEMORY_EVIDENCE_MAX_LENGTH} characters or fewer.`,
     'Memory candidates must match the existing memory candidate schema.',
     'Candidates may include domain, type, strength, scope, content, normalizedKey, source, scores, evidence, and tags.',
     '',
@@ -162,7 +188,8 @@ function redactCandidate(
   runId: string,
   sessionId: string | undefined,
   redactedSummary: string,
-  redactor: ReturnType<typeof createOutputRedactor>
+  redactor: ReturnType<typeof createOutputRedactor>,
+  config: AppConfig
 ): CodexMemoryCandidateInput | undefined {
   if (!isRecord(value)) {
     return undefined
@@ -170,7 +197,11 @@ function redactCandidate(
 
   const domain = parseEnum(value.domain, MEMORY_DOMAINS)
   const type = parseEnum(value.type, MEMORY_TYPES)
-  const content = parseString(value.content)
+  const content = parseBoundedString(
+    value.content,
+    redactor,
+    Math.min(config.memorySingleContentMaxChars, GENERATED_MEMORY_CONTENT_MAX_LENGTH)
+  )
   if (domain === undefined || type === undefined || content === undefined) {
     return undefined
   }
@@ -187,10 +218,18 @@ function redactCandidate(
     ...(candidateKind === undefined ? {} : { candidateKind }),
     strength: parseEnum(value.strength, MEMORY_STRENGTHS),
     scope: parseEnum(value.scope, MEMORY_SCOPES),
-    content: redactor.redact(content),
+    content,
     normalizedKey: redactOptionalString(value.normalizedKey, redactor),
     source,
-    evidence: redactEvidence(value.evidence, runId, sessionId, redactedSummary, source ?? 'assistant_observed', redactor),
+    evidence: redactEvidence(
+      value.evidence,
+      runId,
+      sessionId,
+      redactedSummary,
+      source ?? 'assistant_observed',
+      redactor,
+      Math.min(config.memorySingleEvidenceMaxChars, GENERATED_MEMORY_EVIDENCE_MAX_LENGTH)
+    ),
     scores: parseScores(value.scores),
     tags: redactTags(value.tags, redactor)
   }
@@ -204,15 +243,16 @@ function redactEvidence(
   sessionId: string | undefined,
   redactedSummary: string,
   sourceKind: MemorySource,
-  redactor: ReturnType<typeof createOutputRedactor>
+  redactor: ReturnType<typeof createOutputRedactor>,
+  maxLength: number
 ): MemoryEvidence[] {
   const evidence = Array.isArray(value)
     ? value.flatMap((entry) => {
         if (!isRecord(entry)) {
           return []
         }
-        const summary = redactOptionalString(entry.summary, redactor)
-        const quote = redactOptionalString(entry.quote, redactor)
+        const summary = parseBoundedString(entry.summary, redactor, maxLength)
+        const quote = parseBoundedString(entry.quote, redactor, maxLength)
         if (summary === undefined && quote === undefined) {
           return []
         }
@@ -223,7 +263,7 @@ function redactEvidence(
   if (evidence.length > 0) {
     return evidence
   }
-  return [evidenceEntry({ runId, sessionId, summary: redactedSummary, sourceKind })]
+  return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix(redactedSummary, maxLength), sourceKind })]
 }
 
 export function stableEvidenceGroupId(input: {
@@ -272,6 +312,25 @@ function redactTags(value: unknown, redactor: ReturnType<typeof createOutputReda
 function redactOptionalString(value: unknown, redactor: ReturnType<typeof createOutputRedactor>): string | undefined {
   const text = parseString(value)
   return text === undefined ? undefined : redactor.redact(text)
+}
+
+function parseBoundedString(
+  value: unknown,
+  redactor: ReturnType<typeof createOutputRedactor>,
+  maxLength: number
+): string | undefined {
+  const text = parseString(value)
+  if (text === undefined) {
+    return undefined
+  }
+  return truncateWithSuffix(redactor.redact(text.replace(/\s+/g, ' ').trim()), maxLength)
+}
+
+function truncateWithSuffix(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  if (maxChars <= 0) return ''
+  if (maxChars <= 3) return '.'.repeat(maxChars)
+  return `${value.slice(0, maxChars - 3)}...`
 }
 
 function parseScores(value: unknown): CodexMemoryCandidateInput['scores'] {

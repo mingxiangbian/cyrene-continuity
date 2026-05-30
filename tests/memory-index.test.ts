@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  deriveDeterministicMemoryEdges,
   openMemoryIndexAdapter,
   type MemoryIndexRoot
 } from '../src/memory/memory-index.js'
@@ -574,6 +575,163 @@ describe('memory SQLite index', () => {
     expect(project[0]?.memory.id).toBe('shared-memory-id')
     expect(similar[0]?.memory.id).toBe('shared-memory-id')
     expect(similar[0]?.homeProjectId).toBe('project-b')
+  })
+
+  it('derives approved deterministic file memory edges from evidence trace refs', () => {
+    const edges = deriveDeterministicMemoryEdges(activeMemory({
+      id: 'memory-1',
+      evidence: [{
+        summary: 'Route implementation.',
+        traceRefs: ['src/codex/codex-ui-api.ts', '../outside.ts', 'not-a-file-ref']
+      }]
+    }), '2026-05-30T00:00:00.000Z')
+
+    expect(edges).toEqual([expect.objectContaining({
+      fromId: 'memory-1',
+      fromKind: 'memory',
+      toId: 'src/codex/codex-ui-api.ts',
+      toKind: 'file',
+      edgeType: 'memory_mentions_file',
+      weight: 1,
+      source: 'deterministic',
+      status: 'approved',
+      createdAt: '2026-05-30T00:00:00.000Z'
+    })])
+  })
+
+  it('stores memory edges and returns approved graph neighbors', async () => {
+    const root = await createTempDir('cyrene-memory-index-edges-')
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.initialize()
+
+    await adapter.upsertMemoryEdge({
+      id: 'edge-approved',
+      fromId: 'memory-1',
+      fromKind: 'memory',
+      toId: 'src/codex/codex-ui-api.ts',
+      toKind: 'file',
+      edgeType: 'memory_mentions_file',
+      weight: 1,
+      source: 'deterministic',
+      status: 'approved',
+      createdAt: '2026-05-30T00:00:00.000Z'
+    })
+    await adapter.upsertMemoryEdge({
+      id: 'edge-pending',
+      fromId: 'memory-1',
+      fromKind: 'memory',
+      toId: 'src/codex/continuity-context.ts',
+      toKind: 'file',
+      edgeType: 'memory_mentions_file',
+      weight: 0.5,
+      source: 'model',
+      status: 'pending',
+      createdAt: '2026-05-30T00:00:00.000Z'
+    })
+
+    const edges = await adapter.queryMemoryEdges({ fromId: 'memory-1', status: 'approved' })
+
+    expect(edges).toEqual([expect.objectContaining({
+      id: 'edge-approved',
+      edgeType: 'memory_mentions_file',
+      toId: 'src/codex/codex-ui-api.ts',
+      source: 'deterministic',
+      status: 'approved'
+    })])
+  })
+
+  it('keeps deterministic memory edges distinct for duplicate raw ids across roots', async () => {
+    const root = await createTempDir('cyrene-memory-index-edge-duplicate-ids-')
+    const currentRoot = join(root, 'projects', 'project-a', 'memory')
+    const similarRoot = join(root, 'projects', 'project-b', 'memory')
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(similarRoot, { recursive: true })
+    await writeJsonLines(join(currentRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'shared-memory-id',
+        content: 'Current project duplicate id memory mentions the shared file.',
+        normalizedKey: 'current-duplicate-edge-memory',
+        evidence: [{ summary: 'Shared trace ref.', traceRefs: ['src/shared.ts'] }]
+      })
+    ])
+    await writeJsonLines(join(similarRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'shared-memory-id',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        portability: 'similar_project',
+        content: 'Similar project duplicate id memory mentions the same shared file.',
+        normalizedKey: 'similar-duplicate-edge-memory',
+        evidence: [{ summary: 'Shared trace ref.', traceRefs: ['src/shared.ts'] }]
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({
+      roots: [
+        { memoryRoot: currentRoot, projectId: 'project-a', scope: 'project' },
+        { memoryRoot: similarRoot, projectId: 'project-b', scope: 'project' }
+      ]
+    })
+
+    const edges = await adapter.queryMemoryEdges({ toId: 'src/shared.ts', status: 'approved' })
+
+    expect(edges).toHaveLength(2)
+    expect(new Set(edges.map((edge) => edge.id)).size).toBe(2)
+    expect(new Set(edges.map((edge) => edge.fromId)).size).toBe(2)
+    expect(edges.map((edge) => JSON.parse(edge.fromId))).toEqual(expect.arrayContaining([
+      ['project', 'project-a', 'shared-memory-id'],
+      ['project', 'project-b', 'shared-memory-id']
+    ]))
+  })
+
+  it('does not expose pending memory edges as approved graph neighbors after sync', async () => {
+    const root = await createTempDir('cyrene-memory-index-pending-edges-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'pending.jsonl'), [
+      pendingMemory({
+        id: 'pending-edge-memory',
+        evidence: [{ summary: 'Pending trace ref.', traceRefs: ['src/pending.ts'] }]
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    await expect(adapter.queryMemoryEdges({ toId: 'src/pending.ts', status: 'approved' })).resolves.toEqual([])
+    const pendingEdges = await adapter.queryMemoryEdges({ toId: 'src/pending.ts', status: 'pending' })
+    expect(pendingEdges).toEqual([expect.objectContaining({
+      fromId: expect.stringContaining('pending-edge-memory'),
+      status: 'pending'
+    })])
+  })
+
+  it('queries synced deterministic edges by public memory id', async () => {
+    const root = await createTempDir('cyrene-memory-index-public-edge-id-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'public-memory-id',
+        evidence: [{ summary: 'Public id trace ref.', traceRefs: ['src/public.ts'] }]
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const edges = await adapter.queryMemoryEdges({ fromId: 'public-memory-id', status: 'approved' })
+
+    expect(edges).toEqual([expect.objectContaining({
+      fromId: JSON.stringify(['project', 'project-a', 'public-memory-id']),
+      toId: 'src/public.ts',
+      status: 'approved'
+    })])
   })
 
   it('returns unavailable diagnostics when forced unavailable', async () => {

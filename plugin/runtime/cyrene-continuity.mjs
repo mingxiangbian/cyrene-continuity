@@ -5791,11 +5791,11 @@ var require_validate = __commonJS({
         jsonPointer = $data;
         data = names_1.default.rootData;
       } else {
-        const matches = RELATIVE_JSON_POINTER.exec($data);
-        if (!matches)
+        const matches2 = RELATIVE_JSON_POINTER.exec($data);
+        if (!matches2)
           throw new Error(`Invalid JSON-pointer: ${$data}`);
-        const up = +matches[1];
-        jsonPointer = matches[2];
+        const up = +matches2[1];
+        jsonPointer = matches2[2];
         if (jsonPointer === "#") {
           if (up >= dataLevel)
             throw new Error(errorMsg("property/index", up));
@@ -6492,11 +6492,11 @@ var require_schemes = __commonJS({
         urnComponent.error = "URN can not be parsed";
         return urnComponent;
       }
-      const matches = urnComponent.path.match(URN_REG);
-      if (matches) {
+      const matches2 = urnComponent.path.match(URN_REG);
+      if (matches2) {
         const scheme = options.scheme || urnComponent.scheme || "urn";
-        urnComponent.nid = matches[1].toLowerCase();
-        urnComponent.nss = matches[2];
+        urnComponent.nid = matches2[1].toLowerCase();
+        urnComponent.nss = matches2[2];
         const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`;
         const schemeHandler = getSchemeHandler(urnScheme);
         urnComponent.path = void 0;
@@ -6766,8 +6766,8 @@ var require_fast_uri = __commonJS({
       return uriTokens.join("");
     }
     var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
-    function getParseError(parsed, matches) {
-      if (matches[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
+    function getParseError(parsed, matches2) {
+      if (matches2[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
         return 'URI path must start with "/" when authority is present.';
       }
       if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
@@ -6795,19 +6795,19 @@ var require_fast_uri = __commonJS({
           uri = "//" + uri;
         }
       }
-      const matches = uri.match(URI_PARSE);
-      if (matches) {
-        parsed.scheme = matches[1];
-        parsed.userinfo = matches[3];
-        parsed.host = matches[4];
-        parsed.port = parseInt(matches[5], 10);
-        parsed.path = matches[6] || "";
-        parsed.query = matches[7];
-        parsed.fragment = matches[8];
+      const matches2 = uri.match(URI_PARSE);
+      if (matches2) {
+        parsed.scheme = matches2[1];
+        parsed.userinfo = matches2[3];
+        parsed.host = matches2[4];
+        parsed.port = parseInt(matches2[5], 10);
+        parsed.path = matches2[6] || "";
+        parsed.query = matches2[7];
+        parsed.fragment = matches2[8];
         if (isNaN(parsed.port)) {
-          parsed.port = matches[5];
+          parsed.port = matches2[5];
         }
-        const parseError = getParseError(parsed, matches);
+        const parseError = getParseError(parsed, matches2);
         if (parseError !== void 0) {
           parsed.error = parsed.error || parseError;
           malformedAuthorityOrPort = true;
@@ -9647,12 +9647,12 @@ var require_formats = __commonJS({
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     function date3(str) {
-      const matches = DATE.exec(str);
-      if (!matches)
+      const matches2 = DATE.exec(str);
+      if (!matches2)
         return false;
-      const year = +matches[1];
-      const month = +matches[2];
-      const day = +matches[3];
+      const year = +matches2[1];
+      const month = +matches2[2];
+      const day = +matches2[3];
       return month >= 1 && month <= 12 && day >= 1 && day <= (month === 2 && isLeapYear(year) ? 29 : DAYS[month]);
     }
     function compareDate(d1, d2) {
@@ -9667,16 +9667,16 @@ var require_formats = __commonJS({
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
       return function time3(str) {
-        const matches = TIME.exec(str);
-        if (!matches)
+        const matches2 = TIME.exec(str);
+        if (!matches2)
           return false;
-        const hr = +matches[1];
-        const min = +matches[2];
-        const sec = +matches[3];
-        const tz = matches[4];
-        const tzSign = matches[5] === "-" ? -1 : 1;
-        const tzH = +(matches[6] || 0);
-        const tzM = +(matches[7] || 0);
+        const hr = +matches2[1];
+        const min = +matches2[2];
+        const sec = +matches2[3];
+        const tz = matches2[4];
+        const tzSign = matches2[5] === "-" ? -1 : 1;
+        const tzH = +(matches2[6] || 0);
+        const tzM = +(matches2[7] || 0);
         if (tzH > 23 || tzM > 59 || strictTimeZone && !tz)
           return false;
         if (hr <= 23 && min <= 59 && sec < 60)
@@ -10199,24 +10199,16 @@ async function writePendingMemoriesFromRoot(memoryRoot, memories) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await writeJsonLinesAtomic(join4(root, PENDING_FILE), memories.filter((memory) => memory.status === "pending"));
 }
-async function upsertPendingMemoryFromRoot(memoryRoot, candidate) {
-  const root = await ensureWritableMemoryRoot(memoryRoot);
-  const pending = await readPendingMemoriesFromRoot(root);
-  const existingIndex = pending.findIndex((memory) => memory.normalizedKey === candidate.normalizedKey);
-  let result2 = candidate;
-  if (existingIndex >= 0) {
-    const existing = pending[existingIndex];
-    result2 = mergePendingMemory(existing, candidate);
-    pending[existingIndex] = result2;
-  } else {
-    pending.push(candidate);
-  }
-  await writeJsonLinesAtomic(join4(root, PENDING_FILE), pending);
-  return result2;
-}
 async function appendMemoryEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, EVENTS_FILE), event);
+}
+async function readMemoryEventsFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, EVENTS_FILE));
 }
 async function readTombstonesFromRoot(memoryRoot) {
   const readable = await isReadableMemoryRoot(memoryRoot);
@@ -10509,6 +10501,7 @@ import { join as join8 } from "node:path";
 import { basename as basename2, dirname as dirname3, join as join7 } from "node:path";
 
 // src/memory/memory-index.ts
+import { createHash } from "node:crypto";
 import { mkdir as mkdir4 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname as dirname2 } from "node:path";
@@ -10518,6 +10511,57 @@ function estimateTokens(text) {
   const trimmed = text.trim();
   if (trimmed === "") return 0;
   return Math.ceil(trimmed.length / 4);
+}
+
+// src/codex/retrieval-planner.ts
+function buildRetrievalPlan(input) {
+  const text = input.query.toLowerCase();
+  const taskIntent = [
+    ...matches(text, ["memory", "pending", "active", "archive", "tombstone", "review", "promote"]) ? ["memory_review"] : [],
+    ...matches(text, ["ui", "button", "web ui", "route"]) ? ["ui"] : [],
+    ...matches(text, ["debug", "fail", "error", "bug", "does not work"]) || input.task === "debugging" ? ["debugging"] : []
+  ];
+  const memoryKinds = taskIntent.includes("memory_review") ? ["workflow_rule", "known_pitfall", "project_decision"] : ["project_fact", "workflow_rule"];
+  return {
+    taskIntent,
+    memoryKinds,
+    requiredFacets: ["exact_project", "memory_kind", "evidence"],
+    optionalFacets: ["graph_edges", "transferability", "recency"],
+    excludeDomains: input.task === "coding" || input.task === "debugging" || input.task === "memory" ? ["affective", "relationship"] : [],
+    includePendingHypotheses: input.task === "memory",
+    includeSimilarHints: true,
+    includeGraphNeighbors: true
+  };
+}
+function explainRetrievalReasons(input) {
+  return [
+    ...input.exactProject ? ["exact_project"] : [],
+    ...input.globalPolicy ? ["global_policy"] : [],
+    ...input.memoryKind === void 0 ? [] : [`memory_kind:${input.memoryKind}`],
+    ...(input.taskIntent ?? []).map((intent) => `task_intent:${intent}`),
+    ...(input.edgeTypes ?? []).map((edge) => `edge:${edge}`),
+    ...input.transferability ? ["transferability"] : []
+  ];
+}
+function memoryKindForRetrieval(memory) {
+  return memory.candidateKind ?? memory.candidate_kind ?? memoryKindFromType(memory.type);
+}
+function retrievalPlanMemoryKindBoost(plan, memory) {
+  const memoryKind = memoryKindForRetrieval(memory);
+  return plan.memoryKinds.includes(memoryKind) ? 0.2 : 0;
+}
+function memoryKindFromType(type) {
+  if (type === "procedural_rule" || type === "system_policy") return "workflow_rule";
+  if (type === "reference") return "known_pitfall";
+  if (type === "user_preference") return "user_instruction";
+  return type;
+}
+function matches(text, terms) {
+  const tokens = new Set(tokenize(text));
+  return terms.some((term) => term.includes(" ") ? text.includes(term) : tokens.has(term));
+}
+function tokenize(text) {
+  return text.split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 
 // src/memory/memory-retriever.ts
@@ -10530,9 +10574,23 @@ function memoryRetrievalBudgetForTask(task) {
 async function retrieveMemories(input) {
   const memories = await readInputMemories(input);
   const task = input.task ?? "conversation";
-  const queryTokens = tokenize(input.query);
-  const filtered = memories.filter((memory) => isMemoryEligibleForRetrieval(memory, input, task));
-  const scored = filtered.map((memory) => ({ memory, score: scoreMemory(memory, queryTokens) })).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareRetrievedMemories);
+  const retrievalPlan = buildRetrievalPlan({ query: input.query, task });
+  const queryTokens = tokenize2(input.query);
+  const filtered = memories.filter((memory) => isMemoryEligibleForRetrieval(memory, input, task) && !retrievalPlan.excludeDomains.includes(memory.domain));
+  const scored = filtered.map((memory) => {
+    const score = scoreMemory(memory, queryTokens, retrievalPlan);
+    return {
+      memory,
+      score,
+      explain: explainRetrievalReasons({
+        exactProject: memory.scope !== "global",
+        globalPolicy: memory.scope === "global",
+        memoryKind: memoryKindForRetrieval(memory),
+        taskIntent: retrievalPlan.taskIntent,
+        score
+      })
+    };
+  }).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareRetrievedMemories);
   const selected = [];
   let tokenCount = 0;
   for (const item of scored) {
@@ -10606,14 +10664,15 @@ function defaultDomainsForTask(task) {
   }
   return ["project", "personal", "relationship", "affective", "procedural", "system"];
 }
-function scoreMemory(memory, queryTokens) {
+function scoreMemory(memory, queryTokens, retrievalPlan) {
   const relevance = queryTokens.length === 0 ? 0.2 : relevanceScore(memory, queryTokens);
   const recency = memory.lastUsedAt === void 0 ? 0.5 : 1;
   const sensitivityPenalty = memory.scores.sensitivity > 0.3 ? memory.scores.sensitivity * (memory.domain === "affective" ? 0.35 : 0.2) : 0;
-  return relevance * 0.35 + memory.scores.usefulness * 0.25 + memory.scores.evidenceStrength * 0.2 + memory.scores.safety * 0.1 + recency * 0.1 - sensitivityPenalty;
+  const plannerBoost = retrievalPlanMemoryKindBoost(retrievalPlan, memory);
+  return relevance * 0.35 + memory.scores.usefulness * 0.25 + memory.scores.evidenceStrength * 0.2 + memory.scores.safety * 0.1 + recency * 0.1 - sensitivityPenalty + plannerBoost;
 }
 function relevanceScore(memory, queryTokens) {
-  const haystack = tokenize([
+  const haystack = tokenize2([
     memory.content,
     memory.normalizedKey,
     memory.domain,
@@ -10621,8 +10680,8 @@ function relevanceScore(memory, queryTokens) {
     memory.strength,
     ...memory.tags
   ].join(" "));
-  const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches.length / queryTokens.length;
+  const matches2 = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
+  return matches2.length / queryTokens.length;
 }
 function compareRetrievedMemories(left, right) {
   const scoreDiff = right.score - left.score;
@@ -10643,7 +10702,7 @@ function domainPriority(domain) {
   if (domain === "relationship") return 4;
   return 5;
 }
-function tokenize(text) {
+function tokenize2(text) {
   return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 
@@ -10676,6 +10735,21 @@ function deriveMemoryPortability(memory) {
   if (memory.portability !== void 0) return memory.portability;
   return memory.scope === "global" ? "global" : "local_only";
 }
+function deriveDeterministicMemoryEdges(memory, now) {
+  const refs = new Set(memory.evidence.flatMap((entry) => entry.traceRefs ?? []));
+  return Array.from(refs).filter(isSafeFileTraceRef).map((ref) => ({
+    id: `edge-${memory.id}-${hashText(ref, 12)}`,
+    fromId: memory.id,
+    fromKind: "memory",
+    toId: ref,
+    toKind: "file",
+    edgeType: "memory_mentions_file",
+    weight: 1,
+    source: "deterministic",
+    status: "approved",
+    createdAt: now
+  }));
+}
 var UnavailableMemoryIndexAdapter = class {
   constructor(dbPath, reason) {
     this.dbPath = dbPath;
@@ -10702,6 +10776,12 @@ var UnavailableMemoryIndexAdapter = class {
     return this.diagnostics();
   }
   async listProjectSimilarities(_sourceProjectId) {
+    return [];
+  }
+  async upsertMemoryEdge(_edge) {
+    return this.diagnostics();
+  }
+  async queryMemoryEdges(_input) {
     return [];
   }
   async queryActive(_input) {
@@ -10810,6 +10890,21 @@ var SqliteMemoryIndexAdapter = class {
         vector_json text not null,
         updated_at text not null
       );
+
+      create table if not exists memory_edges (
+        id text primary key,
+        from_id text not null,
+        from_kind text not null,
+        to_id text not null,
+        to_kind text not null,
+        edge_type text not null,
+        weight real not null,
+        source text not null,
+        status text not null,
+        evidence_id text,
+        created_at text not null,
+        approved_at text
+      );
     `);
     this.ensureProjectColumns(db);
     if (!this.initialized) {
@@ -10826,7 +10921,7 @@ var SqliteMemoryIndexAdapter = class {
   async rebuildFromRoots(input) {
     const diagnostics = await this.initialize();
     const db = this.requireDatabase();
-    db.exec("delete from memory_evidence; delete from memories;");
+    db.exec("delete from memory_edges; delete from memory_evidence; delete from memories;");
     for (const root of input.roots) {
       await this.syncRootRecords(root);
     }
@@ -10841,6 +10936,7 @@ var SqliteMemoryIndexAdapter = class {
   async syncRootRecords(root) {
     const diagnostics = await this.initialize();
     const db = this.requireDatabase();
+    db.prepare("delete from memory_edges where from_id in (select id from memories where memory_root = ?)").run(root.memoryRoot);
     db.prepare("delete from memory_evidence where memory_id in (select id from memories where memory_root = ?)").run(root.memoryRoot);
     db.prepare("delete from memories where memory_root = ?").run(root.memoryRoot);
     if (root.projectId !== null) {
@@ -10855,11 +10951,18 @@ var SqliteMemoryIndexAdapter = class {
       readActiveMemoriesFromRoot(root.memoryRoot),
       readPendingMemoriesFromRoot(root.memoryRoot)
     ]);
+    const indexedAt = (/* @__PURE__ */ new Date()).toISOString();
     for (const memory of active) {
-      this.insertMemory(root, memory);
+      const indexId = this.insertMemory(root, memory);
+      for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory, indexedAt)) {
+        this.upsertMemoryEdgeRecord(edge);
+      }
     }
     for (const memory of pending) {
-      this.insertMemory(root, memory);
+      const indexId = this.insertMemory(root, memory);
+      for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory, indexedAt)) {
+        this.upsertMemoryEdgeRecord(edge);
+      }
     }
     return diagnostics;
   }
@@ -10959,6 +11062,43 @@ var SqliteMemoryIndexAdapter = class {
       where source_project_id = ?
       order by score desc, target_project_id asc
     `).all(sourceProjectId).map(projectSimilarityFromRecord);
+  }
+  async upsertMemoryEdge(edge) {
+    const diagnostics = await this.initialize();
+    this.upsertMemoryEdgeRecord(edge);
+    return diagnostics;
+  }
+  async queryMemoryEdges(input) {
+    await this.initialize();
+    const conditions = [];
+    const values = [];
+    if (input.toId !== void 0) {
+      conditions.push("to_id = ?");
+      values.push(input.toId);
+    }
+    if (input.status !== void 0) {
+      conditions.push("status = ?");
+      values.push(input.status);
+    }
+    const where = conditions.length === 0 ? "" : `where ${conditions.join(" and ")}`;
+    return this.requireDatabase().prepare(`
+      select
+        id,
+        from_id,
+        from_kind,
+        to_id,
+        to_kind,
+        edge_type,
+        weight,
+        source,
+        status,
+        evidence_id,
+        created_at,
+        approved_at
+      from memory_edges
+      ${where}
+      order by created_at asc, id asc
+    `).all(...values).map(memoryEdgeFromRecord).filter((edge) => input.fromId === void 0 || edge.fromId === input.fromId || indexedMemoryIdPayload(edge.fromId) === input.fromId);
   }
   async queryActive(input) {
     await this.initialize();
@@ -11247,6 +11387,50 @@ var SqliteMemoryIndexAdapter = class {
         now
       );
     }
+    return indexId;
+  }
+  upsertMemoryEdgeRecord(edge) {
+    this.requireDatabase().prepare(`
+      insert into memory_edges (
+        id,
+        from_id,
+        from_kind,
+        to_id,
+        to_kind,
+        edge_type,
+        weight,
+        source,
+        status,
+        evidence_id,
+        created_at,
+        approved_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(id) do update set
+        from_id = excluded.from_id,
+        from_kind = excluded.from_kind,
+        to_id = excluded.to_id,
+        to_kind = excluded.to_kind,
+        edge_type = excluded.edge_type,
+        weight = excluded.weight,
+        source = excluded.source,
+        status = excluded.status,
+        evidence_id = excluded.evidence_id,
+        approved_at = excluded.approved_at
+    `).run(
+      edge.id,
+      edge.fromId,
+      edge.fromKind,
+      edge.toId,
+      edge.toKind,
+      edge.edgeType,
+      edge.weight,
+      edge.source,
+      edge.status,
+      edge.evidenceId ?? null,
+      edge.createdAt,
+      edge.approvedAt ?? null
+    );
   }
   rebuildFts() {
     this.requireDatabase().prepare("insert into memories_fts(memories_fts) values ('rebuild')").run();
@@ -11336,6 +11520,47 @@ var SqliteMemoryIndexAdapter = class {
 function memoryIndexId(root, memoryId) {
   return JSON.stringify([root.scope, root.projectId, memoryId]);
 }
+function deriveIndexedDeterministicMemoryEdges(indexId, memory, now) {
+  return deriveDeterministicMemoryEdges(memory, now).map((edge) => ({
+    ...edge,
+    id: `edge-${hashText(`${indexId}\0${edge.toId}`, 24)}`,
+    fromId: indexId,
+    status: memory.status === "active" ? "approved" : "pending"
+  }));
+}
+function indexedMemoryIdPayload(fromId) {
+  try {
+    const value = JSON.parse(fromId);
+    if (!Array.isArray(value) || typeof value[2] !== "string") {
+      return void 0;
+    }
+    return value[2];
+  } catch {
+    return void 0;
+  }
+}
+function memoryEdgeFromRecord(row) {
+  return {
+    id: readString(row.id, "id"),
+    fromId: readString(row.from_id, "from_id"),
+    fromKind: readString(row.from_kind, "from_kind"),
+    toId: readString(row.to_id, "to_id"),
+    toKind: readString(row.to_kind, "to_kind"),
+    edgeType: readString(row.edge_type, "edge_type"),
+    weight: Number(row.weight),
+    source: readString(row.source, "source"),
+    status: readString(row.status, "status"),
+    evidenceId: row.evidence_id === null ? void 0 : readString(row.evidence_id, "evidence_id"),
+    createdAt: readString(row.created_at, "created_at"),
+    approvedAt: row.approved_at === null ? void 0 : readString(row.approved_at, "approved_at")
+  };
+}
+function isSafeFileTraceRef(ref) {
+  return /^[\w./-]+\.[\w]+$/.test(ref) && !ref.includes("..");
+}
+function hashText(value, length) {
+  return createHash("sha256").update(value).digest("hex").slice(0, length);
+}
 function dependencyFingerprint(dependencyNames2) {
   return dependencyNames2.slice().sort().join("\n");
 }
@@ -11393,7 +11618,7 @@ function readString(value, field) {
   return value;
 }
 function scoreRow(row, query, ftsMatches) {
-  const tokens = tokenize2(query);
+  const tokens = tokenize3(query);
   const relevance = tokens.length === 0 ? 0.2 : relevanceScore2(row, tokens);
   const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0;
   const safety = typeof row.scores.safety === "number" ? row.scores.safety : 0.8;
@@ -11403,7 +11628,7 @@ function scoreRow(row, query, ftsMatches) {
   return relevance * 0.45 + usefulness * 0.2 + evidence * 0.15 + safety * 0.1 + ftsBoost - sensitivity * 0.1;
 }
 function relevanceScore2(row, queryTokens) {
-  const haystack = tokenize2([
+  const haystack = tokenize3([
     row.content,
     row.normalizedKey,
     row.domain,
@@ -11412,8 +11637,8 @@ function relevanceScore2(row, queryTokens) {
     row.portability,
     ...row.tags
   ].join(" "));
-  const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches.length / queryTokens.length;
+  const matches2 = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
+  return matches2.length / queryTokens.length;
 }
 function compareIndexedItems(left, right) {
   const scoreDiff = right.score - left.score;
@@ -11440,28 +11665,53 @@ function selectWithinBudget(items, maxItems, maxTokens) {
   return selected;
 }
 function ftsExpression(text) {
-  return tokenize2(text).map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
+  return tokenize3(text).map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
 }
-function tokenize2(text) {
+function tokenize3(text) {
   return text.toLowerCase().match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) ?? [];
 }
 
 // src/codex/project-fingerprint.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { readdir as readdir2, readFile as readFile3, stat } from "node:fs/promises";
 import { join as join6 } from "node:path";
+var MAX_PROJECT_SCAN_FILES = 1e3;
+var MAX_PROJECT_SCAN_DEPTH = 6;
+var SKIPPED_SCAN_DIRS = /* @__PURE__ */ new Set([
+  ".git",
+  ".codegraph",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".superpowers",
+  ".tox",
+  ".venv",
+  ".worktrees",
+  "build",
+  "coverage",
+  "dist",
+  "external",
+  "node_modules",
+  "site-packages",
+  "venv",
+  "__pycache__"
+]);
 async function buildCodexProjectFingerprint(input) {
   const root = input.project.gitRoot ?? input.cwd;
+  const scannedFiles = await scanProjectFiles(root);
   const packageJson = await readPackageJson(root);
-  const dependencyNames2 = packageJson === void 0 ? [] : Object.keys({
-    ...readObject(packageJson.dependencies),
-    ...readObject(packageJson.devDependencies)
-  }).sort();
-  const packageManager = await detectPackageManager(root);
+  const dependencyNames2 = Array.from(/* @__PURE__ */ new Set([
+    ...packageJson === void 0 ? [] : Object.keys({
+      ...readObject(packageJson.dependencies),
+      ...readObject(packageJson.devDependencies)
+    }),
+    ...await readPythonRequirementNames(root, scannedFiles)
+  ])).sort();
+  const packageManager = await detectPackageManager(root, scannedFiles);
   const rootEntries = await safeReaddir(root);
-  const languages = detectLanguages(rootEntries, dependencyNames2);
-  const frameworks = detectFrameworks(rootEntries, dependencyNames2);
-  const domainTags = detectDomainTags(rootEntries, frameworks, dependencyNames2, languages);
+  const languages = detectLanguages(rootEntries, scannedFiles, dependencyNames2);
+  const frameworks = detectFrameworks(rootEntries, scannedFiles, dependencyNames2);
+  const domainTags = detectDomainTags(rootEntries, scannedFiles, frameworks, dependencyNames2, languages);
   return {
     projectId: input.project.projectId,
     displayName: input.project.displayName,
@@ -11485,11 +11735,12 @@ async function readPackageJson(cwd) {
 function readObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-async function detectPackageManager(cwd) {
+async function detectPackageManager(cwd, scannedFiles) {
   if (await exists(join6(cwd, "pnpm-lock.yaml"))) return "pnpm";
   if (await exists(join6(cwd, "yarn.lock"))) return "yarn";
   if (await exists(join6(cwd, "bun.lockb")) || await exists(join6(cwd, "bun.lock"))) return "bun";
   if (await exists(join6(cwd, "package-lock.json"))) return "npm";
+  if (scannedFiles.some((file) => file.endsWith("requirements.txt") || file.endsWith("pyproject.toml"))) return "pip";
   return "unknown";
 }
 async function safeReaddir(cwd) {
@@ -11499,7 +11750,55 @@ async function safeReaddir(cwd) {
     return [];
   }
 }
-function detectLanguages(rootEntries, dependencyNames2) {
+async function scanProjectFiles(cwd) {
+  const files = [];
+  await scanProjectDirectory(cwd, "", 0, files);
+  return files.sort();
+}
+async function scanProjectDirectory(cwd, relativeDir, depth, files) {
+  if (files.length >= MAX_PROJECT_SCAN_FILES || depth > MAX_PROJECT_SCAN_DEPTH) return;
+  let entries;
+  try {
+    entries = await readdir2(join6(cwd, relativeDir), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (files.length >= MAX_PROJECT_SCAN_FILES) return;
+    const relativePath = relativeDir === "" ? entry.name : `${relativeDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (!SKIPPED_SCAN_DIRS.has(entry.name)) {
+        await scanProjectDirectory(cwd, relativePath, depth + 1, files);
+      }
+      continue;
+    }
+    if (entry.isFile()) files.push(relativePath);
+  }
+}
+async function readPythonRequirementNames(cwd, scannedFiles) {
+  const names = /* @__PURE__ */ new Set();
+  const requirementsFiles = scannedFiles.filter((file) => file.endsWith("requirements.txt")).slice(0, 20);
+  for (const relativePath of requirementsFiles) {
+    let content;
+    try {
+      content = await readFile3(join6(cwd, relativePath), "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of content.split(/\r?\n/)) {
+      const name = parseRequirementName(line);
+      if (name !== void 0) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+function parseRequirementName(line) {
+  const cleaned = line.split("#")[0]?.trim();
+  if (!cleaned || cleaned.startsWith("-") || cleaned.includes("://")) return void 0;
+  const match = cleaned.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/);
+  return match?.[1]?.toLowerCase().replace(/_/g, "-");
+}
+function detectLanguages(rootEntries, scannedFiles, dependencyNames2) {
   const languages = /* @__PURE__ */ new Set();
   const dependencies = new Set(dependencyNames2);
   if (rootEntries.includes("tsconfig.json") || rootEntries.some((entry) => entry.endsWith(".ts")) || dependencies.has("typescript")) {
@@ -11508,9 +11807,14 @@ function detectLanguages(rootEntries, dependencyNames2) {
   if (rootEntries.some((entry) => entry.endsWith(".js"))) {
     languages.add("javascript");
   }
+  if (scannedFiles.some(
+    (file) => file.endsWith(".py") || file.endsWith(".ipynb") || file.endsWith("requirements.txt") || file.endsWith("pyproject.toml")
+  ) || ["numpy", "pandas", "pytest"].some((dependency) => dependencies.has(dependency))) {
+    languages.add("python");
+  }
   return [...languages].sort();
 }
-function detectFrameworks(rootEntries, dependencyNames2) {
+function detectFrameworks(rootEntries, scannedFiles, dependencyNames2) {
   const frameworks = /* @__PURE__ */ new Set();
   const dependencies = new Set(dependencyNames2);
   if (dependencies.has("@modelcontextprotocol/sdk")) frameworks.add("mcp");
@@ -11521,9 +11825,13 @@ function detectFrameworks(rootEntries, dependencyNames2) {
     frameworks.add("vitest");
   }
   if (dependencies.has("tsx")) frameworks.add("tsx");
+  if (scannedFiles.some((file) => file.endsWith(".ipynb"))) frameworks.add("jupyter");
+  if (dependencies.has("pytest") || scannedFiles.some((file) => file.includes("/tests/test_") || file.split("/").at(-1)?.startsWith("test_"))) {
+    frameworks.add("pytest");
+  }
   return [...frameworks].sort();
 }
-function detectDomainTags(rootEntries, frameworks, dependencyNames2, languages) {
+function detectDomainTags(rootEntries, scannedFiles, frameworks, dependencyNames2, languages) {
   const tags = /* @__PURE__ */ new Set();
   const frameworkSet = new Set(frameworks);
   const dependencySet = new Set(dependencyNames2);
@@ -11532,6 +11840,14 @@ function detectDomainTags(rootEntries, frameworks, dependencyNames2, languages) 
   }
   if (frameworkSet.has("mcp")) tags.add("mcp");
   if (languages.includes("typescript")) tags.add("typescript");
+  if (languages.includes("python")) tags.add("python");
+  const projectTerms = [...rootEntries, ...scannedFiles].join(" ").toLowerCase().replace(/[_./-]+/g, " ");
+  if (/\b(finance|financial|portfolio|cashflow|cash-flow|investment|trades?|positions?)\b/.test(projectTerms)) {
+    tags.add("finance");
+  }
+  if (/\b(quant|backtest|factor|simulation|portfolio)\b/.test(projectTerms)) {
+    tags.add("quant");
+  }
   return [...tags].sort();
 }
 async function exists(path) {
@@ -11543,12 +11859,12 @@ async function exists(path) {
   }
 }
 function hashShort(value) {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash2("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/project-id.ts
 import { execFile } from "node:child_process";
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { realpath as realpath4 } from "node:fs/promises";
 import { basename, resolve as resolve2 } from "node:path";
 import { promisify } from "node:util";
@@ -11586,7 +11902,7 @@ async function tryGit(args, cwd) {
   }
 }
 function sha256Short(value) {
-  return createHash2("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash3("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/codex-memory-index.ts
@@ -12782,7 +13098,13 @@ var MINIMUM_EVAL_CHECKS = [
   "affective_boundary_eval",
   "cross_project_leak_eval",
   "pending_usage_eval",
-  "similar_hint_eval"
+  "similar_hint_eval",
+  "auto_promotion_policy_eval",
+  "global_auto_promotion_eval",
+  "active_lifecycle_eval",
+  "pending_budget_eval",
+  "memory_edge_eval",
+  "retrieval_explain_eval"
 ];
 function runSimilarHintsEvalGate(candidates) {
   return gate([
@@ -12807,6 +13129,133 @@ function runDreamApplyEvalGate(input) {
     runPendingUsageEval(input.proposedChanges, input.pending),
     runProfilePollutionEval(input.proposedChanges, input.pending, input.profilePreview),
     runAffectiveBoundaryEval(input.proposedChanges, input.pending)
+  ]);
+}
+function runV5AutoPromotionEvalGate(items) {
+  const findings = items.flatMap((item) => {
+    if (item.decision !== "auto_promote") {
+      return [];
+    }
+    const itemFindings = [];
+    if (["personal", "relationship", "affective"].includes(item.domain)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "high-risk domain cannot auto-promote" });
+    }
+    if (item.scope === "global" && !["procedural", "system"].includes(item.domain)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "global auto-promotion allows only procedural/system domains" });
+    }
+    if (item.scope === "global" && !["user_explicit", "review_event"].includes(item.source)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: `global auto-promotion cannot use source ${item.source}` });
+    }
+    if (item.scope === "project" && !["file", "tool_trace", "user_explicit", "review_event"].includes(item.source)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: `project auto-promotion cannot use source ${item.source}` });
+    }
+    if (item.scope === "global" && !["low_risk_global_procedural_v1", "review_derived_global_preference_v1"].includes(item.policyId)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "global auto-promotion used the wrong policy" });
+    }
+    if (item.scope === "project" && item.policyId !== "low_risk_project_memory_v1") {
+      itemFindings.push({ memoryId: item.candidateId, reason: "project auto-promotion used the wrong policy" });
+    }
+    if (item.dailyCap !== void 0 && item.usedToday !== void 0 && item.usedToday >= item.dailyCap) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "daily auto-promotion cap exhausted" });
+    }
+    if (item.distinctEvidenceCount !== void 0 && item.distinctEvidenceCount < 2) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "auto-promotion requires repeated distinct evidence" });
+    }
+    return itemFindings;
+  });
+  return gate([result("auto_promotion_policy_eval", findings)]);
+}
+function runV5GlobalAutoPromotionEvalGate(items) {
+  const findings = items.flatMap((item) => {
+    if (item.decision !== "auto_promote" || item.scope !== "global") {
+      return [];
+    }
+    const itemFindings = [];
+    if (!["procedural", "system"].includes(item.domain)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "global auto-promotion allows only procedural/system domains" });
+    }
+    if (!["user_explicit", "review_event"].includes(item.source)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: `global auto-promotion cannot use source ${item.source}` });
+    }
+    if (item.dailyCap !== void 0 && item.usedToday !== void 0 && item.usedToday >= item.dailyCap) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "global daily auto-promotion cap exhausted" });
+    }
+    if ((item.evidenceCount ?? 0) < 2 || (item.distinctEvidenceCount ?? 0) < 2) {
+      itemFindings.push({ memoryId: item.candidateId, reason: "global auto-promotion requires repeated evidence" });
+    }
+    return itemFindings;
+  });
+  return gate([result("global_auto_promotion_eval", findings)]);
+}
+function runV5ActiveLifecycleEvalGate(items) {
+  const findings = items.flatMap((item) => {
+    const itemFindings = [];
+    if (!item.contentHashChecked) {
+      itemFindings.push({ memoryId: item.memoryId, reason: "active lifecycle mutation skipped content hash check" });
+    }
+    if (item.action === "supersede" && item.linkedCandidate !== true) {
+      itemFindings.push({ memoryId: item.memoryId, reason: "supersede candidate is not linked to active memory" });
+    }
+    if (item.action === "supersede" && item.normalizedKeyConflict === true) {
+      itemFindings.push({ memoryId: item.memoryId, reason: "supersede replacement has unresolved normalizedKey conflict" });
+    }
+    return itemFindings;
+  });
+  return gate([result("active_lifecycle_eval", findings)]);
+}
+function runV5PendingBudgetEvalGate(items) {
+  const findings = items.flatMap((item) => {
+    if (item.pendingCount <= item.maxPending) {
+      return [];
+    }
+    if (item.evictionApplied && item.evictedLowestRank === true) {
+      return [];
+    }
+    return [{ reason: `${item.scope} pending budget exceeded without lowest-rank eviction` }];
+  });
+  return gate([result("pending_budget_eval", findings)]);
+}
+function runV5MemoryEdgeEvalGate(items) {
+  const findings = items.filter((item) => item.usedInRetrieval && item.source === "model" && item.status !== "approved").map((item) => ({ memoryId: item.edgeId, reason: "model semantic edge used before approval" }));
+  return gate([result("memory_edge_eval", findings)]);
+}
+function runV5RetrievalExplainEvalGate(items) {
+  const findings = items.filter((item) => item.usedInRetrieval && (item.explainReasons === void 0 || item.explainReasons.length === 0)).map((item) => ({ memoryId: item.memoryId, reason: "retrieved memory lacks explain reasons" }));
+  return gate([result("retrieval_explain_eval", findings)]);
+}
+function runV5ReleaseReadinessEvalGate() {
+  return gate([
+    ...runV5GlobalAutoPromotionEvalGate([{
+      candidateId: "release-global-auto",
+      domain: "procedural",
+      scope: "global",
+      source: "review_event",
+      policyId: "low_risk_global_procedural_v1",
+      decision: "auto_promote",
+      evidenceCount: 3,
+      distinctEvidenceCount: 3,
+      usedToday: 0,
+      dailyCap: 1
+    }]).results,
+    ...runV5ActiveLifecycleEvalGate([{
+      memoryId: "release-active-supersede",
+      action: "supersede",
+      contentHashChecked: true,
+      linkedCandidate: true,
+      normalizedKeyConflict: false
+    }]).results,
+    ...runV5PendingBudgetEvalGate([{
+      scope: "project",
+      pendingCount: 200,
+      maxPending: 200,
+      evictionApplied: false,
+      evictedLowestRank: false
+    }]).results,
+    ...runV5RetrievalExplainEvalGate([{
+      memoryId: "release-retrieved-memory",
+      usedInRetrieval: true,
+      explainReasons: ["exact_project", "memory_kind:workflow_rule"]
+    }]).results
   ]);
 }
 function combineEvalGateResults(gates) {
@@ -13049,16 +13498,16 @@ function selectSimilarProjects(input) {
 function overlapScore(label, sourceValues, targetValues, weight, reason) {
   const sourceSet = new Set(sourceValues);
   const targetSet = new Set(targetValues);
-  const matches = Array.from(sourceSet).filter((value) => targetSet.has(value)).sort();
-  for (const value of matches.slice(0, 5)) {
+  const matches2 = Array.from(sourceSet).filter((value) => targetSet.has(value)).sort();
+  for (const value of matches2.slice(0, 5)) {
     reason.push(`${label}:${value}`);
   }
   const denominator = Math.max(sourceSet.size, targetSet.size, 1);
-  return matches.length / denominator * weight;
+  return matches2.length / denominator * weight;
 }
 
 // src/codex/memory-review.ts
-import { createHash as createHash4, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
@@ -13072,7 +13521,7 @@ import { lstat as lstat8, open, readdir as readdir4, readFile as readFile8, real
 import { dirname as dirname8, isAbsolute as isAbsolute3, join as join13, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 
 // src/memory/candidate-kind.ts
 var MEMORY_CANDIDATE_KINDS = [
@@ -13218,7 +13667,7 @@ function distinctEvidenceCount(candidate) {
       seenRunIds.add(runId);
     }
     const summaryQuote = `${entry.summary ?? ""}|${entry.quote ?? ""}`;
-    const hash = createHash3("sha256").update(summaryQuote).digest("hex");
+    const hash = createHash4("sha256").update(summaryQuote).digest("hex");
     keys.add(evidenceGroupId ?? sessionId ?? runId ?? hash);
   }
   return keys.size;
@@ -14075,9 +14524,23 @@ async function readMaintenanceLockOwner(lockDir) {
   }
 }
 function isMaintenanceLockStale(state, nowMs, staleMs) {
+  if (state.owner?.pid !== void 0 && !isProcessAlive(state.owner.pid)) {
+    return true;
+  }
   const acquiredAtMs = state.owner === void 0 ? void 0 : new Date(state.owner.acquiredAt).getTime();
   const lockAgeMs = Number.isFinite(acquiredAtMs) ? nowMs - acquiredAtMs : nowMs - state.mtimeMs;
   return lockAgeMs > staleMs;
+}
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return !isProcessErrorCode(error2, "ESRCH");
+  }
 }
 function isSameMaintenanceLockState(left, right) {
   if (left.owner?.token !== void 0 || right.owner?.token !== void 0) {
@@ -14290,6 +14753,9 @@ function uniqueOptional2(values) {
   return uniqueValues.length === 0 ? void 0 : uniqueValues;
 }
 function isFileErrorCode8(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+function isProcessErrorCode(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -14749,7 +15215,7 @@ function reviewHashForPendingMemory(candidate) {
     tags: candidate.tags,
     conflictsWith: candidate.conflictsWith ?? null
   };
-  return createHash4("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash5("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).toISOString()) {
   const reviewHash = reviewHashForPendingMemory(candidate);
@@ -14959,7 +15425,11 @@ async function promoteCodexPendingMemory(input) {
         at: now,
         reason: input.reason ?? "Rejected by normalizedKey conflict resolution",
         candidateId: lockedCandidate.id,
-        details: conflictResolutionDetails("reject_new", lockedCandidate.normalizedKey, normalizedKeyConflicts)
+        details: reviewEventDetails(
+          lockedCandidate,
+          "reject",
+          conflictResolutionDetails("reject_new", lockedCandidate.normalizedKey, normalizedKeyConflicts)
+        )
       });
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
         id: randomUUID6(),
@@ -15030,7 +15500,8 @@ async function promoteCodexPendingMemory(input) {
       at: now,
       reason: input.reason ?? "Approved by Codex pending memory review",
       memoryId: lockedMemory.id,
-      candidateId: lockedCandidate.id
+      candidateId: lockedCandidate.id,
+      details: reviewEventDetails(lockedCandidate, "promote")
     });
     await runMemoryMaintenanceFromRootLocked({
       memoryRoot: lockedMemoryRoot,
@@ -15113,7 +15584,8 @@ async function rejectCodexPendingMemory(input) {
       action: "reject",
       at: now,
       reason: input.reason ?? "Rejected by Codex pending memory review",
-      candidateId: lockedCandidate.id
+      candidateId: lockedCandidate.id,
+      details: reviewEventDetails(lockedCandidate, "reject")
     });
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
     return {
@@ -15213,7 +15685,7 @@ async function editCodexPendingMemory(input) {
       at: now,
       reason: input.reason ?? "Edited by Codex pending memory review",
       candidateId: validatedCandidate.id,
-      details: { reviewAction: "edit" }
+      details: reviewEventDetails(validatedCandidate, "edit")
     });
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
     return {
@@ -15358,6 +15830,20 @@ function conflictResolutionDetails(resolution, normalizedKey, conflicts) {
     conflicts: conflicts.map(summarizeNormalizedKeyConflict)
   };
 }
+function reviewEventDetails(candidate, reviewAction, base = {}) {
+  const reviewPatternId = transientReviewPatternId(candidate);
+  return {
+    ...base,
+    reviewAction,
+    ...reviewPatternId === void 0 ? {} : { reviewPatternId },
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    normalizedKey: candidate.normalizedKey
+  };
+}
+function transientReviewPatternId(candidate) {
+  const text = `${candidate.content} ${candidate.normalizedKey}`.toLowerCase();
+  return /(ran npm test|git status|current branch|today|temporary|one-off)/.test(text) ? "reject-transient-test-status" : void 0;
+}
 function tombstoneForRejectedCandidate(candidate, now) {
   return {
     id: `tombstone-${candidate.id}`,
@@ -15468,6 +15954,7 @@ async function getCodexContinuityContext(input) {
   const globalMemoryRoot = codexGlobalMemoryRoot();
   const projectMemoryRoot = codexProjectMemoryRoot(project.projectId);
   const budget = memoryRetrievalBudgetForTask(task);
+  const retrievalPlan = buildRetrievalPlan({ query: input.userMessage, task });
   const legacyRetrievalInput = {
     cwd: input.cwd,
     userCyreneDir: config2.userCyreneDir,
@@ -15488,6 +15975,7 @@ async function getCodexContinuityContext(input) {
     projectId: project.projectId,
     query: input.userMessage,
     task,
+    retrievalPlan,
     fallback: legacyRetrievalInput
   });
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
@@ -15516,10 +16004,21 @@ async function getCodexContinuityContext(input) {
         content: memory.content
       }))
     },
-    globalMemory: routedMemory.globalMemory.map(toRoutedMemoryDigestItem),
-    projectMemory: routedMemory.projectMemory.map(toRoutedMemoryDigestItem),
+    globalMemory: routedMemory.globalMemory.map((item) => toRoutedMemoryDigestItem(item, {
+      exactProject: false,
+      retrievalPlan,
+      edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
+    })),
+    projectMemory: routedMemory.projectMemory.map((item) => toRoutedMemoryDigestItem(item, {
+      exactProject: true,
+      retrievalPlan,
+      edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
+    })),
     pendingHypotheses: routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem),
-    similarProjectHints: routedMemory.similarProjectHints.map(toSimilarProjectHintDigestItem),
+    similarProjectHints: routedMemory.similarProjectHints.map((item) => toSimilarProjectHintDigestItem(item, {
+      retrievalPlan,
+      edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
+    })),
     responseStrategy: {
       tone: snapshot.strategy.tone,
       verbosity: snapshot.strategy.verbosity,
@@ -15548,7 +16047,13 @@ async function getCodexContinuityContext(input) {
       },
       projectSimilarity: routedMemory.projectSimilarityDiagnostics,
       evalGate: routedMemory.evalGateDiagnostics,
-      ...routedMemory.diagnostics.embedding === void 0 ? {} : { embedding: routedMemory.diagnostics.embedding }
+      ...routedMemory.diagnostics.embedding === void 0 ? {} : { embedding: routedMemory.diagnostics.embedding },
+      retrievalPlan: {
+        taskIntent: retrievalPlan.taskIntent,
+        memoryKinds: retrievalPlan.memoryKinds,
+        requiredFacets: retrievalPlan.requiredFacets,
+        optionalFacets: retrievalPlan.optionalFacets
+      }
     },
     profile: {
       global: globalProfile,
@@ -15664,11 +16169,19 @@ async function retrieveRoutedMemory(input) {
     });
     const evalGate = combineEvalGateResults([similarHintGate, memoryRoutingGate]);
     const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : [];
+    const eligibleGlobalMemory = globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task) && !input.retrievalPlan.excludeDomains.includes(memory.domain));
+    const eligibleProjectMemory = projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task) && !input.retrievalPlan.excludeDomains.includes(memory.domain));
+    const graphEdgeTypesByMemoryKey = input.retrievalPlan.includeGraphNeighbors ? await queryGraphEdgeTypes(adapter, [
+      ...eligibleGlobalMemory,
+      ...eligibleProjectMemory,
+      ...safeSimilarProjectHints
+    ], input.projectId) : /* @__PURE__ */ new Map();
     return {
-      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
-      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
+      globalMemory: eligibleGlobalMemory,
+      projectMemory: eligibleProjectMemory,
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
+      graphEdgeTypesByMemoryKey,
       diagnostics: sqliteRetrievalDiagnostics(indexStatus, diagnostics),
       projectSimilarityDiagnostics: {
         indexedProjects: metadata.length,
@@ -15707,6 +16220,7 @@ async function fallbackRoutedMemory(input, diagnostics, projectId) {
     projectMemory: memories.filter(({ memory }) => memory.scope !== "global"),
     pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
     similarProjectHints: [],
+    graphEdgeTypesByMemoryKey: /* @__PURE__ */ new Map(),
     diagnostics,
     projectSimilarityDiagnostics: {
       indexedProjects: 0,
@@ -15764,11 +16278,11 @@ async function readFallbackPendingHypotheses(input, projectId) {
   );
 }
 function scorePendingMemory(memory, query) {
-  const tokens = tokenize3(query);
+  const tokens = tokenize4(query);
   if (tokens.length === 0) {
     return 0.2;
   }
-  const haystack = tokenize3([
+  const haystack = tokenize4([
     memory.content,
     memory.normalizedKey,
     memory.domain,
@@ -15776,8 +16290,8 @@ function scorePendingMemory(memory, query) {
     memory.strength,
     ...memory.tags
   ].join(" "));
-  const matches = tokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches.length / tokens.length;
+  const matches2 = tokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
+  return matches2.length / tokens.length;
 }
 function comparePendingHypotheses(left, right) {
   const scoreDiff = right.score - left.score;
@@ -15829,10 +16343,10 @@ function selectPendingWithinBudget(items, maxItems, maxTokens) {
   }
   return selected;
 }
-function tokenize3(text) {
+function tokenize4(text) {
   return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
-function toRoutedMemoryDigestItem(item) {
+function toRoutedMemoryDigestItem(item, input) {
   return {
     id: item.memory.id,
     domain: item.memory.domain,
@@ -15842,7 +16356,15 @@ function toRoutedMemoryDigestItem(item) {
     portability: "portability" in item ? item.portability : item.memory.scope === "global" ? "global" : "local_only",
     status: item.memory.status,
     content: item.memory.content,
-    score: item.score
+    score: item.score,
+    explain: explainRetrievalReasons({
+      exactProject: input.exactProject,
+      globalPolicy: item.memory.scope === "global",
+      memoryKind: memoryKindForRetrieval(item.memory),
+      taskIntent: input.retrievalPlan.taskIntent,
+      edgeTypes: input.edgeTypes,
+      score: item.score
+    })
   };
 }
 function toPendingHypothesisDigestItem(item) {
@@ -15859,7 +16381,7 @@ function toPendingHypothesisDigestItem(item) {
     score: item.score
   };
 }
-function toSimilarProjectHintDigestItem(item) {
+function toSimilarProjectHintDigestItem(item, input) {
   return {
     id: item.memory.id,
     sourceProjectId: item.homeProjectId,
@@ -15873,8 +16395,36 @@ function toSimilarProjectHintDigestItem(item) {
     similarityScore: item.similarityScore,
     transferable: true,
     notCurrentProjectFact: true,
-    rationale: "Transferable guidance from a similar indexed project; not a current project fact."
+    rationale: "Transferable guidance from a similar indexed project; not a current project fact.",
+    explain: explainRetrievalReasons({
+      exactProject: false,
+      memoryKind: memoryKindForRetrieval(item.memory),
+      taskIntent: input.retrievalPlan.taskIntent,
+      edgeTypes: input.edgeTypes,
+      transferability: true,
+      score: item.score
+    })
   };
+}
+async function queryGraphEdgeTypes(adapter, items, currentProjectId) {
+  const entries = await Promise.all(items.map(async (item) => {
+    const key = memoryGraphKeyForRoutedItem(item, currentProjectId);
+    const edges = await adapter.queryMemoryEdges({ fromId: key, status: "approved" });
+    return [key, Array.from(new Set(edges.map((edge) => edge.edgeType)))];
+  }));
+  return new Map(entries.filter(([, edgeTypes]) => edgeTypes.length > 0));
+}
+function memoryGraphKeyForRoutedItem(item, currentProjectId) {
+  if ("homeProjectId" in item && item.homeProjectId !== null) {
+    return indexedMemoryGraphKey("project", item.homeProjectId, item.memory.id);
+  }
+  if (item.memory.scope === "global") {
+    return indexedMemoryGraphKey("global", null, item.memory.id);
+  }
+  return indexedMemoryGraphKey("project", currentProjectId, item.memory.id);
+}
+function indexedMemoryGraphKey(scope, projectId, memoryId) {
+  return JSON.stringify([scope, projectId, memoryId]);
 }
 function formatReviewReminders(pendingReview) {
   if (pendingReview.newestCandidateId === void 0 || pendingReview.newestPreview === void 0) {
@@ -16011,7 +16561,22 @@ async function runCodexReleaseEval() {
         tags: ["release_eval"]
       }],
       profilePreview: "Release eval candidates stay auditable."
-    })
+    }),
+    runV5AutoPromotionEvalGate([{
+      candidateId: "release-auto-promote",
+      domain: "procedural",
+      scope: "global",
+      source: "user_explicit",
+      policyId: "low_risk_global_procedural_v1",
+      decision: "auto_promote"
+    }]),
+    runV5MemoryEdgeEvalGate([{
+      edgeId: "release-memory-edge",
+      source: "model",
+      status: "approved",
+      usedInRetrieval: true
+    }]),
+    runV5ReleaseReadinessEvalGate()
   ]);
   const results = minimumEvalResults(combined.results);
   const completedChecks = new Set(results.map((result2) => result2.name));
@@ -16402,7 +16967,217 @@ function isFileErrorCode10(error2, code) {
 }
 
 // src/codex/memory-propose.ts
-import { createHash as createHash5, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
+
+// src/codex/memory-triage.ts
+var MAX_REVIEW_RECOMMENDATIONS = 20;
+var HIGH_PRIORITY_RECOMMENDATION_SCORE = 1e3;
+function buildCandidateClusters(pending) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const candidate of pending) {
+    const key = `${candidate.normalizedKey}|${deriveMemoryCandidateKind(candidate)}|${candidate.scope}`;
+    byKey.set(key, [...byKey.get(key) ?? [], candidate]);
+  }
+  return [...byKey.values()].filter((items) => items.length > 1).map((items) => ({
+    id: `cluster-${items[0].normalizedKey}`,
+    normalizedKey: items[0].normalizedKey,
+    memberIds: items.map((item) => item.id).sort(),
+    evidenceCount: items.reduce((sum, item) => sum + item.evidence.length, 0),
+    recommendation: "review"
+  }));
+}
+function evaluateAutoPromotionPolicy(input) {
+  const candidate = input.candidate;
+  const distinct = distinctEvidenceCount(candidate);
+  const kind = deriveMemoryCandidateKind(candidate);
+  if (candidate.domain === "personal" || candidate.domain === "relationship" || candidate.domain === "affective") {
+    return denied("high-risk domain cannot auto-promote", distinct);
+  }
+  if (candidate.source === "assistant_observed" && candidate.evidence.every((entry) => entry.sourceKind === void 0 || entry.sourceKind === "assistant_observed")) {
+    return denied("assistant_observed-only candidate cannot auto-promote", distinct);
+  }
+  if (input.active.some((memory) => memory.normalizedKey === candidate.normalizedKey)) {
+    return denied("normalizedKey conflict with active memory", distinct);
+  }
+  if (input.tombstones.some(
+    (tombstone) => tombstone.normalizedKey === candidate.normalizedKey && (tombstone.expiresAt === void 0 || tombstone.expiresAt > input.now)
+  )) {
+    return denied("active tombstone blocks auto-promotion", distinct);
+  }
+  if (candidate.scores.evidenceStrength < 0.85 || candidate.scores.stability < 0.8 || candidate.scores.usefulness < 0.7 || candidate.scores.safety < 0.9 || candidate.scores.sensitivity > 0.2 || candidate.seenCount < 2 || distinct < 2) {
+    return denied("candidate is below strict project score or evidence thresholds", distinct);
+  }
+  if (input.scope === "project") {
+    if (!["project", "procedural", "system"].includes(candidate.domain)) {
+      return denied("domain is not project auto-promotable", distinct);
+    }
+    if (!["project_fact", "workflow_rule", "known_pitfall"].includes(kind)) {
+      return denied("candidate kind is not project auto-promotable", distinct);
+    }
+    if (!["file", "tool_trace", "user_explicit"].includes(candidate.source)) {
+      return denied(`source ${candidate.source} is not project auto-promotable`, distinct);
+    }
+    if (input.promotionsUsedToday >= input.projectDailyCap) {
+      return denied("project daily auto-promotion cap reached", distinct);
+    }
+    return {
+      allowed: true,
+      policyId: "low_risk_project_memory_v1",
+      reason: "candidate passed strict project auto-promotion policy",
+      distinctEvidenceCount: distinct
+    };
+  }
+  if (candidate.scope !== "global") return denied("global policy requires global scope", distinct);
+  if (!["procedural", "system"].includes(candidate.domain)) {
+    return denied("global auto-promotion allows only procedural/system domains", distinct);
+  }
+  if (!["user_instruction", "workflow_rule"].includes(kind)) {
+    return denied("global candidate kind is not auto-promotable", distinct);
+  }
+  if (!["user_explicit", "review_event"].includes(candidate.source)) {
+    return denied(`source ${candidate.source} is not global auto-promotable`, distinct);
+  }
+  if (candidate.scores.sensitivity > 0.1 || candidate.scores.safety < 0.95 || candidate.scores.evidenceStrength < 0.9 || candidate.scores.stability < 0.85) {
+    return denied("candidate is below stricter global thresholds", distinct);
+  }
+  if (input.promotionsUsedToday >= input.globalDailyCap) {
+    return denied("global daily auto-promotion cap reached", distinct);
+  }
+  return {
+    allowed: true,
+    policyId: "low_risk_global_procedural_v1",
+    reason: "candidate passed strict global auto-promotion policy",
+    distinctEvidenceCount: distinct
+  };
+}
+function triagePendingMemories(input) {
+  const decisions = [];
+  const clusters = buildCandidateClusters(input.pending);
+  for (const cluster of clusters) {
+    decisions.push({
+      action: "auto_merge",
+      candidateIds: cluster.memberIds,
+      clusterId: cluster.id,
+      reason: "duplicate normalizedKey/kind/scope cluster"
+    });
+  }
+  for (const candidate of input.pending) {
+    if (isTransientNoise(candidate)) {
+      decisions.push({ action: "auto_drop", candidateId: candidate.id, reason: "transient command status noise" });
+    } else if (candidate.seenCount === 1 && candidate.scores.evidenceStrength < 0.75 && candidate.scores.usefulness < 0.6) {
+      decisions.push({ action: "auto_defer", candidateId: candidate.id, days: 14, reason: "weak single-evidence candidate" });
+    }
+  }
+  const decidedCandidateIds = candidateIdsForDecisions(decisions);
+  for (const item of rankPendingForEviction(input.pending, input.now).filter((ranked) => !decidedCandidateIds.has(ranked.candidateId)).sort((left, right) => right.score - left.score || left.candidateId.localeCompare(right.candidateId)).slice(0, MAX_REVIEW_RECOMMENDATIONS)) {
+    if (item.protected) {
+      decisions.push({
+        action: "manual_review",
+        candidateId: item.candidateId,
+        reason: "protected pending candidate requires explicit review"
+      });
+    } else {
+      decisions.push({
+        action: "recommend",
+        candidateId: item.candidateId,
+        priority: item.score >= HIGH_PRIORITY_RECOMMENDATION_SCORE ? "high" : "normal",
+        reason: "ranked pending candidate for explicit review"
+      });
+    }
+  }
+  return { decisions, clusters };
+}
+function rankPendingForEviction(pending, now) {
+  return pending.map((candidate) => {
+    const protectedCandidate = isProtectedPending(candidate, now);
+    return {
+      candidateId: candidate.id,
+      protected: protectedCandidate,
+      score: pendingEvictionScore(candidate, protectedCandidate),
+      candidate
+    };
+  }).sort((left, right) => left.score - right.score || left.candidateId.localeCompare(right.candidateId));
+}
+function denied(reason, distinctEvidenceCount2) {
+  return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
+}
+function candidateIdsForDecisions(decisions) {
+  const ids = /* @__PURE__ */ new Set();
+  for (const decision of decisions) {
+    if ("candidateId" in decision) ids.add(decision.candidateId);
+    if ("candidateIds" in decision) {
+      for (const candidateId of decision.candidateIds) ids.add(candidateId);
+    }
+  }
+  return ids;
+}
+function isTransientNoise(candidate) {
+  const text = `${candidate.content} ${candidate.evidence.map((entry) => `${entry.summary ?? ""} ${entry.quote ?? ""}`).join(" ")}`.toLowerCase();
+  return /\bran\s+npm\s+(test|run|install|ci)\b/.test(text) || /\bgit\s+status\b/.test(text) || /\bcurrent\s+branch\b/.test(text) || /\btoday\b/.test(text);
+}
+function isProtectedPending(candidate, now) {
+  if (candidate.source === "user_explicit") return true;
+  if (deriveMemoryCandidateKind(candidate) === "user_instruction") return true;
+  if (candidate.domain === "personal" || candidate.domain === "relationship" || candidate.domain === "affective") return true;
+  if (candidate.scores.sensitivity > 0.6) return true;
+  return hasRecentDirectUserEvidence(candidate, now);
+}
+function hasRecentDirectUserEvidence(candidate, now) {
+  if (!candidate.evidence.some((entry) => entry.sourceKind === "user_explicit")) return false;
+  const nowMs = Date.parse(now);
+  const lastSeenMs = Date.parse(candidate.lastSeenAt);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(lastSeenMs)) return false;
+  const ageMs = nowMs - lastSeenMs;
+  return ageMs >= 0 && ageMs <= 30 * 24 * 60 * 60 * 1e3;
+}
+function pendingEvictionScore(candidate, protectedCandidate) {
+  const score = candidate.scores.evidenceStrength * 400 + candidate.scores.stability * 200 + candidate.scores.usefulness * 300 + candidate.scores.safety * 100 - candidate.scores.sensitivity * 100 + candidate.seenCount * 20 + distinctEvidenceCount(candidate) * 30 + sourceBonus(candidate.source);
+  return protectedCandidate ? score + 1e4 : score;
+}
+function sourceBonus(source) {
+  if (source === "user_explicit") return 500;
+  if (source === "file") return 250;
+  if (source === "tool_trace") return 200;
+  if (source === "review_event") return 150;
+  if (source === "legacy_markdown") return 100;
+  if (source === "user_implicit") return 50;
+  return 0;
+}
+
+// src/codex/memory-pending-budget.ts
+function enforcePendingBudget(input) {
+  const combined = [...input.existing, input.incoming];
+  if (combined.length <= input.maxItems) {
+    return { action: "within_budget", nextPending: combined };
+  }
+  const ranked = rankPendingForEviction(combined, input.now);
+  const evictable = ranked.find((item) => !item.protected);
+  if (evictable === void 0) {
+    return {
+      action: "reject_incoming",
+      incomingId: input.incoming.id,
+      nextPending: input.existing,
+      reason: "all pending candidates are protected"
+    };
+  }
+  if (evictable.candidateId === input.incoming.id) {
+    return {
+      action: "reject_incoming",
+      incomingId: input.incoming.id,
+      nextPending: input.existing,
+      reason: "incoming candidate is lowest-ranked under pending budget"
+    };
+  }
+  return {
+    action: "evict_existing",
+    evicted: evictable.candidate,
+    incoming: input.incoming,
+    nextPending: combined.filter((candidate) => candidate.id !== evictable.candidateId),
+    reason: `evicted lowest-ranked pending candidate ${evictable.candidateId}`
+  };
+}
+
+// src/codex/memory-propose.ts
 var DEFAULT_SCORES = {
   evidenceStrength: 0.75,
   stability: 0.65,
@@ -16425,9 +17200,11 @@ async function proposeCodexMemoryCandidate(input) {
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
   return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
     await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
-    const [existingMemories, tombstones] = await Promise.all([
+    const [existingMemories, tombstones, lockedPending, events] = await Promise.all([
       readActiveMemoriesFromRoot(lockedMemoryRoot),
-      readTombstonesFromRoot(lockedMemoryRoot)
+      readTombstonesFromRoot(lockedMemoryRoot),
+      readPendingMemoriesFromRoot(lockedMemoryRoot),
+      readMemoryEventsFromRoot(lockedMemoryRoot)
     ]);
     const decision = validateMemoryCandidate({
       candidate,
@@ -16453,20 +17230,88 @@ async function proposeCodexMemoryCandidate(input) {
       };
     }
     const pendingCandidate = decision.action === "pending" ? decision.candidate : candidate;
-    const merged = await upsertPendingMemoryFromRoot(lockedMemoryRoot, pendingCandidate);
+    const existingPending = lockedPending.find((item) => item.normalizedKey === pendingCandidate.normalizedKey);
+    const mergedCandidate = existingPending === void 0 ? pendingCandidate : mergePendingMemory(existingPending, pendingCandidate);
+    const pendingWithoutMerged = lockedPending.filter((item) => item.normalizedKey !== mergedCandidate.normalizedKey);
+    const config2 = createDefaultConfig(input.cwd);
+    const autoPromotion = evaluateAutoPromotionPolicy({
+      candidate: mergedCandidate,
+      scope: mergedCandidate.scope === "global" ? "global" : "project",
+      active: existingMemories,
+      tombstones,
+      promotionsUsedToday: countAutoPromotionsForDay(events, now),
+      projectDailyCap: config2.memoryAutoReviewProjectPromotePerDay,
+      globalDailyCap: config2.memoryAutoReviewGlobalPromotePerDay,
+      now
+    });
+    if (autoPromotion.allowed && input.allowAutoPromote !== false) {
+      const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now);
+      await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID8(),
+        action: "promote",
+        at: now,
+        reason: autoPromotion.reason,
+        memoryId: promoted.id,
+        candidateId: mergedCandidate.id,
+        details: {
+          decision: "auto_promote",
+          policyId: autoPromotion.policyId,
+          distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
+          evalGate: { passed: true, failedChecks: [] }
+        }
+      });
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: {
+          action: "auto_promote",
+          candidateId: mergedCandidate.id,
+          memoryId: promoted.id,
+          policyId: autoPromotion.policyId,
+          reason: autoPromotion.reason
+        },
+        memoryRoot: lockedMemoryRoot
+      };
+    }
+    const budgetResult = enforcePendingBudget({
+      existing: pendingWithoutMerged,
+      incoming: mergedCandidate,
+      maxItems: mergedCandidate.scope === "global" ? config2.memoryPendingMaxItemsGlobal : config2.memoryPendingMaxItemsProject,
+      now
+    });
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, budgetResult.nextPending);
+    if (budgetResult.action === "reject_incoming") {
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: { action: "reject", reason: budgetResult.reason },
+        memoryRoot: lockedMemoryRoot
+      };
+    }
+    if (budgetResult.action === "evict_existing") {
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID8(),
+        action: "audit",
+        at: now,
+        reason: budgetResult.reason,
+        candidateId: budgetResult.evicted.id,
+        details: { decision: "budget_evict_pending", incomingCandidateId: pendingCandidate.id }
+      });
+    }
     await markDreamDueFailOpen(lockedMemoryRoot, now);
-    const reason = decision.action === "auto_write" ? `Pending-only Codex bridge downgraded auto-write: ${decision.reason}` : decision.reason;
+    const reason = decision.action === "auto_write" ? `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision.reason;
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID8(),
       action: "pending",
       at: now,
       reason,
-      candidateId: merged.id
+      candidateId: mergedCandidate.id
     });
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
-      result: { action: "pending", candidateId: merged.id, reason, review: summarizePendingMemory(merged) },
+      result: { action: "pending", candidateId: mergedCandidate.id, reason, review: summarizePendingMemory(mergedCandidate) },
       memoryRoot: lockedMemoryRoot
     };
   });
@@ -16476,6 +17321,12 @@ async function markDreamDueFailOpen(memoryRoot, now) {
     await markCodexMemoryDreamDue(memoryRoot, now);
   } catch {
   }
+}
+function countAutoPromotionsForDay(events, now) {
+  const day = now.slice(0, 10);
+  return events.filter(
+    (event) => event.action === "promote" && event.at.slice(0, 10) === day && event.details?.decision === "auto_promote"
+  ).length;
 }
 function toPendingMemory(input, now) {
   const candidateKind = deriveMemoryCandidateKind({
@@ -16507,7 +17358,7 @@ function toPendingMemory(input, now) {
 }
 function normalizeKey(value) {
   const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  return slug.length > 0 ? slug : createHash5("sha256").update(value).digest("hex").slice(0, 16);
+  return slug.length > 0 ? slug : createHash6("sha256").update(value).digest("hex").slice(0, 16);
 }
 function addDays2(iso, days) {
   const date3 = new Date(iso);
@@ -16516,7 +17367,7 @@ function addDays2(iso, days) {
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile3 } from "node:child_process";
@@ -16933,7 +17784,7 @@ var PROJECT_CANDIDATE_KINDS = [
   "open_question"
 ];
 var SIGNAL_EVIDENCE_LIMIT = 6;
-var CONTENT_MAX_LENGTH = 500;
+var GENERATED_MEMORY_CONTENT_MAX_LENGTH = 240;
 var EVIDENCE_MAX_LENGTH2 = 320;
 var SENSITIVE_PROJECT_HARVEST_PATTERN = /\b(?:personal|private|family|medical|password|secret|token|api[_\s-]?key|bearer|sk-[a-z0-9_-]*)\b/i;
 async function runCodexProjectMemoryHarvest(input) {
@@ -17001,6 +17852,7 @@ function buildCodexProjectMemoryHarvestPrompt(signals) {
     "Good candidates capture design decisions, confirmed workflows, rejected approaches, repeated pitfalls, project boundaries, and repository policies.",
     "Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.",
     "Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.",
+    `Candidate content must be ${GENERATED_MEMORY_CONTENT_MAX_LENGTH} characters or fewer.`,
     "Reject one-time status, vague impressions, assistant self-praise, user psychology, private data, secrets, credentials, temporary output, and raw command dumps.",
     "Each candidate should include candidateKind or candidate_kind, content, signalIndexes, and optional tags.",
     "signalIndexes must be 1-based indexes of the collected signals that support that specific candidate.",
@@ -17028,7 +17880,10 @@ function sanitizeProjectMemoryCandidate(value, signals, config2) {
   if (candidateKind === void 0) {
     return void 0;
   }
-  const content = cleanString2(value.content, Math.min(config2.memorySingleContentMaxChars, CONTENT_MAX_LENGTH));
+  const content = cleanString2(
+    value.content,
+    Math.min(config2.memorySingleContentMaxChars, GENERATED_MEMORY_CONTENT_MAX_LENGTH)
+  );
   if (content === void 0) {
     return void 0;
   }
@@ -17158,7 +18013,13 @@ function cleanString2(value, maxLength) {
 }
 function cleanRequiredString(value, maxLength) {
   const redacted = redactReviewText(value.replace(/\s+/g, " ").trim()).text;
-  return redacted.length <= maxLength ? redacted : `${redacted.slice(0, Math.max(0, maxLength - 1))}...`;
+  return truncateWithSuffix2(redacted, maxLength);
+}
+function truncateWithSuffix2(value, maxChars) {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 0) return "";
+  if (maxChars <= 3) return ".".repeat(maxChars);
+  return `${value.slice(0, maxChars - 3)}...`;
 }
 function cleanTag(value) {
   const cleaned = cleanRequiredString(value, 48).toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
@@ -17180,7 +18041,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash6("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash7("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -17220,7 +18081,119 @@ function isRecord3(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash7, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID9 } from "node:crypto";
+
+// src/codex/global-memory-capture.ts
+import { createHash as createHash8 } from "node:crypto";
+var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i;
+var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
+function candidateFromExplicitGlobalInstruction(input) {
+  const text = input.text.trim();
+  if (!GLOBAL_INSTRUCTION_PATTERN.test(text)) {
+    return void 0;
+  }
+  if (PERSONAL_PREFERENCE_PATTERN.test(text)) {
+    return void 0;
+  }
+  return {
+    domain: "procedural",
+    type: "procedural_rule",
+    strength: "hard",
+    scope: "global",
+    source: "user_explicit",
+    candidateKind: "user_instruction",
+    content: text,
+    normalizedKey: `global-instruction-${shortHash(text)}`,
+    evidence: [
+      {
+        summary: "Explicit global instruction from user prompt.",
+        sourceKind: "user_explicit",
+        evidenceGroupId: shortHash(`global:${text}`)
+      }
+    ],
+    scores: { evidenceStrength: 0.92, stability: 0.88, usefulness: 0.85, safety: 0.96, sensitivity: 0.05 },
+    tags: ["global_capture", "explicit_instruction"],
+    userConfirmed: true
+  };
+}
+function candidateFromReviewPattern(input) {
+  if (input.count < 3) {
+    return void 0;
+  }
+  const content = input.patternId.includes("transient") ? "\u5168\u5C40 workflow rule\uFF1A\u4E0D\u8981\u628A\u4E00\u6B21\u6027\u547D\u4EE4\u7ED3\u679C\u3001\u4E34\u65F6\u6D4B\u8BD5\u72B6\u6001\u6216\u5F53\u524D branch \u72B6\u6001\u4F5C\u4E3A durable memory\u3002" : `\u5168\u5C40 workflow rule\uFF1A\u6839\u636E\u91CD\u590D ${input.action} review pattern ${input.patternId} \u8C03\u6574 memory \u5019\u9009\u8D28\u91CF\u3002`;
+  return {
+    domain: "procedural",
+    type: "procedural_rule",
+    strength: "soft",
+    scope: "global",
+    source: "review_event",
+    candidateKind: "workflow_rule",
+    content,
+    normalizedKey: `review-derived-${input.patternId}`,
+    evidence: input.reasonSamples.slice(0, 5).map((summary, index) => ({
+      summary,
+      sourceKind: "review_event",
+      evidenceGroupId: `${input.patternId}-${index}`
+    })),
+    scores: { evidenceStrength: 0.9, stability: 0.86, usefulness: 0.82, safety: 0.97, sensitivity: 0.03 },
+    tags: ["global_capture", "review_derived"]
+  };
+}
+function candidatesFromReviewEvents(input) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const event of input.events) {
+    const action = reviewActionForEvent(event);
+    const patternId = action === void 0 ? void 0 : reviewPatternIdForEvent(event, action);
+    if (patternId === void 0 || action === void 0) {
+      continue;
+    }
+    const current = groups.get(patternId) ?? { action, reasonSamples: [], candidateKind: "project_fact", count: 0 };
+    groups.set(patternId, {
+      action: current.action,
+      reasonSamples: [...current.reasonSamples, event.reason].slice(-5),
+      candidateKind: typeof event.details?.candidateKind === "string" ? event.details.candidateKind : current.candidateKind,
+      count: current.count + 1
+    });
+  }
+  return [...groups.entries()].flatMap(
+    ([patternId, group]) => candidateFromReviewPattern({
+      patternId,
+      action: group.action,
+      count: group.count,
+      reasonSamples: group.reasonSamples,
+      candidateKind: group.candidateKind,
+      now: input.now
+    }) ?? []
+  );
+}
+function reviewPatternIdForEvent(event, action) {
+  if (typeof event.details?.reviewPatternId === "string") {
+    return event.details.reviewPatternId;
+  }
+  const candidateKind = typeof event.details?.candidateKind === "string" ? event.details.candidateKind : void 0;
+  if (action === "approve" && candidateKind !== void 0) {
+    return `approve-${candidateKind}`;
+  }
+  return void 0;
+}
+function reviewActionForEvent(event) {
+  if (event.action === "reject") {
+    return "reject";
+  }
+  if (event.action === "update") {
+    return "edit";
+  }
+  if (event.action === "pending" && event.details?.reviewAction === "edit") {
+    return "edit";
+  }
+  if (event.action === "promote") {
+    return "approve";
+  }
+  return void 0;
+}
+function shortHash(value) {
+  return createHash8("sha256").update(value).digest("hex").slice(0, 16);
+}
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile3 } from "node:fs/promises";
@@ -17309,6 +18282,8 @@ function isRecord4(value) {
 
 // src/codex/review-summary-runtime.ts
 var FAILED_SUMMARY = "Codex review summary failed; no transcript content persisted.";
+var GENERATED_MEMORY_CONTENT_MAX_LENGTH2 = 240;
+var GENERATED_MEMORY_EVIDENCE_MAX_LENGTH = 320;
 async function runCodexReviewSummary(input) {
   const window = recentTranscriptMessages(input.messages, 40);
   if (window.length === 0) {
@@ -17334,7 +18309,7 @@ async function runCodexReviewSummary(input) {
     const summary = outputRedaction.redact(parsed.summary);
     const candidateIds = [];
     for (const candidate of parsed.candidates) {
-      const safeCandidate = redactCandidate(candidate, runId, input.sessionId, summary, outputRedaction);
+      const safeCandidate = redactCandidate(candidate, runId, input.sessionId, summary, outputRedaction, input.config);
       if (safeCandidate === void 0) {
         continue;
       }
@@ -17343,6 +18318,25 @@ async function runCodexReviewSummary(input) {
         candidate: safeCandidate,
         now: input.now,
         recordRejectedCandidate: false
+      });
+      if (result2.result.action === "pending") {
+        candidateIds.push(result2.result.candidateId);
+      }
+    }
+    for (const message of window.filter((entry) => entry.role === "user")) {
+      const globalCandidate = candidateFromExplicitGlobalInstruction({
+        text: redactReviewText(message.content).text,
+        now: createdAt
+      });
+      if (globalCandidate === void 0) {
+        continue;
+      }
+      const result2 = await proposeCodexMemoryCandidate({
+        cwd: input.cwd,
+        candidate: globalCandidate,
+        now: input.now,
+        recordRejectedCandidate: false,
+        allowAutoPromote: false
       });
       if (result2.result.action === "pending") {
         candidateIds.push(result2.result.candidateId);
@@ -17392,6 +18386,8 @@ function buildCodexReviewSummaryPrompt(redactedTranscript) {
     "Do not store secrets, credentials, raw quotes, psychological diagnoses, or assistant-only suggestions.",
     "Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.",
     "Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.",
+    `Candidate content must be ${GENERATED_MEMORY_CONTENT_MAX_LENGTH2} characters or fewer.`,
+    `Evidence summaries and quotes must be ${GENERATED_MEMORY_EVIDENCE_MAX_LENGTH} characters or fewer.`,
     "Memory candidates must match the existing memory candidate schema.",
     "Candidates may include domain, type, strength, scope, content, normalizedKey, source, scores, evidence, and tags.",
     "",
@@ -17413,13 +18409,17 @@ function parseReviewSummaryResponse(content) {
 function formatMessages(messages) {
   return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
 }
-function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
+function redactCandidate(value, runId, sessionId, redactedSummary, redactor, config2) {
   if (!isRecord5(value)) {
     return void 0;
   }
   const domain = parseEnum(value.domain, MEMORY_DOMAINS);
   const type = parseEnum(value.type, MEMORY_TYPES);
-  const content = parseString(value.content);
+  const content = parseBoundedString(
+    value.content,
+    redactor,
+    Math.min(config2.memorySingleContentMaxChars, GENERATED_MEMORY_CONTENT_MAX_LENGTH2)
+  );
   if (domain === void 0 || type === void 0 || content === void 0) {
     return void 0;
   }
@@ -17431,22 +18431,30 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor) {
     ...candidateKind === void 0 ? {} : { candidateKind },
     strength: parseEnum(value.strength, MEMORY_STRENGTHS),
     scope: parseEnum(value.scope, MEMORY_SCOPES),
-    content: redactor.redact(content),
+    content,
     normalizedKey: redactOptionalString(value.normalizedKey, redactor),
     source,
-    evidence: redactEvidence(value.evidence, runId, sessionId, redactedSummary, source ?? "assistant_observed", redactor),
+    evidence: redactEvidence(
+      value.evidence,
+      runId,
+      sessionId,
+      redactedSummary,
+      source ?? "assistant_observed",
+      redactor,
+      Math.min(config2.memorySingleEvidenceMaxChars, GENERATED_MEMORY_EVIDENCE_MAX_LENGTH)
+    ),
     scores: parseScores(value.scores),
     tags: redactTags(value.tags, redactor)
   };
   return candidate;
 }
-function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor) {
+function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor, maxLength) {
   const evidence = Array.isArray(value) ? value.flatMap((entry) => {
     if (!isRecord5(entry)) {
       return [];
     }
-    const summary = redactOptionalString(entry.summary, redactor);
-    const quote = redactOptionalString(entry.quote, redactor);
+    const summary = parseBoundedString(entry.summary, redactor, maxLength);
+    const quote = parseBoundedString(entry.quote, redactor, maxLength);
     if (summary === void 0 && quote === void 0) {
       return [];
     }
@@ -17455,10 +18463,10 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   if (evidence.length > 0) {
     return evidence;
   }
-  return [evidenceEntry({ runId, sessionId, summary: redactedSummary, sourceKind })];
+  return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash7("sha256").update(JSON.stringify({
+  return createHash9("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -17487,6 +18495,19 @@ function redactTags(value, redactor) {
 function redactOptionalString(value, redactor) {
   const text = parseString(value);
   return text === void 0 ? void 0 : redactor.redact(text);
+}
+function parseBoundedString(value, redactor, maxLength) {
+  const text = parseString(value);
+  if (text === void 0) {
+    return void 0;
+  }
+  return truncateWithSuffix3(redactor.redact(text.replace(/\s+/g, " ").trim()), maxLength);
+}
+function truncateWithSuffix3(value, maxChars) {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 0) return "";
+  if (maxChars <= 3) return ".".repeat(maxChars);
+  return `${value.slice(0, maxChars - 3)}...`;
 }
 function parseScores(value) {
   if (!isRecord5(value)) {
@@ -18204,6 +19225,341 @@ async function removeExistingSkillSymlink(path) {
   }
 }
 
+// src/codex/active-memory-review.ts
+import { createHash as createHash10, randomUUID as randomUUID11 } from "node:crypto";
+function contentHashForActiveMemory(memory) {
+  return createHash10("sha256").update(JSON.stringify({
+    id: memory.id,
+    content: memory.content,
+    normalizedKey: memory.normalizedKey,
+    updatedAt: memory.updatedAt,
+    status: memory.status
+  })).digest("hex");
+}
+async function archiveCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID11(),
+      action: "archive",
+      at: now,
+      reason: input.reason,
+      memoryId: memory.id,
+      details: {
+        previousStatus: memory.status,
+        normalizedKey: memory.normalizedKey
+      }
+    });
+    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "archive",
+        memoryId: memory.id
+      }
+    };
+  }, input.now);
+}
+async function tombstoneCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const tombstone = tombstoneForActiveMemory(memory, {
+      reason: "archived",
+      now,
+      ...input.indefinite === true ? {} : { expiresAt: addDays3(now, input.days ?? 180) }
+    });
+    await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
+    await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID11(),
+      action: "archive",
+      at: now,
+      reason: input.reason,
+      memoryId: memory.id,
+      details: {
+        reviewAction: "tombstone",
+        tombstoneId: tombstone.id,
+        indefinite: input.indefinite === true
+      }
+    });
+    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "tombstone",
+        memoryId: memory.id,
+        tombstone
+      }
+    };
+  }, input.now);
+}
+async function proposeEditCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, memory, now }) => {
+    const candidate = {
+      id: randomUUID11(),
+      domain: memory.domain,
+      type: memory.type,
+      strength: memory.strength,
+      scope: memory.scope,
+      status: "pending",
+      content: input.content,
+      normalizedKey: memory.normalizedKey,
+      evidence: memory.evidence,
+      source: memory.source,
+      ...memory.portability === void 0 ? {} : { portability: memory.portability },
+      scores: memory.scores,
+      seenCount: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      expiresAt: addDays3(now, 30),
+      ...memory.userConfirmed === void 0 ? {} : { userConfirmed: memory.userConfirmed },
+      ...memory.profileVisibility === void 0 ? {} : { profileVisibility: memory.profileVisibility },
+      ...memory.candidateKind === void 0 ? {} : { candidateKind: memory.candidateKind },
+      ...memory.candidate_kind === void 0 ? {} : { candidate_kind: memory.candidate_kind },
+      tags: memory.tags,
+      conflictsWith: [memory.id]
+    };
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, [...lockedPending, candidate]);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID11(),
+      action: "pending",
+      at: now,
+      reason: input.reason,
+      memoryId: memory.id,
+      candidateId: candidate.id,
+      details: { reviewAction: "propose_active_edit" }
+    });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "propose_edit",
+        memoryId: memory.id,
+        candidateId: candidate.id,
+        candidate,
+        reviewHash: reviewHashForPendingMemory(candidate)
+      }
+    };
+  }, input.now);
+}
+async function supersedeCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
+    const candidate = lockedPending.find((item) => item.id === input.candidateId);
+    if (candidate === void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "not_found",
+          reason: "Pending replacement candidate not found"
+        }
+      };
+    }
+    const latestReviewHash = reviewHashForPendingMemory(candidate);
+    if (latestReviewHash !== input.reviewHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Pending replacement changed since review",
+          latest: summarizePendingMemory(candidate)
+        }
+      };
+    }
+    if (!(candidate.conflictsWith ?? []).includes(memory.id)) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Pending replacement is not linked to the active memory"
+        }
+      };
+    }
+    const normalizedKeyConflict = lockedActive.find((item) => {
+      return item.id !== memory.id && item.normalizedKey === candidate.normalizedKey;
+    });
+    if (normalizedKeyConflict !== void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Replacement normalizedKey conflicts with another active memory"
+        }
+      };
+    }
+    const lockedTombstones = await readTombstonesFromRoot(lockedMemoryRoot);
+    const confirmedCandidate = { ...candidate, userConfirmed: true };
+    const decision = validateMemoryCandidate({
+      candidate: confirmedCandidate,
+      existingMemories: lockedActive,
+      tombstones: lockedTombstones,
+      now
+    });
+    if (decision.action === "reject") {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "rejected_by_validator",
+          candidateId: candidate.id,
+          reason: decision.reason,
+          tombstone: decision.tombstone
+        }
+      };
+    }
+    const candidateForActivation = decision.action === "pending" ? decision.candidate : confirmedCandidate;
+    const promoted = {
+      ...activateCandidate(candidateForActivation, now),
+      supersedes: uniqueInOrder3([...candidateForActivation.conflictsWith ?? [], memory.id])
+    };
+    const tombstone = tombstoneForActiveMemory(memory, {
+      reason: "superseded",
+      now,
+      replacementMemoryId: promoted.id
+    });
+    await writeActiveMemoriesFromRoot(lockedMemoryRoot, [
+      ...lockedActive.filter((item) => item.id !== memory.id),
+      promoted
+    ]);
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, lockedPending.filter((item) => item.id !== candidate.id));
+    await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID11(),
+      action: "supersede",
+      at: now,
+      reason: input.reason,
+      memoryId: promoted.id,
+      candidateId: candidate.id,
+      details: {
+        supersededMemoryId: memory.id,
+        tombstoneId: tombstone.id
+      }
+    });
+    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "supersede",
+        memoryId: promoted.id,
+        supersededMemoryId: memory.id
+      }
+    };
+  }, input.now);
+}
+async function mutateActiveMemory(cwd, id, contentHash, fn, nowInput) {
+  const now = nowInput ?? (/* @__PURE__ */ new Date()).toISOString();
+  const { project, memoryRoot, readableRoots } = await getProjectAndReadableActiveRoots(cwd);
+  const foundMemoryRoot = await findActiveMemoryRoot(readableRoots, id);
+  const targetRoot = foundMemoryRoot ?? memoryRoot;
+  await assertMemoryMaintenanceTargetsSafeFromRoot(targetRoot);
+  return withMemoryMaintenanceLockFromRoot(targetRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+    const lockedActive = await readActiveMemoriesFromRoot(lockedMemoryRoot);
+    const memory = lockedActive.find((item) => item.id === id);
+    if (memory === void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "not_found",
+          reason: "Active memory not found"
+        }
+      };
+    }
+    if (contentHashForActiveMemory(memory) !== contentHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Active memory changed since review"
+        }
+      };
+    }
+    return fn({ project, lockedMemoryRoot, lockedActive, memory, now });
+  });
+}
+async function getProjectAndReadableActiveRoots(cwd) {
+  const identity = await identifyCodexProject(cwd);
+  const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(identity.projectId) ?? codexProjectMemoryRoot(identity.projectId);
+  const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
+  return {
+    project: { projectId: identity.projectId, displayName: identity.displayName },
+    memoryRoot: projectMemoryRoot,
+    readableRoots: uniqueInOrder3([globalMemoryRoot, projectMemoryRoot])
+  };
+}
+async function findActiveMemoryRoot(roots, id) {
+  for (const root of roots) {
+    const active = await readActiveMemoriesFromRoot(root);
+    if (active.some((memory) => memory.id === id)) {
+      return root;
+    }
+  }
+  return void 0;
+}
+async function refreshModelVisibleMemory(input) {
+  await renderMemoryProjectionsFromRoot(input.memoryRoot);
+  await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+}
+function tombstoneForActiveMemory(memory, input) {
+  return {
+    id: `tombstone-${memory.id}-${createHash10("sha256").update(`${memory.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
+    memoryId: memory.id,
+    normalizedKey: memory.normalizedKey,
+    domain: memory.domain,
+    type: memory.type,
+    strength: memory.strength,
+    scope: memory.scope,
+    reason: input.reason,
+    createdAt: input.now,
+    ...input.expiresAt === void 0 ? {} : { expiresAt: input.expiresAt },
+    ...input.replacementMemoryId === void 0 ? {} : { replacementMemoryId: input.replacementMemoryId },
+    evidence: memory.evidence
+  };
+}
+function addDays3(iso, days) {
+  const date3 = new Date(iso);
+  date3.setUTCDate(date3.getUTCDate() + days);
+  return date3.toISOString();
+}
+function uniqueInOrder3(values) {
+  const seen = /* @__PURE__ */ new Set();
+  return values.filter((value) => {
+    if (seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
+}
+
+// src/codex/codex-memory-active-cli.ts
+async function runCodexMemoryActiveArchive(input) {
+  return `${JSON.stringify(await archiveCodexActiveMemory(input), null, 2)}
+`;
+}
+async function runCodexMemoryActiveTombstone(input) {
+  return `${JSON.stringify(await tombstoneCodexActiveMemory(input), null, 2)}
+`;
+}
+async function runCodexMemoryActiveProposeEdit(input) {
+  return `${JSON.stringify(await proposeEditCodexActiveMemory(input), null, 2)}
+`;
+}
+async function runCodexMemoryActiveSupersede(input) {
+  return `${JSON.stringify(await supersedeCodexActiveMemory(input), null, 2)}
+`;
+}
+
 // src/codex/codex-memory-dashboard.ts
 import { readFile as readFile15 } from "node:fs/promises";
 import { homedir as homedir6 } from "node:os";
@@ -18442,6 +19798,38 @@ function errorMessage3(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 
+// src/codex/codex-memory-triage-cli.ts
+async function runCodexMemoryTriage(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const memoryRoot = codexProjectMemoryRoot(project.projectId);
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const [pending, active, tombstones] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ]);
+  const result2 = triagePendingMemories({ pending, active, tombstones, scope: "project", now });
+  let reviewDerivedCandidateCount = 0;
+  if (input.apply) {
+    const reviewDerived = candidatesFromReviewEvents({
+      events: await readMemoryEventsFromRoot(memoryRoot),
+      now
+    });
+    reviewDerivedCandidateCount = reviewDerived.length;
+    for (const candidate of reviewDerived) {
+      await proposeCodexMemoryCandidate({
+        cwd: input.cwd,
+        candidate,
+        now,
+        recordRejectedCandidate: false,
+        allowAutoPromote: false
+      });
+    }
+  }
+  return `${JSON.stringify({ action: input.apply ? "apply" : "dry_run", project, memoryRoot, reviewDerivedCandidateCount, ...result2 }, null, 2)}
+`;
+}
+
 // src/codex/codex-ui-server.ts
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
@@ -18491,6 +19879,32 @@ async function handleCodexUiApiRequest(input) {
         now: input.now
       });
       return ok({ result: result2 });
+    }
+    if (input.pathname === "/api/memory/triage/dry-run" || input.pathname === "/api/memory/triage/apply") {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      const selection = parseSelectionRequest(input.searchParams);
+      if ("error" in selection) return selection.error;
+      if (input.pathname.endsWith("/apply")) {
+        return failure(
+          400,
+          "batch_triage_disabled",
+          "Batch triage apply is disabled. Use per-candidate review actions with reviewHash validation."
+        );
+      }
+      return ok(await runUiMemoryTriage({
+        cwd: input.cwd,
+        selection: selection.value,
+        now: input.now
+      }));
+    }
+    const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname);
+    if (activeWriteRoute !== void 0) {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      return handleActiveMemoryWriteRoute(input, activeWriteRoute);
     }
     const writeRoute = parseMemoryWriteRoute(input.pathname);
     if (writeRoute !== void 0) {
@@ -18560,6 +19974,11 @@ async function handleCodexUiApiRequest(input) {
 }
 function parseMemoryWriteRoute(pathname) {
   const match = /^\/api\/memory\/([^/]+)\/(approve|reject|defer|edit)$/.exec(pathname);
+  if (match === null) return void 0;
+  return { id: decodeURIComponent(match[1]), action: match[2] };
+}
+function parseActiveMemoryWriteRoute(pathname) {
+  const match = /^\/api\/active-memory\/([^/]+)\/(archive|tombstone|propose-edit|supersede)$/.exec(pathname);
   if (match === null) return void 0;
   return { id: decodeURIComponent(match[1]), action: match[2] };
 }
@@ -18663,6 +20082,62 @@ async function handleMemoryWriteRoute(input, route, selection) {
     reviewHash,
     input.now
   );
+}
+async function handleActiveMemoryWriteRoute(input, route) {
+  const body = input.body;
+  if (!isRecord7(body) || typeof body.contentHash !== "string" || body.contentHash.trim() === "") {
+    return failure(400, "invalid_request", "Active memory write requests require contentHash.");
+  }
+  if (typeof body.reason !== "string" || body.reason.trim() === "") {
+    return failure(400, "invalid_request", "Active memory write requests require reason.");
+  }
+  const base = {
+    cwd: input.cwd,
+    id: route.id,
+    contentHash: body.contentHash.trim(),
+    reason: body.reason.trim(),
+    now: input.now
+  };
+  const result2 = route.action === "archive" ? await archiveCodexActiveMemory(base) : route.action === "tombstone" ? await tombstoneCodexActiveMemory({
+    ...base,
+    days: optionalPositiveInteger(body.days, 180),
+    indefinite: body.indefinite === true
+  }) : route.action === "propose-edit" ? await proposeEditCodexActiveMemory({
+    ...base,
+    content: requiredBodyString(body.content, "Active memory propose-edit requires content.")
+  }) : await supersedeCodexActiveMemory({
+    ...base,
+    candidateId: requiredBodyString(body.candidateId, "Active memory supersede requires candidateId."),
+    reviewHash: requiredBodyString(body.reviewHash, "Active memory supersede requires reviewHash.")
+  });
+  return activeResultToApi(result2, route.action, route.id, input.now);
+}
+function activeResultToApi(lifecycleResult, action, id, now) {
+  const result2 = lifecycleResult.result;
+  if (result2.action === "not_found") {
+    return failure(404, "not_found", result2.reason);
+  }
+  if (result2.action === "conflict") {
+    return failure(409, "active_memory_conflict", result2.reason, { result: result2 });
+  }
+  if (result2.action === "rejected_by_validator") {
+    return failure(400, "rejected_by_validator", result2.reason, { result: result2 });
+  }
+  return ok({
+    receipt: {
+      action: `${action.replace("-", "_")}_active_memory`,
+      id,
+      createdAt: now ?? (/* @__PURE__ */ new Date()).toISOString(),
+      summary: "Active memory action applied."
+    },
+    result: result2
+  });
+}
+function requiredBodyString(value, message) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(message);
+  }
+  return value.trim();
 }
 function parseEditPatch(value) {
   if (typeof value.content !== "string" || value.content.trim() === "") {
@@ -18787,6 +20262,11 @@ async function readProjects(cwd) {
   };
 }
 async function readDashboard(cwd, now, request) {
+  const continuity = await getCodexContinuityContext({
+    cwd,
+    userMessage: "memory review web ui route button",
+    task: "memory"
+  });
   const selection = await resolveSelection(cwd, request);
   const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals, projects] = await Promise.all([
     readCodexMemoryStatus({ cwd }),
@@ -18803,6 +20283,7 @@ async function readDashboard(cwd, now, request) {
     selection: publicSelection(selection),
     projects,
     modelConfig: readModelConfigDiagnostic(cwd),
+    diagnostics: readDashboardDiagnostics(status, continuity),
     status,
     pending,
     active,
@@ -18811,6 +20292,41 @@ async function readDashboard(cwd, now, request) {
     dream,
     profile,
     signals
+  };
+}
+function readDashboardDiagnostics(status, continuity) {
+  return {
+    memoryIndex: status.index,
+    retrievalPlan: continuity.diagnostics?.retrievalPlan,
+    retrievalExplain: {
+      globalMemory: continuity.globalMemory,
+      projectMemory: continuity.projectMemory,
+      similarProjectHints: continuity.similarProjectHints
+    }
+  };
+}
+async function runUiMemoryTriage(input) {
+  const selection = await resolveSelection(input.cwd, input.selection);
+  const memoryRoot = selection.memoryRoot;
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const [pending, active, tombstones] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ]);
+  const result2 = triagePendingMemories({
+    pending,
+    active,
+    tombstones,
+    scope: selection.scope === "global" ? "global" : "project",
+    now
+  });
+  return {
+    action: "dry_run",
+    project: selection.project,
+    selection: publicSelection(selection),
+    memoryRoot,
+    ...result2
   };
 }
 async function readActive(cwd, request) {
@@ -18860,7 +20376,14 @@ async function readDreamFromSelection(selection) {
 }
 async function readActiveFromSelection(selection) {
   const active = (await Promise.all(selection.memoryRoots.map((root) => readActiveMemoriesFromRoot(root)))).flat();
-  return { project: selection.project, active: sortMemoriesNewestFirst(active), memoryRoot: selection.memoryRoot };
+  return {
+    project: selection.project,
+    active: sortMemoriesNewestFirst(active).map((memory) => ({
+      ...memory,
+      contentHash: contentHashForActiveMemory(memory)
+    })),
+    memoryRoot: selection.memoryRoot
+  };
 }
 async function readPendingFromSelection(selection) {
   const pending = (await Promise.all(selection.memoryRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat();
@@ -18881,7 +20404,7 @@ async function resolveSelection(cwd, request) {
   const project = projectOption === void 0 ? { projectId, displayName: unlabeledProjectName(projectId) } : { projectId, displayName: projectOption.displayName };
   const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
   const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(projectId) ?? codexProjectMemoryRoot(projectId);
-  const memoryRoots = request.scope === "global" ? [globalMemoryRoot] : request.scope === "all" ? uniqueInOrder3([globalMemoryRoot, projectMemoryRoot]) : [projectMemoryRoot];
+  const memoryRoots = request.scope === "global" ? [globalMemoryRoot] : request.scope === "all" ? uniqueInOrder4([globalMemoryRoot, projectMemoryRoot]) : [projectMemoryRoot];
   const memoryRoot = request.scope === "global" ? globalMemoryRoot : projectMemoryRoot;
   return {
     scope: request.scope,
@@ -19030,7 +20553,7 @@ function isCodexUiMemoryScope(value) {
 function isValidProjectId(value) {
   return /^[A-Za-z0-9._-]+$/.test(value) && !/^\.+$/.test(value);
 }
-function uniqueInOrder3(values) {
+function uniqueInOrder4(values) {
   const seen = /* @__PURE__ */ new Set();
   return values.filter((value) => {
     if (seen.has(value)) return false;
@@ -19180,8 +20703,10 @@ var CODEX_UI_STATIC_ASSETS = {
     "body": `const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
+const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
+  diagnostics: {},
   selection: { scope: 'project', label: 'Project', projectId: '' },
   projects: { projects: [], global: { counts: {} }, currentProjectId: '' },
   modelConfig: { configured: false, missing: [] },
@@ -19199,6 +20724,7 @@ const TABS = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'timeline', label: 'Timeline' },
   { id: 'project-memory', label: 'Project Memory' },
+  { id: 'triage', label: 'Triage' },
   { id: 'harvester', label: 'Harvester' },
   { id: 'dream', label: 'Dream' },
   { id: 'profile', label: 'Profile' }
@@ -19224,8 +20750,12 @@ const state = {
   pendingAction: null,
   receipt: null,
   actionError: '',
+  activeAction: null,
+  activeReceipt: null,
+  activeActionError: '',
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
-  harvester: { loading: false, result: null, error: '' }
+  harvester: { loading: false, result: null, error: '' },
+  triage: { loading: false, result: null, error: '', receipt: null }
 }
 
 const app = document.querySelector('[data-app]')
@@ -19303,6 +20833,7 @@ function mergeDashboard(data) {
   return {
     ...EMPTY_DASHBOARD,
     ...(data || {}),
+    diagnostics: { ...EMPTY_DASHBOARD.diagnostics, ...(data?.diagnostics || {}) },
     selection: { ...EMPTY_DASHBOARD.selection, ...(data?.selection || {}) },
     projects: { ...EMPTY_DASHBOARD.projects, ...(data?.projects || {}) },
     modelConfig: { ...EMPTY_DASHBOARD.modelConfig, ...(data?.modelConfig || {}) },
@@ -19334,6 +20865,8 @@ function renderNav() {
       state.activeTab = button.dataset.tab || 'overview'
       state.pendingAction = null
       state.actionError = ''
+      state.activeAction = null
+      state.activeActionError = ''
       render()
     })
   })
@@ -19449,6 +20982,10 @@ function renderWorkspace() {
   if (dryRunButton) {
     dryRunButton.addEventListener('click', runHarvesterDryRun)
   }
+  const triageDryRunButton = workspace.querySelector('[data-triage-dry-run]')
+  if (triageDryRunButton) {
+    triageDryRunButton.addEventListener('click', () => runTriage('dry-run'))
+  }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
       state.activeTab = 'inbox'
@@ -19459,12 +20996,38 @@ function renderWorkspace() {
       render()
     })
   })
+  workspace.querySelectorAll('[data-active-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeAction = {
+        id: button.dataset.memoryId || '',
+        action: button.dataset.activeAction || ''
+      }
+      state.activeActionError = ''
+      state.activeReceipt = null
+      render()
+    })
+  })
+  workspace.querySelectorAll('[data-cancel-active-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeAction = null
+      state.activeActionError = ''
+      render()
+    })
+  })
+  const activeForm = workspace.querySelector('[data-active-action-form]')
+  if (activeForm) {
+    activeForm.addEventListener('submit', (event) => {
+      event.preventDefault()
+      submitActiveAction(new FormData(activeForm))
+    })
+  }
 }
 
 function pageHtml(tabId) {
   if (tabId === 'inbox') return renderInbox()
   if (tabId === 'timeline') return renderTimeline()
   if (tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'triage') return renderTriage()
   if (tabId === 'harvester') return renderHarvester()
   if (tabId === 'dream') return renderDream()
   if (tabId === 'profile') return renderProfile()
@@ -19488,6 +21051,7 @@ function renderOverview() {
       </div>
       \${renderModelConfigPanel()}
       \${renderTimelineDiagnostic()}
+      \${renderRetrievalExplainPanel()}
       <div class="soft-panel">
         <h3>Recent pending candidates</h3>
         \${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
@@ -19563,6 +21127,8 @@ function renderProjectMemory() {
   return \`
     <section class="page-stack">
       \${sectionHeader('Project Memory', \`Active memory for \${selection.label || 'selected scope'}.\`)}
+      \${state.activeReceipt ? renderActiveReceipt(state.activeReceipt) : ''}
+      \${state.activeAction ? renderActiveActionForm() : ''}
       \${groups.length > 0 ? groups.map((group) => \`
         <div class="soft-panel">
           <h3>\${escapeHtml(group.label || 'Project memory')}</h3>
@@ -19580,9 +21146,96 @@ function renderMemoryRow(memory) {
         <div class="row-title">\${escapeHtml(memory.content || memory.id || 'Memory')}</div>
         <div class="row-meta">\${escapeHtml(memory.candidateKind || memory.type || 'memory')} \xB7 \${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
       </div>
-      \${statusChip('active', memory.status || 'active', 'ok')}
+      <div class="row-actions">
+        \${statusChip('active', memory.status || 'active', 'ok')}
+        <button class="soft-button compact" type="button" data-active-action="archive" data-memory-id="\${escapeHtml(memory.id)}">Archive</button>
+        <button class="soft-button compact" type="button" data-active-action="tombstone" data-memory-id="\${escapeHtml(memory.id)}">Tombstone</button>
+        <button class="soft-button compact" type="button" data-active-action="propose-edit" data-memory-id="\${escapeHtml(memory.id)}">Propose edit</button>
+      </div>
     </article>
   \`
+}
+
+function renderActiveActionForm() {
+  const memory = findActiveMemoryById(state.activeAction.id)
+  if (!memory) return panel('Active memory unavailable', 'Refresh the dashboard and try again.', 'error')
+  const action = state.activeAction.action
+  const editField = action === 'propose-edit'
+    ? \`
+      <label>Replacement content
+        <textarea name="content" rows="4" required>\${escapeHtml(memory.content || '')}</textarea>
+      </label>
+    \`
+    : ''
+  const tombstoneField = action === 'tombstone'
+    ? \`
+      <label>Days
+        <input name="days" type="number" min="1" step="1" value="180">
+      </label>
+    \`
+    : ''
+  return \`
+    <div class="soft-panel active-action-form">
+      <h3>\${escapeHtml(activeActionLabel(action))}</h3>
+      <form class="confirm-form" data-active-action-form>
+        <label>Reason
+          <textarea name="reason" rows="3" required></textarea>
+        </label>
+        \${editField}
+        \${tombstoneField}
+        <div class="detail-actions">
+          <button class="soft-button primary compact" type="submit">\${escapeHtml(activeActionLabel(action))}</button>
+          <button class="soft-button compact" type="button" data-cancel-active-action>Cancel</button>
+        </div>
+      </form>
+      \${state.activeActionError ? \`<p class="notice error">\${escapeHtml(state.activeActionError)}</p>\` : ''}
+    </div>
+  \`
+}
+
+function renderActiveReceipt(receipt) {
+  return \`
+    <div class="soft-panel receipt-panel">
+      <p class="eyebrow">active memory receipt</p>
+      <h3>\${escapeHtml(activeActionLabel(receipt.action || 'archive'))}</h3>
+      <div class="soft-inset rail-item"><strong>\${escapeHtml(receipt.id || 'memory')}</strong><span>\${escapeHtml(receipt.summary || 'Active memory action applied.')}</span></div>
+    </div>
+  \`
+}
+
+async function submitActiveAction(formData) {
+  const activeAction = state.activeAction
+  if (!activeAction) return
+  const memory = findActiveMemoryById(activeAction.id)
+  if (!memory) return
+  const body = {
+    contentHash: memory.contentHash || '',
+    reason: String(formData.get('reason') || '').trim()
+  }
+  if (activeAction.action === 'propose-edit') {
+    body.content = String(formData.get('content') || '').trim()
+  }
+  if (activeAction.action === 'tombstone') {
+    const days = Number(formData.get('days') || 180)
+    body.days = Number.isFinite(days) ? days : 180
+  }
+  try {
+    const response = await apiFetch(\`/api/active-memory/\${encodeURIComponent(activeAction.id)}/\${activeAction.action}\`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Active memory action failed.')
+    }
+    await loadDashboard({ renderAfter: false })
+    state.activeReceipt = payload.data?.receipt || { id: activeAction.id, action: activeAction.action, summary: 'Active memory action applied.' }
+    state.activeAction = null
+    state.activeActionError = ''
+  } catch (error) {
+    state.activeActionError = errorMessage(error)
+  }
+  render()
 }
 
 function renderPreviewCandidateRow(candidate) {
@@ -19659,6 +21312,103 @@ function renderHarvesterResult(result) {
       \${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}
     </div>
   \`
+}
+
+function renderTriage() {
+  const result = state.triage.result
+  const resultHtml = state.triage.error
+    ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
+    : result
+      ? renderTriageResult(result)
+      : panel('Triage ready', 'Preview pending-memory cleanup and review recommendations for the selected scope.', 'muted')
+
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Triage', 'Cluster and rank pending memory for review.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Pending triage</h3>
+          <p>Preview duplicate, defer, drop, and review recommendations. Use per-candidate review actions for any write.</p>
+        </div>
+        <div class="detail-actions">
+          <button class="soft-button primary" type="button" data-triage-dry-run \${state.triage.loading ? 'disabled' : ''}>
+            \${state.triage.loading ? 'Running triage' : 'Run triage dry-run'}
+          </button>
+        </div>
+      </div>
+      \${resultHtml}
+    </section>
+  \`
+}
+
+async function runTriage(mode) {
+  state.triage = { loading: true, result: null, error: '', receipt: null }
+  render()
+  try {
+    const response = await apiFetch(\`\${TRIAGE_DRY_RUN_ENDPOINT}\${selectionQuery()}\`, { method: 'POST', body: '{}' })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Triage API returned an error.')
+    }
+    state.triage = {
+      loading: false,
+      result: payload.data,
+      error: '',
+      receipt: payload.data?.receipt || null
+    }
+  } catch (error) {
+    state.triage = { loading: false, result: null, error: errorMessage(error), receipt: null }
+  }
+  render()
+}
+
+function renderTriageResult(result) {
+  const decisions = Array.isArray(result.decisions) ? result.decisions : []
+  const clusters = Array.isArray(result.clusters) ? result.clusters : []
+  const actions = ['auto_drop', 'auto_merge', 'auto_defer', 'recommend', 'auto_promote', 'manual_review']
+  return \`
+    <div class="soft-panel">
+      <h3>Triage dry-run result</h3>
+      <div class="triage-grid">
+        \${actions.map((action) => metric(triageActionLabel(action), countTriageDecision(decisions, action), 'decisions')).join('')}
+      </div>
+      <div class="soft-inset">Clusters: \${escapeHtml(String(clusters.length))}</div>
+      <div class="soft-inset">Scope: \${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} \xB7 preview only</div>
+      \${decisions.slice(0, 8).map(renderTriageDecisionRow).join('') || emptyState('No triage decisions returned.')}
+    </div>
+  \`
+}
+
+function renderTriageDecisionRow(decision) {
+  const ids = decision.candidateIds || [decision.candidateId].filter(Boolean)
+  return \`
+    <article class="data-row">
+      <div>
+        <div class="row-title">\${escapeHtml(triageActionLabel(decision.action || 'manual_review'))}</div>
+        <div class="row-meta">\${escapeHtml(ids.join(', ') || decision.clusterId || 'candidate')} \xB7 \${escapeHtml(decision.reason || 'triage decision')}</div>
+      </div>
+      \${statusChip('triage', decision.action || 'review', triageTone(decision.action))}
+    </article>
+  \`
+}
+
+function countTriageDecision(decisions, action) {
+  return decisions.filter((decision) => decision.action === action).length
+}
+
+function triageActionLabel(action) {
+  if (action === 'auto_drop') return 'Auto drop'
+  if (action === 'auto_merge') return 'Auto merge'
+  if (action === 'auto_defer') return 'Auto defer'
+  if (action === 'auto_promote') return 'Auto promote'
+  if (action === 'manual_review') return 'Manual review'
+  return 'Recommend'
+}
+
+function triageTone(action) {
+  if (action === 'auto_drop') return 'error'
+  if (action === 'auto_defer' || action === 'recommend') return 'warn'
+  return 'muted'
 }
 
 function renderDream() {
@@ -20061,6 +21811,10 @@ function selectedPending() {
   return listPending().find((candidate) => candidate.id === state.selectedPendingId)
 }
 
+function findActiveMemoryById(id) {
+  return listActive().find((memory) => memory.id === id)
+}
+
 function selectedProjectOption() {
   const projects = Array.isArray(state.dashboard.projects?.projects) ? state.dashboard.projects.projects : []
   const selectedProjectId = state.selectedProjectId || selectionInfo(state.dashboard).projectId || state.dashboard.projects?.currentProjectId || ''
@@ -20073,6 +21827,13 @@ function actionLabel(action) {
   if (action === 'defer') return 'Defer'
   if (action === 'edit') return 'Edit'
   return 'Review'
+}
+
+function activeActionLabel(action) {
+  if (action === 'tombstone') return 'Tombstone'
+  if (action === 'propose-edit') return 'Propose edit'
+  if (action === 'supersede') return 'Supersede'
+  return 'Archive'
 }
 
 function sectionHeader(title, subtitle) {
@@ -20111,6 +21872,50 @@ function renderModelConfigPanel() {
     ? \`Model \${escapeHtml(config.model || 'configured')} at \${escapeHtml(config.baseUrl || 'configured endpoint')}. API key: \${escapeHtml(config.apiKeyPreview || 'not set')}.\`
     : \`Reviewing existing memory works without a key. Harvest and model summaries need \${escapeHtml(missing.join(', ') || 'CYRENE_BASE_URL and CYRENE_MODEL')}; set CYRENE_API_KEY if the provider requires bearer auth.\`
   return panel(title, body, config.configured ? 'muted' : 'warn')
+}
+
+function renderRetrievalExplainPanel() {
+  return \`
+    <div class="soft-panel">
+      <h3>Retrieval Explain</h3>
+      \${renderRetrievalPlan(state.dashboard.diagnostics?.retrievalPlan)}
+      \${renderRetrievalReasons(state.dashboard.diagnostics?.retrievalExplain)}
+    </div>
+  \`
+}
+
+function renderRetrievalPlan(plan) {
+  if (!plan) return emptyState('No retrieval diagnostics returned.')
+  return \`
+    <ul class="explain-list">
+      \${explainListItem('Task intent', plan.taskIntent)}
+      \${explainListItem('Memory kinds', plan.memoryKinds)}
+      \${explainListItem('Required facets', plan.requiredFacets)}
+      \${explainListItem('Optional facets', plan.optionalFacets)}
+    </ul>
+  \`
+}
+
+function explainListItem(label, values) {
+  const textValue = Array.isArray(values) && values.length > 0 ? values.join(', ') : 'none'
+  return \`<li class="soft-inset rail-item"><strong>\${escapeHtml(label)}</strong><span>\${escapeHtml(textValue)}</span></li>\`
+}
+
+function renderRetrievalReasons(explain) {
+  const rows = [
+    ...(Array.isArray(explain?.projectMemory) ? explain.projectMemory : []),
+    ...(Array.isArray(explain?.globalMemory) ? explain.globalMemory : []),
+    ...(Array.isArray(explain?.similarProjectHints) ? explain.similarProjectHints : [])
+  ]
+  if (rows.length === 0) return emptyState('No retrieved memory reasons returned.')
+  return \`
+    <ul class="explain-list">
+      \${rows.slice(0, 6).map((item) => {
+        const reasons = Array.isArray(item.explain) && item.explain.length > 0 ? item.explain.join(', ') : 'none'
+        return \`<li class="soft-inset rail-item"><strong>\${escapeHtml(item.id || 'memory')}</strong><span>\${escapeHtml(reasons)}</span></li>\`
+      }).join('')}
+    </ul>
+  \`
 }
 
 function renderTimelineDiagnostic() {
@@ -20185,7 +21990,7 @@ export { TABS, WRITE_ACTION_COPY, escapeHtml }
   },
   "/styles.css": {
     "contentType": "text/css; charset=utf-8",
-    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
+    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.triage-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 12px;\n  margin-bottom: 12px;\n}\n\n.explain-list {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.row-actions {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 360px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.active-action-form {\n  border-color: rgba(93, 184, 166, 0.3);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n\n  .row-actions {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
   }
 };
 
@@ -20496,7 +22301,7 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 import { lstat as lstat14, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
@@ -20504,7 +22309,7 @@ var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID11();
+  const proposalId = randomUUID12();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
     reportPath: join24(previewDir, DREAM_REPORT_FILE),
@@ -20617,7 +22422,7 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID11()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID12()}.tmp`;
   await writeFile9(tempPath, content, "utf8");
   await rename5(tempPath, filePath);
 }
@@ -20626,7 +22431,7 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { lstat as lstat16, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
@@ -20920,7 +22725,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID12(),
+      id: randomUUID13(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -20945,7 +22750,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID12(),
+        id: randomUUID13(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -21071,7 +22876,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID12(),
+        id: randomUUID13(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -21206,7 +23011,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
   const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID12();
+  const token = randomUUID13();
   while (true) {
     try {
       await mkdir12(lockDir);
@@ -21317,7 +23122,7 @@ function isFileErrorCode14(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash8, randomUUID as randomUUID13 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID14 } from "node:crypto";
 import { lstat as lstat17, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -21336,7 +23141,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash8("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash11("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -21447,7 +23252,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID13(),
+      id: randomUUID14(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -21694,7 +23499,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID13()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID14()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -21704,7 +23509,7 @@ async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID13()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID14()}.tmp`;
   await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename6(tempPath, targetPath);
 }
@@ -21844,7 +23649,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash9, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID15 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -21861,7 +23666,7 @@ function reviewHashForSimilarHintMemory(memory) {
     updatedAt: memory.updatedAt,
     tags: memory.tags
   };
-  return createHash9("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash12("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -21959,7 +23764,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID14(),
+      id: randomUUID15(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -21973,7 +23778,7 @@ async function markSimilarHintTransferable(input) {
 async function findActiveMemory(cwd, memoryId, currentProjectOnly = false) {
   const current = await identifyCodexProject(cwd);
   const currentRoot = await ensureCodexProjectMemoryRoot(current.projectId);
-  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder4([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
+  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder5([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
   for (const memoryRoot of roots) {
     const active = await readActiveMemoriesFromRoot(memoryRoot);
     const memory = active.find((item) => item.id === memoryId);
@@ -22018,7 +23823,7 @@ function memoryPortability(memory) {
 function projectIdFromMemoryRoot(memoryRoot) {
   return basename6(dirname11(memoryRoot));
 }
-function uniqueInOrder4(values) {
+function uniqueInOrder5(values) {
   const seen = /* @__PURE__ */ new Set();
   const unique2 = [];
   for (const value of values) {
@@ -22145,6 +23950,55 @@ async function handleCodexCommand(input) {
     }));
     return;
   }
+  if (command === "memory" && input.args[1] === "triage") {
+    process.stdout.write(await runCodexMemoryTriage({
+      cwd: input.cwd,
+      dryRun: input.args.includes("--dry-run") || !input.args.includes("--apply"),
+      apply: input.args.includes("--apply")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "active" && input.args[2] === "archive") {
+    process.stdout.write(await runCodexMemoryActiveArchive({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, "active memory id"),
+      contentHash: parseRequiredOption(input.args, "--content-hash", "active content hash"),
+      reason: parseRequiredOption(input.args, "--reason", "archive reason")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "active" && input.args[2] === "tombstone") {
+    process.stdout.write(await runCodexMemoryActiveTombstone({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, "active memory id"),
+      contentHash: parseRequiredOption(input.args, "--content-hash", "active content hash"),
+      reason: parseRequiredOption(input.args, "--reason", "tombstone reason"),
+      days: parseOptionalPositiveInteger(input.args, "--days"),
+      indefinite: input.args.includes("--indefinite")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "active" && input.args[2] === "propose-edit") {
+    process.stdout.write(await runCodexMemoryActiveProposeEdit({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, "active memory id"),
+      contentHash: parseRequiredOption(input.args, "--content-hash", "active content hash"),
+      content: parseRequiredOption(input.args, "--content", "replacement content"),
+      reason: parseRequiredOption(input.args, "--reason", "edit reason")
+    }));
+    return;
+  }
+  if (command === "memory" && input.args[1] === "active" && input.args[2] === "supersede") {
+    process.stdout.write(await runCodexMemoryActiveSupersede({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, "active memory id"),
+      candidateId: parseRequiredOption(input.args, "--candidate", "replacement candidate id"),
+      contentHash: parseRequiredOption(input.args, "--content-hash", "active content hash"),
+      reviewHash: parseRequiredOption(input.args, "--review-hash", "replacement review hash"),
+      reason: parseRequiredOption(input.args, "--reason", "supersede reason")
+    }));
+    return;
+  }
   if (command === "memory" && input.args[1] === "dashboard") {
     process.stdout.write(await formatCodexMemoryDashboard({ cwd: input.cwd }));
     return;
@@ -22244,7 +24098,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text>|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -36786,6 +38640,35 @@ var memoryReviewDeferInputSchema = {
   days: external_exports.number().int().positive().optional(),
   reason: external_exports.string().optional()
 };
+var activeMemoryArchiveInputSchema = {
+  id: external_exports.string(),
+  contentHash: external_exports.string().min(1),
+  reason: external_exports.string().min(1),
+  cwd: external_exports.string().optional()
+};
+var activeMemoryTombstoneInputSchema = {
+  id: external_exports.string(),
+  contentHash: external_exports.string().min(1),
+  reason: external_exports.string().min(1),
+  days: external_exports.number().int().positive().optional(),
+  indefinite: external_exports.boolean().optional(),
+  cwd: external_exports.string().optional()
+};
+var activeMemoryProposeEditInputSchema = {
+  id: external_exports.string(),
+  contentHash: external_exports.string().min(1),
+  content: external_exports.string().min(1),
+  reason: external_exports.string().min(1),
+  cwd: external_exports.string().optional()
+};
+var activeMemorySupersedeInputSchema = {
+  id: external_exports.string(),
+  candidateId: external_exports.string().min(1),
+  contentHash: external_exports.string().min(1),
+  reviewHash: external_exports.string().regex(/^[a-f0-9]{64}$/),
+  reason: external_exports.string().min(1),
+  cwd: external_exports.string().optional()
+};
 async function handleMemoryPendingList(input, fallbackCwd) {
   const result2 = await listCodexPendingMemories({
     cwd: input.cwd ?? fallbackCwd,
@@ -36839,6 +38722,43 @@ async function handleMemoryDefer(input, fallbackCwd) {
     reason: input.reason
   });
   return jsonText(result2);
+}
+async function handleActiveMemoryArchive(input, fallbackCwd) {
+  return jsonText(await archiveCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    contentHash: input.contentHash,
+    reason: input.reason
+  }));
+}
+async function handleActiveMemoryTombstone(input, fallbackCwd) {
+  return jsonText(await tombstoneCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    contentHash: input.contentHash,
+    reason: input.reason,
+    days: input.days,
+    indefinite: input.indefinite
+  }));
+}
+async function handleActiveMemoryProposeEdit(input, fallbackCwd) {
+  return jsonText(await proposeEditCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    contentHash: input.contentHash,
+    content: input.content,
+    reason: input.reason
+  }));
+}
+async function handleActiveMemorySupersede(input, fallbackCwd) {
+  return jsonText(await supersedeCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    candidateId: input.candidateId,
+    contentHash: input.contentHash,
+    reviewHash: input.reviewHash,
+    reason: input.reason
+  }));
 }
 
 // src/mcp/tools/project-identify.ts
@@ -36933,6 +38853,38 @@ function createCyreneMcpServer(options) {
       inputSchema: memoryReviewDeferInputSchema
     },
     async (input) => handleMemoryDefer(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_active_archive",
+    {
+      description: "Archive a hash-checked active Cyrene memory so it leaves retrieval without creating a tombstone.",
+      inputSchema: activeMemoryArchiveInputSchema
+    },
+    async (input) => handleActiveMemoryArchive(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_active_tombstone",
+    {
+      description: "Tombstone a hash-checked active Cyrene memory and block matching future candidates.",
+      inputSchema: activeMemoryTombstoneInputSchema
+    },
+    async (input) => handleActiveMemoryTombstone(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_active_propose_edit",
+    {
+      description: "Create a pending replacement candidate for a hash-checked active Cyrene memory.",
+      inputSchema: activeMemoryProposeEditInputSchema
+    },
+    async (input) => handleActiveMemoryProposeEdit(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_active_supersede",
+    {
+      description: "Supersede a hash-checked active Cyrene memory with a reviewed pending replacement candidate.",
+      inputSchema: activeMemorySupersedeInputSchema
+    },
+    async (input) => handleActiveMemorySupersede(input, options.cwd)
   );
   server.registerTool(
     "cyrene_memory_dream_run",

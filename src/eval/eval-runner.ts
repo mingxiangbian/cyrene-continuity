@@ -8,6 +8,12 @@ export type EvalCheckName =
   | 'pending_usage_eval'
   | 'profile_pollution_eval'
   | 'affective_boundary_eval'
+  | 'auto_promotion_policy_eval'
+  | 'global_auto_promotion_eval'
+  | 'active_lifecycle_eval'
+  | 'pending_budget_eval'
+  | 'memory_edge_eval'
+  | 'retrieval_explain_eval'
 
 export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
   'memory_routing_eval',
@@ -15,7 +21,13 @@ export const MINIMUM_EVAL_CHECKS: EvalCheckName[] = [
   'affective_boundary_eval',
   'cross_project_leak_eval',
   'pending_usage_eval',
-  'similar_hint_eval'
+  'similar_hint_eval',
+  'auto_promotion_policy_eval',
+  'global_auto_promotion_eval',
+  'active_lifecycle_eval',
+  'pending_budget_eval',
+  'memory_edge_eval',
+  'retrieval_explain_eval'
 ]
 
 export interface EvalFinding {
@@ -77,6 +89,41 @@ export interface MemoryMigrationEvalInput {
   activeMemories: Array<Pick<CyreneMemory, 'id' | 'domain'>>
 }
 
+export interface V5AutoPromotionEvalItem {
+  candidateId: string
+  domain: string
+  scope: string
+  source: string
+  policyId: string
+  decision: string
+  evidenceCount?: number
+  distinctEvidenceCount?: number
+  dailyCap?: number
+  usedToday?: number
+}
+
+export interface V5ActiveLifecycleEvalItem {
+  memoryId: string
+  action: string
+  contentHashChecked: boolean
+  linkedCandidate?: boolean
+  normalizedKeyConflict?: boolean
+}
+
+export interface V5PendingBudgetEvalItem {
+  scope: 'project' | 'global'
+  pendingCount: number
+  maxPending: number
+  evictionApplied: boolean
+  evictedLowestRank?: boolean
+}
+
+export interface V5RetrievalExplainEvalItem {
+  memoryId: string
+  usedInRetrieval: boolean
+  explainReasons?: string[]
+}
+
 export interface ProfileApplyEvalCandidate {
   id: string
   content: string
@@ -121,6 +168,149 @@ export function runDreamApplyEvalGate(input: {
     runPendingUsageEval(input.proposedChanges, input.pending),
     runProfilePollutionEval(input.proposedChanges, input.pending, input.profilePreview),
     runAffectiveBoundaryEval(input.proposedChanges, input.pending)
+  ])
+}
+
+export function runV5AutoPromotionEvalGate(items: V5AutoPromotionEvalItem[]): EvalGateResult {
+  const findings = items.flatMap((item) => {
+    if (item.decision !== 'auto_promote') {
+      return []
+    }
+    const itemFindings: EvalFinding[] = []
+    if (['personal', 'relationship', 'affective'].includes(item.domain)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'high-risk domain cannot auto-promote' })
+    }
+    if (item.scope === 'global' && !['procedural', 'system'].includes(item.domain)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'global auto-promotion allows only procedural/system domains' })
+    }
+    if (item.scope === 'global' && !['user_explicit', 'review_event'].includes(item.source)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: `global auto-promotion cannot use source ${item.source}` })
+    }
+    if (item.scope === 'project' && !['file', 'tool_trace', 'user_explicit', 'review_event'].includes(item.source)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: `project auto-promotion cannot use source ${item.source}` })
+    }
+    if (item.scope === 'global' && !['low_risk_global_procedural_v1', 'review_derived_global_preference_v1'].includes(item.policyId)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'global auto-promotion used the wrong policy' })
+    }
+    if (item.scope === 'project' && item.policyId !== 'low_risk_project_memory_v1') {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'project auto-promotion used the wrong policy' })
+    }
+    if (item.dailyCap !== undefined && item.usedToday !== undefined && item.usedToday >= item.dailyCap) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'daily auto-promotion cap exhausted' })
+    }
+    if (item.distinctEvidenceCount !== undefined && item.distinctEvidenceCount < 2) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'auto-promotion requires repeated distinct evidence' })
+    }
+    return itemFindings
+  })
+  return gate([result('auto_promotion_policy_eval', findings)])
+}
+
+export function runV5GlobalAutoPromotionEvalGate(items: V5AutoPromotionEvalItem[]): EvalGateResult {
+  const findings = items.flatMap((item) => {
+    if (item.decision !== 'auto_promote' || item.scope !== 'global') {
+      return []
+    }
+    const itemFindings: EvalFinding[] = []
+    if (!['procedural', 'system'].includes(item.domain)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'global auto-promotion allows only procedural/system domains' })
+    }
+    if (!['user_explicit', 'review_event'].includes(item.source)) {
+      itemFindings.push({ memoryId: item.candidateId, reason: `global auto-promotion cannot use source ${item.source}` })
+    }
+    if (item.dailyCap !== undefined && item.usedToday !== undefined && item.usedToday >= item.dailyCap) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'global daily auto-promotion cap exhausted' })
+    }
+    if ((item.evidenceCount ?? 0) < 2 || (item.distinctEvidenceCount ?? 0) < 2) {
+      itemFindings.push({ memoryId: item.candidateId, reason: 'global auto-promotion requires repeated evidence' })
+    }
+    return itemFindings
+  })
+  return gate([result('global_auto_promotion_eval', findings)])
+}
+
+export function runV5ActiveLifecycleEvalGate(items: V5ActiveLifecycleEvalItem[]): EvalGateResult {
+  const findings = items.flatMap((item) => {
+    const itemFindings: EvalFinding[] = []
+    if (!item.contentHashChecked) {
+      itemFindings.push({ memoryId: item.memoryId, reason: 'active lifecycle mutation skipped content hash check' })
+    }
+    if (item.action === 'supersede' && item.linkedCandidate !== true) {
+      itemFindings.push({ memoryId: item.memoryId, reason: 'supersede candidate is not linked to active memory' })
+    }
+    if (item.action === 'supersede' && item.normalizedKeyConflict === true) {
+      itemFindings.push({ memoryId: item.memoryId, reason: 'supersede replacement has unresolved normalizedKey conflict' })
+    }
+    return itemFindings
+  })
+  return gate([result('active_lifecycle_eval', findings)])
+}
+
+export function runV5PendingBudgetEvalGate(items: V5PendingBudgetEvalItem[]): EvalGateResult {
+  const findings = items.flatMap((item) => {
+    if (item.pendingCount <= item.maxPending) {
+      return []
+    }
+    if (item.evictionApplied && item.evictedLowestRank === true) {
+      return []
+    }
+    return [{ reason: `${item.scope} pending budget exceeded without lowest-rank eviction` }]
+  })
+  return gate([result('pending_budget_eval', findings)])
+}
+
+export function runV5MemoryEdgeEvalGate(items: Array<{
+  edgeId: string
+  source: string
+  status: string
+  usedInRetrieval: boolean
+}>): EvalGateResult {
+  const findings = items
+    .filter((item) => item.usedInRetrieval && item.source === 'model' && item.status !== 'approved')
+    .map((item) => ({ memoryId: item.edgeId, reason: 'model semantic edge used before approval' }))
+  return gate([result('memory_edge_eval', findings)])
+}
+
+export function runV5RetrievalExplainEvalGate(items: V5RetrievalExplainEvalItem[]): EvalGateResult {
+  const findings = items
+    .filter((item) => item.usedInRetrieval && (item.explainReasons === undefined || item.explainReasons.length === 0))
+    .map((item) => ({ memoryId: item.memoryId, reason: 'retrieved memory lacks explain reasons' }))
+  return gate([result('retrieval_explain_eval', findings)])
+}
+
+export function runV5ReleaseReadinessEvalGate(): EvalGateResult {
+  return gate([
+    ...runV5GlobalAutoPromotionEvalGate([{
+      candidateId: 'release-global-auto',
+      domain: 'procedural',
+      scope: 'global',
+      source: 'review_event',
+      policyId: 'low_risk_global_procedural_v1',
+      decision: 'auto_promote',
+      evidenceCount: 3,
+      distinctEvidenceCount: 3,
+      usedToday: 0,
+      dailyCap: 1
+    }]).results,
+    ...runV5ActiveLifecycleEvalGate([{
+      memoryId: 'release-active-supersede',
+      action: 'supersede',
+      contentHashChecked: true,
+      linkedCandidate: true,
+      normalizedKeyConflict: false
+    }]).results,
+    ...runV5PendingBudgetEvalGate([{
+      scope: 'project',
+      pendingCount: 200,
+      maxPending: 200,
+      evictionApplied: false,
+      evictedLowestRank: false
+    }]).results,
+    ...runV5RetrievalExplainEvalGate([{
+      memoryId: 'release-retrieved-memory',
+      usedInRetrieval: true,
+      explainReasons: ['exact_project', 'memory_kind:workflow_rule']
+    }]).results
   ])
 }
 

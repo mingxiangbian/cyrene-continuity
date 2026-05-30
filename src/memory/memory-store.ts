@@ -110,6 +110,14 @@ export async function appendMemoryEventFromRoot(memoryRoot: string, event: Memor
   await appendJsonLine(join(root, EVENTS_FILE), event)
 }
 
+export async function readMemoryEventsFromRoot(memoryRoot: string): Promise<MemoryEvent[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<MemoryEvent>(join(memoryRoot, EVENTS_FILE))
+}
+
 export async function readTombstones(cwd: string): Promise<MemoryTombstone[]> {
   const root = await getReadableMemoryRoot(cwd)
   if (root === null) {

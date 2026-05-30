@@ -2,6 +2,24 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 describe('Codex UI source assets', () => {
+  it('includes triage and retrieval explain UI surfaces', async () => {
+    const [source, css] = await Promise.all([
+      readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8'),
+      readFile(new URL('../src/ui/static/styles.css', import.meta.url), 'utf8')
+    ])
+
+    expect(source).toContain("{ id: 'triage', label: 'Triage' }")
+    expect(source).toContain('Run triage dry-run')
+    expect(source).toContain('preview only')
+    expect(source).toContain('Retrieval Explain')
+    expect(source).toContain('/api/memory/triage/dry-run')
+    expect(source).toContain('renderRetrievalPlan')
+    expect(source).toContain('renderRetrievalReasons')
+    expect(source).not.toContain('data-triage-apply')
+    expect(css).toContain('.triage-grid')
+    expect(css).toContain('.explain-list')
+  })
+
   it('contains the Warm Cream Coral console shell and write-confirm review labels', async () => {
     const [html, js, css] = await Promise.all([
       readFile(new URL('../src/ui/static/index.html', import.meta.url), 'utf8'),
@@ -31,6 +49,11 @@ describe('Codex UI source assets', () => {
     expect(js).not.toContain('Approve selected')
     expect(js).not.toContain('Reject selected')
     expect(js).toContain('/api/memory/harvest-project/dry-run')
+    expect(js).toContain('/api/active-memory/')
+    expect(js).toContain('data-active-action="archive"')
+    expect(js).toContain('data-active-action="tombstone"')
+    expect(js).toContain('data-active-action="propose-edit"')
+    expect(js).toContain('active memory receipt')
     expect(js).toContain('/delete-memory')
     expect(js).toContain('Delete & disable project memory')
     expect(js).toContain('confirmProjectId')
@@ -71,7 +94,8 @@ describe('Codex UI source assets', () => {
       '.selectable-row',
       '.detail-actions',
       '.confirm-form',
-      '.receipt-panel'
+      '.receipt-panel',
+      '.active-action-form'
     ]) {
       expect(css).toContain(className)
     }

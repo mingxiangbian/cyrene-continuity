@@ -25,6 +25,13 @@ import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot } from '../memo
 import type { CyreneMemory, PendingMemory } from '../memory/types.js'
 import { estimateTokens } from '../token-counter.js'
 import { codexMemoryDbPath, codexMemoryIndexRoots } from './codex-memory-index.js'
+import {
+  buildRetrievalPlan,
+  explainRetrievalReasons,
+  memoryKindForRetrieval,
+  type RetrievalFacet,
+  type RetrievalPlan
+} from './retrieval-planner.js'
 import type {
   CodexMemoryFallbackMode,
   CodexMemoryIndexFreshness,
@@ -55,6 +62,7 @@ interface RoutedMemoryDigestItem {
   status: 'active'
   content: string
   score: number
+  explain: string[]
 }
 
 interface PendingHypothesisDigestItem {
@@ -84,6 +92,7 @@ interface SimilarProjectHintDigestItem {
   transferable: true
   notCurrentProjectFact: true
   rationale: string
+  explain: string[]
 }
 
 interface ProjectSimilarityDiagnostics {
@@ -159,6 +168,12 @@ export interface CodexContinuityContext {
     projectSimilarity?: ProjectSimilarityDiagnostics
     evalGate?: EvalGateDiagnostics
     embedding?: NonNullable<MemoryIndexDiagnostics['embedding']>
+    retrievalPlan?: {
+      taskIntent: string[]
+      memoryKinds: string[]
+      requiredFacets: RetrievalFacet[]
+      optionalFacets: RetrievalFacet[]
+    }
   }
   profile: {
     global?: string
@@ -190,6 +205,7 @@ export async function getCodexContinuityContext(input: {
   const globalMemoryRoot = codexGlobalMemoryRoot()
   const projectMemoryRoot = codexProjectMemoryRoot(project.projectId)
   const budget = memoryRetrievalBudgetForTask(task)
+  const retrievalPlan = buildRetrievalPlan({ query: input.userMessage, task })
   const legacyRetrievalInput: RetrieveMemoriesInput = {
       cwd: input.cwd,
       userCyreneDir: config.userCyreneDir,
@@ -210,6 +226,7 @@ export async function getCodexContinuityContext(input: {
     projectId: project.projectId,
     query: input.userMessage,
     task,
+    retrievalPlan,
     fallback: legacyRetrievalInput
   })
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory]
@@ -239,10 +256,21 @@ export async function getCodexContinuityContext(input: {
         content: memory.content
       }))
     },
-    globalMemory: routedMemory.globalMemory.map(toRoutedMemoryDigestItem),
-    projectMemory: routedMemory.projectMemory.map(toRoutedMemoryDigestItem),
+    globalMemory: routedMemory.globalMemory.map((item) => toRoutedMemoryDigestItem(item, {
+      exactProject: false,
+      retrievalPlan,
+      edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
+    })),
+    projectMemory: routedMemory.projectMemory.map((item) => toRoutedMemoryDigestItem(item, {
+      exactProject: true,
+      retrievalPlan,
+      edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
+    })),
     pendingHypotheses: routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem),
-    similarProjectHints: routedMemory.similarProjectHints.map(toSimilarProjectHintDigestItem),
+    similarProjectHints: routedMemory.similarProjectHints.map((item) => toSimilarProjectHintDigestItem(item, {
+      retrievalPlan,
+      edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
+    })),
     responseStrategy: {
       tone: snapshot.strategy.tone,
       verbosity: snapshot.strategy.verbosity,
@@ -271,7 +299,13 @@ export async function getCodexContinuityContext(input: {
       },
       projectSimilarity: routedMemory.projectSimilarityDiagnostics,
       evalGate: routedMemory.evalGateDiagnostics,
-      ...(routedMemory.diagnostics.embedding === undefined ? {} : { embedding: routedMemory.diagnostics.embedding })
+      ...(routedMemory.diagnostics.embedding === undefined ? {} : { embedding: routedMemory.diagnostics.embedding }),
+      retrievalPlan: {
+        taskIntent: retrievalPlan.taskIntent,
+        memoryKinds: retrievalPlan.memoryKinds,
+        requiredFacets: retrievalPlan.requiredFacets,
+        optionalFacets: retrievalPlan.optionalFacets
+      }
     },
     profile: {
       global: globalProfile,
@@ -302,6 +336,7 @@ interface RoutedMemoryResult {
   projectMemory: Array<IndexedActiveMemory | RetrievedMemory>
   pendingHypotheses: IndexedPendingMemory[]
   similarProjectHints: IndexedSimilarMemory[]
+  graphEdgeTypesByMemoryKey: Map<string, string[]>
   diagnostics: RetrievalDiagnostics
   projectSimilarityDiagnostics: ProjectSimilarityDiagnostics
   evalGateDiagnostics: EvalGateDiagnostics
@@ -312,6 +347,7 @@ async function retrieveRoutedMemory(input: {
   projectId: string
   query: string
   task: CodexContinuityTask
+  retrievalPlan: RetrievalPlan
   fallback: RetrieveMemoriesInput
 }): Promise<RoutedMemoryResult> {
   const roots = await codexMemoryIndexRoots(input.projectId)
@@ -405,11 +441,27 @@ async function retrieveRoutedMemory(input: {
     })
     const evalGate = combineEvalGateResults([similarHintGate, memoryRoutingGate])
     const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : []
+    const eligibleGlobalMemory = globalMemory.filter(({ memory }) => (
+      isMemoryEligibleForRetrieval(memory, input.fallback, input.task) &&
+      !input.retrievalPlan.excludeDomains.includes(memory.domain)
+    ))
+    const eligibleProjectMemory = projectMemory.filter(({ memory }) => (
+      isMemoryEligibleForRetrieval(memory, input.fallback, input.task) &&
+      !input.retrievalPlan.excludeDomains.includes(memory.domain)
+    ))
+    const graphEdgeTypesByMemoryKey = input.retrievalPlan.includeGraphNeighbors
+      ? await queryGraphEdgeTypes(adapter, [
+        ...eligibleGlobalMemory,
+        ...eligibleProjectMemory,
+        ...safeSimilarProjectHints
+      ], input.projectId)
+      : new Map<string, string[]>()
     return {
-      globalMemory: globalMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
-      projectMemory: projectMemory.filter(({ memory }) => isMemoryEligibleForRetrieval(memory, input.fallback, input.task)),
+      globalMemory: eligibleGlobalMemory,
+      projectMemory: eligibleProjectMemory,
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
+      graphEdgeTypesByMemoryKey,
       diagnostics: sqliteRetrievalDiagnostics(indexStatus, diagnostics),
       projectSimilarityDiagnostics: {
         indexedProjects: metadata.length,
@@ -454,6 +506,7 @@ async function fallbackRoutedMemory(
     projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
     pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
     similarProjectHints: [],
+    graphEdgeTypesByMemoryKey: new Map(),
     diagnostics,
     projectSimilarityDiagnostics: {
       indexedProjects: 0,
@@ -609,7 +662,11 @@ function tokenize(text: string): string[] {
     .filter(Boolean)
 }
 
-function toRoutedMemoryDigestItem(item: IndexedActiveMemory | RetrievedMemory): RoutedMemoryDigestItem {
+function toRoutedMemoryDigestItem(item: IndexedActiveMemory | RetrievedMemory, input: {
+  exactProject: boolean
+  retrievalPlan: RetrievalPlan
+  edgeTypes: string[]
+}): RoutedMemoryDigestItem {
   return {
     id: item.memory.id,
     domain: item.memory.domain,
@@ -619,7 +676,15 @@ function toRoutedMemoryDigestItem(item: IndexedActiveMemory | RetrievedMemory): 
     portability: 'portability' in item ? item.portability : item.memory.scope === 'global' ? 'global' : 'local_only',
     status: item.memory.status,
     content: item.memory.content,
-    score: item.score
+    score: item.score,
+    explain: explainRetrievalReasons({
+      exactProject: input.exactProject,
+      globalPolicy: item.memory.scope === 'global',
+      memoryKind: memoryKindForRetrieval(item.memory),
+      taskIntent: input.retrievalPlan.taskIntent,
+      edgeTypes: input.edgeTypes,
+      score: item.score
+    })
   }
 }
 
@@ -638,7 +703,10 @@ function toPendingHypothesisDigestItem(item: IndexedPendingMemory): PendingHypot
   }
 }
 
-function toSimilarProjectHintDigestItem(item: IndexedSimilarMemory): SimilarProjectHintDigestItem {
+function toSimilarProjectHintDigestItem(item: IndexedSimilarMemory, input: {
+  retrievalPlan: RetrievalPlan
+  edgeTypes: string[]
+}): SimilarProjectHintDigestItem {
   return {
     id: item.memory.id,
     sourceProjectId: item.homeProjectId,
@@ -652,8 +720,43 @@ function toSimilarProjectHintDigestItem(item: IndexedSimilarMemory): SimilarProj
     similarityScore: item.similarityScore,
     transferable: true,
     notCurrentProjectFact: true,
-    rationale: 'Transferable guidance from a similar indexed project; not a current project fact.'
+    rationale: 'Transferable guidance from a similar indexed project; not a current project fact.',
+    explain: explainRetrievalReasons({
+      exactProject: false,
+      memoryKind: memoryKindForRetrieval(item.memory),
+      taskIntent: input.retrievalPlan.taskIntent,
+      edgeTypes: input.edgeTypes,
+      transferability: true,
+      score: item.score
+    })
   }
+}
+
+async function queryGraphEdgeTypes(
+  adapter: Pick<Awaited<ReturnType<typeof openMemoryIndexAdapter>>, 'queryMemoryEdges'>,
+  items: Array<IndexedActiveMemory | IndexedSimilarMemory>,
+  currentProjectId: string
+): Promise<Map<string, string[]>> {
+  const entries = await Promise.all(items.map(async (item) => {
+    const key = memoryGraphKeyForRoutedItem(item, currentProjectId)
+    const edges = await adapter.queryMemoryEdges({ fromId: key, status: 'approved' })
+    return [key, Array.from(new Set(edges.map((edge) => edge.edgeType)))] as const
+  }))
+  return new Map(entries.filter(([, edgeTypes]) => edgeTypes.length > 0))
+}
+
+function memoryGraphKeyForRoutedItem(item: IndexedActiveMemory | IndexedSimilarMemory | RetrievedMemory, currentProjectId: string): string {
+  if ('homeProjectId' in item && item.homeProjectId !== null) {
+    return indexedMemoryGraphKey('project', item.homeProjectId, item.memory.id)
+  }
+  if (item.memory.scope === 'global') {
+    return indexedMemoryGraphKey('global', null, item.memory.id)
+  }
+  return indexedMemoryGraphKey('project', currentProjectId, item.memory.id)
+}
+
+function indexedMemoryGraphKey(scope: 'global' | 'project', projectId: string | null, memoryId: string): string {
+  return JSON.stringify([scope, projectId, memoryId])
 }
 
 function formatReviewReminders(pendingReview: CodexPendingReviewNotice): ReviewReminder[] {

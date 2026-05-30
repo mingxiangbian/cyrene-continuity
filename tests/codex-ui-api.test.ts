@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -64,8 +64,8 @@ function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
     strength: 'soft',
     scope: 'project',
     status: 'active',
-    content: 'Project Facts should be grouped for the UI.',
-    normalizedKey: 'project-facts-grouped-for-ui',
+    content: 'Memory review Web UI route button facts should be grouped for the UI.',
+    normalizedKey: 'memory-review-web-ui-route-button-facts-grouped',
     evidence: [{ summary: 'Seeded active memory.' }],
     source: 'file',
     scores: {
@@ -165,6 +165,44 @@ describe('handleCodexUiApiRequest', () => {
         kind: 'project_manifest',
         files: ['package.json']
       }))
+    }
+  })
+
+  it('returns Retrieval Explain planner diagnostics for the Web UI panel', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/dashboard' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        diagnostics?: {
+          retrievalPlan?: {
+            taskIntent: string[]
+            memoryKinds: string[]
+            requiredFacets: string[]
+            optionalFacets: string[]
+          }
+          retrievalExplain?: {
+            projectMemory?: Array<{ id: string; explain: string[] }>
+          }
+        }
+      }
+      expect(data.diagnostics?.retrievalPlan).toMatchObject({
+        taskIntent: expect.arrayContaining(['memory_review', 'ui']),
+        memoryKinds: expect.arrayContaining(['workflow_rule']),
+        requiredFacets: expect.arrayContaining(['exact_project', 'memory_kind', 'evidence']),
+        optionalFacets: expect.arrayContaining(['graph_edges', 'recency'])
+      })
+      expect(data.diagnostics?.retrievalExplain?.projectMemory).toEqual([
+        expect.objectContaining({
+          id: 'active-1',
+          explain: expect.arrayContaining(['exact_project'])
+        })
+      ])
     }
   })
 
@@ -489,6 +527,155 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
+  it('runs triage dry-run without mutating pending memory', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    await writeFile(
+      join(memoryRoot, 'pending.jsonl'),
+      [
+        createPending({
+          id: 'triage-noise',
+          content: 'Ran npm test today.',
+          normalizedKey: 'ran-npm-test-today',
+          evidence: [{ summary: 'temporary command result' }],
+          seenCount: 1
+        }),
+        createPending({
+          id: 'triage-review',
+          domain: 'project',
+          type: 'project_fact',
+          content: 'Project memory triage should show ordinary pending candidates for review.',
+          normalizedKey: 'project-memory-triage-review-recommendations',
+          evidence: [{ summary: 'ordinary pending candidate', sourceKind: 'file' }],
+          source: 'file',
+          candidateKind: 'project_fact',
+          scores: { evidenceStrength: 0.75, stability: 0.7, usefulness: 0.7, safety: 0.9, sensitivity: 0.2 },
+          seenCount: 1
+        })
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/triage/dry-run',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { action: string; decisions: Array<{ action: string; candidateId?: string }> }
+      expect(data.action).toBe('dry_run')
+      expect(data.decisions).toContainEqual(expect.objectContaining({ action: 'auto_drop', candidateId: 'triage-noise' }))
+      expect(data.decisions).toContainEqual(expect.objectContaining({ action: 'recommend', candidateId: 'triage-review' }))
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
+  it('rejects batch triage apply and leaves pending memory unchanged', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const weak = createPending({
+      id: 'triage-weak',
+      content: 'Maybe the UI should mention an unconfirmed idea.',
+      normalizedKey: 'triage-weak-idea',
+      source: 'assistant_observed',
+      evidence: [{ summary: 'weak single observation' }],
+      scores: { evidenceStrength: 0.4, stability: 0.5, usefulness: 0.4, safety: 0.95, sensitivity: 0.1 },
+      seenCount: 1
+    })
+    const duplicateA = createPending({
+      id: 'triage-duplicate-a',
+      content: 'Duplicate triage memory should be merged.',
+      normalizedKey: 'triage-duplicate-memory',
+      evidence: [{ summary: 'first duplicate evidence', evidenceGroupId: 'a' }],
+      tags: ['first']
+    })
+    const duplicateB = createPending({
+      id: 'triage-duplicate-b',
+      content: 'Duplicate triage memory should be merged with the first.',
+      normalizedKey: 'triage-duplicate-memory',
+      evidence: [{ summary: 'second duplicate evidence', evidenceGroupId: 'b' }],
+      tags: ['second']
+    })
+    await writeFile(
+      join(memoryRoot, 'pending.jsonl'),
+      [
+        createPending({
+          id: 'triage-noise',
+          content: 'Ran npm test today.',
+          normalizedKey: 'ran-npm-test-today',
+          evidence: [{ summary: 'temporary command result' }],
+          seenCount: 1
+        }),
+        weak,
+        duplicateB,
+        duplicateA
+      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
+    )
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/triage/apply',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error.code).toBe('batch_triage_disabled')
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
+  it('runs triage dry-run for the selected global scope', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeFile(join(globalRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+      id: 'global-triage-noise',
+      scope: 'global',
+      domain: 'procedural',
+      content: 'Ran npm test today.',
+      normalizedKey: 'global-ran-npm-test-today',
+      evidence: [{ summary: 'temporary command result' }]
+    }))}\n`)
+    const projectBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/triage/dry-run',
+      searchParams: new URLSearchParams('scope=global'),
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        selection: { scope: string }
+        memoryRoot: string
+        decisions: Array<{ action: string; candidateId?: string }>
+      }
+      expect(data.selection.scope).toBe('global')
+      expect(data.memoryRoot).toBe(await realpath(globalRoot))
+      expect(data.decisions).toContainEqual(expect.objectContaining({
+        action: 'auto_drop',
+        candidateId: 'global-triage-noise'
+      }))
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(projectBefore)
+  })
+
   it('reports DeepSeek model config incomplete when the API key is missing', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
@@ -607,6 +794,33 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(pending.content)
   })
 
+  it('archives active memory through hash-checked UI API', async () => {
+    const home = await createTempDir('cyrene-ui-active-archive-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, active, memoryRoot } = await seedProject()
+    const { contentHashForActiveMemory } = await import('../src/codex/active-memory-review.js')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/active-memory/${active.id}/archive`,
+      body: { contentHash: contentHashForActiveMemory(active), reason: 'Stale UI memory.' },
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: {
+          action: 'archive_active_memory',
+          id: active.id
+        }
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+  })
+
   it('edits pending memory through the Web UI write route without promoting it', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
@@ -643,7 +857,7 @@ describe('handleCodexUiApiRequest', () => {
       })
     }
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('Keep Web UI write actions hash-checked')
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Project Facts should be grouped for the UI.')
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Memory review Web UI route button facts should be grouped for the UI.')
   })
 
   it('returns structured method errors for non-GET read routes', async () => {

@@ -528,7 +528,11 @@ export async function promoteCodexPendingMemory(input: {
         at: now,
         reason: input.reason ?? 'Rejected by normalizedKey conflict resolution',
         candidateId: lockedCandidate.id,
-        details: conflictResolutionDetails('reject_new', lockedCandidate.normalizedKey, normalizedKeyConflicts)
+        details: reviewEventDetails(
+          lockedCandidate,
+          'reject',
+          conflictResolutionDetails('reject_new', lockedCandidate.normalizedKey, normalizedKeyConflicts)
+        )
       })
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
         id: randomUUID(),
@@ -616,7 +620,8 @@ export async function promoteCodexPendingMemory(input: {
       at: now,
       reason: input.reason ?? 'Approved by Codex pending memory review',
       memoryId: lockedMemory.id,
-      candidateId: lockedCandidate.id
+      candidateId: lockedCandidate.id,
+      details: reviewEventDetails(lockedCandidate, 'promote')
     })
     await runMemoryMaintenanceFromRootLocked({
       memoryRoot: lockedMemoryRoot,
@@ -717,7 +722,8 @@ export async function rejectCodexPendingMemory(input: {
       action: 'reject',
       at: now,
       reason: input.reason ?? 'Rejected by Codex pending memory review',
-      candidateId: lockedCandidate.id
+      candidateId: lockedCandidate.id,
+      details: reviewEventDetails(lockedCandidate, 'reject')
     })
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
@@ -835,7 +841,7 @@ export async function editCodexPendingMemory(input: {
       at: now,
       reason: input.reason ?? 'Edited by Codex pending memory review',
       candidateId: validatedCandidate.id,
-      details: { reviewAction: 'edit' }
+      details: reviewEventDetails(validatedCandidate, 'edit')
     })
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
@@ -1010,6 +1016,28 @@ function conflictResolutionDetails(
     conflictingMemoryIds: conflicts.map((memory) => memory.id),
     conflicts: conflicts.map(summarizeNormalizedKeyConflict)
   }
+}
+
+function reviewEventDetails(
+  candidate: PendingMemory,
+  reviewAction: 'reject' | 'edit' | 'promote',
+  base: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const reviewPatternId = transientReviewPatternId(candidate)
+  return {
+    ...base,
+    reviewAction,
+    ...(reviewPatternId === undefined ? {} : { reviewPatternId }),
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    normalizedKey: candidate.normalizedKey
+  }
+}
+
+function transientReviewPatternId(candidate: PendingMemory): string | undefined {
+  const text = `${candidate.content} ${candidate.normalizedKey}`.toLowerCase()
+  return /(ran npm test|git status|current branch|today|temporary|one-off)/.test(text)
+    ? 'reject-transient-test-status'
+    : undefined
 }
 
 function tombstoneForRejectedCandidate(candidate: PendingMemory, now: string): MemoryTombstone {

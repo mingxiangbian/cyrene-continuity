@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   combineEvalGateResults,
   runDreamApplyEvalGate,
+  runV5ActiveLifecycleEvalGate,
+  runV5AutoPromotionEvalGate,
+  runV5GlobalAutoPromotionEvalGate,
+  runV5MemoryEdgeEvalGate,
+  runV5PendingBudgetEvalGate,
+  runV5RetrievalExplainEvalGate,
   runMemoryMigrationEvalGate,
   runProfileApplyEvalGate,
   runMemoryRoutingEvalGate,
@@ -458,5 +464,102 @@ describe('dream apply eval gate', () => {
     expect(result.passed).toBe(false)
     expect(result.failedChecks).toContain('affective_boundary_eval')
     expect(JSON.stringify(result.results)).toContain('diagnostic affective claim')
+  })
+})
+
+describe('v5 eval gates', () => {
+  it('fails auto_promotion_policy_eval for personal memory auto-promotion', () => {
+    const result = runV5AutoPromotionEvalGate([{
+      candidateId: 'personal-auto',
+      domain: 'personal',
+      scope: 'global',
+      source: 'user_explicit',
+      policyId: 'low_risk_global_procedural_v1',
+      decision: 'auto_promote'
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('auto_promotion_policy_eval')
+  })
+
+  it('fails auto_promotion_policy_eval for assistant-observed global auto-promotion', () => {
+    const result = runV5AutoPromotionEvalGate([{
+      candidateId: 'assistant-global-auto',
+      domain: 'procedural',
+      scope: 'global',
+      source: 'assistant_observed',
+      policyId: 'low_risk_global_procedural_v1',
+      decision: 'auto_promote'
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('auto_promotion_policy_eval')
+  })
+
+  it('fails global_auto_promotion_eval when the daily cap is exhausted', () => {
+    const result = runV5GlobalAutoPromotionEvalGate([{
+      candidateId: 'global-cap',
+      domain: 'procedural',
+      scope: 'global',
+      source: 'review_event',
+      policyId: 'low_risk_global_procedural_v1',
+      decision: 'auto_promote',
+      usedToday: 1,
+      dailyCap: 1,
+      evidenceCount: 3,
+      distinctEvidenceCount: 3
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('global_auto_promotion_eval')
+  })
+
+  it('fails active_lifecycle_eval for an unlinked supersede candidate', () => {
+    const result = runV5ActiveLifecycleEvalGate([{
+      memoryId: 'active-1',
+      action: 'supersede',
+      contentHashChecked: true,
+      linkedCandidate: false,
+      normalizedKeyConflict: false
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('active_lifecycle_eval')
+  })
+
+  it('fails pending_budget_eval when budget is exceeded without eviction', () => {
+    const result = runV5PendingBudgetEvalGate([{
+      scope: 'project',
+      pendingCount: 201,
+      maxPending: 200,
+      evictionApplied: false,
+      evictedLowestRank: false
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('pending_budget_eval')
+  })
+
+  it('fails memory_edge_eval for unapproved semantic edge used in retrieval', () => {
+    const result = runV5MemoryEdgeEvalGate([{
+      edgeId: 'edge-pending',
+      source: 'model',
+      status: 'pending',
+      usedInRetrieval: true
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('memory_edge_eval')
+  })
+
+  it('fails retrieval_explain_eval when retrieved memory lacks explain reasons', () => {
+    const result = runV5RetrievalExplainEvalGate([{
+      memoryId: 'retrieved-1',
+      usedInRetrieval: true,
+      explainReasons: []
+    }])
+
+    expect(result.passed).toBe(false)
+    expect(result.failedChecks).toContain('retrieval_explain_eval')
   })
 })

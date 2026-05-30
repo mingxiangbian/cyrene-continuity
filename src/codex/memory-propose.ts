@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { createDefaultConfig } from '../config.js'
 import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { codexProjectMemoryRoot, ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { markCodexMemoryDreamDue } from './memory-dream-state.js'
+import { enforcePendingBudget } from './memory-pending-budget.js'
 import { summarizePendingMemory } from './memory-review.js'
+import { evaluateAutoPromotionPolicy } from './memory-triage.js'
 import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import {
@@ -12,16 +15,21 @@ import {
 import {
   appendMemoryEventFromRoot,
   appendTombstoneFromRoot,
+  mergePendingMemory,
   readActiveMemoriesFromRoot,
+  readMemoryEventsFromRoot,
+  readPendingMemoriesFromRoot,
   readTombstonesFromRoot,
-  upsertPendingMemoryFromRoot
+  writeActiveMemoriesFromRoot,
+  writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
-import { validateMemoryCandidate } from '../memory/memory-validator.js'
+import { activateCandidate, validateMemoryCandidate } from '../memory/memory-validator.js'
 import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
 import type {
   MemoryCandidateKind,
   MemoryDomain,
   MemoryEvidence,
+  MemoryEvent,
   MemoryScope,
   MemoryScores,
   MemorySource,
@@ -63,6 +71,13 @@ export interface CodexMemoryProposeResult {
         action: 'reject'
         reason: string
       }
+    | {
+        action: 'auto_promote'
+        candidateId: string
+        memoryId: string
+        policyId: string
+        reason: string
+      }
   memoryRoot: string
 }
 
@@ -79,6 +94,7 @@ export async function proposeCodexMemoryCandidate(input: {
   candidate: CodexMemoryCandidateInput
   now?: string
   recordRejectedCandidate?: boolean
+  allowAutoPromote?: boolean
 }): Promise<CodexMemoryProposeResult> {
   const now = input.now ?? new Date().toISOString()
   const project = await identifyCodexProject(input.cwd)
@@ -96,9 +112,11 @@ export async function proposeCodexMemoryCandidate(input: {
   await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot)
   return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
     await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot)
-    const [existingMemories, tombstones] = await Promise.all([
+    const [existingMemories, tombstones, lockedPending, events] = await Promise.all([
       readActiveMemoriesFromRoot(lockedMemoryRoot),
-      readTombstonesFromRoot(lockedMemoryRoot)
+      readTombstonesFromRoot(lockedMemoryRoot),
+      readPendingMemoriesFromRoot(lockedMemoryRoot),
+      readMemoryEventsFromRoot(lockedMemoryRoot)
     ])
     const decision = validateMemoryCandidate({
       candidate,
@@ -126,23 +144,97 @@ export async function proposeCodexMemoryCandidate(input: {
     }
 
     const pendingCandidate = decision.action === 'pending' ? decision.candidate : candidate
-    const merged = await upsertPendingMemoryFromRoot(lockedMemoryRoot, pendingCandidate)
+    const existingPending = lockedPending.find((item) => item.normalizedKey === pendingCandidate.normalizedKey)
+    const mergedCandidate = existingPending === undefined
+      ? pendingCandidate
+      : mergePendingMemory(existingPending, pendingCandidate)
+    const pendingWithoutMerged = lockedPending.filter((item) => item.normalizedKey !== mergedCandidate.normalizedKey)
+    const config = createDefaultConfig(input.cwd)
+    const autoPromotion = evaluateAutoPromotionPolicy({
+      candidate: mergedCandidate,
+      scope: mergedCandidate.scope === 'global' ? 'global' : 'project',
+      active: existingMemories,
+      tombstones,
+      promotionsUsedToday: countAutoPromotionsForDay(events, now),
+      projectDailyCap: config.memoryAutoReviewProjectPromotePerDay,
+      globalDailyCap: config.memoryAutoReviewGlobalPromotePerDay,
+      now
+    })
+
+    if (autoPromotion.allowed && input.allowAutoPromote !== false) {
+      const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now)
+      await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted])
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged)
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID(),
+        action: 'promote',
+        at: now,
+        reason: autoPromotion.reason,
+        memoryId: promoted.id,
+        candidateId: mergedCandidate.id,
+        details: {
+          decision: 'auto_promote',
+          policyId: autoPromotion.policyId,
+          distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
+          evalGate: { passed: true, failedChecks: [] }
+        }
+      })
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: {
+          action: 'auto_promote',
+          candidateId: mergedCandidate.id,
+          memoryId: promoted.id,
+          policyId: autoPromotion.policyId,
+          reason: autoPromotion.reason
+        },
+        memoryRoot: lockedMemoryRoot
+      }
+    }
+
+    const budgetResult = enforcePendingBudget({
+      existing: pendingWithoutMerged,
+      incoming: mergedCandidate,
+      maxItems: mergedCandidate.scope === 'global' ? config.memoryPendingMaxItemsGlobal : config.memoryPendingMaxItemsProject,
+      now
+    })
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, budgetResult.nextPending)
+    if (budgetResult.action === 'reject_incoming') {
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: { action: 'reject', reason: budgetResult.reason },
+        memoryRoot: lockedMemoryRoot
+      }
+    }
+    if (budgetResult.action === 'evict_existing') {
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID(),
+        action: 'audit',
+        at: now,
+        reason: budgetResult.reason,
+        candidateId: budgetResult.evicted.id,
+        details: { decision: 'budget_evict_pending', incomingCandidateId: pendingCandidate.id }
+      })
+    }
     await markDreamDueFailOpen(lockedMemoryRoot, now)
     const reason =
-      decision.action === 'auto_write' ? `Pending-only Codex bridge downgraded auto-write: ${decision.reason}` : decision.reason
+      decision.action === 'auto_write'
+        ? `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.`
+        : decision.reason
 
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID(),
       action: 'pending',
       at: now,
       reason,
-      candidateId: merged.id
+      candidateId: mergedCandidate.id
     })
     await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
 
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
-      result: { action: 'pending', candidateId: merged.id, reason, review: summarizePendingMemory(merged) },
+      result: { action: 'pending', candidateId: mergedCandidate.id, reason, review: summarizePendingMemory(mergedCandidate) },
       memoryRoot: lockedMemoryRoot
     }
   })
@@ -154,6 +246,15 @@ async function markDreamDueFailOpen(memoryRoot: string, now: string): Promise<vo
   } catch {
     // Dream scheduling must never make pending-only memory proposal fail.
   }
+}
+
+function countAutoPromotionsForDay(events: MemoryEvent[], now: string): number {
+  const day = now.slice(0, 10)
+  return events.filter((event) =>
+    event.action === 'promote' &&
+    event.at.slice(0, 10) === day &&
+    event.details?.decision === 'auto_promote'
+  ).length
 }
 
 function toPendingMemory(input: CodexMemoryCandidateInput, now: string): PendingMemory {

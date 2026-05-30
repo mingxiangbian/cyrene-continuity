@@ -51,7 +51,7 @@ const PROJECT_CANDIDATE_KINDS = [
 ] as const satisfies readonly ProjectMemoryHarvesterCandidateKind[]
 
 const SIGNAL_EVIDENCE_LIMIT = 6
-const CONTENT_MAX_LENGTH = 500
+const GENERATED_MEMORY_CONTENT_MAX_LENGTH = 240
 const EVIDENCE_MAX_LENGTH = 320
 const SENSITIVE_PROJECT_HARVEST_PATTERN =
   /\b(?:personal|private|family|medical|password|secret|token|api[_\s-]?key|bearer|sk-[a-z0-9_-]*)\b/i
@@ -132,6 +132,7 @@ export function buildCodexProjectMemoryHarvestPrompt(signals: ProjectMemorySigna
     'Good candidates capture design decisions, confirmed workflows, rejected approaches, repeated pitfalls, project boundaries, and repository policies.',
     'Write generated memory summaries, candidate content, and evidence summaries in Chinese by default.',
     'Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.',
+    `Candidate content must be ${GENERATED_MEMORY_CONTENT_MAX_LENGTH} characters or fewer.`,
     'Reject one-time status, vague impressions, assistant self-praise, user psychology, private data, secrets, credentials, temporary output, and raw command dumps.',
     'Each candidate should include candidateKind or candidate_kind, content, signalIndexes, and optional tags.',
     'signalIndexes must be 1-based indexes of the collected signals that support that specific candidate.',
@@ -168,7 +169,10 @@ function sanitizeProjectMemoryCandidate(
     return undefined
   }
 
-  const content = cleanString(value.content, Math.min(config.memorySingleContentMaxChars, CONTENT_MAX_LENGTH))
+  const content = cleanString(
+    value.content,
+    Math.min(config.memorySingleContentMaxChars, GENERATED_MEMORY_CONTENT_MAX_LENGTH)
+  )
   if (content === undefined) {
     return undefined
   }
@@ -328,7 +332,14 @@ function cleanString(value: unknown, maxLength: number): string | undefined {
 
 function cleanRequiredString(value: string, maxLength: number): string {
   const redacted = redactReviewText(value.replace(/\s+/g, ' ').trim()).text
-  return redacted.length <= maxLength ? redacted : `${redacted.slice(0, Math.max(0, maxLength - 1))}...`
+  return truncateWithSuffix(redacted, maxLength)
+}
+
+function truncateWithSuffix(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  if (maxChars <= 0) return ''
+  if (maxChars <= 3) return '.'.repeat(maxChars)
+  return `${value.slice(0, maxChars - 3)}...`
 }
 
 function cleanTag(value: string): string | undefined {
