@@ -1,13 +1,70 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createDefaultConfig } from '../src/config.js'
 import {
   deriveProfileVisibility,
   distinctEvidenceCount,
   evaluatePendingPromotion,
   isPromotablePending
 } from '../src/memory/memory-validator.js'
-import type { PendingMemory } from '../src/memory/types.js'
+import { MEMORY_SOURCES, type MemoryEvent, type PendingMemory } from '../src/memory/types.js'
+
+const V5_ENV_KEYS = [
+  'CYRENE_AUTO_REVIEW_PROJECT_PROMOTE_PER_DAY',
+  'CYRENE_AUTO_REVIEW_GLOBAL_PROMOTE_PER_DAY',
+  'CYRENE_PENDING_MAX_ITEMS_PROJECT',
+  'CYRENE_PENDING_MAX_ITEMS_GLOBAL',
+  'CYRENE_PENDING_PROTECTED_MAX_AGE_DAYS'
+] as const
+const ORIGINAL_ENV = new Map(V5_ENV_KEYS.map((key) => [key, process.env[key]]))
+
+afterEach(() => {
+  for (const key of V5_ENV_KEYS) {
+    const value = ORIGINAL_ENV.get(key)
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+})
 
 describe('Codex repeated evidence promotion policy', () => {
+  it('loads v5 auto-review caps and pending budgets from env', () => {
+    process.env.CYRENE_AUTO_REVIEW_PROJECT_PROMOTE_PER_DAY = '7'
+    process.env.CYRENE_AUTO_REVIEW_GLOBAL_PROMOTE_PER_DAY = '2'
+    process.env.CYRENE_PENDING_MAX_ITEMS_PROJECT = '250'
+    process.env.CYRENE_PENDING_MAX_ITEMS_GLOBAL = '125'
+    process.env.CYRENE_PENDING_PROTECTED_MAX_AGE_DAYS = '45'
+
+    const config = createDefaultConfig(process.cwd())
+
+    expect(config.memoryAutoReviewProjectPromotePerDay).toBe(7)
+    expect(config.memoryAutoReviewGlobalPromotePerDay).toBe(2)
+    expect(config.memoryPendingMaxItemsProject).toBe(250)
+    expect(config.memoryPendingMaxItemsGlobal).toBe(125)
+    expect(config.memoryPendingProtectedMaxAgeDays).toBe(45)
+  })
+
+  it('supports review_event memory source for review-derived global learning', () => {
+    expect(MEMORY_SOURCES).toContain('review_event')
+  })
+
+  it('allows v5 audit details on memory events', () => {
+    const event: MemoryEvent = {
+      id: 'event-v5',
+      action: 'audit',
+      at: '2026-05-30T00:00:00.000Z',
+      reason: 'Auto-promoted by v5 policy.',
+      candidateId: 'candidate-v5',
+      details: {
+        policyId: 'low_risk_project_memory_v1',
+        decision: 'auto_promote',
+        evalGate: { passed: true, failedChecks: [] }
+      }
+    }
+    expect(event.details?.policyId).toBe('low_risk_project_memory_v1')
+  })
+
   it('counts repeated same run evidence once even with different evidence groups', () => {
     const candidate = createPending({
       seenCount: 2,

@@ -32,7 +32,8 @@ export const MEMORY_SOURCES = [
   'assistant_observed',
   'tool_trace',
   'file',
-  'legacy_markdown'
+  'legacy_markdown',
+  'review_event'
 ] as const
 export type MemorySource = typeof MEMORY_SOURCES[number]
 

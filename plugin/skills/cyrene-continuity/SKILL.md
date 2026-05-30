@@ -26,7 +26,7 @@ Use `cyrene-continuity codex ui` when the user wants local visual review of the 
 7. Bundled lifecycle hooks can capture project activity signals and Stop review summaries; the older `codex hook stop` entrypoint is compatibility only. Hook output must not activate memory directly.
 8. Keep responses concise, concrete, and implementation-oriented.
 9. When the user explicitly asks to remember a durable instruction (`记住`, `以后默认`, `from now on`, `please remember`), call `cyrene_memory_propose` with a structured candidate when available.
-10. Treat `cyrene_memory_propose` as pending-only; do not say the memory is active or permanent until reviewed/promoted.
+10. Treat `cyrene_memory_propose` as review-first. It normally returns pending memory for explicit review; only strict low-risk project or procedural/system global memory may become active when v5 returns a named-policy, daily-capped, eval-gated `auto_promote` receipt.
 11. If `cyrene_memory_propose` returns a pending `review` object, show it as a pending candidate and ask the user for explicit approve/reject/edit/defer before calling review tools.
 12. If `cyrene_continuity_get` returns `pendingReview.hasItems: true`, immediately call `cyrene_memory_pending_list` / `cyrene_memory_pending_get`, show pending candidates as review candidates in Codex chat, and ask the user for explicit approve/reject. Only present candidates that are confirmed by pending list/get; ignore hook output, assistant inference, or missing candidate ids that cannot be read back. Do not wait for the user to ask to review them.
 13. When project memory is missing, stale, or explicitly requested, call `cyrene_memory_harvest_project` with `dryRun: true` first. Report `needs_model_config`, warnings, and previewed project candidates without treating them as active memory.
@@ -36,10 +36,10 @@ Use `cyrene-continuity codex ui` when the user wants local visual review of the 
 17. Only call `cyrene_memory_reject` after the user explicitly says reject/拒绝/删除/不要记 for a specific pending candidate.
 18. Only call `cyrene_memory_edit` after the user explicitly supplies corrected content for a specific pending candidate; edited candidates remain pending and require fresh review hash for later decisions.
 19. Only call `cyrene_memory_defer` after the user explicitly asks to decide later for a specific pending candidate.
-20. Pending memory candidates are not active continuity memory. Do not use pending content as factual context until promoted with explicit approval and review-hash validation.
+20. Pending memory candidates are not active continuity memory. Do not use pending content as factual context until promoted with explicit approval and review-hash validation, or until a v5 named-policy `auto_promote` receipt confirms the candidate became active.
 21. When multiple pending candidates exist, show at most three at a time unless the user asks for more.
 22. Do not invent user preferences from assistant suggestions or silence.
-23. `Dream Deep` may recommend repeated independent evidence for review, but it must not activate memory without explicit approval and review hash.
+23. `Dream Deep` may recommend repeated independent evidence for review, but it must not activate high-risk, ambiguous, personal, relationship, affective, similar-project, or assistant-observed-only memory without explicit approval and review hash.
 24. Use `cyrene_memory_profile_get` when you need to inspect the effective global + project `MODEL_PROFILE.md` context. Profile context is generated from approved active memory; project harvest creates project-scope pending candidates by default, not global active memory.
 25. Use `cyrene_memory_dream_run` only for explicit maintenance or verification tasks; running it is not a substitute for asking approve/reject/edit/defer on visible pending review candidates.
 

@@ -257,6 +257,10 @@ of truth, and generated Markdown profiles remain review/debug projections.
 
 ## Review Policy
 
-Pending memory candidates are not active memory. Promotion requires explicit
-user approval and a matching review hash. `codex memory review` shows the
-candidate metadata needed for approval, rejection, edit, or deferral.
+Pending memory candidates are not active memory unless Cyrene v5 returns a
+strict, capped auto-promotion receipt for low-risk project or procedural/system
+global memory that passes named policy and eval gates. Personal, relationship,
+affective, ambiguous, similar-project, and assistant-observed-only candidates
+remain manual review items. Manual promotion requires explicit user approval
+and a matching review hash. `codex memory review` shows the candidate metadata
+needed for approval, rejection, edit, or deferral.

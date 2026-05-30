@@ -9940,12 +9940,17 @@ function createDefaultConfig(cwd) {
       true
     ),
     deprecatedMemoryAutoPromoteConfigured: envValue(dotEnv, "CYRENE_MEMORY_AUTO_PROMOTE") !== void 0,
+    memoryAutoReviewProjectPromotePerDay: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_AUTO_REVIEW_PROJECT_PROMOTE_PER_DAY"), 5),
+    memoryAutoReviewGlobalPromotePerDay: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_AUTO_REVIEW_GLOBAL_PROMOTE_PER_DAY"), 1),
     memoryActiveMaxItems: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_ACTIVE_MAX_ITEMS"), 300),
     memoryActiveContentMaxChars: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_ACTIVE_CONTENT_MAX_CHARS"), 5e4),
     memoryIndexFileMaxChars: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_INDEX_FILE_MAX_CHARS"), 25e4),
     memorySingleContentMaxChars: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_SINGLE_CONTENT_MAX_CHARS"), 300),
     memorySingleEvidenceMaxChars: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_SINGLE_EVIDENCE_MAX_CHARS"), 1e3),
     memoryPendingMaxItems: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_PENDING_MAX_ITEMS"), 100),
+    memoryPendingMaxItemsProject: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_PENDING_MAX_ITEMS_PROJECT"), 200),
+    memoryPendingMaxItemsGlobal: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_PENDING_MAX_ITEMS_GLOBAL"), 100),
+    memoryPendingProtectedMaxAgeDays: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_PENDING_PROTECTED_MAX_AGE_DAYS"), 30),
     memoryProfileMaxChars: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_PROFILE_MAX_CHARS"), 6e3),
     memoryProfileAlwaysOnEnabled: parseBooleanEnv(envValue(dotEnv, "CYRENE_MEMORY_PROFILE_ALWAYS_ON"), true),
     memoryMaintenanceSnapshotsMax: parsePositiveIntEnv(envValue(dotEnv, "CYRENE_MEMORY_MAINTENANCE_SNAPSHOTS_MAX"), 20),
@@ -14686,7 +14691,8 @@ var MEMORY_SOURCES = [
   "assistant_observed",
   "tool_trace",
   "file",
-  "legacy_markdown"
+  "legacy_markdown",
+  "review_event"
 ];
 var MEMORY_CANDIDATE_KINDS2 = [
   "project_fact",

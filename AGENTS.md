@@ -11,9 +11,10 @@ Scope: this file applies to the whole repository.
   coordination.
 - Do not edit generated plugin runtime files directly; update source and rebuild
   when runtime changes are requested.
-- Preserve the pending-only memory review model: docs must not imply automatic
-  promotion, rejection, profile mutation, or active-memory writes without
-  explicit user approval and review-hash validation.
+- Preserve the v5 memory review model: high-risk or ambiguous memory still
+  requires explicit user approval and review-hash validation. Strict low-risk
+  project/global memory may auto-promote only through named v5 policy, daily
+  caps, eval gates, and auditable `MemoryEvent` receipts.
 
 ## Verification
 
