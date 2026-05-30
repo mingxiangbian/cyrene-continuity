@@ -20,6 +20,23 @@ describe('Codex UI source assets', () => {
     expect(css).toContain('.explain-list')
   })
 
+  it('omits evidence summaries from the Inbox pending detail rail', async () => {
+    const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
+    const pendingDetailStart = source.indexOf('function renderPendingDetail(candidate)')
+    const confirmFormStart = source.indexOf('function renderConfirmForm(candidate, action)')
+    const pendingDetail = source.slice(pendingDetailStart, confirmFormStart)
+
+    expect(pendingDetailStart).toBeGreaterThanOrEqual(0)
+    expect(confirmFormStart).toBeGreaterThan(pendingDetailStart)
+    expect(pendingDetail).toContain('Pending detail')
+    expect(pendingDetail).toContain('reviewHash')
+    expect(pendingDetail).toContain('Actions')
+    expect(pendingDetail).not.toContain('renderEvidence')
+    expect(pendingDetail).not.toContain('Evidence')
+    expect(pendingDetail).not.toContain('evidenceSummary')
+    expect(source).not.toContain('function renderEvidence(candidate)')
+  })
+
   it('contains the Warm Cream Coral console shell and write-confirm review labels', async () => {
     const [html, js, css] = await Promise.all([
       readFile(new URL('../src/ui/static/index.html', import.meta.url), 'utf8'),

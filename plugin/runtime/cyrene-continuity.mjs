@@ -21916,7 +21916,6 @@ function renderPendingDetail(candidate) {
         <h3>Pending detail</h3>
         <p>\${escapeHtml(candidate.content)}</p>
         <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
-        \${renderEvidence(candidate)}
       </div>
       <div class="soft-panel">
         <h3>Actions</h3>
@@ -21928,16 +21927,6 @@ function renderPendingDetail(candidate) {
         </div>
         \${state.actionError ? \`<p class="notice error">\${escapeHtml(state.actionError)}</p>\` : ''}
       </div>
-    </div>
-  \`
-}
-
-function renderEvidence(candidate) {
-  const evidence = Array.isArray(candidate.evidenceSummary) ? candidate.evidenceSummary : []
-  return \`
-    <div class="evidence-list">
-      <h3>Evidence</h3>
-      \${evidence.slice(0, 4).map((item) => \`<div class="soft-inset rail-item">\${escapeHtml(item)}</div>\`).join('') || emptyState('No evidence summary returned.')}
     </div>
   \`
 }
