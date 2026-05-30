@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { proposeCodexMemoryCandidate } from '../src/codex/memory-propose.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import type { PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -19,6 +20,28 @@ async function createTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix))
   tempDirs.push(dir)
   return dir
+}
+
+function budgetPending(id: string, overrides: Partial<PendingMemory> = {}): PendingMemory {
+  return {
+    id,
+    domain: 'project',
+    type: 'project_fact',
+    strength: 'soft',
+    scope: 'project',
+    status: 'pending',
+    content: `Budget pending ${id}`,
+    normalizedKey: id,
+    evidence: [{ summary: `Budget evidence ${id}` }],
+    source: 'assistant_observed',
+    scores: { evidenceStrength: 0.4, stability: 0.4, usefulness: 0.3, safety: 0.9, sensitivity: 0.1 },
+    seenCount: 1,
+    firstSeenAt: '2026-05-01T00:00:00.000Z',
+    lastSeenAt: '2026-05-01T00:00:00.000Z',
+    expiresAt: '2026-06-01T00:00:00.000Z',
+    tags: [],
+    ...overrides
+  }
 }
 
 describe('Codex memory propose', () => {
@@ -255,6 +278,114 @@ describe('Codex memory propose', () => {
     expect(pending).toContain('Second observation.')
     expect(pending).toContain('"codex"')
     expect(pending).toContain('"memory"')
+  })
+
+  it('auto-promotes repeated strict low-risk project candidates after merge', async () => {
+    const home = await createTempDir('cyrene-propose-auto-promote-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-propose-auto-promote-project-')
+    const candidate = {
+      domain: 'project' as const,
+      type: 'project_fact' as const,
+      scope: 'project' as const,
+      source: 'file' as const,
+      candidateKind: 'project_fact' as const,
+      content: 'Project uses SQLite FTS for memory retrieval.',
+      normalizedKey: 'project-sqlite-fts-retrieval',
+      evidence: [{ summary: 'README documents SQLite FTS.', evidenceGroupId: 'file-1', sourceKind: 'file' as const }],
+      scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.8, safety: 0.95, sensitivity: 0.05 },
+      tags: ['project_harvest']
+    }
+
+    const first = await proposeCodexMemoryCandidate({ cwd, candidate, now: '2026-05-30T00:00:00.000Z' })
+    expect(first.result.action).toBe('pending')
+
+    const second = await proposeCodexMemoryCandidate({
+      cwd,
+      candidate: {
+        ...candidate,
+        evidence: [{ summary: 'Tool trace rebuilt memory.db.', evidenceGroupId: 'tool-1', sourceKind: 'tool_trace' as const }]
+      },
+      now: '2026-05-30T01:00:00.000Z'
+    })
+
+    expect(second.result.action).toBe('auto_promote')
+    const active = await readFile(join(second.memoryRoot, 'index.jsonl'), 'utf8')
+    expect(active).toContain('Project uses SQLite FTS for memory retrieval.')
+    await expect(readFile(join(second.memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+    const events = await readFile(join(second.memoryRoot, 'events.jsonl'), 'utf8')
+    expect(events).toContain('"decision":"auto_promote"')
+    expect(events).toContain('"policyId":"low_risk_project_memory_v1"')
+  })
+
+  it('evicts the weakest pending candidate before writing a stronger incoming candidate over budget', async () => {
+    const home = await createTempDir('cyrene-propose-budget-evict-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_PENDING_MAX_ITEMS_PROJECT', '2')
+    const cwd = await createTempDir('cyrene-propose-budget-evict-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), [
+      JSON.stringify(budgetPending('weak')),
+      JSON.stringify(budgetPending('protected', { source: 'user_explicit', candidateKind: 'user_instruction' }))
+    ].join('\n') + '\n')
+
+    const result = await proposeCodexMemoryCandidate({
+      cwd,
+      now: '2026-05-30T00:00:00.000Z',
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        content: 'Incoming budget candidate has stronger evidence.',
+        normalizedKey: 'incoming-budget-candidate',
+        source: 'file',
+        evidence: [{ summary: 'Incoming file evidence.', evidenceGroupId: 'file-incoming', sourceKind: 'file' }],
+        scores: { evidenceStrength: 0.9, stability: 0.8, usefulness: 0.8, safety: 0.95, sensitivity: 0.1 }
+      }
+    })
+
+    expect(result.result.action).toBe('pending')
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('incoming-budget-candidate')
+    expect(pending).toContain('protected')
+    expect(pending).not.toContain('weak')
+    const events = await readFile(join(memoryRoot, 'events.jsonl'), 'utf8')
+    expect(events).toContain('"decision":"budget_evict_pending"')
+    expect(events).toContain('"candidateId":"weak"')
+  })
+
+  it('rejects an incoming pending candidate when it is lowest ranked over budget', async () => {
+    const home = await createTempDir('cyrene-propose-budget-reject-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_PENDING_MAX_ITEMS_PROJECT', '2')
+    const cwd = await createTempDir('cyrene-propose-budget-reject-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), [
+      JSON.stringify(budgetPending('kept-file', { source: 'file', scores: { evidenceStrength: 0.7, stability: 0.7, usefulness: 0.65, safety: 0.95, sensitivity: 0.1 } })),
+      JSON.stringify(budgetPending('kept-tool', { source: 'tool_trace', scores: { evidenceStrength: 0.65, stability: 0.65, usefulness: 0.6, safety: 0.95, sensitivity: 0.1 } }))
+    ].join('\n') + '\n')
+
+    const result = await proposeCodexMemoryCandidate({
+      cwd,
+      now: '2026-05-30T00:00:00.000Z',
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        content: 'Incoming weak budget candidate.',
+        normalizedKey: 'incoming-weak-budget-candidate',
+        evidence: [{ summary: 'Weak assistant-observed budget evidence.' }]
+      }
+    })
+
+    expect(result.result).toMatchObject({ action: 'reject' })
+    expect(result.result.reason).toContain('incoming candidate is lowest-ranked under pending budget')
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('kept-file')
+    expect(pending).toContain('kept-tool')
+    expect(pending).not.toContain('incoming-weak-budget-candidate')
   })
 
   it('refuses a symlinked Codex project memory root', async () => {
