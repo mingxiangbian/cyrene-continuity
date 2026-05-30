@@ -45,6 +45,9 @@ const state = {
   pendingAction: null,
   receipt: null,
   actionError: '',
+  activeAction: null,
+  activeReceipt: null,
+  activeActionError: '',
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
   harvester: { loading: false, result: null, error: '' }
 }
@@ -155,6 +158,8 @@ function renderNav() {
       state.activeTab = button.dataset.tab || 'overview'
       state.pendingAction = null
       state.actionError = ''
+      state.activeAction = null
+      state.activeActionError = ''
       render()
     })
   })
@@ -280,6 +285,31 @@ function renderWorkspace() {
       render()
     })
   })
+  workspace.querySelectorAll('[data-active-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeAction = {
+        id: button.dataset.memoryId || '',
+        action: button.dataset.activeAction || ''
+      }
+      state.activeActionError = ''
+      state.activeReceipt = null
+      render()
+    })
+  })
+  workspace.querySelectorAll('[data-cancel-active-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.activeAction = null
+      state.activeActionError = ''
+      render()
+    })
+  })
+  const activeForm = workspace.querySelector('[data-active-action-form]')
+  if (activeForm) {
+    activeForm.addEventListener('submit', (event) => {
+      event.preventDefault()
+      submitActiveAction(new FormData(activeForm))
+    })
+  }
 }
 
 function pageHtml(tabId) {
@@ -384,6 +414,8 @@ function renderProjectMemory() {
   return `
     <section class="page-stack">
       ${sectionHeader('Project Memory', `Active memory for ${selection.label || 'selected scope'}.`)}
+      ${state.activeReceipt ? renderActiveReceipt(state.activeReceipt) : ''}
+      ${state.activeAction ? renderActiveActionForm() : ''}
       ${groups.length > 0 ? groups.map((group) => `
         <div class="soft-panel">
           <h3>${escapeHtml(group.label || 'Project memory')}</h3>
@@ -401,9 +433,96 @@ function renderMemoryRow(memory) {
         <div class="row-title">${escapeHtml(memory.content || memory.id || 'Memory')}</div>
         <div class="row-meta">${escapeHtml(memory.candidateKind || memory.type || 'memory')} · ${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
       </div>
-      ${statusChip('active', memory.status || 'active', 'ok')}
+      <div class="row-actions">
+        ${statusChip('active', memory.status || 'active', 'ok')}
+        <button class="soft-button compact" type="button" data-active-action="archive" data-memory-id="${escapeHtml(memory.id)}">Archive</button>
+        <button class="soft-button compact" type="button" data-active-action="tombstone" data-memory-id="${escapeHtml(memory.id)}">Tombstone</button>
+        <button class="soft-button compact" type="button" data-active-action="propose-edit" data-memory-id="${escapeHtml(memory.id)}">Propose edit</button>
+      </div>
     </article>
   `
+}
+
+function renderActiveActionForm() {
+  const memory = findActiveMemoryById(state.activeAction.id)
+  if (!memory) return panel('Active memory unavailable', 'Refresh the dashboard and try again.', 'error')
+  const action = state.activeAction.action
+  const editField = action === 'propose-edit'
+    ? `
+      <label>Replacement content
+        <textarea name="content" rows="4" required>${escapeHtml(memory.content || '')}</textarea>
+      </label>
+    `
+    : ''
+  const tombstoneField = action === 'tombstone'
+    ? `
+      <label>Days
+        <input name="days" type="number" min="1" step="1" value="180">
+      </label>
+    `
+    : ''
+  return `
+    <div class="soft-panel active-action-form">
+      <h3>${escapeHtml(activeActionLabel(action))}</h3>
+      <form class="confirm-form" data-active-action-form>
+        <label>Reason
+          <textarea name="reason" rows="3" required></textarea>
+        </label>
+        ${editField}
+        ${tombstoneField}
+        <div class="detail-actions">
+          <button class="soft-button primary compact" type="submit">${escapeHtml(activeActionLabel(action))}</button>
+          <button class="soft-button compact" type="button" data-cancel-active-action>Cancel</button>
+        </div>
+      </form>
+      ${state.activeActionError ? `<p class="notice error">${escapeHtml(state.activeActionError)}</p>` : ''}
+    </div>
+  `
+}
+
+function renderActiveReceipt(receipt) {
+  return `
+    <div class="soft-panel receipt-panel">
+      <p class="eyebrow">active memory receipt</p>
+      <h3>${escapeHtml(activeActionLabel(receipt.action || 'archive'))}</h3>
+      <div class="soft-inset rail-item"><strong>${escapeHtml(receipt.id || 'memory')}</strong><span>${escapeHtml(receipt.summary || 'Active memory action applied.')}</span></div>
+    </div>
+  `
+}
+
+async function submitActiveAction(formData) {
+  const activeAction = state.activeAction
+  if (!activeAction) return
+  const memory = findActiveMemoryById(activeAction.id)
+  if (!memory) return
+  const body = {
+    contentHash: memory.contentHash || '',
+    reason: String(formData.get('reason') || '').trim()
+  }
+  if (activeAction.action === 'propose-edit') {
+    body.content = String(formData.get('content') || '').trim()
+  }
+  if (activeAction.action === 'tombstone') {
+    const days = Number(formData.get('days') || 180)
+    body.days = Number.isFinite(days) ? days : 180
+  }
+  try {
+    const response = await apiFetch(`/api/active-memory/${encodeURIComponent(activeAction.id)}/${activeAction.action}`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Active memory action failed.')
+    }
+    await loadDashboard({ renderAfter: false })
+    state.activeReceipt = payload.data?.receipt || { id: activeAction.id, action: activeAction.action, summary: 'Active memory action applied.' }
+    state.activeAction = null
+    state.activeActionError = ''
+  } catch (error) {
+    state.activeActionError = errorMessage(error)
+  }
+  render()
 }
 
 function renderPreviewCandidateRow(candidate) {
@@ -882,6 +1001,10 @@ function selectedPending() {
   return listPending().find((candidate) => candidate.id === state.selectedPendingId)
 }
 
+function findActiveMemoryById(id) {
+  return listActive().find((memory) => memory.id === id)
+}
+
 function selectedProjectOption() {
   const projects = Array.isArray(state.dashboard.projects?.projects) ? state.dashboard.projects.projects : []
   const selectedProjectId = state.selectedProjectId || selectionInfo(state.dashboard).projectId || state.dashboard.projects?.currentProjectId || ''
@@ -894,6 +1017,13 @@ function actionLabel(action) {
   if (action === 'defer') return 'Defer'
   if (action === 'edit') return 'Edit'
   return 'Review'
+}
+
+function activeActionLabel(action) {
+  if (action === 'tombstone') return 'Tombstone'
+  if (action === 'propose-edit') return 'Propose edit'
+  if (action === 'supersede') return 'Supersede'
+  return 'Archive'
 }
 
 function sectionHeader(title, subtitle) {

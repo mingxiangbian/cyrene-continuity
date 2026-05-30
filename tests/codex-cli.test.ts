@@ -154,6 +154,16 @@ async function seedCliPending(cwd: string, pending: PendingMemory | PendingMemor
   return memoryRoot
 }
 
+async function seedCliActiveMemory(cwd: string): Promise<{ active: CyreneMemory; contentHash: string; memoryRoot: string }> {
+  const { contentHashForActiveMemory } = await import('../src/codex/active-memory-review.js')
+  const identity = await identifyCodexProject(cwd)
+  const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+  const active = createActive({ id: 'cli-active-lifecycle-1' })
+  await mkdir(memoryRoot, { recursive: true })
+  await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(active)}\n`, 'utf8')
+  return { active, contentHash: contentHashForActiveMemory(active), memoryRoot }
+}
+
 describe('cyrene-continuity codex CLI', () => {
   it('starts the Codex Web UI server until terminated', async () => {
     const home = await createTempDir('cyrene-codex-ui-home-')
@@ -1510,6 +1520,70 @@ describe('cyrene-continuity codex CLI', () => {
     expect(pending).not.toContain('cli-approve-1')
   })
 
+  it('runs active memory archive from the Codex CLI', async () => {
+    const home = await createTempDir('cyrene-cli-active-home-')
+    const repo = await createTempDir('cyrene-cli-active-project-')
+    process.env.HOME = home
+    const { active, contentHash, memoryRoot } = await seedCliActiveMemory(repo)
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'active',
+        'archive',
+        active.id,
+        '--content-hash',
+        contentHash,
+        '--reason',
+        'Stale.'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    expect(JSON.parse(result.stdout).result.action).toBe('archive')
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+  })
+
+  it('runs memory triage dry-run from the Codex CLI', async () => {
+    const home = await createTempDir('cyrene-cli-triage-home-')
+    const repo = await createTempDir('cyrene-cli-triage-project-')
+    process.env.HOME = home
+    await seedCliPending(repo, createPending({
+      id: 'triage-noise',
+      content: 'Ran npm test today.',
+      normalizedKey: 'ran-npm-test-today',
+      evidence: [{ summary: 'temporary command result' }],
+      seenCount: 1
+    }))
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'triage',
+        '--dry-run'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; decisions?: Array<{ action: string; candidateId: string }> }
+    expect(parsed.action).toBe('dry_run')
+    expect(parsed.decisions).toContainEqual(expect.objectContaining({ action: 'auto_drop', candidateId: 'triage-noise' }))
+  })
+
   it('memory approve accepts explicit normalizedKey conflict resolution', async () => {
     const home = await createTempDir('cyrene-codex-cli-conflict-resolution-home-')
     const repo = await createTempDir('cyrene-codex-cli-conflict-resolution-project-')
@@ -1835,7 +1909,13 @@ describe('cyrene-continuity codex CLI', () => {
         'affective_boundary_eval',
         'cross_project_leak_eval',
         'pending_usage_eval',
-        'similar_hint_eval'
+        'similar_hint_eval',
+        'auto_promotion_policy_eval',
+        'global_auto_promotion_eval',
+        'active_lifecycle_eval',
+        'pending_budget_eval',
+        'memory_edge_eval',
+        'retrieval_explain_eval'
       ]
     })
     expect(parsed.results.map((item) => item.name)).toEqual(parsed.minimumChecks)

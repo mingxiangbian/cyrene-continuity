@@ -278,6 +278,78 @@ describe('Codex active memory lifecycle', () => {
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('Replacement active memory.')
   })
 
+  it('rejects supersede when the pending candidate is not linked to the active memory', async () => {
+    const home = await createTempDir('cyrene-unlinked-supersede-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-unlinked-supersede-project-')
+    const memory = active()
+    const replacement = pending({
+      id: 'unlinked-replacement',
+      content: 'Unlinked replacement should not supersede active memory.',
+      normalizedKey: memory.normalizedKey,
+      conflictsWith: ['some-other-memory']
+    })
+    const root = await seed(cwd, [memory])
+    await writeFile(join(root, 'pending.jsonl'), jsonlText([replacement]), 'utf8')
+
+    const result = await supersedeCodexActiveMemory({
+      cwd,
+      id: memory.id,
+      candidateId: replacement.id,
+      contentHash: contentHashForActiveMemory(memory),
+      reviewHash: reviewHashForPendingMemory(replacement),
+      reason: 'Wrong replacement.',
+      now: '2026-05-30T02:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'conflict',
+      reason: 'Pending replacement is not linked to the active memory'
+    })
+    expect(await readFile(join(root, 'index.jsonl'), 'utf8')).toContain(memory.content)
+    expect(await readFile(join(root, 'pending.jsonl'), 'utf8')).toContain(replacement.content)
+  })
+
+  it('rejects supersede when the replacement normalized key conflicts with another active memory', async () => {
+    const home = await createTempDir('cyrene-supersede-key-conflict-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-supersede-key-conflict-project-')
+    const memory = active({ id: 'target-active', normalizedKey: 'target-key' })
+    const other = active({
+      id: 'other-active',
+      content: 'Other active memory keeps this normalized key.',
+      normalizedKey: 'other-key'
+    })
+    const replacement = pending({
+      id: 'replacement-key-conflict',
+      content: 'Replacement conflicts with another active memory key.',
+      normalizedKey: other.normalizedKey,
+      conflictsWith: [memory.id]
+    })
+    const root = await seed(cwd, [memory, other])
+    await writeFile(join(root, 'pending.jsonl'), jsonlText([replacement]), 'utf8')
+
+    const result = await supersedeCodexActiveMemory({
+      cwd,
+      id: memory.id,
+      candidateId: replacement.id,
+      contentHash: contentHashForActiveMemory(memory),
+      reviewHash: reviewHashForPendingMemory(replacement),
+      reason: 'Conflicting replacement.',
+      now: '2026-05-30T02:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'conflict',
+      reason: 'Replacement normalizedKey conflicts with another active memory'
+    })
+    const activeLines = await readFile(join(root, 'index.jsonl'), 'utf8')
+    expect(activeLines).toContain(memory.content)
+    expect(activeLines).toContain(other.content)
+    expect(activeLines).not.toContain(replacement.content)
+    expect(await readFile(join(root, 'pending.jsonl'), 'utf8')).toContain(replacement.content)
+  })
+
   it('returns conflict and does not mutate when the active content hash is stale', async () => {
     const home = await createTempDir('cyrene-active-conflict-home-')
     vi.stubEnv('HOME', home)

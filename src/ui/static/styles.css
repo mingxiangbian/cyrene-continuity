@@ -421,6 +421,14 @@ p {
   margin-top: 6px;
 }
 
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 360px;
+}
+
 .action-strip {
   display: flex;
   flex-wrap: wrap;
@@ -461,6 +469,10 @@ p {
 
 .receipt-panel {
   border-color: rgba(93, 184, 166, 0.42);
+}
+
+.active-action-form {
+  border-color: rgba(93, 184, 166, 0.3);
 }
 
 .danger-panel {
@@ -594,6 +606,11 @@ p {
   }
 
   .action-strip {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .row-actions {
     justify-content: flex-start;
     max-width: none;
   }

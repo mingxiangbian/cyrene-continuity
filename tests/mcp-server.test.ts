@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -8,6 +8,7 @@ import { jsonText } from '../src/mcp/mcp-json.js'
 import { createCyreneMcpServer } from '../src/mcp/mcp-server.js'
 import { handleMemoryPropose } from '../src/mcp/tools/memory-propose.js'
 import {
+  handleActiveMemoryArchive,
   handleMemoryDefer,
   handleMemoryEdit,
   handleMemoryPendingGet,
@@ -17,6 +18,10 @@ import {
 } from '../src/mcp/tools/memory-review.js'
 import { handleMemoryDreamRun, handleMemoryProfileGet } from '../src/mcp/tools/memory-dream.js'
 import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from '../src/mcp/tools/memory-harvest-project.js'
+import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
+import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { identifyCodexProject } from '../src/codex/project-id.js'
+import type { CyreneMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
 const originalHome = process.env.HOME
@@ -187,6 +192,44 @@ describe('Cyrene MCP server', () => {
     )
     expect(rejectJson.result.action).toBe('reject')
     expect(String(rejectJson.memoryRoot)).toContain('/.cyrene/codex/global/memory')
+  })
+
+  it('handles active memory archive over MCP', async () => {
+    const home = await createTempDir('cyrene-mcp-active-archive-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-mcp-active-archive-project-')
+    const project = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    const memory: CyreneMemory = {
+      id: 'mcp-active-archive',
+      domain: 'project',
+      type: 'project_fact',
+      strength: 'hard',
+      scope: 'project',
+      status: 'active',
+      content: 'MCP can archive active memory.',
+      normalizedKey: 'mcp-can-archive-active-memory',
+      evidence: [{ summary: 'MCP active seed.' }],
+      source: 'file',
+      scores: { evidenceStrength: 0.9, stability: 0.9, usefulness: 0.9, safety: 0.95, sensitivity: 0.1 },
+      createdAt: '2026-05-30T00:00:00.000Z',
+      updatedAt: '2026-05-30T00:00:00.000Z',
+      tags: []
+    }
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(memory)}\n`, 'utf8')
+
+    const archiveJson = JSON.parse(
+      (await handleActiveMemoryArchive({
+        cwd,
+        id: memory.id,
+        contentHash: contentHashForActiveMemory(memory),
+        reason: 'Covered by MCP active archive test.'
+      }, process.cwd())).content[0]?.text ?? '{}'
+    )
+
+    expect(archiveJson.result.action).toBe('archive')
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
   })
 
   it('handles memory promote conflict resolution over MCP', async () => {

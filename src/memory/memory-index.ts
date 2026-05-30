@@ -581,10 +581,6 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     await this.initialize()
     const conditions: string[] = []
     const values: unknown[] = []
-    if (input.fromId !== undefined) {
-      conditions.push('from_id = ?')
-      values.push(input.fromId)
-    }
     if (input.toId !== undefined) {
       conditions.push('to_id = ?')
       values.push(input.toId)
@@ -611,7 +607,9 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       from memory_edges
       ${where}
       order by created_at asc, id asc
-    `).all(...values).map(memoryEdgeFromRecord)
+    `).all(...values)
+      .map(memoryEdgeFromRecord)
+      .filter((edge) => input.fromId === undefined || edge.fromId === input.fromId || indexedMemoryIdPayload(edge.fromId) === input.fromId)
   }
 
   async queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]> {
@@ -1083,8 +1081,21 @@ function deriveIndexedDeterministicMemoryEdges(
   return deriveDeterministicMemoryEdges(memory, now).map((edge) => ({
     ...edge,
     id: `edge-${hashText(`${indexId}\0${edge.toId}`, 24)}`,
-    fromId: indexId
+    fromId: indexId,
+    status: memory.status === 'active' ? 'approved' : 'pending'
   }))
+}
+
+function indexedMemoryIdPayload(fromId: string): string | undefined {
+  try {
+    const value = JSON.parse(fromId) as unknown
+    if (!Array.isArray(value) || typeof value[2] !== 'string') {
+      return undefined
+    }
+    return value[2]
+  } catch {
+    return undefined
+  }
 }
 
 function memoryEdgeFromRecord(row: Record<string, unknown>): MemoryEdge {

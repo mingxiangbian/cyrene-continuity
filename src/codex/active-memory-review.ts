@@ -289,6 +289,31 @@ export async function supersedeCodexActiveMemory(input: {
       }
     }
 
+    if (!(candidate.conflictsWith ?? []).includes(memory.id)) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'conflict',
+          reason: 'Pending replacement is not linked to the active memory'
+        }
+      }
+    }
+
+    const normalizedKeyConflict = lockedActive.find((item) => {
+      return item.id !== memory.id && item.normalizedKey === candidate.normalizedKey
+    })
+    if (normalizedKeyConflict !== undefined) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'conflict',
+          reason: 'Replacement normalizedKey conflicts with another active memory'
+        }
+      }
+    }
+
     const lockedTombstones = await readTombstonesFromRoot(lockedMemoryRoot)
     const confirmedCandidate: PendingMemory = { ...candidate, userConfirmed: true }
     const decision = validateMemoryCandidate({

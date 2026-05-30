@@ -1,5 +1,11 @@
 import { z } from 'zod'
 import {
+  archiveCodexActiveMemory,
+  proposeEditCodexActiveMemory,
+  supersedeCodexActiveMemory,
+  tombstoneCodexActiveMemory
+} from '../../codex/active-memory-review.js'
+import {
   deferCodexPendingMemory,
   editCodexPendingMemory,
   getCodexPendingMemory,
@@ -38,6 +44,39 @@ export const memoryReviewDeferInputSchema = {
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
   days: z.number().int().positive().optional(),
   reason: z.string().optional()
+}
+
+export const activeMemoryArchiveInputSchema = {
+  id: z.string(),
+  contentHash: z.string().min(1),
+  reason: z.string().min(1),
+  cwd: z.string().optional()
+}
+
+export const activeMemoryTombstoneInputSchema = {
+  id: z.string(),
+  contentHash: z.string().min(1),
+  reason: z.string().min(1),
+  days: z.number().int().positive().optional(),
+  indefinite: z.boolean().optional(),
+  cwd: z.string().optional()
+}
+
+export const activeMemoryProposeEditInputSchema = {
+  id: z.string(),
+  contentHash: z.string().min(1),
+  content: z.string().min(1),
+  reason: z.string().min(1),
+  cwd: z.string().optional()
+}
+
+export const activeMemorySupersedeInputSchema = {
+  id: z.string(),
+  candidateId: z.string().min(1),
+  contentHash: z.string().min(1),
+  reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  reason: z.string().min(1),
+  cwd: z.string().optional()
 }
 
 export async function handleMemoryPendingList(input: { cwd?: string; limit?: number }, fallbackCwd: string) {
@@ -110,4 +149,57 @@ export async function handleMemoryDefer(
     reason: input.reason
   })
   return jsonText(result)
+}
+
+export async function handleActiveMemoryArchive(
+  input: { cwd?: string; id: string; contentHash: string; reason: string },
+  fallbackCwd: string
+) {
+  return jsonText(await archiveCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    contentHash: input.contentHash,
+    reason: input.reason
+  }))
+}
+
+export async function handleActiveMemoryTombstone(
+  input: { cwd?: string; id: string; contentHash: string; reason: string; days?: number; indefinite?: boolean },
+  fallbackCwd: string
+) {
+  return jsonText(await tombstoneCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    contentHash: input.contentHash,
+    reason: input.reason,
+    days: input.days,
+    indefinite: input.indefinite
+  }))
+}
+
+export async function handleActiveMemoryProposeEdit(
+  input: { cwd?: string; id: string; contentHash: string; content: string; reason: string },
+  fallbackCwd: string
+) {
+  return jsonText(await proposeEditCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    contentHash: input.contentHash,
+    content: input.content,
+    reason: input.reason
+  }))
+}
+
+export async function handleActiveMemorySupersede(
+  input: { cwd?: string; id: string; candidateId: string; contentHash: string; reviewHash: string; reason: string },
+  fallbackCwd: string
+) {
+  return jsonText(await supersedeCodexActiveMemory({
+    cwd: input.cwd ?? fallbackCwd,
+    id: input.id,
+    candidateId: input.candidateId,
+    contentHash: input.contentHash,
+    reviewHash: input.reviewHash,
+    reason: input.reason
+  }))
 }

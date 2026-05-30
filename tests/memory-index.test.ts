@@ -685,6 +685,55 @@ describe('memory SQLite index', () => {
     ]))
   })
 
+  it('does not expose pending memory edges as approved graph neighbors after sync', async () => {
+    const root = await createTempDir('cyrene-memory-index-pending-edges-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'pending.jsonl'), [
+      pendingMemory({
+        id: 'pending-edge-memory',
+        evidence: [{ summary: 'Pending trace ref.', traceRefs: ['src/pending.ts'] }]
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    await expect(adapter.queryMemoryEdges({ toId: 'src/pending.ts', status: 'approved' })).resolves.toEqual([])
+    const pendingEdges = await adapter.queryMemoryEdges({ toId: 'src/pending.ts', status: 'pending' })
+    expect(pendingEdges).toEqual([expect.objectContaining({
+      fromId: expect.stringContaining('pending-edge-memory'),
+      status: 'pending'
+    })])
+  })
+
+  it('queries synced deterministic edges by public memory id', async () => {
+    const root = await createTempDir('cyrene-memory-index-public-edge-id-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'public-memory-id',
+        evidence: [{ summary: 'Public id trace ref.', traceRefs: ['src/public.ts'] }]
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const edges = await adapter.queryMemoryEdges({ fromId: 'public-memory-id', status: 'approved' })
+
+    expect(edges).toEqual([expect.objectContaining({
+      fromId: JSON.stringify(['project', 'project-a', 'public-memory-id']),
+      toId: 'src/public.ts',
+      status: 'approved'
+    })])
+  })
+
   it('returns unavailable diagnostics when forced unavailable', async () => {
     const root = await createTempDir('cyrene-memory-index-disabled-')
     const adapter = await openMemoryIndexAdapter({

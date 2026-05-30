@@ -10,6 +10,14 @@ import {
 import { handleMemoryPropose, memoryProposeInputSchema } from './tools/memory-propose.js'
 import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from './tools/memory-harvest-project.js'
 import {
+  activeMemoryArchiveInputSchema,
+  activeMemoryProposeEditInputSchema,
+  activeMemorySupersedeInputSchema,
+  activeMemoryTombstoneInputSchema,
+  handleActiveMemoryArchive,
+  handleActiveMemoryProposeEdit,
+  handleActiveMemorySupersede,
+  handleActiveMemoryTombstone,
   handleMemoryDefer,
   handleMemoryEdit,
   handleMemoryPendingGet,
@@ -123,6 +131,42 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
       inputSchema: memoryReviewDeferInputSchema
     },
     async (input) => handleMemoryDefer(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_active_archive',
+    {
+      description: 'Archive a hash-checked active Cyrene memory so it leaves retrieval without creating a tombstone.',
+      inputSchema: activeMemoryArchiveInputSchema
+    },
+    async (input) => handleActiveMemoryArchive(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_active_tombstone',
+    {
+      description: 'Tombstone a hash-checked active Cyrene memory and block matching future candidates.',
+      inputSchema: activeMemoryTombstoneInputSchema
+    },
+    async (input) => handleActiveMemoryTombstone(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_active_propose_edit',
+    {
+      description: 'Create a pending replacement candidate for a hash-checked active Cyrene memory.',
+      inputSchema: activeMemoryProposeEditInputSchema
+    },
+    async (input) => handleActiveMemoryProposeEdit(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_active_supersede',
+    {
+      description: 'Supersede a hash-checked active Cyrene memory with a reviewed pending replacement candidate.',
+      inputSchema: activeMemorySupersedeInputSchema
+    },
+    async (input) => handleActiveMemorySupersede(input, options.cwd)
   )
 
   server.registerTool(

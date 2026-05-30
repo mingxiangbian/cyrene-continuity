@@ -607,6 +607,33 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(pending.content)
   })
 
+  it('archives active memory through hash-checked UI API', async () => {
+    const home = await createTempDir('cyrene-ui-active-archive-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, active, memoryRoot } = await seedProject()
+    const { contentHashForActiveMemory } = await import('../src/codex/active-memory-review.js')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/active-memory/${active.id}/archive`,
+      body: { contentHash: contentHashForActiveMemory(active), reason: 'Stale UI memory.' },
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: {
+          action: 'archive_active_memory',
+          id: active.id
+        }
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+  })
+
   it('edits pending memory through the Web UI write route without promoting it', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)

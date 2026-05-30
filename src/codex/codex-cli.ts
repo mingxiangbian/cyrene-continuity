@@ -5,7 +5,14 @@ import { handleCodexStopHookCommand } from './codex-hook-stop.js'
 import { handleCodexHookTraceCommand } from './codex-hook-trace.js'
 import { installCodexDevBridge, installCodexPluginBridge } from './codex-install.js'
 import { rebuildCodexMemoryIndex } from './codex-memory-index.js'
+import {
+  runCodexMemoryActiveArchive,
+  runCodexMemoryActiveProposeEdit,
+  runCodexMemoryActiveSupersede,
+  runCodexMemoryActiveTombstone
+} from './codex-memory-active-cli.js'
 import { formatCodexMemoryDashboard } from './codex-memory-dashboard.js'
+import { runCodexMemoryTriage } from './codex-memory-triage-cli.js'
 import { startCodexUiServer, type CodexUiServer } from './codex-ui-server.js'
 import {
   formatCodexMemoryReview,
@@ -181,6 +188,60 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
+  if (command === 'memory' && input.args[1] === 'triage') {
+    process.stdout.write(await runCodexMemoryTriage({
+      cwd: input.cwd,
+      dryRun: input.args.includes('--dry-run') || !input.args.includes('--apply'),
+      apply: input.args.includes('--apply')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'active' && input.args[2] === 'archive') {
+    process.stdout.write(await runCodexMemoryActiveArchive({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, 'active memory id'),
+      contentHash: parseRequiredOption(input.args, '--content-hash', 'active content hash'),
+      reason: parseRequiredOption(input.args, '--reason', 'archive reason')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'active' && input.args[2] === 'tombstone') {
+    process.stdout.write(await runCodexMemoryActiveTombstone({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, 'active memory id'),
+      contentHash: parseRequiredOption(input.args, '--content-hash', 'active content hash'),
+      reason: parseRequiredOption(input.args, '--reason', 'tombstone reason'),
+      days: parseOptionalPositiveInteger(input.args, '--days'),
+      indefinite: input.args.includes('--indefinite')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'active' && input.args[2] === 'propose-edit') {
+    process.stdout.write(await runCodexMemoryActiveProposeEdit({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, 'active memory id'),
+      contentHash: parseRequiredOption(input.args, '--content-hash', 'active content hash'),
+      content: parseRequiredOption(input.args, '--content', 'replacement content'),
+      reason: parseRequiredOption(input.args, '--reason', 'edit reason')
+    }))
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'active' && input.args[2] === 'supersede') {
+    process.stdout.write(await runCodexMemoryActiveSupersede({
+      cwd: input.cwd,
+      id: parseRequiredPositional(input.args, 3, 'active memory id'),
+      candidateId: parseRequiredOption(input.args, '--candidate', 'replacement candidate id'),
+      contentHash: parseRequiredOption(input.args, '--content-hash', 'active content hash'),
+      reviewHash: parseRequiredOption(input.args, '--review-hash', 'replacement review hash'),
+      reason: parseRequiredOption(input.args, '--reason', 'supersede reason')
+    }))
+    return
+  }
+
   if (command === 'memory' && input.args[1] === 'dashboard') {
     process.stdout.write(await formatCodexMemoryDashboard({ cwd: input.cwd }))
     return
@@ -286,7 +347,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text>|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 

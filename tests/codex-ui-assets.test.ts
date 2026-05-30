@@ -31,6 +31,11 @@ describe('Codex UI source assets', () => {
     expect(js).not.toContain('Approve selected')
     expect(js).not.toContain('Reject selected')
     expect(js).toContain('/api/memory/harvest-project/dry-run')
+    expect(js).toContain('/api/active-memory/')
+    expect(js).toContain('data-active-action="archive"')
+    expect(js).toContain('data-active-action="tombstone"')
+    expect(js).toContain('data-active-action="propose-edit"')
+    expect(js).toContain('active memory receipt')
     expect(js).toContain('/delete-memory')
     expect(js).toContain('Delete & disable project memory')
     expect(js).toContain('confirmProjectId')
@@ -71,7 +76,8 @@ describe('Codex UI source assets', () => {
       '.selectable-row',
       '.detail-actions',
       '.confirm-form',
-      '.receipt-panel'
+      '.receipt-panel',
+      '.active-action-form'
     ]) {
       expect(css).toContain(className)
     }

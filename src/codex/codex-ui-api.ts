@@ -20,11 +20,19 @@ import type { CyreneMemory, MemoryCandidateKind, MemoryScores } from '../memory/
 import { codexMemoryDbPath } from './codex-memory-index.js'
 import { readCodexMemoryStatus } from './codex-memory-status.js'
 import {
+  archiveCodexActiveMemory,
+  contentHashForActiveMemory,
+  proposeEditCodexActiveMemory,
+  supersedeCodexActiveMemory,
+  tombstoneCodexActiveMemory
+} from './active-memory-review.js'
+import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
+import { runCodexMemoryTriage } from './codex-memory-triage-cli.js'
 import {
   deferCodexPendingMemory,
   editCodexPendingMemory,
@@ -74,9 +82,11 @@ interface CodexUiProjectIdentity {
 
 interface ActiveMemoryResult {
   project: CodexUiProjectIdentity
-  active: CyreneMemory[]
+  active: CodexUiActiveMemorySummary[]
   memoryRoot: string
 }
+
+type CodexUiActiveMemorySummary = CyreneMemory & { contentHash: string }
 
 interface ProjectMemoryGroup {
   label: string
@@ -111,6 +121,7 @@ type ProjectMemoryLabel = typeof PROJECT_MEMORY_LABELS[number]
 type GlobalMemoryLabel = typeof GLOBAL_MEMORY_LABELS[number]
 type CodexUiMemoryScope = 'project' | 'global' | 'all'
 type MemoryWriteAction = 'approve' | 'reject' | 'defer' | 'edit'
+type ActiveMemoryWriteAction = 'archive' | 'tombstone' | 'propose-edit' | 'supersede'
 type MemoryWriteReviewResult =
   | CodexPendingMemoryPromoteResult
   | CodexPendingMemoryRejectResult
@@ -120,6 +131,11 @@ type MemoryWriteReviewResult =
 interface MemoryWriteRoute {
   id: string
   action: MemoryWriteAction
+}
+
+interface ActiveMemoryWriteRoute {
+  id: string
+  action: ActiveMemoryWriteAction
 }
 
 interface EditPatch {
@@ -198,6 +214,27 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       return ok({ result })
     }
 
+    if (input.pathname === '/api/memory/triage/dry-run' || input.pathname === '/api/memory/triage/apply') {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      const output = await runCodexMemoryTriage({
+        cwd: input.cwd,
+        dryRun: input.pathname.endsWith('/dry-run'),
+        apply: input.pathname.endsWith('/apply'),
+        now: input.now
+      })
+      return ok(JSON.parse(output))
+    }
+
+    const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname)
+    if (activeWriteRoute !== undefined) {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      return handleActiveMemoryWriteRoute(input, activeWriteRoute)
+    }
+
     const writeRoute = parseMemoryWriteRoute(input.pathname)
     if (writeRoute !== undefined) {
       if (input.method.toUpperCase() !== 'POST') {
@@ -272,6 +309,12 @@ function parseMemoryWriteRoute(pathname: string): MemoryWriteRoute | undefined {
   const match = /^\/api\/memory\/([^/]+)\/(approve|reject|defer|edit)$/.exec(pathname)
   if (match === null) return undefined
   return { id: decodeURIComponent(match[1]), action: match[2] as MemoryWriteAction }
+}
+
+function parseActiveMemoryWriteRoute(pathname: string): ActiveMemoryWriteRoute | undefined {
+  const match = /^\/api\/active-memory\/([^/]+)\/(archive|tombstone|propose-edit|supersede)$/.exec(pathname)
+  if (match === null) return undefined
+  return { id: decodeURIComponent(match[1]), action: match[2] as ActiveMemoryWriteAction }
 }
 
 function parseProjectDeleteRoute(pathname: string): { projectId: string } | undefined {
@@ -388,6 +431,86 @@ async function handleMemoryWriteRoute(
     reviewHash,
     input.now
   )
+}
+
+async function handleActiveMemoryWriteRoute(
+  input: HandleCodexUiApiRequestInput,
+  route: ActiveMemoryWriteRoute
+): Promise<CodexUiApiResult<unknown>> {
+  const body = input.body
+  if (!isRecord(body) || typeof body.contentHash !== 'string' || body.contentHash.trim() === '') {
+    return failure(400, 'invalid_request', 'Active memory write requests require contentHash.')
+  }
+  if (typeof body.reason !== 'string' || body.reason.trim() === '') {
+    return failure(400, 'invalid_request', 'Active memory write requests require reason.')
+  }
+
+  const base = {
+    cwd: input.cwd,
+    id: route.id,
+    contentHash: body.contentHash.trim(),
+    reason: body.reason.trim(),
+    now: input.now
+  }
+  const result = route.action === 'archive'
+    ? await archiveCodexActiveMemory(base)
+    : route.action === 'tombstone'
+      ? await tombstoneCodexActiveMemory({
+          ...base,
+          days: optionalPositiveInteger(body.days, 180),
+          indefinite: body.indefinite === true
+        })
+      : route.action === 'propose-edit'
+        ? await proposeEditCodexActiveMemory({
+            ...base,
+            content: requiredBodyString(body.content, 'Active memory propose-edit requires content.')
+          })
+        : await supersedeCodexActiveMemory({
+            ...base,
+            candidateId: requiredBodyString(body.candidateId, 'Active memory supersede requires candidateId.'),
+            reviewHash: requiredBodyString(body.reviewHash, 'Active memory supersede requires reviewHash.')
+          })
+
+  return activeResultToApi(result, route.action, route.id, input.now)
+}
+
+function activeResultToApi(
+  lifecycleResult: Awaited<
+    ReturnType<typeof archiveCodexActiveMemory> |
+    ReturnType<typeof tombstoneCodexActiveMemory> |
+    ReturnType<typeof proposeEditCodexActiveMemory> |
+    ReturnType<typeof supersedeCodexActiveMemory>
+  >,
+  action: ActiveMemoryWriteAction,
+  id: string,
+  now?: string
+): CodexUiApiResult<unknown> {
+  const result = lifecycleResult.result
+  if (result.action === 'not_found') {
+    return failure(404, 'not_found', result.reason)
+  }
+  if (result.action === 'conflict') {
+    return failure(409, 'active_memory_conflict', result.reason, { result })
+  }
+  if (result.action === 'rejected_by_validator') {
+    return failure(400, 'rejected_by_validator', result.reason, { result })
+  }
+  return ok({
+    receipt: {
+      action: `${action.replace('-', '_')}_active_memory`,
+      id,
+      createdAt: now ?? new Date().toISOString(),
+      summary: 'Active memory action applied.'
+    },
+    result
+  })
+}
+
+function requiredBodyString(value: unknown, message: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(message)
+  }
+  return value.trim()
 }
 
 function parseEditPatch(value: Record<string, unknown>): { value: EditPatch } | { error: CodexUiApiResult<never> } {
@@ -673,7 +796,14 @@ async function readDreamFromSelection(selection: CodexUiResolvedSelection): Prom
 
 async function readActiveFromSelection(selection: CodexUiResolvedSelection): Promise<ActiveMemoryResult> {
   const active = (await Promise.all(selection.memoryRoots.map((root) => readActiveMemoriesFromRoot(root)))).flat()
-  return { project: selection.project, active: sortMemoriesNewestFirst(active), memoryRoot: selection.memoryRoot }
+  return {
+    project: selection.project,
+    active: sortMemoriesNewestFirst(active).map((memory) => ({
+      ...memory,
+      contentHash: contentHashForActiveMemory(memory)
+    })),
+    memoryRoot: selection.memoryRoot
+  }
 }
 
 async function readPendingFromSelection(selection: CodexUiResolvedSelection): Promise<{
