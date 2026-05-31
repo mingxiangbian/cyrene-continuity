@@ -10148,6 +10148,9 @@ function isFileErrorCode2(error2, code) {
 // src/memory/memory-store.ts
 var INDEX_FILE = "index.jsonl";
 var PENDING_FILE = "pending.jsonl";
+var EPISODES_FILE = "episodes.jsonl";
+var CANDIDATE_DRAFTS_FILE = "candidate_drafts.jsonl";
+var ADMISSION_DECISIONS_FILE = "admission_decisions.jsonl";
 var EVENTS_FILE = "events.jsonl";
 var TOMBSTONES_FILE = "tombstones.jsonl";
 var MAX_PENDING_EVIDENCE = 10;
@@ -10199,6 +10202,18 @@ async function writePendingMemoriesFromRoot(memoryRoot, memories) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await writeJsonLinesAtomic(join4(root, PENDING_FILE), memories.filter((memory) => memory.status === "pending"));
 }
+async function appendEpisodeMemoryFromRoot(memoryRoot, episode) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await appendJsonLine(join4(root, EPISODES_FILE), episode);
+}
+async function appendCandidateDraftFromRoot(memoryRoot, draft) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await appendJsonLine(join4(root, CANDIDATE_DRAFTS_FILE), draft);
+}
+async function appendAdmissionDecisionFromRoot(memoryRoot, decision2) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await appendJsonLine(join4(root, ADMISSION_DECISIONS_FILE), decision2);
+}
 async function appendMemoryEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, EVENTS_FILE), event);
@@ -10235,6 +10250,11 @@ function mergePendingMemory(existing, candidate) {
     candidateKind: existing.candidateKind ?? candidate.candidateKind,
     candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
     tags: Array.from(/* @__PURE__ */ new Set([...existing.tags, ...candidate.tags])),
+    admittedBy: existing.admittedBy ?? candidate.admittedBy,
+    admissionScore: Math.max(existing.admissionScore ?? 0, candidate.admissionScore ?? 0) || void 0,
+    admissionReasons: uniqueOptional([...existing.admissionReasons ?? [], ...candidate.admissionReasons ?? []]),
+    sourceEpisodeIds: uniqueOptional([...existing.sourceEpisodeIds ?? [], ...candidate.sourceEpisodeIds ?? []]),
+    sourceDraftIds: uniqueOptional([...existing.sourceDraftIds ?? [], ...candidate.sourceDraftIds ?? []]),
     conflictsWith: uniqueOptional([...existing.conflictsWith ?? [], ...candidate.conflictsWith ?? []])
   };
 }
@@ -15351,16 +15371,16 @@ async function promoteCodexPendingMemory(input) {
     readTombstonesFromRoot(memoryRoot)
   ]);
   const confirmedCandidate = { ...candidate, userConfirmed: true };
-  const decision = validateMemoryCandidate({ candidate: confirmedCandidate, existingMemories: active, tombstones, now });
-  if (decision.action === "reject") {
+  const decision2 = validateMemoryCandidate({ candidate: confirmedCandidate, existingMemories: active, tombstones, now });
+  if (decision2.action === "reject") {
     return {
       project,
       memoryRoot,
       result: {
         action: "rejected_by_validator",
         candidateId: candidate.id,
-        reason: decision.reason,
-        tombstone: decision.tombstone
+        reason: decision2.reason,
+        tombstone: decision2.tombstone
       }
     };
   }
@@ -15543,14 +15563,14 @@ async function promoteCodexPendingMemory(input) {
     };
   });
 }
-function memoryForPromotedDecision(decision, now) {
-  if (decision.action === "pending") {
-    return activateCandidate({ ...decision.candidate, userConfirmed: true }, now);
+function memoryForPromotedDecision(decision2, now) {
+  if (decision2.action === "pending") {
+    return activateCandidate({ ...decision2.candidate, userConfirmed: true }, now);
   }
-  if (decision.action === "auto_write") {
-    return { ...decision.memory, userConfirmed: true };
+  if (decision2.action === "auto_write") {
+    return { ...decision2.memory, userConfirmed: true };
   }
-  throw new Error(`Unsupported validator action for Codex pending promotion: ${decision.action}`);
+  throw new Error(`Unsupported validator action for Codex pending promotion: ${decision2.action}`);
 }
 async function rejectCodexPendingMemory(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -15676,25 +15696,25 @@ async function editCodexPendingMemory(input) {
       readActiveMemoriesFromRoot(lockedMemoryRoot),
       readTombstonesFromRoot(lockedMemoryRoot)
     ]);
-    const decision = validateMemoryCandidate({
+    const decision2 = validateMemoryCandidate({
       candidate: editedCandidate,
       existingMemories: lockedActive,
       tombstones: lockedTombstones,
       now
     });
-    if (decision.action === "reject") {
+    if (decision2.action === "reject") {
       return {
         project,
         memoryRoot: lockedMemoryRoot,
         result: {
           action: "rejected_by_validator",
           candidateId: candidate.id,
-          reason: decision.reason,
-          tombstone: decision.tombstone
+          reason: decision2.reason,
+          tombstone: decision2.tombstone
         }
       };
     }
-    const validatedCandidate = decision.action === "pending" ? decision.candidate : editedCandidate;
+    const validatedCandidate = decision2.action === "pending" ? decision2.candidate : editedCandidate;
     const nextPending = lockedPending.map(
       (memoryCandidate) => memoryCandidate.id === candidate.id ? validatedCandidate : memoryCandidate
     );
@@ -16644,7 +16664,7 @@ function uniqueChecks(checks) {
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { lstat as lstat12, open as open3, readFile as readFile14, realpath as realpath6 } from "node:fs/promises";
 import { isAbsolute as isAbsolute5, join as join20, relative as relative5, resolve as resolve5 } from "node:path";
 
@@ -16762,250 +16782,218 @@ function mergeAbortSignals(timeoutSignal, inputSignal) {
   return inputSignal === void 0 ? timeoutSignal : AbortSignal.any([timeoutSignal, inputSignal]);
 }
 
-// src/codex/hook-trace-store.ts
+// src/codex/admission-gate.ts
 import { randomUUID as randomUUID7 } from "node:crypto";
-import { appendFile as appendFile2, readFile as readFile12 } from "node:fs/promises";
-import { join as join17 } from "node:path";
-
-// src/codex/review-redaction.ts
-var RULES = [
-  {
-    name: "privateKey",
-    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-    replacement: "[REDACTED_PRIVATE_KEY]"
-  },
-  {
-    name: "secret",
-    pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\b(?:xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{30,}|(?:sk|pk)_(?:live|test)_[0-9A-Za-z]{16,})\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\b[A-Z0-9_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)\s*=\s*["']?[^"'\s]+["']?/gi,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /(["']?[A-Z0-9_.-]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)["']?\s*:\s*)["'][^"'\s]{8,}["']/gi,
-    replacement: '$1"[REDACTED_SECRET]"'
-  },
-  {
-    name: "secret",
-    pattern: /\bsk-[A-Za-z0-9_-]{16,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/gi,
-    replacement: "Bearer [REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "email",
-    pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-    replacement: "[REDACTED_EMAIL]"
-  },
-  {
-    name: "secret",
-    pattern: /\b[A-Fa-f0-9]{32,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "phone",
-    pattern: /(?<!\d-)\b(?!\d{4}-\d{2}-\d{2}\b)(?:\+?\d[\d .()_-]{7,}\d)\b/g,
-    replacement: "[REDACTED_PHONE]"
-  }
-];
-function mergeRedactionCounts(left, right) {
-  const merged = { ...left };
-  for (const [name, count] of Object.entries(right)) {
-    merged[name] = (merged[name] ?? 0) + count;
-  }
-  return merged;
-}
-function redactReviewText(input) {
-  let text = input;
-  let counts = {};
-  for (const rule of RULES) {
-    let count = 0;
-    text = text.replace(rule.pattern, () => {
-      count += 1;
-      return rule.replacement;
+var ONE_TIME_ACTION_PATTERN = /(?:使用|ran|run|checked|检查|修复|完成|准备|reviewed|looked at).*?(?:工具|tool|command|命令|问题|issue|review)/i;
+var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i;
+var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
+var VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i;
+var PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i;
+function evaluateCandidateAdmission(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey);
+  if (duplicateActive !== void 0) {
+    return decision(input.draft, "reject_duplicate", ["duplicate_active"], scoresFor(input.draft, { redundancy: 1 }), now, {
+      targetMemoryId: duplicateActive.id
     });
-    if (count > 0) {
-      counts = mergeRedactionCounts(counts, { [rule.name]: count });
-    }
   }
-  return { text, counts };
+  const tombstone = findActiveTombstone(input.tombstones, input.draft, now);
+  if (tombstone !== void 0) {
+    return decision(input.draft, "auto_drop", ["conflicts_with_tombstone"], scoresFor(input.draft, { redundancy: 1 }), now, {
+      targetMemoryId: tombstone.memoryId ?? tombstone.id
+    });
+  }
+  const duplicatePending = findByNormalizedKey(input.pending, input.draft.normalizedKey);
+  if (duplicatePending !== void 0) {
+    return decision(
+      input.draft,
+      "merge_with_existing",
+      ["duplicate_pending"],
+      scoresFor(input.draft, { redundancy: 0.8 }),
+      now,
+      {
+        targetMemoryId: duplicatePending.id
+      }
+    );
+  }
+  const reasons = reasonsForDraft(input.draft);
+  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons));
+  const admissionScore = admissionScoreFor(scores);
+  const action = actionFor(input.draft, reasons, admissionScore);
+  return decision(input.draft, action, reasons, scores, now);
 }
-
-// src/codex/hook-trace-store.ts
-var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
-var DEFAULT_LIMIT = 100;
-var SUMMARY_MAX_LENGTH = 500;
-var SIGNAL_MAX_LENGTH = 240;
-var COMMAND_SUMMARY_MAX_LENGTH = 500;
-var OUTPUT_SUMMARY_MAX_LENGTH = 500;
-var MAX_TOUCHED_FILES = 50;
-var HOOK_TRACE_EVENTS = /* @__PURE__ */ new Set(["session_start", "user_prompt_submit", "post_tool_use", "stop"]);
-async function appendCodexHookTrace(input) {
-  const project = await identifyCodexProject(input.cwd);
-  const record2 = createHookTraceRecord(input, project.cwd);
-  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+function reasonsForDraft(draft) {
+  const reasons = [];
+  const durableGuidance = isDurablePrescriptiveGuidance(draft);
+  if (draft.candidateKind === "user_instruction" || draft.sourceKind === "user_explicit") {
+    reasons.push("explicit_user_instruction");
+  }
+  if (draft.candidateKind === "workflow_rule") {
+    reasons.push("valuable_workflow_rule");
+  }
+  if (draft.candidateKind === "project_decision") {
+    reasons.push("valuable_project_decision");
+  }
+  if (draft.candidateKind === "known_pitfall") {
+    reasons.push("valuable_known_pitfall");
+  }
+  if (draft.candidateKind === "rejected_approach") {
+    reasons.push("valuable_rejected_approach");
+  }
+  if (!durableGuidance && ONE_TIME_ACTION_PATTERN.test(draft.content)) {
+    reasons.push("one_time_action", "low_future_usefulness");
+  }
+  if (NUMERIC_SNAPSHOT_PATTERN.test(draft.content)) {
+    reasons.push("stale_numeric_snapshot", "low_actionability");
+  }
+  if (TEMPORARY_STATUS_PATTERN.test(draft.content)) {
+    reasons.push("temporary_status");
+  }
+  if (!durableGuidance && (draft.content.length < 24 || VAGUE_PATTERN.test(draft.content))) {
+    reasons.push("too_vague");
+  }
+  return Array.from(new Set(reasons));
+}
+function isDurablePrescriptiveGuidance(draft) {
+  const durableKind = draft.candidateKind === "workflow_rule" || draft.candidateKind === "known_pitfall" || draft.candidateKind === "rejected_approach" || draft.candidateKind === "user_instruction";
+  return durableKind && PRESCRIPTIVE_PATTERN.test(draft.content);
+}
+function scoreOverridesForReasons(reasons) {
+  const noisy = reasons.some(
+    (reason) => reason === "one_time_action" || reason === "temporary_status" || reason === "stale_numeric_snapshot" || reason === "low_future_usefulness" || reason === "low_actionability" || reason === "too_vague"
+  );
+  const valuable = reasons.some(
+    (reason) => reason === "valuable_project_decision" || reason === "valuable_workflow_rule" || reason === "valuable_known_pitfall" || reason === "valuable_rejected_approach" || reason === "explicit_user_instruction"
+  );
+  if (valuable && !noisy) {
     return {
-      ...record2,
-      summary: "Project memory is disabled; hook trace was not persisted.",
-      signals: []
+      futureUsefulness: 0.85,
+      actionability: 0.85,
+      stability: 0.8,
+      specificity: 0.75,
+      evidenceStrength: 0.75,
+      repeatPotential: 0.7,
+      expiryRisk: 0.1,
+      redundancy: 0,
+      sensitivity: 0.1
     };
   }
-  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const targetPath = join17(memoryRoot, HOOK_TRACE_FILE2);
-  await assertSafeMemoryDataFileTarget(targetPath);
-  await appendFile2(targetPath, `${JSON.stringify(record2)}
-`, "utf8");
-  return record2;
+  if (reasons.includes("stale_numeric_snapshot")) {
+    return {
+      futureUsefulness: 0.35,
+      actionability: 0.25,
+      stability: 0.35,
+      specificity: 0.65,
+      evidenceStrength: 0.7,
+      repeatPotential: 0.55,
+      expiryRisk: 0.85,
+      redundancy: 0.1,
+      sensitivity: 0.1
+    };
+  }
+  if (noisy) {
+    return {
+      futureUsefulness: 0.2,
+      actionability: 0.2,
+      stability: 0.25,
+      specificity: 0.35,
+      evidenceStrength: 0.6,
+      repeatPotential: 0.2,
+      expiryRisk: 0.7,
+      redundancy: 0.1,
+      sensitivity: 0.1
+    };
+  }
+  return {};
 }
-function createHookTraceRecord(input, cwd) {
+function scoresFor(draft, overrides = {}) {
+  return {
+    futureUsefulness: 0.55,
+    actionability: 0.5,
+    stability: 0.55,
+    specificity: draft.content.length >= 48 ? 0.65 : 0.45,
+    evidenceStrength: draft.evidenceRefs.length > 0 ? 0.7 : 0.3,
+    repeatPotential: draft.candidateKind === "workflow_rule" || draft.candidateKind === "known_pitfall" ? 0.7 : 0.45,
+    expiryRisk: 0.35,
+    redundancy: 0,
+    sensitivity: draft.domain === "personal" || draft.domain === "relationship" || draft.domain === "affective" ? 0.7 : 0.1,
+    ...overrides
+  };
+}
+function admissionScoreFor(scores) {
+  return clamp(
+    scores.futureUsefulness * 0.25 + scores.actionability * 0.2 + scores.stability * 0.15 + scores.specificity * 0.15 + scores.evidenceStrength * 0.15 + scores.repeatPotential * 0.1 - scores.expiryRisk * 0.25 - scores.redundancy * 0.2 - scores.sensitivity * 0.1
+  );
+}
+function actionFor(draft, reasons, score) {
+  if (reasons.includes("explicit_user_instruction")) return "admit_to_pending";
+  if (reasons.includes("valuable_workflow_rule") || reasons.includes("valuable_known_pitfall") || reasons.includes("valuable_rejected_approach") || reasons.includes("valuable_project_decision")) {
+    return score >= 0.5 ? "admit_to_pending" : "admit_to_distillation";
+  }
+  if (reasons.includes("stale_numeric_snapshot")) return "admit_to_distillation";
+  if (reasons.includes("one_time_action") || reasons.includes("temporary_status")) return "episode_only";
+  if (score < 0.35) return "auto_drop";
+  if (score < 0.5) return "episode_only";
+  if (score < 0.65) return "admit_to_distillation";
+  return draft.candidateKind === "project_fact" ? "admit_to_distillation" : "admit_to_pending";
+}
+function decision(draft, action, reasons, scores, now, extras = {}) {
   return {
     id: randomUUID7(),
-    createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
-    event: input.event,
-    cwd: cleanString(cwd),
-    summary: cleanString(input.summary, SUMMARY_MAX_LENGTH),
-    signals: (input.signals ?? []).map((signal) => cleanString(signal, SIGNAL_MAX_LENGTH)),
-    ...input.sessionId === void 0 ? {} : { sessionId: cleanString(input.sessionId) },
-    ...input.turnId === void 0 ? {} : { turnId: cleanString(input.turnId) },
-    ...input.tool === void 0 ? {} : { tool: cleanTool(input.tool) }
+    draftId: draft.id,
+    action,
+    admissionScore: admissionScoreFor(scores),
+    reasons,
+    scores,
+    createdAt: now,
+    ...extras
   };
 }
-async function readRecentCodexHookTrace(input) {
-  const project = await identifyCodexProject(input.cwd);
-  const memoryRoot = await getReadableCodexProjectMemoryRoot(project.projectId);
-  if (memoryRoot === null) {
-    return { records: [], warnings: [] };
-  }
-  const targetPath = join17(memoryRoot, HOOK_TRACE_FILE2);
-  await assertSafeMemoryDataFileTarget(targetPath);
-  let content;
-  try {
-    content = await readFile12(targetPath, "utf8");
-  } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) {
-      return { records: [], warnings: [] };
-    }
-    throw error2;
-  }
-  const warnings = [];
-  const records = [];
-  const lines2 = content.split(/\r?\n/);
-  for (const [index, line] of lines2.entries()) {
-    const trimmed = line.trim();
-    if (trimmed === "") {
-      continue;
-    }
-    try {
-      const record2 = JSON.parse(trimmed);
-      if (!isCodexHookTraceRecord(record2)) {
-        warnings.push(`Malformed hook trace line ${index + 1} skipped.`);
-        continue;
-      }
-      records.push(record2);
-    } catch {
-      warnings.push(`Malformed hook trace line ${index + 1} skipped.`);
-    }
-  }
-  const newestLimit = Math.max(0, input.limit ?? DEFAULT_LIMIT);
-  if (newestLimit === 0) {
-    return { records: [], warnings };
-  }
+function findByNormalizedKey(items, normalizedKey) {
+  return normalizedKey === void 0 ? void 0 : items.find((item) => item.normalizedKey === normalizedKey);
+}
+function findActiveTombstone(tombstones, draft, now) {
+  return tombstones.find(
+    (entry) => entry.normalizedKey === draft.normalizedKey && (entry.expiresAt === void 0 || entry.expiresAt > now)
+  );
+}
+function clamp(value) {
+  return Math.max(0, Math.min(1, Number(value.toFixed(4))));
+}
+
+// src/codex/candidate-drafts.ts
+import { randomUUID as randomUUID8 } from "node:crypto";
+function toCandidateDraft(input) {
+  const candidateKind = deriveMemoryCandidateKind({
+    candidateKind: input.candidate.candidateKind,
+    candidate_kind: input.candidate.candidate_kind,
+    tags: input.candidate.tags ?? [],
+    type: input.candidate.type
+  });
+  const scope = input.candidate.scope ?? "project";
   return {
-    records: records.filter((record2) => isWithinMaxAge(record2, input.now, input.maxAgeDays)).sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)).slice(-newestLimit),
-    warnings
+    id: randomUUID8(),
+    content: input.candidate.content,
+    candidateKind,
+    scope,
+    domain: input.candidate.domain,
+    sourceKind: input.sourceKind,
+    sourceEpisodeIds: input.sourceEpisodeIds ?? [],
+    evidenceRefs: input.evidenceRefs ?? evidenceRefs(input.candidate.evidence),
+    ...input.candidate.normalizedKey === void 0 ? {} : { normalizedKey: input.candidate.normalizedKey },
+    tags: input.candidate.tags ?? [],
+    createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
   };
 }
-function cleanTool(tool) {
-  if (tool === void 0) {
-    return void 0;
-  }
-  return {
-    name: cleanString(tool.name),
-    ...tool.useId === void 0 ? {} : { useId: cleanString(tool.useId) },
-    ...tool.commandSummary === void 0 ? {} : { commandSummary: cleanString(tool.commandSummary, COMMAND_SUMMARY_MAX_LENGTH) },
-    ...tool.exitCode === void 0 ? {} : { exitCode: tool.exitCode },
-    ...tool.touchedFiles === void 0 ? {} : { touchedFiles: tool.touchedFiles.slice(0, MAX_TOUCHED_FILES).map((file) => cleanString(file)) },
-    ...tool.outputSummary === void 0 ? {} : { outputSummary: cleanString(tool.outputSummary, OUTPUT_SUMMARY_MAX_LENGTH) }
-  };
-}
-function cleanString(value, maxLength) {
-  const redacted = redactReviewText(value).text;
-  return maxLength === void 0 ? redacted : redacted.slice(0, maxLength);
-}
-function isCodexHookTraceRecord(value) {
-  if (!isPlainRecord(value)) {
-    return false;
-  }
-  return isNonemptyString(value.id) && isValidTimestamp(value.createdAt) && typeof value.event === "string" && HOOK_TRACE_EVENTS.has(value.event) && typeof value.cwd === "string" && typeof value.summary === "string" && isStringArray(value.signals) && isOptionalString(value.sessionId) && isOptionalString(value.turnId) && isOptionalHookTraceTool(value.tool);
-}
-function isOptionalHookTraceTool(value) {
-  if (value === void 0) {
-    return true;
-  }
-  if (!isPlainRecord(value)) {
-    return false;
-  }
-  return typeof value.name === "string" && isOptionalString(value.useId) && isOptionalString(value.commandSummary) && (value.exitCode === void 0 || typeof value.exitCode === "number") && (value.touchedFiles === void 0 || isStringArray(value.touchedFiles)) && isOptionalString(value.outputSummary);
-}
-function isPlainRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isNonemptyString(value) {
-  return typeof value === "string" && value.length > 0;
-}
-function isValidTimestamp(value) {
-  return isNonemptyString(value) && Number.isFinite(Date.parse(value));
-}
-function isOptionalString(value) {
-  return value === void 0 || typeof value === "string";
-}
-function isStringArray(value) {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-function isWithinMaxAge(record2, now, maxAgeDays) {
-  if (maxAgeDays === void 0) {
-    return true;
-  }
-  const createdAt = Date.parse(record2.createdAt);
-  const nowTime = Date.parse(now ?? (/* @__PURE__ */ new Date()).toISOString());
-  if (!Number.isFinite(createdAt) || !Number.isFinite(nowTime)) {
-    return false;
-  }
-  return createdAt >= nowTime - maxAgeDays * 24 * 60 * 60 * 1e3;
-}
-function isFileErrorCode10(error2, code) {
-  return error2 instanceof Error && "code" in error2 && error2.code === code;
+function evidenceRefs(evidence) {
+  return evidence.flatMap((entry) => {
+    const value = entry.evidenceGroupId ?? entry.runId ?? entry.sessionId ?? entry.taskHash ?? entry.summary ?? entry.quote;
+    return value === void 0 ? [] : [value];
+  });
 }
 
 // src/codex/memory-propose.ts
-import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID9 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -17141,10 +17129,10 @@ function denied(reason, distinctEvidenceCount2) {
 }
 function candidateIdsForDecisions(decisions) {
   const ids = /* @__PURE__ */ new Set();
-  for (const decision of decisions) {
-    if ("candidateId" in decision) ids.add(decision.candidateId);
-    if ("candidateIds" in decision) {
-      for (const candidateId of decision.candidateIds) ids.add(candidateId);
+  for (const decision2 of decisions) {
+    if ("candidateId" in decision2) ids.add(decision2.candidateId);
+    if ("candidateIds" in decision2) {
+      for (const candidateId of decision2.candidateIds) ids.add(candidateId);
     }
   }
   return ids;
@@ -17244,30 +17232,30 @@ async function proposeCodexMemoryCandidate(input) {
       readPendingMemoriesFromRoot(lockedMemoryRoot),
       readMemoryEventsFromRoot(lockedMemoryRoot)
     ]);
-    const decision = validateMemoryCandidate({
+    const decision2 = validateMemoryCandidate({
       candidate,
       existingMemories,
       tombstones,
       now
     });
-    if (decision.action === "reject") {
+    if (decision2.action === "reject") {
       if (input.recordRejectedCandidate !== false) {
-        await appendTombstoneFromRoot(lockedMemoryRoot, decision.tombstone);
+        await appendTombstoneFromRoot(lockedMemoryRoot, decision2.tombstone);
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID8(),
+          id: randomUUID9(),
           action: "reject",
           at: now,
-          reason: decision.reason,
-          candidateId: decision.tombstone.id
+          reason: decision2.reason,
+          candidateId: decision2.tombstone.id
         });
       }
       return {
         project: { projectId: project.projectId, displayName: project.displayName },
-        result: { action: "reject", reason: decision.reason },
+        result: { action: "reject", reason: decision2.reason },
         memoryRoot: lockedMemoryRoot
       };
     }
-    const pendingCandidate = decision.action === "pending" ? decision.candidate : candidate;
+    const pendingCandidate = decision2.action === "pending" ? decision2.candidate : candidate;
     const existingPending = lockedPending.find((item) => item.normalizedKey === pendingCandidate.normalizedKey);
     const mergedCandidate = existingPending === void 0 ? pendingCandidate : mergePendingMemory(existingPending, pendingCandidate);
     const pendingWithoutMerged = lockedPending.filter((item) => item.normalizedKey !== mergedCandidate.normalizedKey);
@@ -17298,7 +17286,7 @@ async function proposeCodexMemoryCandidate(input) {
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID8(),
+        id: randomUUID9(),
         action: "promote",
         at: now,
         reason: autoPromotion.reason,
@@ -17348,7 +17336,7 @@ async function proposeCodexMemoryCandidate(input) {
     }
     if (budgetResult.action === "evict_existing") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID8(),
+        id: randomUUID9(),
         action: "audit",
         at: now,
         reason: budgetResult.reason,
@@ -17357,9 +17345,9 @@ async function proposeCodexMemoryCandidate(input) {
       });
     }
     await markDreamDueFailOpen(lockedMemoryRoot, now);
-    const reason = decision.action === "auto_write" ? input.allowAutoPromote === false ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.` : autoPromotion.allowed && autoPromotionEval?.passed === false ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.` : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision.reason;
+    const reason = decision2.action === "auto_write" ? input.allowAutoPromote === false ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.` : autoPromotion.allowed && autoPromotionEval?.passed === false ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.` : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision2.reason;
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID8(),
+      id: randomUUID9(),
       action: "pending",
       at: now,
       reason,
@@ -17431,7 +17419,7 @@ function toPendingMemory(input, now) {
     type: input.type
   });
   return {
-    id: randomUUID8(),
+    id: randomUUID9(),
     domain: input.domain,
     type: input.type,
     strength: input.strength ?? "soft",
@@ -17446,6 +17434,11 @@ function toPendingMemory(input, now) {
     firstSeenAt: now,
     lastSeenAt: now,
     expiresAt: addDays2(now, 30),
+    ...input.admittedBy === void 0 ? {} : { admittedBy: input.admittedBy },
+    ...input.admissionScore === void 0 ? {} : { admissionScore: input.admissionScore },
+    ...input.admissionReasons === void 0 ? {} : { admissionReasons: input.admissionReasons },
+    ...input.sourceEpisodeIds === void 0 ? {} : { sourceEpisodeIds: input.sourceEpisodeIds },
+    ...input.sourceDraftIds === void 0 ? {} : { sourceDraftIds: input.sourceDraftIds },
     userConfirmed: input.userConfirmed,
     candidateKind,
     tags: input.tags ?? []
@@ -17459,6 +17452,376 @@ function addDays2(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
+}
+
+// src/codex/admission-pipeline.ts
+async function runCodexAdmissionPipeline(input) {
+  const project = await identifyCodexProject(input.cwd);
+  if (input.candidate.scope !== "global" && await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      memoryRoot: codexProjectMemoryRoot(project.projectId),
+      action: "auto_drop",
+      admission: disabledAdmission(input),
+      reason: "Project memory is disabled for this project."
+    };
+  }
+  const memoryRoot = input.candidate.scope === "global" ? await ensureCodexGlobalMemoryRoot() : await ensureCodexProjectMemoryRoot(project.projectId);
+  const draft = toCandidateDraft({
+    projectId: project.projectId,
+    candidate: input.candidate,
+    sourceKind: input.sourceKind,
+    sourceEpisodeIds: input.sourceEpisodeIds,
+    evidenceRefs: input.evidenceRefs,
+    now: input.now
+  });
+  await appendCandidateDraftFromRoot(memoryRoot, draft);
+  const [pending, active, tombstones] = await Promise.all([
+    readPendingMemoriesFromRoot(memoryRoot),
+    readActiveMemoriesFromRoot(memoryRoot),
+    readTombstonesFromRoot(memoryRoot)
+  ]);
+  const admission = evaluateCandidateAdmission({ draft, pending, active, tombstones, now: input.now });
+  await appendAdmissionDecisionFromRoot(memoryRoot, admission);
+  if (admission.action !== "admit_to_pending" && admission.action !== "merge_with_existing") {
+    return {
+      project: { projectId: project.projectId, displayName: project.displayName },
+      memoryRoot,
+      action: admission.action,
+      admission,
+      reason: `Admission gate decided ${admission.action}: ${admission.reasons.join(", ")}`
+    };
+  }
+  const proposed = await proposeCodexMemoryCandidate({
+    cwd: input.cwd,
+    candidate: {
+      ...input.candidate,
+      admittedBy: "admission_gate_v1",
+      admissionScore: admission.admissionScore,
+      admissionReasons: admission.reasons,
+      sourceEpisodeIds: input.sourceEpisodeIds,
+      sourceDraftIds: [draft.id]
+    },
+    now: input.now,
+    recordRejectedCandidate: input.recordRejectedCandidate,
+    allowAutoPromote: input.allowAutoPromote
+  });
+  return {
+    ...proposed,
+    action: proposed.result.action,
+    admission
+  };
+}
+function disabledAdmission(input) {
+  return {
+    id: "admission-disabled-project",
+    draftId: "draft-disabled-project",
+    action: "auto_drop",
+    admissionScore: 0,
+    reasons: ["low_future_usefulness"],
+    scores: {
+      futureUsefulness: 0,
+      actionability: 0,
+      stability: 0,
+      specificity: 0,
+      evidenceStrength: 0,
+      repeatPotential: 0,
+      expiryRisk: 1,
+      redundancy: 0,
+      sensitivity: 0
+    },
+    createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+
+// src/codex/episode-memory.ts
+import { randomUUID as randomUUID10 } from "node:crypto";
+
+// src/codex/review-redaction.ts
+var RULES = [
+  {
+    name: "privateKey",
+    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    replacement: "[REDACTED_PRIVATE_KEY]"
+  },
+  {
+    name: "secret",
+    pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\b(?:xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{30,}|(?:sk|pk)_(?:live|test)_[0-9A-Za-z]{16,})\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\b[A-Z0-9_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)\s*=\s*["']?[^"'\s]+["']?/gi,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /(["']?[A-Z0-9_.-]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)["']?\s*:\s*)["'][^"'\s]{8,}["']/gi,
+    replacement: '$1"[REDACTED_SECRET]"'
+  },
+  {
+    name: "secret",
+    pattern: /\bsk-[A-Za-z0-9_-]{16,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/gi,
+    replacement: "Bearer [REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "email",
+    pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+    replacement: "[REDACTED_EMAIL]"
+  },
+  {
+    name: "secret",
+    pattern: /\b[A-Fa-f0-9]{32,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "phone",
+    pattern: /(?<!\d-)\b(?!\d{4}-\d{2}-\d{2}\b)(?:\+?\d[\d .()_-]{7,}\d)\b/g,
+    replacement: "[REDACTED_PHONE]"
+  }
+];
+function mergeRedactionCounts(left, right) {
+  const merged = { ...left };
+  for (const [name, count] of Object.entries(right)) {
+    merged[name] = (merged[name] ?? 0) + count;
+  }
+  return merged;
+}
+function redactReviewText(input) {
+  let text = input;
+  let counts = {};
+  for (const rule of RULES) {
+    let count = 0;
+    text = text.replace(rule.pattern, () => {
+      count += 1;
+      return rule.replacement;
+    });
+    if (count > 0) {
+      counts = mergeRedactionCounts(counts, { [rule.name]: count });
+    }
+  }
+  return { text, counts };
+}
+
+// src/codex/episode-memory.ts
+var SUMMARY_MAX_LENGTH = 500;
+var ITEM_MAX_LENGTH = 240;
+async function appendStopHookEpisodeFailOpen(input) {
+  try {
+    const memoryRoot = await ensureCodexProjectMemoryRoot(input.projectId);
+    const episode = buildStopHookEpisode(input);
+    await appendEpisodeMemoryFromRoot(memoryRoot, episode);
+    return episode;
+  } catch {
+    return void 0;
+  }
+}
+function buildStopHookEpisode(input) {
+  const sessionId = asString(input.payload.session_id);
+  const turnId = asString(input.payload.turn_id);
+  const sourceTraceIds = [sessionId, turnId].filter((value) => value !== void 0);
+  const title = firstNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
+  return {
+    id: randomUUID10(),
+    projectId: input.projectId,
+    title: clean(title, ITEM_MAX_LENGTH),
+    summary: clean(input.summary, SUMMARY_MAX_LENGTH),
+    actions: cleanItems(input.actions ?? []),
+    decisions: cleanItems(input.decisions ?? []),
+    failures: cleanItems(input.failures ?? []),
+    openQuestions: cleanItems(input.openQuestions ?? []),
+    toolNames: cleanItems(input.toolNames ?? ["stop_hook"]),
+    sourceTraceIds: sourceTraceIds.length === 0 ? [input.projectId] : sourceTraceIds,
+    createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString(),
+    ...sessionId === void 0 ? {} : { sessionId },
+    ...turnId === void 0 ? {} : { turnId }
+  };
+}
+function firstNonemptyUserMessage(messages) {
+  return messages.find((message) => message.role === "user" && message.content.trim() !== "")?.content;
+}
+function cleanItems(values) {
+  return values.map((value) => clean(value, ITEM_MAX_LENGTH)).filter((value) => value !== "");
+}
+function clean(value, maxLength) {
+  return redactReviewText(value.replace(/\s+/g, " ").trim()).text.slice(0, maxLength);
+}
+function asString(value) {
+  return typeof value === "string" && value !== "" ? value : void 0;
+}
+
+// src/codex/hook-trace-store.ts
+import { randomUUID as randomUUID11 } from "node:crypto";
+import { appendFile as appendFile2, readFile as readFile12 } from "node:fs/promises";
+import { join as join17 } from "node:path";
+var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
+var DEFAULT_LIMIT = 100;
+var SUMMARY_MAX_LENGTH2 = 500;
+var SIGNAL_MAX_LENGTH = 240;
+var COMMAND_SUMMARY_MAX_LENGTH = 500;
+var OUTPUT_SUMMARY_MAX_LENGTH = 500;
+var MAX_TOUCHED_FILES = 50;
+var HOOK_TRACE_EVENTS = /* @__PURE__ */ new Set(["session_start", "user_prompt_submit", "post_tool_use", "stop"]);
+async function appendCodexHookTrace(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const record2 = createHookTraceRecord(input, project.cwd);
+  if (await isCodexProjectMemoryDisabled(project.projectId)) {
+    return {
+      ...record2,
+      summary: "Project memory is disabled; hook trace was not persisted.",
+      signals: []
+    };
+  }
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
+  const targetPath = join17(memoryRoot, HOOK_TRACE_FILE2);
+  await assertSafeMemoryDataFileTarget(targetPath);
+  await appendFile2(targetPath, `${JSON.stringify(record2)}
+`, "utf8");
+  return record2;
+}
+function createHookTraceRecord(input, cwd) {
+  return {
+    id: randomUUID11(),
+    createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
+    event: input.event,
+    cwd: cleanString(cwd),
+    summary: cleanString(input.summary, SUMMARY_MAX_LENGTH2),
+    signals: (input.signals ?? []).map((signal) => cleanString(signal, SIGNAL_MAX_LENGTH)),
+    ...input.sessionId === void 0 ? {} : { sessionId: cleanString(input.sessionId) },
+    ...input.turnId === void 0 ? {} : { turnId: cleanString(input.turnId) },
+    ...input.tool === void 0 ? {} : { tool: cleanTool(input.tool) }
+  };
+}
+async function readRecentCodexHookTrace(input) {
+  const project = await identifyCodexProject(input.cwd);
+  const memoryRoot = await getReadableCodexProjectMemoryRoot(project.projectId);
+  if (memoryRoot === null) {
+    return { records: [], warnings: [] };
+  }
+  const targetPath = join17(memoryRoot, HOOK_TRACE_FILE2);
+  await assertSafeMemoryDataFileTarget(targetPath);
+  let content;
+  try {
+    content = await readFile12(targetPath, "utf8");
+  } catch (error2) {
+    if (isFileErrorCode10(error2, "ENOENT")) {
+      return { records: [], warnings: [] };
+    }
+    throw error2;
+  }
+  const warnings = [];
+  const records = [];
+  const lines2 = content.split(/\r?\n/);
+  for (const [index, line] of lines2.entries()) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    try {
+      const record2 = JSON.parse(trimmed);
+      if (!isCodexHookTraceRecord(record2)) {
+        warnings.push(`Malformed hook trace line ${index + 1} skipped.`);
+        continue;
+      }
+      records.push(record2);
+    } catch {
+      warnings.push(`Malformed hook trace line ${index + 1} skipped.`);
+    }
+  }
+  const newestLimit = Math.max(0, input.limit ?? DEFAULT_LIMIT);
+  if (newestLimit === 0) {
+    return { records: [], warnings };
+  }
+  return {
+    records: records.filter((record2) => isWithinMaxAge(record2, input.now, input.maxAgeDays)).sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)).slice(-newestLimit),
+    warnings
+  };
+}
+function cleanTool(tool) {
+  if (tool === void 0) {
+    return void 0;
+  }
+  return {
+    name: cleanString(tool.name),
+    ...tool.useId === void 0 ? {} : { useId: cleanString(tool.useId) },
+    ...tool.commandSummary === void 0 ? {} : { commandSummary: cleanString(tool.commandSummary, COMMAND_SUMMARY_MAX_LENGTH) },
+    ...tool.exitCode === void 0 ? {} : { exitCode: tool.exitCode },
+    ...tool.touchedFiles === void 0 ? {} : { touchedFiles: tool.touchedFiles.slice(0, MAX_TOUCHED_FILES).map((file) => cleanString(file)) },
+    ...tool.outputSummary === void 0 ? {} : { outputSummary: cleanString(tool.outputSummary, OUTPUT_SUMMARY_MAX_LENGTH) }
+  };
+}
+function cleanString(value, maxLength) {
+  const redacted = redactReviewText(value).text;
+  return maxLength === void 0 ? redacted : redacted.slice(0, maxLength);
+}
+function isCodexHookTraceRecord(value) {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return isNonemptyString(value.id) && isValidTimestamp(value.createdAt) && typeof value.event === "string" && HOOK_TRACE_EVENTS.has(value.event) && typeof value.cwd === "string" && typeof value.summary === "string" && isStringArray(value.signals) && isOptionalString(value.sessionId) && isOptionalString(value.turnId) && isOptionalHookTraceTool(value.tool);
+}
+function isOptionalHookTraceTool(value) {
+  if (value === void 0) {
+    return true;
+  }
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return typeof value.name === "string" && isOptionalString(value.useId) && isOptionalString(value.commandSummary) && (value.exitCode === void 0 || typeof value.exitCode === "number") && (value.touchedFiles === void 0 || isStringArray(value.touchedFiles)) && isOptionalString(value.outputSummary);
+}
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonemptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+function isValidTimestamp(value) {
+  return isNonemptyString(value) && Number.isFinite(Date.parse(value));
+}
+function isOptionalString(value) {
+  return value === void 0 || typeof value === "string";
+}
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+function isWithinMaxAge(record2, now, maxAgeDays) {
+  if (maxAgeDays === void 0) {
+    return true;
+  }
+  const createdAt = Date.parse(record2.createdAt);
+  const nowTime = Date.parse(now ?? (/* @__PURE__ */ new Date()).toISOString());
+  if (!Number.isFinite(createdAt) || !Number.isFinite(nowTime)) {
+    return false;
+  }
+  return createdAt >= nowTime - maxAgeDays * 24 * 60 * 60 * 1e3;
+}
+function isFileErrorCode10(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/project-memory-harvester.ts
@@ -17479,7 +17842,7 @@ var PROJECT_FILES = [
   "AGENTS.md"
 ];
 var PROJECT_FILE_MAX_BYTES = 16 * 1024;
-var SUMMARY_MAX_LENGTH2 = 180;
+var SUMMARY_MAX_LENGTH3 = 180;
 var EVIDENCE_MAX_LENGTH = 360;
 var MAX_SIGNAL_FILES = 50;
 var REVIEW_SUMMARIES_FILE2 = "review-summaries.jsonl";
@@ -17516,7 +17879,7 @@ async function collectGitSignals(cwd, mode) {
     warnings.push(`git status unavailable: ${status.warning}`);
     return { signals, warnings, changedFiles: [] };
   }
-  const statusEvidence = clean(status.stdout.replace(/\0/g, "\n"), EVIDENCE_MAX_LENGTH);
+  const statusEvidence = clean2(status.stdout.replace(/\0/g, "\n"), EVIDENCE_MAX_LENGTH);
   const statusFiles = parseGitStatusFiles(status.stdout);
   const diffNames = await tryGit3(cwd, ["diff", "--name-only"]);
   if (!diffNames.ok) {
@@ -17528,7 +17891,7 @@ async function collectGitSignals(cwd, mode) {
     signals.push({
       kind: "git_changed_file",
       source: "git",
-      summary: clean(`changed files: ${changedFiles.join(", ")}`, SUMMARY_MAX_LENGTH2),
+      summary: clean2(`changed files: ${changedFiles.join(", ")}`, SUMMARY_MAX_LENGTH3),
       files: changedFiles,
       ...statusEvidence === "" ? {} : { evidence: statusEvidence }
     });
@@ -17541,12 +17904,12 @@ async function collectGitSignals(cwd, mode) {
     warnings.push(`git diff --stat unavailable: ${diffStat.warning}`);
     return { signals, warnings, changedFiles };
   }
-  const diffStatEvidence = clean(diffStat.stdout, EVIDENCE_MAX_LENGTH);
+  const diffStatEvidence = clean2(diffStat.stdout, EVIDENCE_MAX_LENGTH);
   if (diffStatEvidence !== "") {
     signals.push({
       kind: "git_changed_file",
       source: "git",
-      summary: clean(`diff stat: ${firstLine(diffStatEvidence)}`, SUMMARY_MAX_LENGTH2),
+      summary: clean2(`diff stat: ${firstLine(diffStatEvidence)}`, SUMMARY_MAX_LENGTH3),
       ...changedFiles.length === 0 ? {} : { files: changedFiles },
       evidence: diffStatEvidence
     });
@@ -17587,9 +17950,9 @@ async function collectTestSignals(root, mode, changedFiles) {
   return [{
     kind: "test_signal",
     source: "file",
-    summary: clean(`tests present: ${files.join(", ")}`, SUMMARY_MAX_LENGTH2),
+    summary: clean2(`tests present: ${files.join(", ")}`, SUMMARY_MAX_LENGTH3),
     files,
-    evidence: clean(`${files.length} test file${files.length === 1 ? "" : "s"} listed under tests/.`, EVIDENCE_MAX_LENGTH)
+    evidence: clean2(`${files.length} test file${files.length === 1 ? "" : "s"} listed under tests/.`, EVIDENCE_MAX_LENGTH)
   }];
 }
 async function collectReviewSummarySignals(projectId) {
@@ -17699,8 +18062,8 @@ function summarizeProjectFile(file, text) {
       kind: "repository_policy",
       source: "file",
       files: [file],
-      summary: clean(`repository policy: ${firstLine(excerpt2)}`, SUMMARY_MAX_LENGTH2),
-      evidence: clean(excerpt2, EVIDENCE_MAX_LENGTH)
+      summary: clean2(`repository policy: ${firstLine(excerpt2)}`, SUMMARY_MAX_LENGTH3),
+      evidence: clean2(excerpt2, EVIDENCE_MAX_LENGTH)
     };
   }
   const excerpt = markdownExcerpt(text);
@@ -17708,8 +18071,8 @@ function summarizeProjectFile(file, text) {
     kind: "documentation",
     source: "file",
     files: [file],
-    summary: clean(`documentation: ${firstLine(excerpt)}`, SUMMARY_MAX_LENGTH2),
-    evidence: clean(excerpt, EVIDENCE_MAX_LENGTH)
+    summary: clean2(`documentation: ${firstLine(excerpt)}`, SUMMARY_MAX_LENGTH3),
+    evidence: clean2(excerpt, EVIDENCE_MAX_LENGTH)
   };
 }
 function summarizeJsonFile(file, text, label) {
@@ -17718,19 +18081,19 @@ function summarizeJsonFile(file, text, label) {
     if (isPlainRecord2(parsed)) {
       const evidence = jsonFacts(parsed);
       return {
-        summary: clean(`${label} ${file}: ${firstLine(evidence)}`, SUMMARY_MAX_LENGTH2),
-        evidence: clean(evidence, EVIDENCE_MAX_LENGTH)
+        summary: clean2(`${label} ${file}: ${firstLine(evidence)}`, SUMMARY_MAX_LENGTH3),
+        evidence: clean2(evidence, EVIDENCE_MAX_LENGTH)
       };
     }
   } catch {
     return {
-      summary: clean(`${label} ${file}: JSON parse failed`, SUMMARY_MAX_LENGTH2),
-      evidence: clean(text, EVIDENCE_MAX_LENGTH)
+      summary: clean2(`${label} ${file}: JSON parse failed`, SUMMARY_MAX_LENGTH3),
+      evidence: clean2(text, EVIDENCE_MAX_LENGTH)
     };
   }
   return {
-    summary: clean(`${label} ${file}: present`, SUMMARY_MAX_LENGTH2),
-    evidence: clean(text, EVIDENCE_MAX_LENGTH)
+    summary: clean2(`${label} ${file}: present`, SUMMARY_MAX_LENGTH3),
+    evidence: clean2(text, EVIDENCE_MAX_LENGTH)
   };
 }
 function jsonFacts(value) {
@@ -17783,9 +18146,9 @@ function toHookTraceSignal(record2) {
   return {
     kind: "hook_trace",
     source: "tool_trace",
-    summary: clean(`hook trace ${record2.event}: ${record2.summary}`, SUMMARY_MAX_LENGTH2),
+    summary: clean2(`hook trace ${record2.event}: ${record2.summary}`, SUMMARY_MAX_LENGTH3),
     ...touchedFiles === void 0 || touchedFiles.length === 0 ? {} : { files: touchedFiles },
-    evidence: clean(details.join("; "), EVIDENCE_MAX_LENGTH)
+    evidence: clean2(details.join("; "), EVIDENCE_MAX_LENGTH)
   };
 }
 function toReviewSummarySignal(record2) {
@@ -17798,8 +18161,8 @@ function toReviewSummarySignal(record2) {
   return {
     kind: "review_summary",
     source: "review_summary",
-    summary: clean(`review summary ${record2.status}: ${record2.summary}`, SUMMARY_MAX_LENGTH2),
-    evidence: clean(details.join("; "), EVIDENCE_MAX_LENGTH)
+    summary: clean2(`review summary ${record2.status}: ${record2.summary}`, SUMMARY_MAX_LENGTH3),
+    evidence: clean2(details.join("; "), EVIDENCE_MAX_LENGTH)
   };
 }
 function parseGitStatusFiles(output) {
@@ -17831,16 +18194,16 @@ function firstLine(text) {
 function uniqueSorted2(values) {
   return Array.from(new Set(values)).sort();
 }
-function clean(value, maxLength) {
+function clean2(value, maxLength) {
   const redacted = redactReviewText(value.replace(/\s+/g, " ").trim()).text;
   return redacted.length <= maxLength ? redacted : `${redacted.slice(0, maxLength - 1)}...`;
 }
 function cleanError(error2) {
   if (isErrorWithStderr(error2) && error2.stderr.trim() !== "") {
-    return clean(error2.stderr, SUMMARY_MAX_LENGTH2);
+    return clean2(error2.stderr, SUMMARY_MAX_LENGTH3);
   }
   if (error2 instanceof Error) {
-    return clean(error2.message, SUMMARY_MAX_LENGTH2);
+    return clean2(error2.message, SUMMARY_MAX_LENGTH3);
   }
   return "unknown error";
 }
@@ -17922,19 +18285,20 @@ async function runCodexProjectMemoryHarvest(input) {
   const candidateIds = [];
   let memoryRoot;
   for (const candidate of candidates) {
-    const result2 = await proposeCodexMemoryCandidate({
+    const result2 = await runCodexAdmissionPipeline({
       cwd: input.cwd,
       candidate,
+      sourceKind: candidate.source === "tool_trace" ? "tool_trace" : candidate.source === "assistant_observed" ? "assistant_observed" : "file",
       now: input.now,
       recordRejectedCandidate: false
     });
     memoryRoot = result2.memoryRoot;
-    if (result2.result.action === "pending") {
+    if (result2.action === "pending" && result2.result.action === "pending") {
       candidateIds.push(result2.result.candidateId);
     }
   }
   if (candidateIds.length === 0) {
-    return { action: "noop", reason: "No project memory candidates survived validation.", signals, warnings };
+    return { action: "noop", reason: "No project memory candidates survived admission.", signals, warnings };
   }
   return { action: "pending", candidateIds, memoryRoot: memoryRoot ?? "", signals, warnings };
 }
@@ -18176,7 +18540,7 @@ function isRecord3(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash9, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID12 } from "node:crypto";
 
 // src/codex/global-memory-capture.ts
 import { createHash as createHash8 } from "node:crypto";
@@ -18325,7 +18689,7 @@ function parseTranscriptLine(value) {
     return [eventMessage];
   }
   const source = isRecord4(record2?.message) ? record2.message : record2;
-  const role = asString(source?.role);
+  const role = asString2(source?.role);
   const content = contentToString(source?.content);
   if (role === void 0 || content === void 0) {
     return [];
@@ -18337,8 +18701,8 @@ function parseCodexEventMessage(record2) {
     return void 0;
   }
   const payload = isRecord4(record2.payload) ? record2.payload : void 0;
-  const payloadType = asString(payload?.type);
-  const message = asString(payload?.message);
+  const payloadType = asString2(payload?.type);
+  const message = asString2(payload?.message);
   if (message === void 0) {
     return void 0;
   }
@@ -18368,7 +18732,7 @@ function contentToString(value) {
   });
   return parts.length > 0 ? parts.join("\n") : void 0;
 }
-function asString(value) {
+function asString2(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
 function isRecord4(value) {
@@ -18386,7 +18750,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID9();
+  const summaryId = randomUUID12();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -18408,13 +18772,15 @@ async function runCodexReviewSummary(input) {
       if (safeCandidate === void 0) {
         continue;
       }
-      const result2 = await proposeCodexMemoryCandidate({
+      const result2 = await runCodexAdmissionPipeline({
         cwd: input.cwd,
         candidate: safeCandidate,
+        sourceKind: "review_summary",
+        evidenceRefs: [summaryId],
         now: input.now,
         recordRejectedCandidate: false
       });
-      if (result2.result.action === "pending") {
+      if (result2.action === "pending" && result2.result.action === "pending") {
         candidateIds.push(result2.result.candidateId);
       }
     }
@@ -18426,14 +18792,16 @@ async function runCodexReviewSummary(input) {
       if (globalCandidate === void 0) {
         continue;
       }
-      const result2 = await proposeCodexMemoryCandidate({
+      const result2 = await runCodexAdmissionPipeline({
         cwd: input.cwd,
         candidate: globalCandidate,
+        sourceKind: "user_explicit",
+        evidenceRefs: [summaryId],
         now: input.now,
         recordRejectedCandidate: false,
         allowAutoPromote: false
       });
-      if (result2.result.action === "pending") {
+      if (result2.action === "pending" && result2.result.action === "pending") {
         candidateIds.push(result2.result.candidateId);
       }
     }
@@ -18706,7 +19074,7 @@ async function readJsonFromStdin() {
   return trimmed === "" ? {} : JSON.parse(trimmed);
 }
 async function handleCodexStopHookPayload(payload, deps = {}) {
-  const cwd = asString2(payload.cwd) ?? process.cwd();
+  const cwd = asString3(payload.cwd) ?? process.cwd();
   try {
     return await handleCodexStopHookPayloadUnsafe(payload, deps, cwd);
   } catch (error2) {
@@ -18723,7 +19091,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (!config2.memoryAutoExtractEnabled) {
     return { action: "noop", reason: "Codex memory auto extraction is disabled." };
   }
-  const transcriptPath = asString2(payload.transcript_path) ?? asString2(payload.transcriptPath);
+  const transcriptPath = asString3(payload.transcript_path) ?? asString3(payload.transcriptPath);
   if (transcriptPath === void 0) {
     return { action: "noop", reason: "No transcript path provided." };
   }
@@ -18742,6 +19110,21 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
     config: config2,
     deps
   });
+  await appendStopHookEpisodeFailOpen({
+    cwd,
+    projectId: project.projectId,
+    payload,
+    messages,
+    summary: review.action === "summary_failed" ? review.reason : review.action === "pending" ? "Codex Stop hook wrote review summary and proposed pending candidates." : review.action === "summary" ? "Codex Stop hook wrote review summary." : review.reason,
+    actions: [
+      "Parsed Codex Stop hook transcript.",
+      review.action === "pending" ? "Proposed pending memory candidates." : "Wrote review-safe summary."
+    ],
+    decisions: [],
+    failures: review.action === "summary_failed" ? [review.reason] : [],
+    openQuestions: [],
+    toolNames: ["stop_hook", "review_summary"]
+  });
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages);
   const explicitResult = instruction === void 0 ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction);
   const harvest = await runProjectMemoryHarvestFailOpen({
@@ -18751,7 +19134,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
     signal: AbortSignal.timeout(2e4)
   });
   const reviewCandidateIds = review.action === "pending" ? review.candidateIds : [];
-  const explicitPending = explicitResult?.result.action === "pending" ? explicitResult.result : void 0;
+  const explicitPending = explicitResult?.action === "pending" && explicitResult.result.action === "pending" ? explicitResult.result : void 0;
   const explicitCandidateId = explicitPending?.candidateId;
   const harvestCandidateIds = harvest?.action === "pending" ? harvest.candidateIds : [];
   const proposedCandidateIds = [
@@ -18812,16 +19195,16 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
 }
 async function appendStopHookTrace(cwd, payload) {
   try {
-    const transcriptPath = asString2(payload.transcript_path) ?? asString2(payload.transcriptPath);
+    const transcriptPath = asString3(payload.transcript_path) ?? asString3(payload.transcriptPath);
     await appendCodexHookTrace({
       cwd,
       event: "stop",
-      sessionId: asString2(payload.session_id),
-      turnId: asString2(payload.turn_id),
+      sessionId: asString3(payload.session_id),
+      turnId: asString3(payload.turn_id),
       summary: "Stop hook received.",
       signals: [
         transcriptPath === void 0 ? void 0 : "transcript path provided",
-        asString2(payload.last_assistant_message) === void 0 ? void 0 : "last assistant message provided"
+        asString3(payload.last_assistant_message) === void 0 ? void 0 : "last assistant message provided"
       ].filter((signal) => signal !== void 0)
     });
   } catch {
@@ -18840,8 +19223,8 @@ async function runReviewSummaryOrSkip(input) {
   }
   return runCodexReviewSummary({
     cwd: input.cwd,
-    sessionId: asString2(input.payload.session_id),
-    turnId: asString2(input.payload.turn_id),
+    sessionId: asString3(input.payload.session_id),
+    turnId: asString3(input.payload.turn_id),
     messages: input.messages,
     config: input.config,
     callModel: input.deps.callModel ?? callModel,
@@ -18873,9 +19256,9 @@ async function recordStopHookFailureSummary(cwd, payload, error2) {
       return { action: "noop", reason: "Project memory is disabled for this project." };
     }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID10();
-    const sessionId = asString2(payload.session_id);
-    const turnId = asString2(payload.turn_id);
+    const summaryId = randomUUID13();
+    const sessionId = asString3(payload.session_id);
+    const turnId = asString3(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
     const reason = redactReviewText(error2 instanceof Error ? error2.message : String(error2));
     const failureReason = reason.text.slice(0, 500);
@@ -18908,9 +19291,9 @@ async function recordModelConfigSkippedSummary(cwd, payload) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID10();
-  const sessionId = asString2(payload.session_id);
-  const turnId = asString2(payload.turn_id);
+  const summaryId = randomUUID13();
+  const sessionId = asString3(payload.session_id);
+  const turnId = asString3(payload.turn_id);
   const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
   await appendCodexReviewSummary(memoryRoot, {
     id: summaryId,
@@ -18963,36 +19346,41 @@ function uniqueInOrder2(values) {
   });
 }
 async function proposeExplicitMemoryCandidate(payload, cwd, instruction) {
-  const runId = [asString2(payload.session_id), asString2(payload.turn_id)].filter(Boolean).join(":") || void 0;
-  const sessionId = asString2(payload.session_id);
+  const runId = [asString3(payload.session_id), asString3(payload.turn_id)].filter(Boolean).join(":") || void 0;
+  const sessionId = asString3(payload.session_id);
   const content = instruction.slice(0, 500);
-  return proposeCodexMemoryCandidate({
-    cwd,
-    candidate: {
-      domain: "procedural",
-      type: "procedural_rule",
-      strength: "hard",
-      scope: GLOBAL_SCOPE_SIGNAL.test(instruction) ? "global" : "project",
-      source: "user_explicit",
-      content,
-      evidence: [
-        {
+  const candidate = {
+    domain: "procedural",
+    type: "procedural_rule",
+    strength: "hard",
+    scope: GLOBAL_SCOPE_SIGNAL.test(instruction) ? "global" : "project",
+    source: "user_explicit",
+    content,
+    evidence: [
+      {
+        runId,
+        sessionId,
+        sourceKind: "user_explicit",
+        evidenceGroupId: stableEvidenceGroupId2({
           runId,
           sessionId,
-          sourceKind: "user_explicit",
-          evidenceGroupId: stableEvidenceGroupId2({
-            runId,
-            sessionId,
-            quote: content,
-            summary: "Codex Stop hook captured explicit durable user instruction."
-          }),
           quote: content,
           summary: "Codex Stop hook captured explicit durable user instruction."
-        }
-      ],
-      tags: ["codex-hook", "explicit-memory"]
-    },
-    recordRejectedCandidate: false
+        }),
+        quote: content,
+        summary: "Codex Stop hook captured explicit durable user instruction."
+      }
+    ],
+    tags: ["codex-hook", "explicit-memory"]
+  };
+  return runCodexAdmissionPipeline({
+    cwd,
+    candidate,
+    sourceKind: "user_explicit",
+    sourceEpisodeIds: [],
+    now: void 0,
+    recordRejectedCandidate: false,
+    allowAutoPromote: false
   });
 }
 function extractRecentExplicitMemoryInstructionFromMessages(messages) {
@@ -19073,7 +19461,7 @@ function isPathInside5(parent, child) {
   const path = relative5(parent, child);
   return path === "" || !path.startsWith("..") && !isAbsolute5(path);
 }
-function asString2(value) {
+function asString3(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
 
@@ -19114,14 +19502,14 @@ function parsePayload(raw) {
   return isRecord6(parsed) ? parsed : void 0;
 }
 function toTraceInput(event, payload) {
-  const cwd = asString3(payload.cwd) ?? process.cwd();
+  const cwd = asString4(payload.cwd) ?? process.cwd();
   const prompt = firstString(payload.prompt, payload.text, payload.user_prompt, payload.userPrompt);
   const tool = event === "post_tool_use" ? parseTool(payload) : void 0;
   return {
     cwd,
     event,
-    sessionId: asString3(payload.session_id) ?? asString3(payload.sessionId),
-    turnId: asString3(payload.turn_id) ?? asString3(payload.turnId),
+    sessionId: asString4(payload.session_id) ?? asString4(payload.sessionId),
+    turnId: asString4(payload.turn_id) ?? asString4(payload.turnId),
     summary: summaryForEvent(event, prompt, tool),
     signals: signalsForEvent(event, prompt, tool),
     ...tool === void 0 ? {} : { tool }
@@ -19192,7 +19580,7 @@ function parseTool(payload) {
   };
 }
 function responseSummary(value) {
-  const direct = asString3(value);
+  const direct = asString4(value);
   if (direct !== void 0) {
     return direct;
   }
@@ -19212,7 +19600,7 @@ function optionalStringArrayField(key, value) {
 }
 function firstString(...values) {
   for (const value of values) {
-    const parsed = asString3(value);
+    const parsed = asString4(value);
     if (parsed !== void 0) {
       return parsed;
     }
@@ -19238,7 +19626,7 @@ function firstStringArray(...values) {
   }
   return void 0;
 }
-function asString3(value) {
+function asString4(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
 function compact(value, maxLength) {
@@ -19321,7 +19709,7 @@ async function removeExistingSkillSymlink(path) {
 }
 
 // src/codex/active-memory-review.ts
-import { createHash as createHash10, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash10, randomUUID as randomUUID14 } from "node:crypto";
 function contentHashForActiveMemory(memory) {
   return createHash10("sha256").update(JSON.stringify({
     id: memory.id,
@@ -19338,7 +19726,7 @@ async function archiveCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID11(),
+      id: randomUUID14(),
       action: "archive",
       at: now,
       reason: input.reason,
@@ -19374,7 +19762,7 @@ async function tombstoneCodexActiveMemory(input) {
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID11(),
+      id: randomUUID14(),
       action: "tombstone",
       at: now,
       reason: input.reason,
@@ -19401,7 +19789,7 @@ async function tombstoneCodexActiveMemory(input) {
 async function proposeEditCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, memory, now }) => {
     const candidate = {
-      id: randomUUID11(),
+      id: randomUUID14(),
       domain: memory.domain,
       type: memory.type,
       strength: memory.strength,
@@ -19427,7 +19815,7 @@ async function proposeEditCodexActiveMemory(input) {
     const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
     await writePendingMemoriesFromRoot(lockedMemoryRoot, [...lockedPending, candidate]);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID11(),
+      id: randomUUID14(),
       action: "pending",
       at: now,
       reason: input.reason,
@@ -19504,25 +19892,25 @@ async function supersedeCodexActiveMemory(input) {
     }
     const lockedTombstones = await readTombstonesFromRoot(lockedMemoryRoot);
     const confirmedCandidate = { ...candidate, userConfirmed: true };
-    const decision = validateMemoryCandidate({
+    const decision2 = validateMemoryCandidate({
       candidate: confirmedCandidate,
       existingMemories: lockedActive,
       tombstones: lockedTombstones,
       now
     });
-    if (decision.action === "reject") {
+    if (decision2.action === "reject") {
       return {
         project,
         memoryRoot: lockedMemoryRoot,
         result: {
           action: "rejected_by_validator",
           candidateId: candidate.id,
-          reason: decision.reason,
-          tombstone: decision.tombstone
+          reason: decision2.reason,
+          tombstone: decision2.tombstone
         }
       };
     }
-    const candidateForActivation = decision.action === "pending" ? decision.candidate : confirmedCandidate;
+    const candidateForActivation = decision2.action === "pending" ? decision2.candidate : confirmedCandidate;
     const promoted = {
       ...activateCandidate(candidateForActivation, now),
       supersedes: uniqueInOrder3([...candidateForActivation.conflictsWith ?? [], memory.id])
@@ -19539,7 +19927,7 @@ async function supersedeCodexActiveMemory(input) {
     await writePendingMemoriesFromRoot(lockedMemoryRoot, lockedPending.filter((item) => item.id !== candidate.id));
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID11(),
+      id: randomUUID14(),
       action: "supersede",
       at: now,
       reason: input.reason,
@@ -19922,28 +20310,28 @@ function errorMessage3(error2) {
 }
 
 // src/codex/triage-apply.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID15 } from "node:crypto";
 function applySafeTriageDecisions(input) {
   const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
   const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
   const tombstones = [];
   const events = [];
   const counts = { auto_drop: 0, auto_defer: 0, auto_merge: 0 };
-  for (const decision of input.decisions.slice().sort(compareSafeTriageDecisionApplyOrder)) {
-    if (decision.action === "auto_drop") {
-      const candidate = byId.get(decision.candidateId);
+  for (const decision2 of input.decisions.slice().sort(compareSafeTriageDecisionApplyOrder)) {
+    if (decision2.action === "auto_drop") {
+      const candidate = byId.get(decision2.candidateId);
       if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
       retainedIds.delete(candidate.id);
       tombstones.push(tombstoneForAutoDroppedCandidate(candidate, input.now));
-      events.push(memoryEventForTriageDecision("reject", candidate, input.now, decision.reason, {
+      events.push(memoryEventForTriageDecision("reject", candidate, input.now, decision2.reason, {
         reviewAction: "triage_auto_drop",
         triageDecision: "auto_drop"
       }));
       counts.auto_drop += 1;
       continue;
     }
-    if (decision.action === "auto_merge") {
-      const memberIds = decision.candidateIds.slice().sort();
+    if (decision2.action === "auto_merge") {
+      const memberIds = decision2.candidateIds.slice().sort();
       const keeperId = memberIds.find((id) => retainedIds.has(id) && byId.has(id));
       if (keeperId === void 0) continue;
       let merged = byId.get(keeperId);
@@ -19959,27 +20347,27 @@ function applySafeTriageDecisions(input) {
       }
       if (mergedCandidateIds.length < 2) continue;
       byId.set(keeperId, merged);
-      events.push(memoryEventForTriageDecision("pending", merged, input.now, decision.reason, {
+      events.push(memoryEventForTriageDecision("pending", merged, input.now, decision2.reason, {
         reviewAction: "triage_auto_merge",
         triageDecision: "auto_merge",
-        clusterId: decision.clusterId,
+        clusterId: decision2.clusterId,
         mergedCandidateIds: mergedCandidateIds.sort()
       }));
       counts.auto_merge += 1;
       continue;
     }
-    if (decision.action === "auto_defer") {
-      const candidate = byId.get(decision.candidateId);
+    if (decision2.action === "auto_defer") {
+      const candidate = byId.get(decision2.candidateId);
       if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
       const deferredCandidate = {
         ...candidate,
-        promoteAfter: addDays4(input.now, decision.days)
+        promoteAfter: addDays4(input.now, decision2.days)
       };
       byId.set(candidate.id, deferredCandidate);
-      events.push(memoryEventForTriageDecision("pending", deferredCandidate, input.now, decision.reason, {
+      events.push(memoryEventForTriageDecision("pending", deferredCandidate, input.now, decision2.reason, {
         reviewAction: "triage_auto_defer",
         triageDecision: "auto_defer",
-        days: decision.days
+        days: decision2.days
       }));
       counts.auto_defer += 1;
     }
@@ -20016,7 +20404,7 @@ function tombstoneForAutoDroppedCandidate(candidate, now) {
 }
 function memoryEventForTriageDecision(action, candidate, now, reason, details) {
   return {
-    id: randomUUID12(),
+    id: randomUUID15(),
     action,
     at: now,
     reason,
@@ -22853,7 +23241,7 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 import { lstat as lstat14, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
@@ -22861,7 +23249,7 @@ var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID13();
+  const proposalId = randomUUID16();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
     reportPath: join24(previewDir, DREAM_REPORT_FILE),
@@ -22974,7 +23362,7 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID13()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID16()}.tmp`;
   await writeFile9(tempPath, content, "utf8");
   await rename5(tempPath, filePath);
 }
@@ -22983,7 +23371,7 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID14 } from "node:crypto";
+import { randomUUID as randomUUID17 } from "node:crypto";
 import { lstat as lstat16, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
@@ -23032,23 +23420,23 @@ async function buildDreamProposalForRoot(input) {
       summary.expire += 1;
       continue;
     }
-    const decision = validateMemoryCandidate({ candidate, existingMemories: active, tombstones, now: input.now });
-    if (decision.action === "reject") {
+    const decision2 = validateMemoryCandidate({ candidate, existingMemories: active, tombstones, now: input.now });
+    if (decision2.action === "reject") {
       proposedChanges.push({
         action: "reject",
         candidateId: candidate.id,
         normalizedKey: candidate.normalizedKey,
-        reason: decision.reason,
-        tombstoneReason: decision.tombstone.reason
+        reason: decision2.reason,
+        tombstoneReason: decision2.tombstone.reason
       });
       applyPlan.push({
         action: "reject",
         candidateId: candidate.id,
-        tombstone: decision.tombstone,
-        reason: decision.reason
+        tombstone: decision2.tombstone,
+        reason: decision2.reason
       });
       diff.removePendingCandidateIds.push(candidate.id);
-      diff.addTombstoneIds.push(decision.tombstone.id);
+      diff.addTombstoneIds.push(decision2.tombstone.id);
       summary.reject += 1;
       continue;
     }
@@ -23083,16 +23471,16 @@ async function buildDreamProposalForRoot(input) {
       summary.keepPending += 1;
       continue;
     }
-    const memory = decision.action === "auto_write" ? decision.memory : decision.action === "pending" ? activateCandidate(decision.candidate, input.now) : void 0;
+    const memory = decision2.action === "auto_write" ? decision2.memory : decision2.action === "pending" ? activateCandidate(decision2.candidate, input.now) : void 0;
     if (memory === void 0) {
       proposedChanges.push({
         action: "keep_pending",
         candidateId: candidate.id,
         normalizedKey: candidate.normalizedKey,
-        reason: decision.reason,
+        reason: decision2.reason,
         distinctEvidenceCount: evaluation.distinctEvidenceCount
       });
-      applyPlan.push({ action: "keep_pending", candidate, reason: decision.reason });
+      applyPlan.push({ action: "keep_pending", candidate, reason: decision2.reason });
       diff.keepPendingCandidateIds.push(candidate.id);
       summary.keepPending += 1;
       continue;
@@ -23277,7 +23665,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID14(),
+      id: randomUUID17(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -23302,7 +23690,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID14(),
+        id: randomUUID17(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -23428,7 +23816,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID14(),
+        id: randomUUID17(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -23563,7 +23951,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
   const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID14();
+  const token = randomUUID17();
   while (true) {
     try {
       await mkdir12(lockDir);
@@ -23674,7 +24062,7 @@ function isFileErrorCode14(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash11, randomUUID as randomUUID15 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID18 } from "node:crypto";
 import { lstat as lstat17, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -23804,7 +24192,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID15(),
+      id: randomUUID18(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -24051,7 +24439,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID15()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID18()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -24061,7 +24449,7 @@ async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID15()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID18()}.tmp`;
   await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename6(tempPath, targetPath);
 }
@@ -24201,7 +24589,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash12, randomUUID as randomUUID16 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID19 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -24316,7 +24704,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID16(),
+      id: randomUUID19(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
