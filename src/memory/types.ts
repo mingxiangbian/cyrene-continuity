@@ -75,6 +75,23 @@ export interface MemoryEvidence {
   sourceKind?: MemorySource
 }
 
+export interface EpisodeMemory {
+  id: string
+  projectId: string
+  title: string
+  summary: string
+  actions: string[]
+  decisions: string[]
+  failures: string[]
+  openQuestions: string[]
+  changedFiles?: string[]
+  commandsRun?: string[]
+  toolNames?: string[]
+  sourceTraceIds: string[]
+  createdAt: string
+  expiresAt?: string
+}
+
 export interface CyreneMemory {
   id: string
   domain: MemoryDomain

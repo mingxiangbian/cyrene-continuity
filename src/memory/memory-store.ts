@@ -1,10 +1,11 @@
 import { appendFile, lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ensureMemoryRoot, getReadableMemoryRoot } from './paths.js'
-import type { CyreneMemory, MemoryEvent, MemoryScores, MemoryTombstone, PendingMemory } from './types.js'
+import type { CyreneMemory, EpisodeMemory, MemoryEvent, MemoryScores, MemoryTombstone, PendingMemory } from './types.js'
 
 const INDEX_FILE = 'index.jsonl'
 const PENDING_FILE = 'pending.jsonl'
+const EPISODES_FILE = 'episodes.jsonl'
 const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
@@ -98,6 +99,19 @@ export async function upsertPendingMemoryFromRoot(memoryRoot: string, candidate:
 
   await writeJsonLinesAtomic(join(root, PENDING_FILE), pending)
   return result
+}
+
+export async function appendEpisodeMemoryFromRoot(memoryRoot: string, episode: EpisodeMemory): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, EPISODES_FILE), episode)
+}
+
+export async function readEpisodeMemoriesFromRoot(memoryRoot: string): Promise<EpisodeMemory[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<EpisodeMemory>(join(memoryRoot, EPISODES_FILE))
 }
 
 export async function appendMemoryEvent(cwd: string, event: MemoryEvent): Promise<void> {
