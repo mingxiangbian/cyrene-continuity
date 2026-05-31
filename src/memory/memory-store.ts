@@ -212,6 +212,11 @@ export function mergePendingMemory(existing: PendingMemory, candidate: PendingMe
     candidateKind: existing.candidateKind ?? candidate.candidateKind,
     candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
     tags: Array.from(new Set([...existing.tags, ...candidate.tags])),
+    admittedBy: existing.admittedBy ?? candidate.admittedBy,
+    admissionScore: Math.max(existing.admissionScore ?? 0, candidate.admissionScore ?? 0) || undefined,
+    admissionReasons: uniqueOptional([...(existing.admissionReasons ?? []), ...(candidate.admissionReasons ?? [])]),
+    sourceEpisodeIds: uniqueOptional([...(existing.sourceEpisodeIds ?? []), ...(candidate.sourceEpisodeIds ?? [])]),
+    sourceDraftIds: uniqueOptional([...(existing.sourceDraftIds ?? []), ...(candidate.sourceDraftIds ?? [])]),
     conflictsWith: uniqueOptional([...(existing.conflictsWith ?? []), ...(candidate.conflictsWith ?? [])])
   }
 }

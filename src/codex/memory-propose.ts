@@ -59,6 +59,11 @@ export interface CodexMemoryCandidateInput {
   scores?: Partial<MemoryScores>
   tags?: string[]
   userConfirmed?: boolean
+  admittedBy?: 'admission_gate_v1'
+  admissionScore?: number
+  admissionReasons?: string[]
+  sourceEpisodeIds?: string[]
+  sourceDraftIds?: string[]
 }
 
 export interface CodexMemoryProposeResult {
@@ -362,6 +367,11 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     firstSeenAt: now,
     lastSeenAt: now,
     expiresAt: addDays(now, 30),
+    ...(input.admittedBy === undefined ? {} : { admittedBy: input.admittedBy }),
+    ...(input.admissionScore === undefined ? {} : { admissionScore: input.admissionScore }),
+    ...(input.admissionReasons === undefined ? {} : { admissionReasons: input.admissionReasons }),
+    ...(input.sourceEpisodeIds === undefined ? {} : { sourceEpisodeIds: input.sourceEpisodeIds }),
+    ...(input.sourceDraftIds === undefined ? {} : { sourceDraftIds: input.sourceDraftIds }),
     userConfirmed: input.userConfirmed,
     candidateKind,
     tags: input.tags ?? []
