@@ -165,4 +165,35 @@ describe('Codex memory distillation dry run', () => {
       ])
     })
   })
+
+  it('marks duplicate pending candidates with mixed metadata as needs_review', async () => {
+    const memoryRoot = await createTempDir('cyrene-distill-mixed-metadata-')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [
+      createPending({
+        candidateKind: 'workflow_rule',
+        domain: 'procedural',
+        type: 'procedural_rule'
+      }),
+      createPending({
+        id: 'p2',
+        candidateKind: 'project_fact',
+        domain: 'project',
+        type: 'project_fact'
+      })
+    ])
+    await writeFile(join(memoryRoot, 'index.jsonl'), '', 'utf8')
+
+    const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
+
+    expect(result.candidates[0]).toMatchObject({
+      id: 'distill-release-typecheck',
+      risk: 'medium',
+      recommendedAction: 'needs_review',
+      reasons: expect.arrayContaining([
+        'mixed pending metadata for duplicate normalizedKey release-typecheck',
+        'duplicate normalizedKey release-typecheck has 2 pending candidates'
+      ])
+    })
+  })
 })

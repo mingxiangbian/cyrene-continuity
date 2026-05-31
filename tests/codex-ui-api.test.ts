@@ -627,6 +627,25 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
+  it('rejects all-scope memory distillation because the route operates on one memory root', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/distill/dry-run',
+      searchParams: new URLSearchParams('scope=all')
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error.message).toContain('scope=all')
+    }
+  })
+
   it('runs triage dry-run without mutating pending memory', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
@@ -673,6 +692,25 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.decisions).toContainEqual(expect.objectContaining({ action: 'recommend', candidateId: 'triage-review' }))
     }
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
+  it('rejects all-scope memory triage because the route operates on one memory root', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/triage/dry-run',
+      searchParams: new URLSearchParams('scope=all')
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error.message).toContain('scope=all')
+    }
   })
 
   it('applies safe triage decisions and leaves review-only candidates pending', async () => {

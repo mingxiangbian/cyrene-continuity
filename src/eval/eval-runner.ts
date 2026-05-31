@@ -290,7 +290,7 @@ export function runV5RetrievalExplainEvalGate(items: V5RetrievalExplainEvalItem[
 
 export function runV6DistillationReviewGate(items: V6DistillationReviewGateItem[]): EvalGateResult {
   const findings = items
-    .filter((item) => item.mode !== 'dry_run' || item.mutatedStores.length > 0 || !hasSourceIds(item.sourceIds))
+    .filter((item) => item.mode !== 'dry_run' || item.mutatedStores.length > 0 || !hasRequiredSourceIds(item))
     .map((item) => ({
       memoryId: item.candidateId,
       reason: item.mode !== 'dry_run'
@@ -572,8 +572,10 @@ function result(name: EvalCheckName, findings: EvalFinding[]): EvalResult {
   }
 }
 
-function hasSourceIds(sourceIds: string[]): boolean {
-  return sourceIds.some((sourceId) => sourceId.trim() !== '')
+function hasRequiredSourceIds(item: V6DistillationReviewGateItem): boolean {
+  const sourceIds = item.sourceIds.map((sourceId) => sourceId.trim())
+  if (sourceIds.length === 0 || sourceIds.some((sourceId) => sourceId === '')) return false
+  return item.recommendedAction === 'merge_pending' ? sourceIds.length >= 2 : sourceIds.length >= 1
 }
 
 function isDisallowedSimilarHintDomain(domain: MemoryDomain): boolean {

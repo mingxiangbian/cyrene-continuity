@@ -13225,7 +13225,7 @@ function runV5RetrievalExplainEvalGate(items) {
   return gate([result("retrieval_explain_eval", findings)]);
 }
 function runV6DistillationReviewGate(items) {
-  const findings = items.filter((item) => item.mode !== "dry_run" || item.mutatedStores.length > 0 || !hasSourceIds(item.sourceIds)).map((item) => ({
+  const findings = items.filter((item) => item.mode !== "dry_run" || item.mutatedStores.length > 0 || !hasRequiredSourceIds(item)).map((item) => ({
     memoryId: item.candidateId,
     reason: item.mode !== "dry_run" ? "distillation MVP must run in dry_run mode" : item.mutatedStores.length > 0 ? `distillation dry_run mutated stores: ${item.mutatedStores.join(", ")}` : "distillation candidate lacks source ids"
   }));
@@ -13462,8 +13462,10 @@ function result(name, findings) {
     findings
   };
 }
-function hasSourceIds(sourceIds) {
-  return sourceIds.some((sourceId) => sourceId.trim() !== "");
+function hasRequiredSourceIds(item) {
+  const sourceIds = item.sourceIds.map((sourceId) => sourceId.trim());
+  if (sourceIds.length === 0 || sourceIds.some((sourceId) => sourceId === "")) return false;
+  return item.recommendedAction === "merge_pending" ? sourceIds.length >= 2 : sourceIds.length >= 1;
 }
 function isDisallowedSimilarHintDomain(domain) {
   return domain === "personal" || domain === "relationship" || domain === "affective";
@@ -20167,8 +20169,9 @@ function groupPendingByNormalizedKey(pending) {
 function buildDistilledCandidate(normalizedKey, items, hasActiveOverlap) {
   const sourceItems = sortById(items);
   const highRiskDomains = Array.from(new Set(sourceItems.filter(isHighRiskDomain).map((item) => item.domain))).sort();
-  const risk = hasActiveOverlap || highRiskDomains.length > 0 ? "high" : "low";
-  const recommendedAction = risk === "high" ? "needs_review" : "merge_pending";
+  const hasMixedMetadata = hasMixedPendingMetadata(sourceItems);
+  const risk = hasActiveOverlap || highRiskDomains.length > 0 ? "high" : hasMixedMetadata ? "medium" : "low";
+  const recommendedAction = risk === "low" ? "merge_pending" : "needs_review";
   return {
     id: `distill-${normalizedKey}`,
     normalizedKey,
@@ -20177,7 +20180,7 @@ function buildDistilledCandidate(normalizedKey, items, hasActiveOverlap) {
     evidence: sourceItems.flatMap((item) => item.evidence),
     recommendedAction,
     risk,
-    reasons: buildReasons(normalizedKey, sourceItems.length, hasActiveOverlap, highRiskDomains)
+    reasons: buildReasons(normalizedKey, sourceItems.length, hasActiveOverlap, highRiskDomains, hasMixedMetadata)
   };
 }
 function isHighRiskDomain(item) {
@@ -20192,10 +20195,22 @@ function chooseRepresentativeContent(items) {
 function sortById(items) {
   return [...items].sort((left, right) => left.id.localeCompare(right.id));
 }
-function buildReasons(normalizedKey, pendingCount, hasActiveOverlap, highRiskDomains) {
+function hasMixedPendingMetadata(items) {
+  return new Set(items.map((item) => pendingMetadataSignature(item))).size > 1;
+}
+function pendingMetadataSignature(item) {
+  return JSON.stringify({
+    scope: item.scope,
+    domain: item.domain,
+    type: item.type,
+    candidateKind: item.candidateKind ?? item.candidate_kind ?? null
+  });
+}
+function buildReasons(normalizedKey, pendingCount, hasActiveOverlap, highRiskDomains, hasMixedMetadata) {
   return [
     ...hasActiveOverlap ? [`active memory already has normalizedKey ${normalizedKey}`] : [],
     ...highRiskDomains.map((domain) => `high-risk pending domain ${domain}`),
+    ...hasMixedMetadata ? [`mixed pending metadata for duplicate normalizedKey ${normalizedKey}`] : [],
     `duplicate normalizedKey ${normalizedKey} has ${pendingCount} pending candidates`
   ];
 }
@@ -20250,6 +20265,8 @@ async function handleCodexUiApiRequest(input) {
       }
       const selectionRequest = parseSelectionRequest(input.searchParams);
       if ("error" in selectionRequest) return selectionRequest.error;
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selectionRequest.value, "memory distillation");
+      if (unsupportedScope !== void 0) return unsupportedScope;
       const selection = await resolveSelection(input.cwd, selectionRequest.value);
       return ok(await runCodexMemoryDistill({ memoryRoot: selection.memoryRoot, dryRun: true }));
     }
@@ -20259,6 +20276,8 @@ async function handleCodexUiApiRequest(input) {
       }
       const selection = parseSelectionRequest(input.searchParams);
       if ("error" in selection) return selection.error;
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, "memory triage");
+      if (unsupportedScope !== void 0) return unsupportedScope;
       return ok(await runUiMemoryTriage({
         cwd: input.cwd,
         selection: selection.value,
@@ -20864,6 +20883,10 @@ function parseSelectionRequest(params) {
       ...projectId === void 0 ? {} : { projectId }
     }
   };
+}
+function rejectAllScopeForSingleRootOperation(request, operation) {
+  if (request.scope !== "all") return void 0;
+  return failure(400, "invalid_request", `${operation} does not support scope=all; choose project or global.`);
 }
 function publicSelection(selection) {
   return {

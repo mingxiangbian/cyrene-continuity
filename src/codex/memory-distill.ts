@@ -92,8 +92,13 @@ function buildDistilledCandidate(
 ): DistilledMemoryCandidate {
   const sourceItems = sortById(items)
   const highRiskDomains = Array.from(new Set(sourceItems.filter(isHighRiskDomain).map((item) => item.domain))).sort()
-  const risk = hasActiveOverlap || highRiskDomains.length > 0 ? 'high' : 'low'
-  const recommendedAction = risk === 'high' ? 'needs_review' : 'merge_pending'
+  const hasMixedMetadata = hasMixedPendingMetadata(sourceItems)
+  const risk = hasActiveOverlap || highRiskDomains.length > 0
+    ? 'high'
+    : hasMixedMetadata
+      ? 'medium'
+      : 'low'
+  const recommendedAction = risk === 'low' ? 'merge_pending' : 'needs_review'
 
   return {
     id: `distill-${normalizedKey}`,
@@ -103,7 +108,7 @@ function buildDistilledCandidate(
     evidence: sourceItems.flatMap((item) => item.evidence),
     recommendedAction,
     risk,
-    reasons: buildReasons(normalizedKey, sourceItems.length, hasActiveOverlap, highRiskDomains)
+    reasons: buildReasons(normalizedKey, sourceItems.length, hasActiveOverlap, highRiskDomains, hasMixedMetadata)
   }
 }
 
@@ -122,15 +127,30 @@ function sortById(items: PendingMemory[]): PendingMemory[] {
   return [...items].sort((left, right) => left.id.localeCompare(right.id))
 }
 
+function hasMixedPendingMetadata(items: PendingMemory[]): boolean {
+  return new Set(items.map((item) => pendingMetadataSignature(item))).size > 1
+}
+
+function pendingMetadataSignature(item: PendingMemory): string {
+  return JSON.stringify({
+    scope: item.scope,
+    domain: item.domain,
+    type: item.type,
+    candidateKind: item.candidateKind ?? item.candidate_kind ?? null
+  })
+}
+
 function buildReasons(
   normalizedKey: string,
   pendingCount: number,
   hasActiveOverlap: boolean,
-  highRiskDomains: string[]
+  highRiskDomains: string[],
+  hasMixedMetadata: boolean
 ): string[] {
   return [
     ...(hasActiveOverlap ? [`active memory already has normalizedKey ${normalizedKey}`] : []),
     ...highRiskDomains.map((domain) => `high-risk pending domain ${domain}`),
+    ...(hasMixedMetadata ? [`mixed pending metadata for duplicate normalizedKey ${normalizedKey}`] : []),
     `duplicate normalizedKey ${normalizedKey} has ${pendingCount} pending candidates`
   ]
 }

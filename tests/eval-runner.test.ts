@@ -601,4 +601,28 @@ describe('v6 distillation eval gate', () => {
 
     expect(result.failedChecks).toContain('distillation_review_gate')
   })
+
+  it('fails distillation_review_gate when a merge candidate has fewer than two sources', () => {
+    const result = runV6DistillationReviewGate([{
+      candidateId: 'distill-1',
+      mode: 'dry_run',
+      mutatedStores: [],
+      recommendedAction: 'merge_pending',
+      sourceIds: ['p1']
+    }])
+
+    expect(result.failedChecks).toContain('distillation_review_gate')
+  })
+
+  it('fails distillation_review_gate when any source id is blank', () => {
+    const result = runV6DistillationReviewGate([{
+      candidateId: 'distill-1',
+      mode: 'dry_run',
+      mutatedStores: [],
+      recommendedAction: 'merge_pending',
+      sourceIds: ['p1', '   ']
+    }])
+
+    expect(result.failedChecks).toContain('distillation_review_gate')
+  })
 })

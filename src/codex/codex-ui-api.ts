@@ -228,6 +228,8 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       }
       const selectionRequest = parseSelectionRequest(input.searchParams)
       if ('error' in selectionRequest) return selectionRequest.error
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selectionRequest.value, 'memory distillation')
+      if (unsupportedScope !== undefined) return unsupportedScope
       const selection = await resolveSelection(input.cwd, selectionRequest.value)
       return ok(await runCodexMemoryDistill({ memoryRoot: selection.memoryRoot, dryRun: true }))
     }
@@ -238,6 +240,8 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       }
       const selection = parseSelectionRequest(input.searchParams)
       if ('error' in selection) return selection.error
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, 'memory triage')
+      if (unsupportedScope !== undefined) return unsupportedScope
       return ok(await runUiMemoryTriage({
         cwd: input.cwd,
         selection: selection.value,
@@ -1018,6 +1022,14 @@ function parseSelectionRequest(params?: URLSearchParams): { value: CodexUiSelect
       ...(projectId === undefined ? {} : { projectId })
     }
   }
+}
+
+function rejectAllScopeForSingleRootOperation(
+  request: CodexUiSelectionRequest,
+  operation: string
+): CodexUiApiResult<never> | undefined {
+  if (request.scope !== 'all') return undefined
+  return failure(400, 'invalid_request', `${operation} does not support scope=all; choose project or global.`)
 }
 
 function publicSelection(selection: CodexUiResolvedSelection): {
