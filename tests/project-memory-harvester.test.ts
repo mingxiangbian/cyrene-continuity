@@ -294,6 +294,36 @@ describe('runCodexProjectMemoryHarvest', () => {
     }))
   })
 
+  it('writes candidate drafts beside existing project harvest pending candidates', async () => {
+    const home = await createTempDir('cyrene-harvester-draft-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-harvester-draft-project-')
+    collectSignals.mockResolvedValue({ signals: sampleSignals(), warnings: [] })
+
+    const result = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          candidates: [{
+            candidateKind: 'workflow_rule',
+            content: 'Repository changes must preserve the pending-only memory review model.',
+            signalIndexes: [1]
+          }]
+        })),
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('pending')
+    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const drafts = await readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')
+    expect(drafts).toContain('Repository changes must preserve the pending-only memory review model.')
+    expect(drafts).toContain('"sourceKind":"file"')
+    expect(drafts).toContain('"candidateKind":"workflow_rule"')
+  })
+
   it('filters invalid candidate kinds and prevents personal or global model output from leaking through', async () => {
     const home = await createTempDir('cyrene-harvester-home-')
     vi.stubEnv('HOME', home)

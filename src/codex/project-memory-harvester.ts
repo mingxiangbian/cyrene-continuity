@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { appendCodexCandidateDraftFailOpen } from './candidate-drafts.js'
 import { type CodexMemoryCandidateInput, proposeCodexMemoryCandidate } from './memory-propose.js'
 import {
   collectProjectMemorySignals,
@@ -104,6 +105,18 @@ export async function runCodexProjectMemoryHarvest(
   const candidateIds: string[] = []
   let memoryRoot: string | undefined
   for (const candidate of candidates) {
+    await appendCodexCandidateDraftFailOpen({
+      projectId: project.projectId,
+      candidate,
+      sourceKind: candidate.source === 'tool_trace'
+        ? 'tool_trace'
+        : candidate.source === 'user_explicit'
+          ? 'user_explicit'
+          : candidate.source === 'assistant_observed'
+            ? 'assistant_observed'
+            : 'file',
+      now: input.now
+    })
     const result = await proposeCodexMemoryCandidate({
       cwd: input.cwd,
       candidate,

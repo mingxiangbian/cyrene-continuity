@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { appendCodexCandidateDraftFailOpen } from './candidate-drafts.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { candidateFromExplicitGlobalInstruction } from './global-memory-capture.js'
 import { type CodexMemoryCandidateInput, proposeCodexMemoryCandidate } from './memory-propose.js'
@@ -78,6 +79,13 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         continue
       }
 
+      await appendCodexCandidateDraftFailOpen({
+        projectId: project.projectId,
+        candidate: safeCandidate,
+        sourceKind: 'review_summary',
+        evidenceRefs: [summaryId],
+        now: createdAt
+      })
       const result = await proposeCodexMemoryCandidate({
         cwd: input.cwd,
         candidate: safeCandidate,
@@ -98,6 +106,13 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         continue
       }
 
+      await appendCodexCandidateDraftFailOpen({
+        projectId: project.projectId,
+        candidate: globalCandidate,
+        sourceKind: 'user_explicit',
+        evidenceRefs: [summaryId],
+        now: createdAt
+      })
       const result = await proposeCodexMemoryCandidate({
         cwd: input.cwd,
         candidate: globalCandidate,

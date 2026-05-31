@@ -247,6 +247,43 @@ describe('Codex review summary runtime', () => {
     expect(pending).toContain('"candidateKind":"known_pitfall"')
   })
 
+  it('writes candidate drafts beside existing pending review summary candidates', async () => {
+    const home = await createTempDir('cyrene-review-runtime-draft-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-runtime-draft-project-')
+
+    const result = await runCodexReviewSummary({
+      cwd,
+      sessionId: 's-draft',
+      turnId: 't-draft',
+      messages: [{ role: 'user', content: '这个项目的 memory 审批要用 review hash。' }],
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          summary: '用户要求项目 memory 审批使用 review hash。',
+          candidates: [{
+            domain: 'procedural',
+            type: 'procedural_rule',
+            candidateKind: 'workflow_rule',
+            content: '项目 memory 审批必须使用 review hash。',
+            source: 'user_explicit',
+            evidence: [{ summary: '用户要求项目 memory 审批使用 review hash。' }]
+          }]
+        })),
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('pending')
+    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const drafts = await readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')
+    expect(drafts).toContain('项目 memory 审批必须使用 review hash。')
+    expect(drafts).toContain('"sourceKind":"review_summary"')
+    expect(drafts).toContain('"candidateKind":"workflow_rule"')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('项目 memory 审批必须使用 review hash。')
+  })
+
   it('adds stable evidence grouping metadata to generated candidates', async () => {
     const home = await createTempDir('cyrene-review-runtime-home-')
     vi.stubEnv('HOME', home)
