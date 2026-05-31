@@ -1,11 +1,20 @@
 import { appendFile, lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ensureMemoryRoot, getReadableMemoryRoot } from './paths.js'
-import type { CyreneMemory, EpisodeMemory, MemoryEvent, MemoryScores, MemoryTombstone, PendingMemory } from './types.js'
+import type {
+  CandidateDraft,
+  CyreneMemory,
+  EpisodeMemory,
+  MemoryEvent,
+  MemoryScores,
+  MemoryTombstone,
+  PendingMemory
+} from './types.js'
 
 const INDEX_FILE = 'index.jsonl'
 const PENDING_FILE = 'pending.jsonl'
 const EPISODES_FILE = 'episodes.jsonl'
+const CANDIDATE_DRAFTS_FILE = 'candidate_drafts.jsonl'
 const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
@@ -112,6 +121,19 @@ export async function readEpisodeMemoriesFromRoot(memoryRoot: string): Promise<E
     return []
   }
   return readJsonLines<EpisodeMemory>(join(memoryRoot, EPISODES_FILE))
+}
+
+export async function appendCandidateDraftFromRoot(memoryRoot: string, draft: CandidateDraft): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, CANDIDATE_DRAFTS_FILE), draft)
+}
+
+export async function readCandidateDraftsFromRoot(memoryRoot: string): Promise<CandidateDraft[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<CandidateDraft>(join(memoryRoot, CANDIDATE_DRAFTS_FILE))
 }
 
 export async function appendMemoryEvent(cwd: string, event: MemoryEvent): Promise<void> {

@@ -92,6 +92,31 @@ export interface EpisodeMemory {
   expiresAt?: string
 }
 
+export const CANDIDATE_DRAFT_SOURCE_KINDS = [
+  'file',
+  'tool_trace',
+  'review_summary',
+  'user_explicit',
+  'assistant_observed',
+  'daily_interview'
+] as const
+export type CandidateDraftSourceKind = typeof CANDIDATE_DRAFT_SOURCE_KINDS[number]
+
+export interface CandidateDraft {
+  id: string
+  episodeId?: string
+  content: string
+  candidateKind: MemoryCandidateKind
+  scope: MemoryScope
+  domain: MemoryDomain
+  sourceKind: CandidateDraftSourceKind
+  sourceEpisodeIds: string[]
+  evidenceRefs: string[]
+  normalizedKey?: string
+  tags: string[]
+  createdAt: string
+}
+
 export interface CyreneMemory {
   id: string
   domain: MemoryDomain
