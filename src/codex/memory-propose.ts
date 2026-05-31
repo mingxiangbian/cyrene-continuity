@@ -66,6 +66,12 @@ export interface CodexMemoryCandidateInput {
   sourceDraftIds?: string[]
 }
 
+export function normalizedKeyForCodexMemoryCandidate(
+  input: Pick<CodexMemoryCandidateInput, 'content' | 'domain' | 'normalizedKey' | 'type'>
+): string {
+  return input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`)
+}
+
 export interface CodexMemoryProposeResult {
   project: {
     projectId: string
@@ -359,7 +365,7 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     scope: input.scope ?? 'project',
     status: 'pending',
     content: input.content,
-    normalizedKey: input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`),
+    normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
     evidence: input.evidence,
     source: input.source ?? 'assistant_observed',
     scores: { ...DEFAULT_SCORES, ...input.scores },

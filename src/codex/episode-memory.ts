@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { appendEpisodeMemoryFromRoot } from '../memory/memory-store.js'
 import type { EpisodeMemory } from '../memory/types.js'
-import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
+import { ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import type { CodexStopHookPayload } from './codex-hook-stop.js'
 import { redactReviewText } from './review-redaction.js'
 import type { TranscriptMessage } from './transcript.js'
@@ -27,9 +27,16 @@ export interface StopHookEpisodeInput {
 export async function appendStopHookEpisodeFailOpen(input: StopHookEpisodeInput): Promise<EpisodeMemory | undefined> {
   try {
     const memoryRoot = await ensureCodexProjectMemoryRoot(input.projectId)
-    const episode = buildStopHookEpisode(input)
-    await appendEpisodeMemoryFromRoot(memoryRoot, episode)
-    return episode
+    return await appendStopHookEpisodeToRootFailOpen(memoryRoot, input)
+  } catch {
+    return undefined
+  }
+}
+
+export async function appendGlobalStopHookEpisodeFailOpen(input: StopHookEpisodeInput): Promise<EpisodeMemory | undefined> {
+  try {
+    const memoryRoot = await ensureCodexGlobalMemoryRoot()
+    return await appendStopHookEpisodeToRootFailOpen(memoryRoot, input)
   } catch {
     return undefined
   }
@@ -39,7 +46,7 @@ export function buildStopHookEpisode(input: StopHookEpisodeInput): EpisodeMemory
   const sessionId = asString(input.payload.session_id)
   const turnId = asString(input.payload.turn_id)
   const sourceTraceIds = [sessionId, turnId].filter((value): value is string => value !== undefined)
-  const title = firstNonemptyUserMessage(input.messages) ?? 'Codex Stop hook episode'
+  const title = lastNonemptyUserMessage(input.messages) ?? 'Codex Stop hook episode'
 
   return {
     id: input.id ?? randomUUID(),
@@ -58,8 +65,17 @@ export function buildStopHookEpisode(input: StopHookEpisodeInput): EpisodeMemory
   }
 }
 
-function firstNonemptyUserMessage(messages: TranscriptMessage[]): string | undefined {
-  return messages.find((message) => message.role === 'user' && message.content.trim() !== '')?.content
+async function appendStopHookEpisodeToRootFailOpen(
+  memoryRoot: string,
+  input: StopHookEpisodeInput
+): Promise<EpisodeMemory> {
+  const episode = buildStopHookEpisode(input)
+  await appendEpisodeMemoryFromRoot(memoryRoot, episode)
+  return episode
+}
+
+function lastNonemptyUserMessage(messages: TranscriptMessage[]): string | undefined {
+  return [...messages].reverse().find((message) => message.role === 'user' && message.content.trim() !== '')?.content
 }
 
 function cleanItems(values: string[]): string[] {

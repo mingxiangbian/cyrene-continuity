@@ -16962,38 +16962,10 @@ function clamp(value) {
 }
 
 // src/codex/candidate-drafts.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
-function toCandidateDraft(input) {
-  const candidateKind = deriveMemoryCandidateKind({
-    candidateKind: input.candidate.candidateKind,
-    candidate_kind: input.candidate.candidate_kind,
-    tags: input.candidate.tags ?? [],
-    type: input.candidate.type
-  });
-  const scope = input.candidate.scope ?? "project";
-  return {
-    id: randomUUID8(),
-    content: input.candidate.content,
-    candidateKind,
-    scope,
-    domain: input.candidate.domain,
-    sourceKind: input.sourceKind,
-    sourceEpisodeIds: input.sourceEpisodeIds ?? [],
-    evidenceRefs: input.evidenceRefs ?? evidenceRefs(input.candidate.evidence),
-    ...input.candidate.normalizedKey === void 0 ? {} : { normalizedKey: input.candidate.normalizedKey },
-    tags: input.candidate.tags ?? [],
-    createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-function evidenceRefs(evidence) {
-  return evidence.flatMap((entry) => {
-    const value = entry.evidenceGroupId ?? entry.runId ?? entry.sessionId ?? entry.taskHash ?? entry.summary ?? entry.quote;
-    return value === void 0 ? [] : [value];
-  });
-}
+import { randomUUID as randomUUID9 } from "node:crypto";
 
 // src/codex/memory-propose.ts
-import { createHash as createHash6, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -17204,6 +17176,9 @@ function enforcePendingBudget(input) {
 }
 
 // src/codex/memory-propose.ts
+function normalizedKeyForCodexMemoryCandidate(input) {
+  return input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`);
+}
 var DEFAULT_SCORES = {
   evidenceStrength: 0.75,
   stability: 0.65,
@@ -17242,7 +17217,7 @@ async function proposeCodexMemoryCandidate(input) {
       if (input.recordRejectedCandidate !== false) {
         await appendTombstoneFromRoot(lockedMemoryRoot, decision2.tombstone);
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID9(),
+          id: randomUUID8(),
           action: "reject",
           at: now,
           reason: decision2.reason,
@@ -17286,7 +17261,7 @@ async function proposeCodexMemoryCandidate(input) {
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID9(),
+        id: randomUUID8(),
         action: "promote",
         at: now,
         reason: autoPromotion.reason,
@@ -17336,7 +17311,7 @@ async function proposeCodexMemoryCandidate(input) {
     }
     if (budgetResult.action === "evict_existing") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID9(),
+        id: randomUUID8(),
         action: "audit",
         at: now,
         reason: budgetResult.reason,
@@ -17347,7 +17322,7 @@ async function proposeCodexMemoryCandidate(input) {
     await markDreamDueFailOpen(lockedMemoryRoot, now);
     const reason = decision2.action === "auto_write" ? input.allowAutoPromote === false ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.` : autoPromotion.allowed && autoPromotionEval?.passed === false ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.` : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision2.reason;
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID9(),
+      id: randomUUID8(),
       action: "pending",
       at: now,
       reason,
@@ -17419,14 +17394,14 @@ function toPendingMemory(input, now) {
     type: input.type
   });
   return {
-    id: randomUUID9(),
+    id: randomUUID8(),
     domain: input.domain,
     type: input.type,
     strength: input.strength ?? "soft",
     scope: input.scope ?? "project",
     status: "pending",
     content: input.content,
-    normalizedKey: input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`),
+    normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
     evidence: input.evidence,
     source: input.source ?? "assistant_observed",
     scores: { ...DEFAULT_SCORES, ...input.scores },
@@ -17452,6 +17427,36 @@ function addDays2(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
+}
+
+// src/codex/candidate-drafts.ts
+function toCandidateDraft(input) {
+  const candidateKind = deriveMemoryCandidateKind({
+    candidateKind: input.candidate.candidateKind,
+    candidate_kind: input.candidate.candidate_kind,
+    tags: input.candidate.tags ?? [],
+    type: input.candidate.type
+  });
+  const scope = input.candidate.scope ?? "project";
+  return {
+    id: randomUUID9(),
+    content: input.candidate.content,
+    candidateKind,
+    scope,
+    domain: input.candidate.domain,
+    sourceKind: input.sourceKind,
+    sourceEpisodeIds: input.sourceEpisodeIds ?? [],
+    evidenceRefs: input.evidenceRefs ?? evidenceRefs(input.candidate.evidence),
+    normalizedKey: normalizedKeyForCodexMemoryCandidate(input.candidate),
+    tags: input.candidate.tags ?? [],
+    createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+function evidenceRefs(evidence) {
+  return evidence.flatMap((entry) => {
+    const value = entry.evidenceGroupId ?? entry.runId ?? entry.sessionId ?? entry.taskHash ?? entry.summary ?? entry.quote;
+    return value === void 0 ? [] : [value];
+  });
 }
 
 // src/codex/admission-pipeline.ts
@@ -17634,9 +17639,15 @@ var ITEM_MAX_LENGTH = 240;
 async function appendStopHookEpisodeFailOpen(input) {
   try {
     const memoryRoot = await ensureCodexProjectMemoryRoot(input.projectId);
-    const episode = buildStopHookEpisode(input);
-    await appendEpisodeMemoryFromRoot(memoryRoot, episode);
-    return episode;
+    return await appendStopHookEpisodeToRootFailOpen(memoryRoot, input);
+  } catch {
+    return void 0;
+  }
+}
+async function appendGlobalStopHookEpisodeFailOpen(input) {
+  try {
+    const memoryRoot = await ensureCodexGlobalMemoryRoot();
+    return await appendStopHookEpisodeToRootFailOpen(memoryRoot, input);
   } catch {
     return void 0;
   }
@@ -17645,7 +17656,7 @@ function buildStopHookEpisode(input) {
   const sessionId = asString(input.payload.session_id);
   const turnId = asString(input.payload.turn_id);
   const sourceTraceIds = [sessionId, turnId].filter((value) => value !== void 0);
-  const title = firstNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
+  const title = lastNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
   return {
     id: input.id ?? randomUUID10(),
     projectId: input.projectId,
@@ -17662,8 +17673,13 @@ function buildStopHookEpisode(input) {
     ...turnId === void 0 ? {} : { turnId }
   };
 }
-function firstNonemptyUserMessage(messages) {
-  return messages.find((message) => message.role === "user" && message.content.trim() !== "")?.content;
+async function appendStopHookEpisodeToRootFailOpen(memoryRoot, input) {
+  const episode = buildStopHookEpisode(input);
+  await appendEpisodeMemoryFromRoot(memoryRoot, episode);
+  return episode;
+}
+function lastNonemptyUserMessage(messages) {
+  return [...messages].reverse().find((message) => message.role === "user" && message.content.trim() !== "")?.content;
 }
 function cleanItems(values) {
   return values.map((value) => clean(value, ITEM_MAX_LENGTH)).filter((value) => value !== "");
@@ -18800,7 +18816,7 @@ async function runCodexReviewSummary(input) {
         candidate: globalCandidate,
         sourceKind: "user_explicit",
         sourceEpisodeIds: input.sourceEpisodeIds,
-        evidenceRefs: [summaryId],
+        evidenceRefs: input.sourceEpisodeIds ?? [],
         now: input.now,
         recordRejectedCandidate: false,
         allowAutoPromote: false
@@ -19116,12 +19132,14 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
     deps,
     sourceEpisodeIds: [stopEpisodeId]
   });
-  await appendStopHookEpisodeFailOpen({
+  const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages);
+  const episodeMessages = recentTranscriptMessages(messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW);
+  const episodeInput = {
     id: stopEpisodeId,
     cwd,
     projectId: project.projectId,
     payload,
-    messages,
+    messages: episodeMessages,
     summary: review.action === "summary_failed" ? review.reason : review.action === "pending" ? "Codex Stop hook wrote review summary and proposed pending candidates." : review.action === "summary" ? "Codex Stop hook wrote review summary." : review.reason,
     actions: [
       "Parsed Codex Stop hook transcript.",
@@ -19131,8 +19149,11 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
     failures: review.action === "summary_failed" ? [review.reason] : [],
     openQuestions: [],
     toolNames: ["stop_hook", "review_summary"]
-  });
-  const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages);
+  };
+  await appendStopHookEpisodeFailOpen(episodeInput);
+  if (shouldMirrorGlobalStopEpisode(messages, instruction)) {
+    await appendGlobalStopHookEpisodeFailOpen(episodeInput);
+  }
   const explicitResult = instruction === void 0 || shouldSkipExplicitMemoryFallback(instruction, review, messages) ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction, [stopEpisodeId]);
   const harvest = await runProjectMemoryHarvestFailOpen({
     cwd,
@@ -19391,6 +19412,17 @@ async function proposeExplicitMemoryCandidate(payload, cwd, instruction, sourceE
     recordRejectedCandidate: false,
     allowAutoPromote: false
   });
+}
+function shouldMirrorGlobalStopEpisode(messages, instruction) {
+  if (instruction !== void 0 && GLOBAL_SCOPE_SIGNAL.test(instruction)) {
+    return true;
+  }
+  return recentTranscriptMessages(messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW).some(
+    (message) => message.role === "user" && candidateFromExplicitGlobalInstruction({
+      text: redactReviewText(message.content).text,
+      now: (/* @__PURE__ */ new Date(0)).toISOString()
+    }) !== void 0
+  );
 }
 function shouldSkipExplicitMemoryFallback(instruction, review, messages) {
   if (!reviewSummaryRanExtraction(review)) {

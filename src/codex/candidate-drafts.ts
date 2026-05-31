@@ -10,7 +10,7 @@ import type {
 } from '../memory/types.js'
 import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
 import { ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
-import type { CodexMemoryCandidateInput } from './memory-propose.js'
+import { normalizedKeyForCodexMemoryCandidate, type CodexMemoryCandidateInput } from './memory-propose.js'
 
 export interface CandidateDraftInput {
   projectId: string
@@ -51,7 +51,7 @@ export function toCandidateDraft(input: CandidateDraftInput): CandidateDraft {
     sourceKind: input.sourceKind,
     sourceEpisodeIds: input.sourceEpisodeIds ?? [],
     evidenceRefs: input.evidenceRefs ?? evidenceRefs(input.candidate.evidence),
-    ...(input.candidate.normalizedKey === undefined ? {} : { normalizedKey: input.candidate.normalizedKey }),
+    normalizedKey: normalizedKeyForCodexMemoryCandidate(input.candidate),
     tags: input.candidate.tags ?? [],
     createdAt: input.now ?? new Date().toISOString()
   }

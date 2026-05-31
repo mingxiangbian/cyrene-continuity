@@ -5,7 +5,7 @@ import { createDefaultConfig, type AppConfig } from '../config.js'
 import { callModel as defaultCallModel, modelBaseUrlRequiresApiKey } from '../llm-client.js'
 import { runCodexAdmissionPipeline } from './admission-pipeline.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
-import { appendStopHookEpisodeFailOpen } from './episode-memory.js'
+import { appendGlobalStopHookEpisodeFailOpen, appendStopHookEpisodeFailOpen } from './episode-memory.js'
 import { candidateFromExplicitGlobalInstruction } from './global-memory-capture.js'
 import { appendCodexHookTrace } from './hook-trace-store.js'
 import { listCodexPendingMemories } from './memory-review.js'
@@ -149,12 +149,14 @@ async function handleCodexStopHookPayloadUnsafe(
     deps,
     sourceEpisodeIds: [stopEpisodeId]
   })
-  await appendStopHookEpisodeFailOpen({
+  const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages)
+  const episodeMessages = recentTranscriptMessages(messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW)
+  const episodeInput = {
     id: stopEpisodeId,
     cwd,
     projectId: project.projectId,
     payload,
-    messages,
+    messages: episodeMessages,
     summary: review.action === 'summary_failed'
       ? review.reason
       : review.action === 'pending'
@@ -170,8 +172,11 @@ async function handleCodexStopHookPayloadUnsafe(
     failures: review.action === 'summary_failed' ? [review.reason] : [],
     openQuestions: [],
     toolNames: ['stop_hook', 'review_summary']
-  })
-  const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages)
+  }
+  await appendStopHookEpisodeFailOpen(episodeInput)
+  if (shouldMirrorGlobalStopEpisode(messages, instruction)) {
+    await appendGlobalStopHookEpisodeFailOpen(episodeInput)
+  }
   const explicitResult = instruction === undefined || shouldSkipExplicitMemoryFallback(instruction, review, messages)
     ? undefined
     : await proposeExplicitMemoryCandidate(payload, cwd, instruction, [stopEpisodeId])
@@ -486,6 +491,20 @@ async function proposeExplicitMemoryCandidate(
     recordRejectedCandidate: false,
     allowAutoPromote: false
   })
+}
+
+function shouldMirrorGlobalStopEpisode(messages: TranscriptMessage[], instruction: string | undefined): boolean {
+  if (instruction !== undefined && GLOBAL_SCOPE_SIGNAL.test(instruction)) {
+    return true
+  }
+
+  return recentTranscriptMessages(messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW).some((message) =>
+    message.role === 'user' &&
+    candidateFromExplicitGlobalInstruction({
+      text: redactReviewText(message.content).text,
+      now: new Date(0).toISOString()
+    }) !== undefined
+  )
 }
 
 function shouldSkipExplicitMemoryFallback(

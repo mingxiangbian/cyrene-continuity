@@ -427,6 +427,9 @@ describe('Codex Stop hook runtime', () => {
     const globalPending = await readFile(join(home, '.cyrene', 'codex', 'global', 'memory', 'pending.jsonl'), 'utf8')
     expect(globalPending).toContain('"scope":"global"')
     expect(globalPending).toContain('以后在所有项目里，所有 spec 和 plan 默认用中文写。')
+    const [globalPendingRecord] = globalPending.trim().split('\n').map((line) => JSON.parse(line) as PendingMemory)
+    const globalEpisodes = await readFile(join(home, '.cyrene', 'codex', 'global', 'memory', 'episodes.jsonl'), 'utf8')
+    expect(globalEpisodes).toContain(`"id":"${globalPendingRecord.sourceEpisodeIds?.[0]}"`)
 
     const identity = await identifyCodexProject(cwd)
     await expect(readFile(join(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl'), 'utf8')).rejects.toMatchObject({
@@ -464,6 +467,9 @@ describe('Codex Stop hook runtime', () => {
     expect(globalPending).toHaveLength(1)
     expect(globalDrafts).toHaveLength(1)
     expect(globalPending[0]).toContain('以后在所有项目里，所有 spec 和 plan 默认用中文写。')
+    const [globalPendingRecord] = globalPending.map((line) => JSON.parse(line) as PendingMemory)
+    const globalEpisodes = await readFile(join(globalMemoryRoot, 'episodes.jsonl'), 'utf8')
+    expect(globalEpisodes).toContain(`"id":"${globalPendingRecord.sourceEpisodeIds?.[0]}"`)
   })
 
   it('keeps global explicit fallback when the instruction is outside the review summary window', async () => {
@@ -919,6 +925,40 @@ describe('Codex Stop hook runtime', () => {
     expect(episodes).toContain('"sessionId":"s-episode"')
     expect(episodes).toContain('Codex Stop hook wrote review summary.')
     await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+  })
+
+  it('uses recent user context for Stop hook episode titles', async () => {
+    const home = await createTempDir('cyrene-codex-stop-episode-title-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-episode-title-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    const filler = Array.from({ length: 45 }, (_, index) =>
+      JSON.stringify({ role: 'assistant', content: `普通后续消息 ${index}` })
+    )
+    await writeFile(transcript, [
+      JSON.stringify({ role: 'user', content: '旧的普通讨论，不应作为新 episode title。' }),
+      ...filler,
+      JSON.stringify({ role: 'user', content: '新的普通讨论，应该作为 episode title。' })
+    ].join('\n') + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-episode-title', turn_id: 't-episode-title', transcript_path: transcript },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({ summary: '普通讨论，无长期记忆。', candidates: [] }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('summary')
+    const identity = await identifyCodexProject(cwd)
+    const [episode] = (await readFile(join(codexProjectMemoryRoot(identity.projectId), 'episodes.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { title: string })
+    expect(episode.title).toContain('新的普通讨论')
+    expect(episode.title).not.toContain('旧的普通讨论')
   })
 
   it('keeps Stop hook fail-open when episode write fails', async () => {

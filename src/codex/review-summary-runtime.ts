@@ -109,7 +109,7 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         candidate: globalCandidate,
         sourceKind: 'user_explicit',
         sourceEpisodeIds: input.sourceEpisodeIds,
-        evidenceRefs: [summaryId],
+        evidenceRefs: input.sourceEpisodeIds ?? [],
         now: input.now,
         recordRejectedCandidate: false,
         allowAutoPromote: false

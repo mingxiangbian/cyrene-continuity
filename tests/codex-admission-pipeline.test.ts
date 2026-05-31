@@ -6,7 +6,7 @@ import { runCodexAdmissionPipeline } from '../src/codex/admission-pipeline.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -39,6 +39,19 @@ function activeMemory(normalizedKey: string): CyreneMemory {
     createdAt: '2026-05-01T00:00:00.000Z',
     updatedAt: '2026-05-01T00:00:00.000Z',
     tags: []
+  }
+}
+
+function tombstone(normalizedKey: string): MemoryTombstone {
+  return {
+    id: 'tombstone-1',
+    normalizedKey,
+    domain: 'project',
+    type: 'project_fact',
+    scope: 'project',
+    reason: 'archived',
+    createdAt: '2026-05-01T00:00:00.000Z',
+    expiresAt: '2026-06-01T00:00:00.000Z'
   }
 }
 
@@ -226,6 +239,62 @@ describe('runCodexAdmissionPipeline', () => {
     })
 
     expect(result.action).toBe('reject_duplicate')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects duplicate active memory using derived normalized keys', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-derived-duplicate-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-derived-duplicate-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(activeMemory('project-project-fact-duplicate-active-memory'))}\n`)
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'review_summary',
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        candidateKind: 'project_fact',
+        content: 'Duplicate active memory',
+        evidence: [{ summary: 'Duplicate evidence.' }]
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('reject_duplicate')
+    expect(result.admission.reasons).toContain('duplicate_active')
+    const drafts = await readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')
+    expect(drafts).toContain('"normalizedKey":"project-project-fact-duplicate-active-memory"')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('drops tombstoned memory using derived normalized keys', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-derived-tombstone-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-derived-tombstone-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'tombstones.jsonl'), `${JSON.stringify(tombstone('project-project-fact-archived-memory'))}\n`)
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'review_summary',
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        candidateKind: 'project_fact',
+        content: 'Archived memory',
+        evidence: [{ summary: 'Archived evidence.' }]
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('auto_drop')
+    expect(result.admission.reasons).toContain('conflicts_with_tombstone')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

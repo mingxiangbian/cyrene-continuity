@@ -208,6 +208,7 @@ describe('Codex review summary runtime', () => {
       messages: [{ role: 'user', content: '以后所有项目都默认先运行 git diff --check。' }],
       config: createConfig(cwd),
       callModel: async () => modelResponse(JSON.stringify({ summary: '用户给出全局 workflow 指令。', candidates: [] })),
+      sourceEpisodeIds: ['episode-global'],
       now: '2026-05-30T00:00:00.000Z'
     })
 
@@ -218,6 +219,12 @@ describe('Codex review summary runtime', () => {
     expect(pending).toContain('以后所有项目都默认先运行 git diff --check。')
     expect(pending).toContain('"source":"user_explicit"')
     expect(pending).toContain('"scope":"global"')
+    const [draft] = (await readFile(join(codexGlobalMemoryRoot(), 'candidate_drafts.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { evidenceRefs: string[]; sourceEpisodeIds: string[] })
+    expect(draft.sourceEpisodeIds).toEqual(['episode-global'])
+    expect(draft.evidenceRefs).toEqual(['episode-global'])
   })
 
   it('preserves candidateKind from review summary candidates', async () => {
