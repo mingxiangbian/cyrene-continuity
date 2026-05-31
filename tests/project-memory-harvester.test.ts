@@ -294,6 +294,35 @@ describe('runCodexProjectMemoryHarvest', () => {
     }))
   })
 
+  it('routes numeric project harvest snapshots to admission without pending write', async () => {
+    const home = await createTempDir('cyrene-harvester-admission-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-harvester-admission-project-')
+    collectSignals.mockResolvedValue({ signals: sampleSignals(), warnings: [] })
+
+    const result = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          candidates: [{
+            candidateKind: 'project_fact',
+            content: '项目包含 44 个测试文件，广泛覆盖 active memory、CLI、distill、MCP、memory index 等模块。',
+            signalIndexes: [1]
+          }]
+        })),
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('noop')
+    if (result.action !== 'noop') throw new Error(`Expected noop, got ${result.action}`)
+    expect(result.reason).toContain('No project memory candidates survived admission.')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('stale_numeric_snapshot')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('writes candidate drafts beside existing project harvest pending candidates', async () => {
     const home = await createTempDir('cyrene-harvester-draft-home-')
     vi.stubEnv('HOME', home)

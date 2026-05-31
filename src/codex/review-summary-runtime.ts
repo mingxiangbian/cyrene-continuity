@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { appendCodexCandidateDraftFailOpen } from './candidate-drafts.js'
+import { runCodexAdmissionPipeline } from './admission-pipeline.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { candidateFromExplicitGlobalInstruction } from './global-memory-capture.js'
-import { type CodexMemoryCandidateInput, proposeCodexMemoryCandidate } from './memory-propose.js'
+import type { CodexMemoryCandidateInput } from './memory-propose.js'
 import { identifyCodexProject } from './project-id.js'
 import { redactReviewText, mergeRedactionCounts } from './review-redaction.js'
 import { appendCodexReviewSummary } from './review-summary-store.js'
@@ -79,20 +79,15 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         continue
       }
 
-      await appendCodexCandidateDraftFailOpen({
-        projectId: project.projectId,
+      const result = await runCodexAdmissionPipeline({
+        cwd: input.cwd,
         candidate: safeCandidate,
         sourceKind: 'review_summary',
         evidenceRefs: [summaryId],
-        now: createdAt
-      })
-      const result = await proposeCodexMemoryCandidate({
-        cwd: input.cwd,
-        candidate: safeCandidate,
         now: input.now,
         recordRejectedCandidate: false
       })
-      if (result.result.action === 'pending') {
+      if (result.action === 'pending' && result.result.action === 'pending') {
         candidateIds.push(result.result.candidateId)
       }
     }
@@ -106,21 +101,16 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         continue
       }
 
-      await appendCodexCandidateDraftFailOpen({
-        projectId: project.projectId,
+      const result = await runCodexAdmissionPipeline({
+        cwd: input.cwd,
         candidate: globalCandidate,
         sourceKind: 'user_explicit',
         evidenceRefs: [summaryId],
-        now: createdAt
-      })
-      const result = await proposeCodexMemoryCandidate({
-        cwd: input.cwd,
-        candidate: globalCandidate,
         now: input.now,
         recordRejectedCandidate: false,
         allowAutoPromote: false
       })
-      if (result.result.action === 'pending') {
+      if (result.action === 'pending' && result.result.action === 'pending') {
         candidateIds.push(result.result.candidateId)
       }
     }

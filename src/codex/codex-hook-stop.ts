@@ -3,11 +3,12 @@ import { lstat, open, readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createDefaultConfig, type AppConfig } from '../config.js'
 import { callModel as defaultCallModel, modelBaseUrlRequiresApiKey } from '../llm-client.js'
+import { runCodexAdmissionPipeline } from './admission-pipeline.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { appendStopHookEpisodeFailOpen } from './episode-memory.js'
 import { appendCodexHookTrace } from './hook-trace-store.js'
 import { listCodexPendingMemories } from './memory-review.js'
-import { proposeCodexMemoryCandidate } from './memory-propose.js'
+import type { CodexMemoryCandidateInput } from './memory-propose.js'
 import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
@@ -173,7 +174,8 @@ async function handleCodexStopHookPayloadUnsafe(
   })
 
   const reviewCandidateIds = review.action === 'pending' ? review.candidateIds : []
-  const explicitPending = explicitResult?.result.action === 'pending' ? explicitResult.result : undefined
+  const explicitPending =
+    explicitResult?.action === 'pending' && explicitResult.result.action === 'pending' ? explicitResult.result : undefined
   const explicitCandidateId = explicitPending?.candidateId
   const harvestCandidateIds = harvest?.action === 'pending' ? harvest.candidateIds : []
   const proposedCandidateIds = [
@@ -434,37 +436,42 @@ async function proposeExplicitMemoryCandidate(
   payload: CodexStopHookPayload,
   cwd: string,
   instruction: string
-): Promise<Awaited<ReturnType<typeof proposeCodexMemoryCandidate>>> {
+): Promise<Awaited<ReturnType<typeof runCodexAdmissionPipeline>>> {
   const runId = [asString(payload.session_id), asString(payload.turn_id)].filter(Boolean).join(':') || undefined
   const sessionId = asString(payload.session_id)
   const content = instruction.slice(0, 500)
-  return proposeCodexMemoryCandidate({
-    cwd,
-    candidate: {
-      domain: 'procedural',
-      type: 'procedural_rule',
-      strength: 'hard',
-      scope: GLOBAL_SCOPE_SIGNAL.test(instruction) ? 'global' : 'project',
-      source: 'user_explicit',
-      content,
-      evidence: [
-        {
+  const candidate = {
+    domain: 'procedural',
+    type: 'procedural_rule',
+    strength: 'hard',
+    scope: GLOBAL_SCOPE_SIGNAL.test(instruction) ? 'global' : 'project',
+    source: 'user_explicit',
+    content,
+    evidence: [
+      {
+        runId,
+        sessionId,
+        sourceKind: 'user_explicit',
+        evidenceGroupId: stableEvidenceGroupId({
           runId,
           sessionId,
-          sourceKind: 'user_explicit',
-          evidenceGroupId: stableEvidenceGroupId({
-            runId,
-            sessionId,
-            quote: content,
-            summary: 'Codex Stop hook captured explicit durable user instruction.'
-          }),
           quote: content,
           summary: 'Codex Stop hook captured explicit durable user instruction.'
-        }
-      ],
-      tags: ['codex-hook', 'explicit-memory']
-    },
-    recordRejectedCandidate: false
+        }),
+        quote: content,
+        summary: 'Codex Stop hook captured explicit durable user instruction.'
+      }
+    ],
+    tags: ['codex-hook', 'explicit-memory']
+  } satisfies CodexMemoryCandidateInput
+  return runCodexAdmissionPipeline({
+    cwd,
+    candidate,
+    sourceKind: 'user_explicit',
+    sourceEpisodeIds: [],
+    now: undefined,
+    recordRejectedCandidate: false,
+    allowAutoPromote: false
   })
 }
 

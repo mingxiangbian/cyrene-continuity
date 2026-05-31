@@ -127,6 +127,36 @@ describe('Codex review summary runtime', () => {
     expect(summaries).toContain(result.candidateIds[0])
   })
 
+  it('routes low-value review summary candidates to admission without pending write', async () => {
+    const home = await createTempDir('cyrene-review-runtime-admission-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-runtime-admission-project-')
+
+    const result = await runCodexReviewSummary({
+      cwd,
+      messages: [{ role: 'assistant', content: 'Used repo-review-fix-coordinator to inspect findings.' }],
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          summary: 'Assistant used a review tool.',
+          candidates: [{
+            domain: 'project',
+            type: 'project_fact',
+            candidateKind: 'project_fact',
+            content: '使用 repo-review-fix-coordinator 工具检查和修复代码审查发现的问题。',
+            evidence: [{ summary: 'Assistant used review tool.' }]
+          }]
+        })),
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('summary')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('one_time_action')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('bounds generated pending candidate content and evidence for reviewability', async () => {
     const home = await createTempDir('cyrene-review-runtime-bounds-home-')
     vi.stubEnv('HOME', home)
@@ -144,6 +174,7 @@ describe('Codex review summary runtime', () => {
           candidates: [{
             domain: 'project',
             type: 'project_fact',
+            candidateKind: 'workflow_rule',
             content: longContent,
             source: 'assistant_observed',
             evidence: [{ summary: longEvidence }]
@@ -302,7 +333,8 @@ describe('Codex review summary runtime', () => {
             {
               domain: 'procedural',
               type: 'procedural_rule',
-              content: '用户偏好中文计划。',
+              candidateKind: 'workflow_rule',
+              content: '用户明确要求后续项目计划必须默认使用中文撰写。',
               source: 'user_explicit',
               evidence: [{ summary: '用户说偏好中文计划。' }]
             }
@@ -378,7 +410,8 @@ describe('Codex review summary runtime', () => {
             {
               domain: 'project',
               type: 'project_fact',
-              content: '密钥是 sk-abc1234567890abcdef1234567890',
+              candidateKind: 'project_decision',
+              content: '项目决策记录中的密钥 sk-abc1234567890abcdef1234567890 必须在写入 pending 前被 redacted。',
               evidence: [{
                 runId: 'evil-sk-abc1234567890abcdef1234567890',
                 summary: '看到了 sk-abc1234567890abcdef1234567890'

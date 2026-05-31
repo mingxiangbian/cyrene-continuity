@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { appendCodexCandidateDraftFailOpen } from './candidate-drafts.js'
-import { type CodexMemoryCandidateInput, proposeCodexMemoryCandidate } from './memory-propose.js'
+import { runCodexAdmissionPipeline } from './admission-pipeline.js'
+import type { CodexMemoryCandidateInput } from './memory-propose.js'
 import {
   collectProjectMemorySignals,
   type CodexProjectHarvestMode,
@@ -105,32 +105,25 @@ export async function runCodexProjectMemoryHarvest(
   const candidateIds: string[] = []
   let memoryRoot: string | undefined
   for (const candidate of candidates) {
-    await appendCodexCandidateDraftFailOpen({
-      projectId: project.projectId,
+    const result = await runCodexAdmissionPipeline({
+      cwd: input.cwd,
       candidate,
       sourceKind: candidate.source === 'tool_trace'
         ? 'tool_trace'
-        : candidate.source === 'user_explicit'
-          ? 'user_explicit'
-          : candidate.source === 'assistant_observed'
-            ? 'assistant_observed'
-            : 'file',
-      now: input.now
-    })
-    const result = await proposeCodexMemoryCandidate({
-      cwd: input.cwd,
-      candidate,
+        : candidate.source === 'assistant_observed'
+          ? 'assistant_observed'
+          : 'file',
       now: input.now,
       recordRejectedCandidate: false
     })
     memoryRoot = result.memoryRoot
-    if (result.result.action === 'pending') {
+    if (result.action === 'pending' && result.result.action === 'pending') {
       candidateIds.push(result.result.candidateId)
     }
   }
 
   if (candidateIds.length === 0) {
-    return { action: 'noop', reason: 'No project memory candidates survived validation.', signals, warnings }
+    return { action: 'noop', reason: 'No project memory candidates survived admission.', signals, warnings }
   }
 
   return { action: 'pending', candidateIds, memoryRoot: memoryRoot ?? '', signals, warnings }

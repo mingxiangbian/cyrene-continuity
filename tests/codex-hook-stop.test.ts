@@ -370,6 +370,32 @@ describe('Codex Stop hook runtime', () => {
     })
   })
 
+  it('routes explicit durable instruction through admission metadata', async () => {
+    const home = await createTempDir('cyrene-codex-stop-admission-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-admission-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '以后默认 Cyrene 的 spec 和 plan 用中文写。' }) + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, transcript_path: transcript, session_id: 's-admission', turn_id: 't-admission' },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({ summary: '用户给出项目 workflow 指令。', candidates: [] }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('pending')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('"admittedBy":"admission_gate_v1"')
+    expect(pending).toContain('"explicit_user_instruction"')
+    await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('explicit_user_instruction')
+  })
+
   it('writes all-project explicit durable instructions to global pending memory', async () => {
     const home = await createTempDir('cyrene-codex-stop-home-')
     vi.stubEnv('HOME', home)
@@ -609,6 +635,7 @@ describe('Codex Stop hook runtime', () => {
               {
                 domain: 'project',
                 type: 'project_fact',
+                candidateKind: 'workflow_rule',
                 strength: 'soft',
                 scope: 'project',
                 source: 'user_explicit',
@@ -669,7 +696,7 @@ describe('Codex Stop hook runtime', () => {
             summary: 'Harvested project hook config convention.',
             candidates: [
               {
-                candidateKind: 'project_fact',
+                candidateKind: 'project_decision',
                 content: 'The plugin hook lifecycle config lives at plugin/hooks/hooks.json.',
                 signalIndexes: [1]
               }
@@ -847,6 +874,7 @@ describe('Codex Stop hook runtime', () => {
               {
                 domain: 'project',
                 type: 'project_fact',
+                candidateKind: 'project_decision',
                 content: 'This candidate should be confirmed before review.'
               }
             ]
