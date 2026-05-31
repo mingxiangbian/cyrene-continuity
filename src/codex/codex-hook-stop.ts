@@ -14,9 +14,14 @@ import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
 import { redactReviewText } from './review-redaction.js'
-import { runCodexReviewSummary, stableEvidenceGroupId, type RunCodexReviewSummaryInput } from './review-summary-runtime.js'
+import {
+  CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW,
+  runCodexReviewSummary,
+  stableEvidenceGroupId,
+  type RunCodexReviewSummaryInput
+} from './review-summary-runtime.js'
 import { appendCodexReviewSummary } from './review-summary-store.js'
-import { parseTranscriptMessages, type TranscriptMessage } from './transcript.js'
+import { parseTranscriptMessages, recentTranscriptMessages, type TranscriptMessage } from './transcript.js'
 
 export interface CodexStopHookPayload {
   cwd?: unknown
@@ -167,7 +172,7 @@ async function handleCodexStopHookPayloadUnsafe(
     toolNames: ['stop_hook', 'review_summary']
   })
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages)
-  const explicitResult = instruction === undefined || shouldSkipExplicitMemoryFallback(instruction, review)
+  const explicitResult = instruction === undefined || shouldSkipExplicitMemoryFallback(instruction, review, messages)
     ? undefined
     : await proposeExplicitMemoryCandidate(payload, cwd, instruction, [stopEpisodeId])
   const harvest = await runProjectMemoryHarvestFailOpen({
@@ -483,8 +488,17 @@ async function proposeExplicitMemoryCandidate(
   })
 }
 
-function shouldSkipExplicitMemoryFallback(instruction: string, review: ReviewSummaryOrSkipResult): boolean {
+function shouldSkipExplicitMemoryFallback(
+  instruction: string,
+  review: ReviewSummaryOrSkipResult,
+  messages: TranscriptMessage[]
+): boolean {
   if (!reviewSummaryRanExtraction(review)) {
+    return false
+  }
+  if (!recentTranscriptMessages(messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW).some((message) =>
+    message.role === 'user' && message.content === instruction
+  )) {
     return false
   }
 

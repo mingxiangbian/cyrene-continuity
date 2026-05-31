@@ -18744,8 +18744,9 @@ function isRecord4(value) {
 var FAILED_SUMMARY = "Codex review summary failed; no transcript content persisted.";
 var GENERATED_MEMORY_CONTENT_MAX_LENGTH2 = 240;
 var GENERATED_MEMORY_EVIDENCE_MAX_LENGTH = 320;
+var CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW = 40;
 async function runCodexReviewSummary(input) {
-  const window = recentTranscriptMessages(input.messages, 40);
+  const window = recentTranscriptMessages(input.messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW);
   if (window.length === 0) {
     return { action: "noop", reason: "No transcript messages to summarize." };
   }
@@ -19132,7 +19133,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
     toolNames: ["stop_hook", "review_summary"]
   });
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages);
-  const explicitResult = instruction === void 0 || shouldSkipExplicitMemoryFallback(instruction, review) ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction, [stopEpisodeId]);
+  const explicitResult = instruction === void 0 || shouldSkipExplicitMemoryFallback(instruction, review, messages) ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction, [stopEpisodeId]);
   const harvest = await runProjectMemoryHarvestFailOpen({
     cwd,
     config: config2,
@@ -19391,8 +19392,13 @@ async function proposeExplicitMemoryCandidate(payload, cwd, instruction, sourceE
     allowAutoPromote: false
   });
 }
-function shouldSkipExplicitMemoryFallback(instruction, review) {
+function shouldSkipExplicitMemoryFallback(instruction, review, messages) {
   if (!reviewSummaryRanExtraction(review)) {
+    return false;
+  }
+  if (!recentTranscriptMessages(messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW).some(
+    (message) => message.role === "user" && message.content === instruction
+  )) {
     return false;
   }
   return candidateFromExplicitGlobalInstruction({

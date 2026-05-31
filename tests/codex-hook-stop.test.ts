@@ -466,6 +466,39 @@ describe('Codex Stop hook runtime', () => {
     expect(globalPending[0]).toContain('以后在所有项目里，所有 spec 和 plan 默认用中文写。')
   })
 
+  it('keeps global explicit fallback when the instruction is outside the review summary window', async () => {
+    const home = await createTempDir('cyrene-codex-stop-global-window-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-global-window-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    const filler = Array.from({ length: 40 }, (_, index) =>
+      JSON.stringify({ role: 'assistant', content: `普通后续消息 ${index}` })
+    )
+    await writeFile(
+      transcript,
+      [
+        JSON.stringify({ role: 'user', content: '记住：以后在所有项目里，所有 spec 和 plan 默认用中文写。' }),
+        ...filler
+      ].join('\n') + '\n'
+    )
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-global-window', turn_id: 't-global-window', transcript_path: transcript },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({ summary: '最近窗口没有全局指令。', candidates: [] }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('pending')
+    const globalMemoryRoot = join(home, '.cyrene', 'codex', 'global', 'memory')
+    const globalPending = (await readFile(join(globalMemoryRoot, 'pending.jsonl'), 'utf8')).trim().split('\n')
+    expect(globalPending).toHaveLength(1)
+    expect(globalPending[0]).toContain('以后在所有项目里，所有 spec 和 plan 默认用中文写。')
+  })
+
   it('keeps command output valid while internal runtime writes review summaries', async () => {
     const home = await createTempDir('cyrene-codex-stop-home-')
     vi.stubEnv('HOME', home)

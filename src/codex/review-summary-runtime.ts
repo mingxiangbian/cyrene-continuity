@@ -46,9 +46,10 @@ interface ParsedReviewSummary {
 const FAILED_SUMMARY = 'Codex review summary failed; no transcript content persisted.'
 const GENERATED_MEMORY_CONTENT_MAX_LENGTH = 240
 const GENERATED_MEMORY_EVIDENCE_MAX_LENGTH = 320
+export const CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW = 40
 
 export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): Promise<CodexReviewSummaryResult> {
-  const window = recentTranscriptMessages(input.messages, 40)
+  const window = recentTranscriptMessages(input.messages, CODEX_REVIEW_SUMMARY_MESSAGE_WINDOW)
   if (window.length === 0) {
     return { action: 'noop', reason: 'No transcript messages to summarize.' }
   }
