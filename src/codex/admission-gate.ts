@@ -23,6 +23,7 @@ const NUMERIC_SNAPSHOT_PATTERN =
   /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i
 const TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i
 const VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i
+const PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i
 
 export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInput): AdmissionDecision {
   const now = input.now ?? new Date().toISOString()
@@ -30,6 +31,13 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
   if (duplicateActive !== undefined) {
     return decision(input.draft, 'reject_duplicate', ['duplicate_active'], scoresFor(input.draft, { redundancy: 1 }), now, {
       targetMemoryId: duplicateActive.id
+    })
+  }
+
+  const tombstone = findActiveTombstone(input.tombstones, input.draft, now)
+  if (tombstone !== undefined) {
+    return decision(input.draft, 'auto_drop', ['conflicts_with_tombstone'], scoresFor(input.draft, { redundancy: 1 }), now, {
+      targetMemoryId: tombstone.memoryId ?? tombstone.id
     })
   }
 
@@ -47,13 +55,6 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
     )
   }
 
-  const tombstone = findActiveTombstone(input.tombstones, input.draft, now)
-  if (tombstone !== undefined) {
-    return decision(input.draft, 'auto_drop', ['conflicts_with_tombstone'], scoresFor(input.draft, { redundancy: 1 }), now, {
-      targetMemoryId: tombstone.memoryId ?? tombstone.id
-    })
-  }
-
   const reasons = reasonsForDraft(input.draft)
   const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons))
   const admissionScore = admissionScoreFor(scores)
@@ -63,6 +64,7 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
 
 function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   const reasons: AdmissionReason[] = []
+  const durableGuidance = isDurablePrescriptiveGuidance(draft)
   if (draft.candidateKind === 'user_instruction' || draft.sourceKind === 'user_explicit') {
     reasons.push('explicit_user_instruction')
   }
@@ -78,7 +80,7 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   if (draft.candidateKind === 'rejected_approach') {
     reasons.push('valuable_rejected_approach')
   }
-  if (ONE_TIME_ACTION_PATTERN.test(draft.content)) {
+  if (!durableGuidance && ONE_TIME_ACTION_PATTERN.test(draft.content)) {
     reasons.push('one_time_action', 'low_future_usefulness')
   }
   if (NUMERIC_SNAPSHOT_PATTERN.test(draft.content)) {
@@ -87,10 +89,19 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   if (TEMPORARY_STATUS_PATTERN.test(draft.content)) {
     reasons.push('temporary_status')
   }
-  if (draft.content.length < 24 || VAGUE_PATTERN.test(draft.content)) {
+  if (!durableGuidance && (draft.content.length < 24 || VAGUE_PATTERN.test(draft.content))) {
     reasons.push('too_vague')
   }
   return Array.from(new Set(reasons))
+}
+
+function isDurablePrescriptiveGuidance(draft: CandidateDraft): boolean {
+  const durableKind =
+    draft.candidateKind === 'workflow_rule' ||
+    draft.candidateKind === 'known_pitfall' ||
+    draft.candidateKind === 'rejected_approach' ||
+    draft.candidateKind === 'user_instruction'
+  return durableKind && PRESCRIPTIVE_PATTERN.test(draft.content)
 }
 
 function scoreOverridesForReasons(reasons: AdmissionReason[]): Partial<AdmissionScores> {

@@ -172,6 +172,19 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.targetMemoryId).toBe('pending-1')
   })
 
+  it('drops candidates with pending duplicates when an active tombstone also matches', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({ normalizedKey: 'blocked-pending-key' }),
+      pending: [pending('blocked-pending-key')],
+      active: [],
+      tombstones: [tombstone('blocked-pending-key')],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('auto_drop')
+    expect(decision.reasons).toContain('conflicts_with_tombstone')
+  })
+
   it('drops candidates that conflict with active tombstones', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({ normalizedKey: 'blocked-key' }),
@@ -183,5 +196,23 @@ describe('evaluateCandidateAdmission', () => {
 
     expect(decision.action).toBe('auto_drop')
     expect(decision.reasons).toContain('conflicts_with_tombstone')
+  })
+
+  it('admits durable Chinese workflow rules that mention fixing issues', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: '修复问题前必须先复现并记录命令输出。',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'reproduce-before-fixing'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('admit_to_pending')
+    expect(decision.reasons).toContain('valuable_workflow_rule')
+    expect(decision.reasons).not.toContain('one_time_action')
   })
 })
