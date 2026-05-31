@@ -2,6 +2,7 @@ import { appendFile, lstat, mkdir, readFile, realpath, rename, writeFile } from 
 import { join } from 'node:path'
 import { ensureMemoryRoot, getReadableMemoryRoot } from './paths.js'
 import type {
+  AdmissionDecision,
   CandidateDraft,
   CyreneMemory,
   EpisodeMemory,
@@ -15,6 +16,7 @@ const INDEX_FILE = 'index.jsonl'
 const PENDING_FILE = 'pending.jsonl'
 const EPISODES_FILE = 'episodes.jsonl'
 const CANDIDATE_DRAFTS_FILE = 'candidate_drafts.jsonl'
+const ADMISSION_DECISIONS_FILE = 'admission_decisions.jsonl'
 const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
@@ -134,6 +136,22 @@ export async function readCandidateDraftsFromRoot(memoryRoot: string): Promise<C
     return []
   }
   return readJsonLines<CandidateDraft>(join(memoryRoot, CANDIDATE_DRAFTS_FILE))
+}
+
+export async function appendAdmissionDecisionFromRoot(
+  memoryRoot: string,
+  decision: AdmissionDecision
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, ADMISSION_DECISIONS_FILE), decision)
+}
+
+export async function readAdmissionDecisionsFromRoot(memoryRoot: string): Promise<AdmissionDecision[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<AdmissionDecision>(join(memoryRoot, ADMISSION_DECISIONS_FILE))
 }
 
 export async function appendMemoryEvent(cwd: string, event: MemoryEvent): Promise<void> {

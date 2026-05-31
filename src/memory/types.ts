@@ -117,6 +117,59 @@ export interface CandidateDraft {
   createdAt: string
 }
 
+export const ADMISSION_ACTIONS = [
+  'admit_to_pending',
+  'admit_to_distillation',
+  'episode_only',
+  'auto_drop',
+  'auto_defer',
+  'merge_with_existing',
+  'reject_duplicate'
+] as const
+export type AdmissionAction = typeof ADMISSION_ACTIONS[number]
+
+export const ADMISSION_REASONS = [
+  'one_time_action',
+  'temporary_status',
+  'stale_numeric_snapshot',
+  'low_future_usefulness',
+  'low_actionability',
+  'too_vague',
+  'duplicate_pending',
+  'duplicate_active',
+  'conflicts_with_tombstone',
+  'valuable_project_decision',
+  'valuable_workflow_rule',
+  'valuable_known_pitfall',
+  'valuable_rejected_approach',
+  'explicit_user_instruction'
+] as const
+export type AdmissionReason = typeof ADMISSION_REASONS[number]
+
+export interface AdmissionScores {
+  futureUsefulness: number
+  actionability: number
+  stability: number
+  specificity: number
+  evidenceStrength: number
+  repeatPotential: number
+  expiryRisk: number
+  redundancy: number
+  sensitivity: number
+}
+
+export interface AdmissionDecision {
+  id: string
+  draftId: string
+  action: AdmissionAction
+  admissionScore: number
+  reasons: AdmissionReason[]
+  scores: AdmissionScores
+  targetMemoryId?: string
+  targetClusterId?: string
+  createdAt: string
+}
+
 export interface CyreneMemory {
   id: string
   domain: MemoryDomain
@@ -165,6 +218,11 @@ export interface PendingMemory {
   lastSeenAt: string
   promoteAfter?: string
   expiresAt: string
+  admittedBy?: 'admission_gate_v1'
+  admissionScore?: number
+  admissionReasons?: string[]
+  sourceEpisodeIds?: string[]
+  sourceDraftIds?: string[]
   userConfirmed?: boolean
   profileVisibility?: MemoryProfileVisibility
   candidateKind?: MemoryCandidateKind
