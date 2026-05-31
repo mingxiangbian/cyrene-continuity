@@ -38,10 +38,6 @@ export async function runCodexAdmissionPipeline(
   input: RunCodexAdmissionPipelineInput
 ): Promise<CodexAdmissionPipelineResult> {
   const project = await identifyCodexProject(input.cwd)
-  const memoryRoot = input.candidate.scope === 'global'
-    ? await ensureCodexGlobalMemoryRoot()
-    : await ensureCodexProjectMemoryRoot(project.projectId)
-
   if (input.candidate.scope !== 'global' && await isCodexProjectMemoryDisabled(project.projectId)) {
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
@@ -51,6 +47,10 @@ export async function runCodexAdmissionPipeline(
       reason: 'Project memory is disabled for this project.'
     }
   }
+
+  const memoryRoot = input.candidate.scope === 'global'
+    ? await ensureCodexGlobalMemoryRoot()
+    : await ensureCodexProjectMemoryRoot(project.projectId)
 
   const draft = toCandidateDraft({
     projectId: project.projectId,
