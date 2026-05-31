@@ -6,6 +6,7 @@ import { callModel as defaultCallModel, modelBaseUrlRequiresApiKey } from '../ll
 import { runCodexAdmissionPipeline } from './admission-pipeline.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { appendStopHookEpisodeFailOpen } from './episode-memory.js'
+import { candidateFromExplicitGlobalInstruction } from './global-memory-capture.js'
 import { appendCodexHookTrace } from './hook-trace-store.js'
 import { listCodexPendingMemories } from './memory-review.js'
 import type { CodexMemoryCandidateInput } from './memory-propose.js'
@@ -134,14 +135,17 @@ async function handleCodexStopHookPayloadUnsafe(
     return { action: 'noop', reason: 'No transcript messages found.' }
   }
 
+  const stopEpisodeId = randomUUID()
   const review = await runReviewSummaryOrSkip({
     payload,
     cwd,
     messages,
     config,
-    deps
+    deps,
+    sourceEpisodeIds: [stopEpisodeId]
   })
   await appendStopHookEpisodeFailOpen({
+    id: stopEpisodeId,
     cwd,
     projectId: project.projectId,
     payload,
@@ -163,13 +167,14 @@ async function handleCodexStopHookPayloadUnsafe(
     toolNames: ['stop_hook', 'review_summary']
   })
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages)
-  const explicitResult = instruction === undefined
+  const explicitResult = instruction === undefined || shouldSkipExplicitMemoryFallback(instruction, review)
     ? undefined
-    : await proposeExplicitMemoryCandidate(payload, cwd, instruction)
+    : await proposeExplicitMemoryCandidate(payload, cwd, instruction, [stopEpisodeId])
   const harvest = await runProjectMemoryHarvestFailOpen({
     cwd,
     config,
     callModel: deps.callModel ?? defaultCallModel,
+    sourceEpisodeIds: [stopEpisodeId],
     signal: AbortSignal.timeout(20_000)
   })
 
@@ -274,6 +279,7 @@ async function runReviewSummaryOrSkip(input: {
   messages: TranscriptMessage[]
   config: AppConfig
   deps: CodexStopHookDeps
+  sourceEpisodeIds?: string[]
 }): Promise<ReviewSummaryOrSkipResult> {
   if (input.deps.callModel === undefined && !isMemoryExtractionModelConfigured(input.config)) {
     return recordModelConfigSkippedSummary(input.cwd, input.payload)
@@ -286,6 +292,7 @@ async function runReviewSummaryOrSkip(input: {
     messages: input.messages,
     config: input.config,
     callModel: input.deps.callModel ?? defaultCallModel,
+    sourceEpisodeIds: input.sourceEpisodeIds,
     signal: AbortSignal.timeout(20_000)
   })
 }
@@ -435,7 +442,8 @@ function uniqueInOrder(values: string[]): string[] {
 async function proposeExplicitMemoryCandidate(
   payload: CodexStopHookPayload,
   cwd: string,
-  instruction: string
+  instruction: string,
+  sourceEpisodeIds: string[]
 ): Promise<Awaited<ReturnType<typeof runCodexAdmissionPipeline>>> {
   const runId = [asString(payload.session_id), asString(payload.turn_id)].filter(Boolean).join(':') || undefined
   const sessionId = asString(payload.session_id)
@@ -468,11 +476,26 @@ async function proposeExplicitMemoryCandidate(
     cwd,
     candidate,
     sourceKind: 'user_explicit',
-    sourceEpisodeIds: [],
+    sourceEpisodeIds,
     now: undefined,
     recordRejectedCandidate: false,
     allowAutoPromote: false
   })
+}
+
+function shouldSkipExplicitMemoryFallback(instruction: string, review: ReviewSummaryOrSkipResult): boolean {
+  if (!reviewSummaryRanExtraction(review)) {
+    return false
+  }
+
+  return candidateFromExplicitGlobalInstruction({
+    text: redactReviewText(instruction).text,
+    now: new Date(0).toISOString()
+  }) !== undefined
+}
+
+function reviewSummaryRanExtraction(review: ReviewSummaryOrSkipResult): boolean {
+  return review.action === 'pending' || (review.action === 'summary' && !('reason' in review))
 }
 
 function extractRecentExplicitMemoryInstructionFromMessages(messages: TranscriptMessage[]): string | undefined {

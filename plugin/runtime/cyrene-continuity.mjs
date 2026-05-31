@@ -17647,7 +17647,7 @@ function buildStopHookEpisode(input) {
   const sourceTraceIds = [sessionId, turnId].filter((value) => value !== void 0);
   const title = firstNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
   return {
-    id: randomUUID10(),
+    id: input.id ?? randomUUID10(),
     projectId: input.projectId,
     title: clean(title, ITEM_MAX_LENGTH),
     summary: clean(input.summary, SUMMARY_MAX_LENGTH),
@@ -17673,6 +17673,118 @@ function clean(value, maxLength) {
 }
 function asString(value) {
   return typeof value === "string" && value !== "" ? value : void 0;
+}
+
+// src/codex/global-memory-capture.ts
+import { createHash as createHash7 } from "node:crypto";
+var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i;
+var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
+function candidateFromExplicitGlobalInstruction(input) {
+  const text = input.text.trim();
+  if (!GLOBAL_INSTRUCTION_PATTERN.test(text)) {
+    return void 0;
+  }
+  if (PERSONAL_PREFERENCE_PATTERN.test(text)) {
+    return void 0;
+  }
+  return {
+    domain: "procedural",
+    type: "procedural_rule",
+    strength: "hard",
+    scope: "global",
+    source: "user_explicit",
+    candidateKind: "user_instruction",
+    content: text,
+    normalizedKey: `global-instruction-${shortHash(text)}`,
+    evidence: [
+      {
+        summary: "Explicit global instruction from user prompt.",
+        sourceKind: "user_explicit",
+        evidenceGroupId: shortHash(`global:${text}`)
+      }
+    ],
+    scores: { evidenceStrength: 0.92, stability: 0.88, usefulness: 0.85, safety: 0.96, sensitivity: 0.05 },
+    tags: ["global_capture", "explicit_instruction"],
+    userConfirmed: true
+  };
+}
+function candidateFromReviewPattern(input) {
+  if (input.count < 3) {
+    return void 0;
+  }
+  const content = input.patternId.includes("transient") ? "\u5168\u5C40 workflow rule\uFF1A\u4E0D\u8981\u628A\u4E00\u6B21\u6027\u547D\u4EE4\u7ED3\u679C\u3001\u4E34\u65F6\u6D4B\u8BD5\u72B6\u6001\u6216\u5F53\u524D branch \u72B6\u6001\u4F5C\u4E3A durable memory\u3002" : `\u5168\u5C40 workflow rule\uFF1A\u6839\u636E\u91CD\u590D ${input.action} review pattern ${input.patternId} \u8C03\u6574 memory \u5019\u9009\u8D28\u91CF\u3002`;
+  return {
+    domain: "procedural",
+    type: "procedural_rule",
+    strength: "soft",
+    scope: "global",
+    source: "review_event",
+    candidateKind: "workflow_rule",
+    content,
+    normalizedKey: `review-derived-${input.patternId}`,
+    evidence: input.reasonSamples.slice(0, 5).map((summary, index) => ({
+      summary,
+      sourceKind: "review_event",
+      evidenceGroupId: `${input.patternId}-${index}`
+    })),
+    scores: { evidenceStrength: 0.9, stability: 0.86, usefulness: 0.82, safety: 0.97, sensitivity: 0.03 },
+    tags: ["global_capture", "review_derived"]
+  };
+}
+function candidatesFromReviewEvents(input) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const event of input.events) {
+    const action = reviewActionForEvent(event);
+    const patternId = action === void 0 ? void 0 : reviewPatternIdForEvent(event, action);
+    if (patternId === void 0 || action === void 0) {
+      continue;
+    }
+    const current = groups.get(patternId) ?? { action, reasonSamples: [], candidateKind: "project_fact", count: 0 };
+    groups.set(patternId, {
+      action: current.action,
+      reasonSamples: [...current.reasonSamples, event.reason].slice(-5),
+      candidateKind: typeof event.details?.candidateKind === "string" ? event.details.candidateKind : current.candidateKind,
+      count: current.count + 1
+    });
+  }
+  return [...groups.entries()].flatMap(
+    ([patternId, group]) => candidateFromReviewPattern({
+      patternId,
+      action: group.action,
+      count: group.count,
+      reasonSamples: group.reasonSamples,
+      candidateKind: group.candidateKind,
+      now: input.now
+    }) ?? []
+  );
+}
+function reviewPatternIdForEvent(event, action) {
+  if (typeof event.details?.reviewPatternId === "string") {
+    return event.details.reviewPatternId;
+  }
+  const candidateKind = typeof event.details?.candidateKind === "string" ? event.details.candidateKind : void 0;
+  if (action === "approve" && candidateKind !== void 0) {
+    return `approve-${candidateKind}`;
+  }
+  return void 0;
+}
+function reviewActionForEvent(event) {
+  if (event.action === "reject") {
+    return "reject";
+  }
+  if (event.action === "update") {
+    return "edit";
+  }
+  if (event.action === "pending" && event.details?.reviewAction === "edit") {
+    return "edit";
+  }
+  if (event.action === "promote") {
+    return "approve";
+  }
+  return void 0;
+}
+function shortHash(value) {
+  return createHash7("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/hook-trace-store.ts
@@ -17825,7 +17937,7 @@ function isFileErrorCode10(error2, code) {
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile3 } from "node:child_process";
@@ -18289,6 +18401,7 @@ async function runCodexProjectMemoryHarvest(input) {
       cwd: input.cwd,
       candidate,
       sourceKind: candidate.source === "tool_trace" ? "tool_trace" : candidate.source === "assistant_observed" ? "assistant_observed" : "file",
+      sourceEpisodeIds: input.sourceEpisodeIds,
       now: input.now,
       recordRejectedCandidate: false
     });
@@ -18500,7 +18613,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash7("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash8("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -18541,118 +18654,6 @@ function isRecord3(value) {
 
 // src/codex/review-summary-runtime.ts
 import { createHash as createHash9, randomUUID as randomUUID12 } from "node:crypto";
-
-// src/codex/global-memory-capture.ts
-import { createHash as createHash8 } from "node:crypto";
-var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i;
-var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
-function candidateFromExplicitGlobalInstruction(input) {
-  const text = input.text.trim();
-  if (!GLOBAL_INSTRUCTION_PATTERN.test(text)) {
-    return void 0;
-  }
-  if (PERSONAL_PREFERENCE_PATTERN.test(text)) {
-    return void 0;
-  }
-  return {
-    domain: "procedural",
-    type: "procedural_rule",
-    strength: "hard",
-    scope: "global",
-    source: "user_explicit",
-    candidateKind: "user_instruction",
-    content: text,
-    normalizedKey: `global-instruction-${shortHash(text)}`,
-    evidence: [
-      {
-        summary: "Explicit global instruction from user prompt.",
-        sourceKind: "user_explicit",
-        evidenceGroupId: shortHash(`global:${text}`)
-      }
-    ],
-    scores: { evidenceStrength: 0.92, stability: 0.88, usefulness: 0.85, safety: 0.96, sensitivity: 0.05 },
-    tags: ["global_capture", "explicit_instruction"],
-    userConfirmed: true
-  };
-}
-function candidateFromReviewPattern(input) {
-  if (input.count < 3) {
-    return void 0;
-  }
-  const content = input.patternId.includes("transient") ? "\u5168\u5C40 workflow rule\uFF1A\u4E0D\u8981\u628A\u4E00\u6B21\u6027\u547D\u4EE4\u7ED3\u679C\u3001\u4E34\u65F6\u6D4B\u8BD5\u72B6\u6001\u6216\u5F53\u524D branch \u72B6\u6001\u4F5C\u4E3A durable memory\u3002" : `\u5168\u5C40 workflow rule\uFF1A\u6839\u636E\u91CD\u590D ${input.action} review pattern ${input.patternId} \u8C03\u6574 memory \u5019\u9009\u8D28\u91CF\u3002`;
-  return {
-    domain: "procedural",
-    type: "procedural_rule",
-    strength: "soft",
-    scope: "global",
-    source: "review_event",
-    candidateKind: "workflow_rule",
-    content,
-    normalizedKey: `review-derived-${input.patternId}`,
-    evidence: input.reasonSamples.slice(0, 5).map((summary, index) => ({
-      summary,
-      sourceKind: "review_event",
-      evidenceGroupId: `${input.patternId}-${index}`
-    })),
-    scores: { evidenceStrength: 0.9, stability: 0.86, usefulness: 0.82, safety: 0.97, sensitivity: 0.03 },
-    tags: ["global_capture", "review_derived"]
-  };
-}
-function candidatesFromReviewEvents(input) {
-  const groups = /* @__PURE__ */ new Map();
-  for (const event of input.events) {
-    const action = reviewActionForEvent(event);
-    const patternId = action === void 0 ? void 0 : reviewPatternIdForEvent(event, action);
-    if (patternId === void 0 || action === void 0) {
-      continue;
-    }
-    const current = groups.get(patternId) ?? { action, reasonSamples: [], candidateKind: "project_fact", count: 0 };
-    groups.set(patternId, {
-      action: current.action,
-      reasonSamples: [...current.reasonSamples, event.reason].slice(-5),
-      candidateKind: typeof event.details?.candidateKind === "string" ? event.details.candidateKind : current.candidateKind,
-      count: current.count + 1
-    });
-  }
-  return [...groups.entries()].flatMap(
-    ([patternId, group]) => candidateFromReviewPattern({
-      patternId,
-      action: group.action,
-      count: group.count,
-      reasonSamples: group.reasonSamples,
-      candidateKind: group.candidateKind,
-      now: input.now
-    }) ?? []
-  );
-}
-function reviewPatternIdForEvent(event, action) {
-  if (typeof event.details?.reviewPatternId === "string") {
-    return event.details.reviewPatternId;
-  }
-  const candidateKind = typeof event.details?.candidateKind === "string" ? event.details.candidateKind : void 0;
-  if (action === "approve" && candidateKind !== void 0) {
-    return `approve-${candidateKind}`;
-  }
-  return void 0;
-}
-function reviewActionForEvent(event) {
-  if (event.action === "reject") {
-    return "reject";
-  }
-  if (event.action === "update") {
-    return "edit";
-  }
-  if (event.action === "pending" && event.details?.reviewAction === "edit") {
-    return "edit";
-  }
-  if (event.action === "promote") {
-    return "approve";
-  }
-  return void 0;
-}
-function shortHash(value) {
-  return createHash8("sha256").update(value).digest("hex").slice(0, 16);
-}
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile3 } from "node:fs/promises";
@@ -18776,6 +18777,7 @@ async function runCodexReviewSummary(input) {
         cwd: input.cwd,
         candidate: safeCandidate,
         sourceKind: "review_summary",
+        sourceEpisodeIds: input.sourceEpisodeIds,
         evidenceRefs: [summaryId],
         now: input.now,
         recordRejectedCandidate: false
@@ -18796,6 +18798,7 @@ async function runCodexReviewSummary(input) {
         cwd: input.cwd,
         candidate: globalCandidate,
         sourceKind: "user_explicit",
+        sourceEpisodeIds: input.sourceEpisodeIds,
         evidenceRefs: [summaryId],
         now: input.now,
         recordRejectedCandidate: false,
@@ -19103,14 +19106,17 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (messages.length === 0) {
     return { action: "noop", reason: "No transcript messages found." };
   }
+  const stopEpisodeId = randomUUID13();
   const review = await runReviewSummaryOrSkip({
     payload,
     cwd,
     messages,
     config: config2,
-    deps
+    deps,
+    sourceEpisodeIds: [stopEpisodeId]
   });
   await appendStopHookEpisodeFailOpen({
+    id: stopEpisodeId,
     cwd,
     projectId: project.projectId,
     payload,
@@ -19126,11 +19132,12 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
     toolNames: ["stop_hook", "review_summary"]
   });
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages);
-  const explicitResult = instruction === void 0 ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction);
+  const explicitResult = instruction === void 0 || shouldSkipExplicitMemoryFallback(instruction, review) ? void 0 : await proposeExplicitMemoryCandidate(payload, cwd, instruction, [stopEpisodeId]);
   const harvest = await runProjectMemoryHarvestFailOpen({
     cwd,
     config: config2,
     callModel: deps.callModel ?? callModel,
+    sourceEpisodeIds: [stopEpisodeId],
     signal: AbortSignal.timeout(2e4)
   });
   const reviewCandidateIds = review.action === "pending" ? review.candidateIds : [];
@@ -19228,6 +19235,7 @@ async function runReviewSummaryOrSkip(input) {
     messages: input.messages,
     config: input.config,
     callModel: input.deps.callModel ?? callModel,
+    sourceEpisodeIds: input.sourceEpisodeIds,
     signal: AbortSignal.timeout(2e4)
   });
 }
@@ -19345,7 +19353,7 @@ function uniqueInOrder2(values) {
     return true;
   });
 }
-async function proposeExplicitMemoryCandidate(payload, cwd, instruction) {
+async function proposeExplicitMemoryCandidate(payload, cwd, instruction, sourceEpisodeIds) {
   const runId = [asString3(payload.session_id), asString3(payload.turn_id)].filter(Boolean).join(":") || void 0;
   const sessionId = asString3(payload.session_id);
   const content = instruction.slice(0, 500);
@@ -19377,11 +19385,23 @@ async function proposeExplicitMemoryCandidate(payload, cwd, instruction) {
     cwd,
     candidate,
     sourceKind: "user_explicit",
-    sourceEpisodeIds: [],
+    sourceEpisodeIds,
     now: void 0,
     recordRejectedCandidate: false,
     allowAutoPromote: false
   });
+}
+function shouldSkipExplicitMemoryFallback(instruction, review) {
+  if (!reviewSummaryRanExtraction(review)) {
+    return false;
+  }
+  return candidateFromExplicitGlobalInstruction({
+    text: redactReviewText(instruction).text,
+    now: (/* @__PURE__ */ new Date(0)).toISOString()
+  }) !== void 0;
+}
+function reviewSummaryRanExtraction(review) {
+  return review.action === "pending" || review.action === "summary" && !("reason" in review);
 }
 function extractRecentExplicitMemoryInstructionFromMessages(messages) {
   const userMessages = messages.filter((message) => message.role === "user");

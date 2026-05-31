@@ -33,6 +33,7 @@ export interface RunCodexReviewSummaryInput {
   messages: TranscriptMessage[]
   config: AppConfig
   callModel: (input: CallModelInput) => Promise<ModelResponse>
+  sourceEpisodeIds?: string[]
   now?: string
   signal?: AbortSignal
 }
@@ -83,6 +84,7 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         cwd: input.cwd,
         candidate: safeCandidate,
         sourceKind: 'review_summary',
+        sourceEpisodeIds: input.sourceEpisodeIds,
         evidenceRefs: [summaryId],
         now: input.now,
         recordRejectedCandidate: false
@@ -105,6 +107,7 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
         cwd: input.cwd,
         candidate: globalCandidate,
         sourceKind: 'user_explicit',
+        sourceEpisodeIds: input.sourceEpisodeIds,
         evidenceRefs: [summaryId],
         now: input.now,
         recordRejectedCandidate: false,

@@ -10,6 +10,7 @@ const SUMMARY_MAX_LENGTH = 500
 const ITEM_MAX_LENGTH = 240
 
 export interface StopHookEpisodeInput {
+  id?: string
   cwd: string
   projectId: string
   payload: CodexStopHookPayload
@@ -41,7 +42,7 @@ export function buildStopHookEpisode(input: StopHookEpisodeInput): EpisodeMemory
   const title = firstNonemptyUserMessage(input.messages) ?? 'Codex Stop hook episode'
 
   return {
-    id: randomUUID(),
+    id: input.id ?? randomUUID(),
     projectId: input.projectId,
     title: clean(title, ITEM_MAX_LENGTH),
     summary: clean(input.summary, SUMMARY_MAX_LENGTH),

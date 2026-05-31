@@ -27,6 +27,7 @@ export interface RunCodexProjectMemoryHarvestInput {
   callModel: (input: CallModelInput) => Promise<ModelResponse>
   mode?: CodexProjectHarvestMode
   dryRun?: boolean
+  sourceEpisodeIds?: string[]
   now?: string
   signal?: AbortSignal
 }
@@ -113,6 +114,7 @@ export async function runCodexProjectMemoryHarvest(
         : candidate.source === 'assistant_observed'
           ? 'assistant_observed'
           : 'file',
+      sourceEpisodeIds: input.sourceEpisodeIds,
       now: input.now,
       recordRejectedCandidate: false
     })

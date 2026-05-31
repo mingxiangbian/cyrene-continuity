@@ -391,8 +391,15 @@ describe('Codex Stop hook runtime', () => {
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const [pendingRecord] = pending.trim().split('\n').map((line) => JSON.parse(line) as {
+      sourceEpisodeIds?: string[]
+    })
+    const [episode] = (await readFile(join(memoryRoot, 'episodes.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as {
+      id: string
+    })
     expect(pending).toContain('"admittedBy":"admission_gate_v1"')
     expect(pending).toContain('"explicit_user_instruction"')
+    expect(pendingRecord.sourceEpisodeIds).toEqual([episode.id])
     await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('explicit_user_instruction')
   })
 
@@ -425,6 +432,38 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT'
     })
+  })
+
+  it('does not duplicate global explicit instructions already captured by review summary', async () => {
+    const home = await createTempDir('cyrene-codex-stop-global-dedup-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-global-dedup-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(
+      transcript,
+      [
+        JSON.stringify({ role: 'user', content: '记住：以后在所有项目里，所有 spec 和 plan 默认用中文写。' }),
+        JSON.stringify({ role: 'assistant', content: '已记录为全局规则。' })
+      ].join('\n') + '\n'
+    )
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-global-dedup', turn_id: 't-global-dedup', transcript_path: transcript },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({ summary: '用户给出全局写作规则。', candidates: [] }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('pending')
+    const globalMemoryRoot = join(home, '.cyrene', 'codex', 'global', 'memory')
+    const globalPending = (await readFile(join(globalMemoryRoot, 'pending.jsonl'), 'utf8')).trim().split('\n')
+    const globalDrafts = (await readFile(join(globalMemoryRoot, 'candidate_drafts.jsonl'), 'utf8')).trim().split('\n')
+    expect(globalPending).toHaveLength(1)
+    expect(globalDrafts).toHaveLength(1)
+    expect(globalPending[0]).toContain('以后在所有项目里，所有 spec 和 plan 默认用中文写。')
   })
 
   it('keeps command output valid while internal runtime writes review summaries', async () => {
@@ -593,9 +632,15 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
       '用户要求项目 memory 审批使用 review hash。'
     )
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
-      '项目 memory 审批必须使用 review hash。'
-    )
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('项目 memory 审批必须使用 review hash。')
+    const [pendingRecord] = pending.trim().split('\n').map((line) => JSON.parse(line) as {
+      sourceEpisodeIds?: string[]
+    })
+    const [episode] = (await readFile(join(memoryRoot, 'episodes.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as {
+      id: string
+    })
+    expect(pendingRecord.sourceEpisodeIds).toEqual([episode.id])
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(
       'Existing active memory must remain unchanged.'
     )
@@ -722,9 +767,19 @@ describe('Codex Stop hook runtime', () => {
     expect(result).toMatchObject({ candidateIds: [expect.any(String)] })
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
-      'The plugin hook lifecycle config lives at plugin/hooks/hooks.json.'
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain('The plugin hook lifecycle config lives at plugin/hooks/hooks.json.')
+    const pendingRecords = pending.trim().split('\n').map((line) => JSON.parse(line) as {
+      content: string
+      sourceEpisodeIds?: string[]
+    })
+    const harvestPending = pendingRecords.find((record) =>
+      record.content.includes('The plugin hook lifecycle config lives at plugin/hooks/hooks.json.')
     )
+    const [episode] = (await readFile(join(memoryRoot, 'episodes.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as {
+      id: string
+    })
+    expect(harvestPending?.sourceEpisodeIds).toEqual([episode.id])
     const trace = await readRecentCodexHookTrace({ cwd })
     expect(trace.records.some((record) => record.event === 'stop' && record.sessionId === 's-harvest')).toBe(true)
   })
