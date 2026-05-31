@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import { createDefaultConfig, type AppConfig } from '../config.js'
 import { callModel as defaultCallModel, modelBaseUrlRequiresApiKey } from '../llm-client.js'
 import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
+import { appendStopHookEpisodeFailOpen } from './episode-memory.js'
 import { appendCodexHookTrace } from './hook-trace-store.js'
 import { listCodexPendingMemories } from './memory-review.js'
 import { proposeCodexMemoryCandidate } from './memory-propose.js'
@@ -138,6 +139,27 @@ async function handleCodexStopHookPayloadUnsafe(
     messages,
     config,
     deps
+  })
+  await appendStopHookEpisodeFailOpen({
+    cwd,
+    projectId: project.projectId,
+    payload,
+    messages,
+    summary: review.action === 'summary_failed'
+      ? review.reason
+      : review.action === 'pending'
+        ? 'Codex Stop hook wrote review summary and proposed pending candidates.'
+        : review.action === 'summary'
+          ? 'Codex Stop hook wrote review summary.'
+          : review.reason,
+    actions: [
+      'Parsed Codex Stop hook transcript.',
+      review.action === 'pending' ? 'Proposed pending memory candidates.' : 'Wrote review-safe summary.'
+    ],
+    decisions: [],
+    failures: review.action === 'summary_failed' ? [review.reason] : [],
+    openQuestions: [],
+    toolNames: ['stop_hook', 'review_summary']
   })
   const instruction = extractRecentExplicitMemoryInstructionFromMessages(messages)
   const explicitResult = instruction === undefined

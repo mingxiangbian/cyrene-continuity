@@ -780,6 +780,56 @@ describe('Codex Stop hook runtime', () => {
     expect(JSON.parse(formatCodexStopHookCommandOutput(result))).toEqual({ continue: true, suppressOutput: true })
   })
 
+  it('writes an episode for parsed Stop hook transcripts without creating pending memory', async () => {
+    const home = await createTempDir('cyrene-codex-stop-episode-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-episode-project-')
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '普通讨论，不需要长期记忆。' }) + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-episode', turn_id: 't-episode', transcript_path: transcript },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({ summary: '普通讨论，无长期记忆。', candidates: [] }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result.action).toBe('summary')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const episodes = await readFile(join(memoryRoot, 'episodes.jsonl'), 'utf8')
+    expect(episodes).toContain('"sessionId":"s-episode"')
+    expect(episodes).toContain('Codex Stop hook wrote review summary.')
+    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+  })
+
+  it('keeps Stop hook fail-open when episode write fails', async () => {
+    const home = await createTempDir('cyrene-codex-stop-episode-fail-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-stop-episode-fail-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(join(memoryRoot, 'episodes.jsonl'), { recursive: true })
+    const transcript = join(cwd, 'transcript.jsonl')
+    await writeFile(transcript, JSON.stringify({ role: 'user', content: '普通讨论。' }) + '\n')
+
+    const result = await handleCodexStopHookPayload(
+      { cwd, session_id: 's-episode-fail', turn_id: 't-episode-fail', transcript_path: transcript },
+      {
+        callModel: async () => ({
+          content: JSON.stringify({ summary: '普通讨论。', candidates: [] }),
+          toolCalls: []
+        })
+      }
+    )
+
+    expect(result).toMatchObject({ action: 'summary' })
+    await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain('普通讨论。')
+  })
+
   it('does not return pending when proposed candidate ids are not confirmed in pending storage', async () => {
     const home = await createTempDir('cyrene-codex-stop-home-')
     vi.stubEnv('HOME', home)
