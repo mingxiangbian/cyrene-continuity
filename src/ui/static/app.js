@@ -386,6 +386,10 @@ function renderInbox() {
 
 function renderCandidateRow(candidate) {
   const selected = state.selectedPendingId === candidate.id
+  const readiness = candidate.activeReadiness || {}
+  const readinessLabel = readiness.status === 'needs_rewrite'
+    ? `needs rewrite · ${readiness.suggestedShape || 'review'}`
+    : 'ready'
   return `
     <article class="data-row candidate-row selectable-row ${selected ? 'selected' : ''}" data-pending-id="${escapeHtml(candidate.id)}">
       <div>
@@ -393,6 +397,7 @@ function renderCandidateRow(candidate) {
         <div class="row-meta">
           ${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
           ${candidate.reviewHash ? ` · review ${escapeHtml(shortHash(candidate.reviewHash))}` : ''}
+          · ${escapeHtml(readinessLabel)}
         </div>
       </div>
       ${statusChip(candidate.recommendation || 'review', candidate.risk || 'pending', candidate.risk === 'high' ? 'error' : 'warn')}
@@ -1015,6 +1020,7 @@ function renderPendingDetail(candidate) {
         <h3>Pending detail</h3>
         <p>${escapeHtml(candidate.content)}</p>
         <div class="soft-inset rail-item"><strong>reviewHash</strong><span>${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
+        ${renderActiveReadiness(candidate.activeReadiness)}
       </div>
       <div class="soft-panel">
         <h3>Actions</h3>
@@ -1026,6 +1032,32 @@ function renderPendingDetail(candidate) {
         </div>
         ${state.actionError ? `<p class="notice error">${escapeHtml(state.actionError)}</p>` : ''}
       </div>
+    </div>
+  `
+}
+
+function renderActiveReadiness(activeReadiness) {
+  if (!activeReadiness) return ''
+  const status = activeReadiness.status || (activeReadiness.ready === false ? 'needs_rewrite' : 'ready')
+  const reasons = Array.isArray(activeReadiness.reasons) && activeReadiness.reasons.length > 0
+    ? activeReadiness.reasons.join(', ')
+    : 'none'
+  return `
+    <div class="soft-inset rail-item">
+      <strong>Active readiness</strong>
+      <span>${escapeHtml(status)}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Suggested shape</strong>
+      <span>${escapeHtml(activeReadiness.suggestedShape || 'active_memory')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Reasons</strong>
+      <span>${escapeHtml(reasons)}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Rewrite hint</strong>
+      <span>${escapeHtml(activeReadiness.rewriteHint || 'No rewrite needed.')}</span>
     </div>
   `
 }

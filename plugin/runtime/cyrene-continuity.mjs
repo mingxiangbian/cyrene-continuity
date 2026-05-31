@@ -13552,6 +13552,7 @@ import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypt
 // src/codex/active-memory-readiness.ts
 var VERSION_OR_SESSION_PATTERN = /(?:\bv\d+(?:\.\d+)*\b|本轮|这次|当前|目前|刚刚|today|this round|current)/i;
 var IMPLEMENTATION_NOTE_PATTERN = /(?:核心实现|实现采用|采用.+执行方案|创建隔离工作区|created.+worktree|used.+workflow|implementation used)/i;
+var COMPLETED_IMPLEMENTATION_PATTERN = /(?:实现了|加固了|引入了|修复了|完成了|移除了|切换到|implemented|hardened|introduced|fixed|completed|removed|switched to)/i;
 var FILE_RULE_EXCERPT_PATTERN = /\b(?:AGENTS\.md|README\.md|CONTRIBUTING\.md|package\.json|tsconfig\.json)\b.*(?:中规定|定义|要求|states?|says?|requires?)/i;
 var SOURCE_OF_TRUTH_PATTERN = /(?:source of truth|source-of-truth|source_of_truth|事实来源|权威来源)/i;
 var OVERBROAD_EDIT_RULE_PATTERN = /(?:所有|每次|all|every).{0,16}(?:修改|更改|edits?|changes?).{0,32}(?:issue|task|任务|手术|surgical|trace|追溯)/i;
@@ -13570,15 +13571,19 @@ function evaluateActiveMemoryReadiness(input) {
   if (reasons.length > 0) {
     reasons.push("needs_active_memory_rewrite");
   }
+  const uniqueReasons = Array.from(new Set(reasons));
   return {
-    ready: reasons.length === 0,
-    reasons: Array.from(new Set(reasons))
+    ready: uniqueReasons.length === 0,
+    status: uniqueReasons.length === 0 ? "ready" : "needs_rewrite",
+    reasons: uniqueReasons,
+    suggestedShape: suggestedShapeForReasons(uniqueReasons),
+    rewriteHint: rewriteHintForReasons(uniqueReasons)
   };
 }
 function isImplementationNote(input) {
   const kind = input.candidateKind;
   const projectLike = kind === "project_fact" || kind === "project_decision" || input.domain === "project";
-  return projectLike && VERSION_OR_SESSION_PATTERN.test(input.content) && IMPLEMENTATION_NOTE_PATTERN.test(input.content);
+  return projectLike && (VERSION_OR_SESSION_PATTERN.test(input.content) && IMPLEMENTATION_NOTE_PATTERN.test(input.content) || COMPLETED_IMPLEMENTATION_PATTERN.test(input.content));
 }
 function isRawFileRuleExcerpt(input) {
   return FILE_RULE_EXCERPT_PATTERN.test(input.content) && !SOURCE_OF_TRUTH_PATTERN.test(input.content);
@@ -13586,6 +13591,28 @@ function isRawFileRuleExcerpt(input) {
 function isOverbroadWorkflowRule(input) {
   const workflowLike = input.candidateKind === "workflow_rule" || input.type === "procedural_rule";
   return workflowLike && OVERBROAD_EDIT_RULE_PATTERN.test(input.content) && !NON_TRIVIAL_QUALIFIER_PATTERN.test(input.content);
+}
+function suggestedShapeForReasons(reasons) {
+  if (reasons.includes("implementation_note")) return "episode";
+  if (reasons.includes("raw_file_rule_excerpt")) return "project_policy";
+  if (reasons.includes("overbroad_workflow_rule")) return "workflow_rule";
+  return "active_memory";
+}
+function rewriteHintForReasons(reasons) {
+  if (reasons.length === 0) {
+    return "Candidate is already shaped for active memory review.";
+  }
+  const hints = [];
+  if (reasons.includes("implementation_note")) {
+    hints.push("Convert implementation history into an episode, or extract only the reusable rule with applicability and rationale.");
+  }
+  if (reasons.includes("raw_file_rule_excerpt")) {
+    hints.push("Rewrite file excerpts as behavioral guidance and name the source of truth instead of duplicating raw policy text.");
+  }
+  if (reasons.includes("overbroad_workflow_rule")) {
+    hints.push("Constrain broad workflow rules to non-trivial code or architecture changes and avoid absolute all/every wording.");
+  }
+  return hints.join(" ");
 }
 
 // src/memory/memory-maintenance.ts
@@ -15298,16 +15325,25 @@ function reviewHashForPendingMemory(candidate) {
 }
 function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).toISOString()) {
   const reviewHash = reviewHashForPendingMemory(candidate);
-  const recommendation = deriveRecommendation(candidate, now);
+  const candidateKind = deriveMemoryCandidateKind(candidate);
+  const activeReadiness = evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind,
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  });
+  const recommendation = deriveRecommendation(candidate, now, activeReadiness);
   return {
     id: candidate.id,
     domain: candidate.domain,
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
-    candidateKind: deriveMemoryCandidateKind(candidate),
+    candidateKind,
     recommendation,
     suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
+    activeReadiness,
     risk: deriveRisk(candidate),
     sensitivity: candidate.scores.sensitivity,
     evidenceCount: candidate.evidence.length,
@@ -15325,9 +15361,12 @@ function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).to
     scores: candidate.scores
   };
 }
-function deriveRecommendation(candidate, now) {
+function deriveRecommendation(candidate, now, activeReadiness) {
   if (candidate.expiresAt <= now) {
     return "reject";
+  }
+  if (!activeReadiness.ready) {
+    return "defer";
   }
   const promotion = evaluatePendingPromotion(candidate, now);
   return promotion.promotable ? "promote" : "defer";
@@ -15374,7 +15413,8 @@ async function getCodexPendingMemory(input) {
     result: {
       action: "get",
       candidate,
-      reviewHash: reviewHashForPendingMemory(candidate)
+      reviewHash: reviewHashForPendingMemory(candidate),
+      review: summarizePendingMemory(candidate)
     }
   };
 }
@@ -22077,6 +22117,10 @@ function renderInbox() {
 
 function renderCandidateRow(candidate) {
   const selected = state.selectedPendingId === candidate.id
+  const readiness = candidate.activeReadiness || {}
+  const readinessLabel = readiness.status === 'needs_rewrite'
+    ? \`needs rewrite \xB7 \${readiness.suggestedShape || 'review'}\`
+    : 'ready'
   return \`
     <article class="data-row candidate-row selectable-row \${selected ? 'selected' : ''}" data-pending-id="\${escapeHtml(candidate.id)}">
       <div>
@@ -22084,6 +22128,7 @@ function renderCandidateRow(candidate) {
         <div class="row-meta">
           \${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
           \${candidate.reviewHash ? \` \xB7 review \${escapeHtml(shortHash(candidate.reviewHash))}\` : ''}
+          \xB7 \${escapeHtml(readinessLabel)}
         </div>
       </div>
       \${statusChip(candidate.recommendation || 'review', candidate.risk || 'pending', candidate.risk === 'high' ? 'error' : 'warn')}
@@ -22706,6 +22751,7 @@ function renderPendingDetail(candidate) {
         <h3>Pending detail</h3>
         <p>\${escapeHtml(candidate.content)}</p>
         <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
+        \${renderActiveReadiness(candidate.activeReadiness)}
       </div>
       <div class="soft-panel">
         <h3>Actions</h3>
@@ -22717,6 +22763,32 @@ function renderPendingDetail(candidate) {
         </div>
         \${state.actionError ? \`<p class="notice error">\${escapeHtml(state.actionError)}</p>\` : ''}
       </div>
+    </div>
+  \`
+}
+
+function renderActiveReadiness(activeReadiness) {
+  if (!activeReadiness) return ''
+  const status = activeReadiness.status || (activeReadiness.ready === false ? 'needs_rewrite' : 'ready')
+  const reasons = Array.isArray(activeReadiness.reasons) && activeReadiness.reasons.length > 0
+    ? activeReadiness.reasons.join(', ')
+    : 'none'
+  return \`
+    <div class="soft-inset rail-item">
+      <strong>Active readiness</strong>
+      <span>\${escapeHtml(status)}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Suggested shape</strong>
+      <span>\${escapeHtml(activeReadiness.suggestedShape || 'active_memory')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Reasons</strong>
+      <span>\${escapeHtml(reasons)}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Rewrite hint</strong>
+      <span>\${escapeHtml(activeReadiness.rewriteHint || 'No rewrite needed.')}</span>
     </div>
   \`
 }
@@ -23358,6 +23430,10 @@ async function formatCodexMemoryReview(input) {
       `  scope: ${item.scope}`,
       `  domain: ${item.domain}`,
       `  candidate kind: ${item.candidateKind}`,
+      `  active readiness: ${item.activeReadiness.status}`,
+      `  suggested shape: ${item.activeReadiness.suggestedShape}`,
+      `  readiness reasons: ${item.activeReadiness.reasons.join(", ") || "none"}`,
+      `  rewrite hint: ${item.activeReadiness.rewriteHint}`,
       `  content: ${item.content}`,
       `  evidence count: ${item.evidenceCount}`,
       `  risk: ${item.risk}`,

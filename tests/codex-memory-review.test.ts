@@ -166,6 +166,40 @@ describe('Codex pending memory review', () => {
     expect(result.pending[0]?.suggestedAction).not.toContain('cyrene-continuity codex memory')
   })
 
+  it('summarizes active-memory readiness for pending rewrite candidates', async () => {
+    const home = await createTempDir('cyrene-review-readiness-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-readiness-project-')
+    const candidate = createPending({
+      id: 'pending-implementation-note',
+      domain: 'project',
+      type: 'project_fact',
+      candidateKind: 'project_decision',
+      content: '实现了 active memory readiness gate，防止未压缩的候选直接进入 active memory。',
+      normalizedKey: 'implemented-active-memory-readiness-gate',
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First implementation note.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second implementation note.' }
+      ]
+    })
+    await seedPending(cwd, [candidate])
+
+    const result = await listCodexPendingMemories({ cwd })
+
+    expect(result.pending[0]).toMatchObject({
+      id: 'pending-implementation-note',
+      recommendation: 'defer',
+      activeReadiness: {
+        ready: false,
+        status: 'needs_rewrite',
+        suggestedShape: 'episode',
+        reasons: expect.arrayContaining(['implementation_note', 'needs_active_memory_rewrite'])
+      }
+    })
+    expect(result.pending[0]?.activeReadiness.rewriteHint).toContain('episode')
+  })
+
   it('uses explicit candidate kind in review metadata and review hashes', async () => {
     const home = await createTempDir('cyrene-review-kind-home-')
     vi.stubEnv('HOME', home)

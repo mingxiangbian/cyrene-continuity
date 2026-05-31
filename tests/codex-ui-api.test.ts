@@ -232,9 +232,10 @@ describe('handleCodexUiApiRequest', () => {
     expect(result.status).toBe(200)
     expect(result.body.ok).toBe(true)
     if (result.body.ok) {
-      const data = result.body.data as { pending: Array<{ id: string; reviewHash: string }> }
+      const data = result.body.data as { pending: Array<{ id: string; reviewHash: string; activeReadiness: { status: string } }> }
       expect(data.pending[0]).toMatchObject({ id: 'pending-1' })
       expect(data.pending[0].reviewHash).toMatch(/^[a-f0-9]{64}$/)
+      expect(data.pending[0].activeReadiness.status).toBe('ready')
     }
   })
 

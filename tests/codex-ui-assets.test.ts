@@ -37,6 +37,15 @@ describe('Codex UI source assets', () => {
     expect(source).not.toContain('function renderEvidence(candidate)')
   })
 
+  it('renders active-readiness structure in pending rows and detail rail', async () => {
+    const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
+
+    expect(source).toContain('renderActiveReadiness')
+    expect(source).toContain('activeReadiness')
+    expect(source).toContain('Suggested shape')
+    expect(source).toContain('Rewrite hint')
+  })
+
   it('contains the Warm Cream Coral console shell and write-confirm review labels', async () => {
     const [html, js, css] = await Promise.all([
       readFile(new URL('../src/ui/static/index.html', import.meta.url), 'utf8'),

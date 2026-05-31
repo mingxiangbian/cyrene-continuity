@@ -65,6 +65,7 @@ export interface CodexPendingMemorySummary {
   candidateKind: CodexMemoryCandidateKind
   recommendation: CodexPendingMemoryRecommendation
   suggestedAction: string
+  activeReadiness: ActiveMemoryReadinessResult
   risk: CodexPendingMemoryRisk
   sensitivity: number
   evidenceCount: number
@@ -109,6 +110,7 @@ export interface CodexPendingMemoryGetResult {
         action: 'get'
         candidate: PendingMemory
         reviewHash: string
+        review: CodexPendingMemorySummary
       }
     | {
         action: 'not_found'
@@ -293,16 +295,25 @@ export function reviewHashForPendingMemory(candidate: PendingMemory): string {
 
 export function summarizePendingMemory(candidate: PendingMemory, now = new Date().toISOString()): CodexPendingMemorySummary {
   const reviewHash = reviewHashForPendingMemory(candidate)
-  const recommendation = deriveRecommendation(candidate, now)
+  const candidateKind = deriveMemoryCandidateKind(candidate)
+  const activeReadiness = evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind,
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  })
+  const recommendation = deriveRecommendation(candidate, now, activeReadiness)
   return {
     id: candidate.id,
     domain: candidate.domain,
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
-    candidateKind: deriveMemoryCandidateKind(candidate),
+    candidateKind,
     recommendation,
     suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
+    activeReadiness,
     risk: deriveRisk(candidate),
     sensitivity: candidate.scores.sensitivity,
     evidenceCount: candidate.evidence.length,
@@ -323,9 +334,16 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
   }
 }
 
-function deriveRecommendation(candidate: PendingMemory, now: string): CodexPendingMemoryRecommendation {
+function deriveRecommendation(
+  candidate: PendingMemory,
+  now: string,
+  activeReadiness: ActiveMemoryReadinessResult
+): CodexPendingMemoryRecommendation {
   if (candidate.expiresAt <= now) {
     return 'reject'
+  }
+  if (!activeReadiness.ready) {
+    return 'defer'
   }
   const promotion = evaluatePendingPromotion(candidate, now)
   return promotion.promotable ? 'promote' : 'defer'
@@ -389,7 +407,8 @@ export async function getCodexPendingMemory(input: {
     result: {
       action: 'get',
       candidate,
-      reviewHash: reviewHashForPendingMemory(candidate)
+      reviewHash: reviewHashForPendingMemory(candidate),
+      review: summarizePendingMemory(candidate)
     }
   }
 }
