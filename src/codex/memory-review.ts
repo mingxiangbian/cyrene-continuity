@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createDefaultConfig } from '../config.js'
+import { evaluateActiveMemoryReadiness, type ActiveMemoryReadinessResult } from './active-memory-readiness.js'
 import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
@@ -152,6 +153,13 @@ export interface CodexPendingMemoryPromoteResult {
         reason: string
         conflicts: CodexNormalizedKeyConflict[]
         resolutionOptions: MemoryConflictResolution[]
+      }
+    | {
+        action: 'needs_rewrite'
+        candidateId: string
+        reason: string
+        readiness: ActiveMemoryReadinessResult
+        reviewHash: string
       }
     | {
         action: 'rejected_by_validator'
@@ -503,6 +511,27 @@ export async function promoteCodexPendingMemory(input: {
           candidateId: lockedCandidate.id,
           reason: lockedDecision.reason,
           tombstone: lockedDecision.tombstone
+        }
+      }
+    }
+
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: lockedCandidate.content,
+      candidateKind: deriveMemoryCandidateKind(lockedCandidate),
+      domain: lockedCandidate.domain,
+      type: lockedCandidate.type,
+      tags: lockedCandidate.tags
+    })
+    if (!activeReadiness.ready) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'needs_rewrite',
+          candidateId: lockedCandidate.id,
+          reason: 'Pending memory must be rewritten before it can become active memory.',
+          readiness: activeReadiness,
+          reviewHash: lockedReviewHash
         }
       }
     }

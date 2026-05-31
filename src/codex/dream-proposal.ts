@@ -4,6 +4,7 @@ import {
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
 } from '../memory/memory-store.js'
+import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
 import {
   runDreamApplyEvalGate,
   type EvalCheckName,
@@ -14,6 +15,7 @@ import {
   evaluatePendingPromotion,
   validateMemoryCandidate
 } from '../memory/memory-validator.js'
+import { evaluateActiveMemoryReadiness } from './active-memory-readiness.js'
 import type { MemoryTombstone, PendingMemory } from '../memory/types.js'
 
 export interface DreamEvalGateResult {
@@ -162,6 +164,32 @@ export async function buildDreamProposalForRoot(input: {
       continue
     }
 
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: candidate.content,
+      candidateKind: deriveMemoryCandidateKind(candidate),
+      domain: candidate.domain,
+      type: candidate.type,
+      tags: candidate.tags
+    })
+    if (!activeReadiness.ready) {
+      const reason = `Active-readiness requires rewrite before promotion: ${activeReadiness.reasons.join(', ')}`
+      proposedChanges.push({
+        action: 'keep_pending',
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason,
+        distinctEvidenceCount: distinctEvidenceCount(candidate)
+      })
+      applyPlan.push({
+        action: 'keep_pending',
+        candidate,
+        reason
+      })
+      diff.keepPendingCandidateIds.push(candidate.id)
+      summary.keepPending += 1
+      continue
+    }
+
     const evaluation = evaluatePendingPromotion(candidate, input.now)
     if (!evaluation.promotable) {
       proposedChanges.push({
@@ -271,6 +299,12 @@ function tombstoneForExpiredPending(candidate: PendingMemory, now: string): Memo
     createdAt: now,
     evidence: candidate.evidence
   }
+}
+
+function distinctEvidenceCount(candidate: PendingMemory): number {
+  return new Set(
+    candidate.evidence.map((item) => item.evidenceGroupId ?? item.runId ?? item.sessionId ?? item.summary)
+  ).size
 }
 
 function isFileErrorCode(error: unknown, code: string): boolean {

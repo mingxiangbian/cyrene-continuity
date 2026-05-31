@@ -633,6 +633,9 @@ function writeResultToApi(
   if (result.action === 'rejected_by_validator') {
     return failure(400, 'rejected_by_validator', result.reason, { result })
   }
+  if (result.action === 'needs_rewrite') {
+    return failure(400, 'needs_rewrite', result.reason, { result })
+  }
 
   const summary = summaryForWriteResult(action, result.action)
   const receipt = writeReceipt(action, result.candidateId, reviewHash, summary, now)

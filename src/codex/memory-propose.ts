@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createDefaultConfig } from '../config.js'
+import { evaluateActiveMemoryReadiness } from './active-memory-readiness.js'
 import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { codexProjectMemoryRoot, ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { markCodexMemoryDreamDue } from './memory-dream-state.js'
@@ -172,6 +173,13 @@ export async function proposeCodexMemoryCandidate(input: {
     const dailyCap = promotionScope === 'global'
       ? config.memoryAutoReviewGlobalPromotePerDay
       : config.memoryAutoReviewProjectPromotePerDay
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: mergedCandidate.content,
+      candidateKind: deriveMemoryCandidateKind(mergedCandidate),
+      domain: mergedCandidate.domain,
+      type: mergedCandidate.type,
+      tags: mergedCandidate.tags
+    })
     const autoPromotion = evaluateAutoPromotionPolicy({
       candidate: mergedCandidate,
       scope: promotionScope,
@@ -193,7 +201,12 @@ export async function proposeCodexMemoryCandidate(input: {
         })
       : undefined
 
-    if (autoPromotion.allowed && autoPromotionEval?.passed === true && input.allowAutoPromote !== false) {
+    if (
+      autoPromotion.allowed &&
+      autoPromotionEval?.passed === true &&
+      activeReadiness.ready &&
+      input.allowAutoPromote !== false
+    ) {
       const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now)
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted])
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged)
@@ -258,14 +271,22 @@ export async function proposeCodexMemoryCandidate(input: {
       })
     }
     await markDreamDueFailOpen(lockedMemoryRoot, now)
-    const reason =
-      decision.action === 'auto_write'
-        ? input.allowAutoPromote === false
-          ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.`
-          : autoPromotion.allowed && autoPromotionEval?.passed === false
-          ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(', ')}; pending for manual review.`
-          : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.`
-        : decision.reason
+    const activeReadinessReason =
+      `Active-readiness requires rewrite before auto-promotion: ${activeReadiness.reasons.join(', ')}; pending for manual review.`
+    let reason = decision.reason
+    if (decision.action === 'auto_write') {
+      if (input.allowAutoPromote === false) {
+        reason = `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.`
+      } else if (!activeReadiness.ready) {
+        reason = activeReadinessReason
+      } else if (autoPromotion.allowed && autoPromotionEval?.passed === false) {
+        reason = `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(', ')}; pending for manual review.`
+      } else {
+        reason = `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.`
+      }
+    } else if (!activeReadiness.ready && autoPromotion.allowed && autoPromotionEval?.passed === true) {
+      reason = activeReadinessReason
+    }
 
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID(),

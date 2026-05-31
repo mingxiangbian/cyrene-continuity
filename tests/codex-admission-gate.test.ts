@@ -109,6 +109,61 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.reasons).toContain('stale_numeric_snapshot')
   })
 
+  it('routes version-bound implementation notes to distillation instead of pending', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+        candidateKind: 'project_decision',
+        domain: 'project',
+        normalizedKey: 'v1-admission-gate-subagent-worktree'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('admit_to_distillation')
+    expect(decision.reasons).toContain('implementation_note')
+    expect(decision.reasons).toContain('needs_active_memory_rewrite')
+  })
+
+  it('routes raw file rule excerpts to distillation instead of pending', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'agents-md-all-edits-surgical'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('admit_to_distillation')
+    expect(decision.reasons).toContain('raw_file_rule_excerpt')
+    expect(decision.reasons).toContain('needs_active_memory_rewrite')
+  })
+
+  it('admits canonical workflow rules with source-of-truth context', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'For non-trivial code or architecture changes in this repo, edits should trace directly to a specified issue/task and remain surgical: avoid unrelated refactors, broad rewrites, or opportunistic cleanup unless explicitly requested. Source of truth: AGENTS.md.',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'workflow-agents-md-surgical-edits'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('admit_to_pending')
+    expect(decision.reasons).not.toContain('raw_file_rule_excerpt')
+    expect(decision.reasons).not.toContain('needs_active_memory_rewrite')
+  })
+
   it('admits durable workflow rules to pending', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({

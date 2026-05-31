@@ -400,6 +400,42 @@ describe('Codex pending memory review', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
+  it('requires rewrite before promoting implementation notes as active memory', async () => {
+    const home = await createTempDir('cyrene-review-needs-rewrite-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-needs-rewrite-project-')
+    const candidate = createPending({
+      id: 'pending-implementation-note',
+      domain: 'project',
+      type: 'project_fact',
+      strength: 'soft',
+      content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+      normalizedKey: 'v1-admission-gate-subagent-worktree',
+      candidateKind: 'project_decision',
+      tags: ['project_harvest', 'project_decision']
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'needs_rewrite',
+      candidateId: candidate.id,
+      reason: 'Pending memory must be rewritten before it can become active memory.',
+      readiness: expect.objectContaining({
+        ready: false,
+        reasons: expect.arrayContaining(['implementation_note', 'needs_active_memory_rewrite'])
+      })
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
   it('requires explicit resolution before promoting a normalizedKey conflict', async () => {
     const home = await createTempDir('cyrene-review-normalized-conflict-home-')
     vi.stubEnv('HOME', home)

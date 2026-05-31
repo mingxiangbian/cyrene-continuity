@@ -13549,6 +13549,45 @@ function overlapScore(label, sourceValues, targetValues, weight, reason) {
 // src/codex/memory-review.ts
 import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 
+// src/codex/active-memory-readiness.ts
+var VERSION_OR_SESSION_PATTERN = /(?:\bv\d+(?:\.\d+)*\b|本轮|这次|当前|目前|刚刚|today|this round|current)/i;
+var IMPLEMENTATION_NOTE_PATTERN = /(?:核心实现|实现采用|采用.+执行方案|创建隔离工作区|created.+worktree|used.+workflow|implementation used)/i;
+var FILE_RULE_EXCERPT_PATTERN = /\b(?:AGENTS\.md|README\.md|CONTRIBUTING\.md|package\.json|tsconfig\.json)\b.*(?:中规定|定义|要求|states?|says?|requires?)/i;
+var SOURCE_OF_TRUTH_PATTERN = /(?:source of truth|source-of-truth|source_of_truth|事实来源|权威来源)/i;
+var OVERBROAD_EDIT_RULE_PATTERN = /(?:所有|每次|all|every).{0,16}(?:修改|更改|edits?|changes?).{0,32}(?:issue|task|任务|手术|surgical|trace|追溯)/i;
+var NON_TRIVIAL_QUALIFIER_PATTERN = /(?:non-trivial|非琐碎|非平凡|非简单|代码\/架构|code or architecture)/i;
+function evaluateActiveMemoryReadiness(input) {
+  const reasons = [];
+  if (isImplementationNote(input)) {
+    reasons.push("implementation_note");
+  }
+  if (isRawFileRuleExcerpt(input)) {
+    reasons.push("raw_file_rule_excerpt");
+  }
+  if (isOverbroadWorkflowRule(input)) {
+    reasons.push("overbroad_workflow_rule");
+  }
+  if (reasons.length > 0) {
+    reasons.push("needs_active_memory_rewrite");
+  }
+  return {
+    ready: reasons.length === 0,
+    reasons: Array.from(new Set(reasons))
+  };
+}
+function isImplementationNote(input) {
+  const kind = input.candidateKind;
+  const projectLike = kind === "project_fact" || kind === "project_decision" || input.domain === "project";
+  return projectLike && VERSION_OR_SESSION_PATTERN.test(input.content) && IMPLEMENTATION_NOTE_PATTERN.test(input.content);
+}
+function isRawFileRuleExcerpt(input) {
+  return FILE_RULE_EXCERPT_PATTERN.test(input.content) && !SOURCE_OF_TRUTH_PATTERN.test(input.content);
+}
+function isOverbroadWorkflowRule(input) {
+  const workflowLike = input.candidateKind === "workflow_rule" || input.type === "procedural_rule";
+  return workflowLike && OVERBROAD_EDIT_RULE_PATTERN.test(input.content) && !NON_TRIVIAL_QUALIFIER_PATTERN.test(input.content);
+}
+
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { lstat as lstat10, mkdir as mkdir8, readFile as readFile10, rm as rm2, writeFile as writeFile6 } from "node:fs/promises";
@@ -13875,8 +13914,8 @@ function cleanEvidencePart(value) {
   const trimmed = value?.trim();
   return trimmed === void 0 || trimmed === "" ? void 0 : trimmed;
 }
-function pendingResult(reason, distinctEvidenceCount2) {
-  return { promotable: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
+function pendingResult(reason, distinctEvidenceCount3) {
+  return { promotable: false, reason, distinctEvidenceCount: distinctEvidenceCount3 };
 }
 function promotionThreshold(candidate) {
   if (candidate.domain === "personal" || candidate.domain === "relationship") {
@@ -15445,6 +15484,26 @@ async function promoteCodexPendingMemory(input) {
         }
       };
     }
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: lockedCandidate.content,
+      candidateKind: deriveMemoryCandidateKind(lockedCandidate),
+      domain: lockedCandidate.domain,
+      type: lockedCandidate.type,
+      tags: lockedCandidate.tags
+    });
+    if (!activeReadiness.ready) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "needs_rewrite",
+          candidateId: lockedCandidate.id,
+          reason: "Pending memory must be rewritten before it can become active memory.",
+          readiness: activeReadiness,
+          reviewHash: lockedReviewHash
+        }
+      };
+    }
     const baseMemory = memoryForPromotedDecision(lockedDecision, now);
     const normalizedKeyConflicts = findNormalizedKeyConflicts(lockedActive, baseMemory);
     if (normalizedKeyConflicts.length > 0 && input.conflictResolution === void 0) {
@@ -16825,6 +16884,7 @@ function evaluateCandidateAdmission(input) {
 function reasonsForDraft(draft) {
   const reasons = [];
   const durableGuidance = isDurablePrescriptiveGuidance(draft);
+  const readiness = evaluateActiveMemoryReadiness(draft);
   if (draft.candidateKind === "user_instruction" || draft.sourceKind === "user_explicit") {
     reasons.push("explicit_user_instruction");
   }
@@ -16852,6 +16912,9 @@ function reasonsForDraft(draft) {
   if (!durableGuidance && (draft.content.length < 24 || VAGUE_PATTERN.test(draft.content))) {
     reasons.push("too_vague");
   }
+  if (!readiness.ready) {
+    reasons.push(...readiness.reasons);
+  }
   return Array.from(new Set(reasons));
 }
 function isDurablePrescriptiveGuidance(draft) {
@@ -16860,7 +16923,7 @@ function isDurablePrescriptiveGuidance(draft) {
 }
 function scoreOverridesForReasons(reasons) {
   const noisy = reasons.some(
-    (reason) => reason === "one_time_action" || reason === "temporary_status" || reason === "stale_numeric_snapshot" || reason === "low_future_usefulness" || reason === "low_actionability" || reason === "too_vague"
+    (reason) => reason === "one_time_action" || reason === "temporary_status" || reason === "stale_numeric_snapshot" || reason === "low_future_usefulness" || reason === "low_actionability" || reason === "too_vague" || reason === "implementation_note" || reason === "raw_file_rule_excerpt" || reason === "overbroad_workflow_rule" || reason === "needs_active_memory_rewrite"
   );
   const valuable = reasons.some(
     (reason) => reason === "valuable_project_decision" || reason === "valuable_workflow_rule" || reason === "valuable_known_pitfall" || reason === "valuable_rejected_approach" || reason === "explicit_user_instruction"
@@ -16927,6 +16990,7 @@ function admissionScoreFor(scores) {
 }
 function actionFor(draft, reasons, score) {
   if (reasons.includes("explicit_user_instruction")) return "admit_to_pending";
+  if (reasons.includes("needs_active_memory_rewrite")) return "admit_to_distillation";
   if (reasons.includes("valuable_workflow_rule") || reasons.includes("valuable_known_pitfall") || reasons.includes("valuable_rejected_approach") || reasons.includes("valuable_project_decision")) {
     return score >= 0.5 ? "admit_to_pending" : "admit_to_distillation";
   }
@@ -17096,8 +17160,8 @@ function rankPendingForEviction(pending, now) {
     };
   }).sort((left, right) => left.score - right.score || left.candidateId.localeCompare(right.candidateId));
 }
-function denied(reason, distinctEvidenceCount2) {
-  return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
+function denied(reason, distinctEvidenceCount3) {
+  return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount3 };
 }
 function candidateIdsForDecisions(decisions) {
   const ids = /* @__PURE__ */ new Set();
@@ -17238,6 +17302,13 @@ async function proposeCodexMemoryCandidate(input) {
     const promotionScope = mergedCandidate.scope === "global" ? "global" : "project";
     const promotionsUsedToday = countAutoPromotionsForDay(events, now);
     const dailyCap = promotionScope === "global" ? config2.memoryAutoReviewGlobalPromotePerDay : config2.memoryAutoReviewProjectPromotePerDay;
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: mergedCandidate.content,
+      candidateKind: deriveMemoryCandidateKind(mergedCandidate),
+      domain: mergedCandidate.domain,
+      type: mergedCandidate.type,
+      tags: mergedCandidate.tags
+    });
     const autoPromotion = evaluateAutoPromotionPolicy({
       candidate: mergedCandidate,
       scope: promotionScope,
@@ -17256,7 +17327,7 @@ async function proposeCodexMemoryCandidate(input) {
       usedToday: promotionsUsedToday,
       dailyCap
     }) : void 0;
-    if (autoPromotion.allowed && autoPromotionEval?.passed === true && input.allowAutoPromote !== false) {
+    if (autoPromotion.allowed && autoPromotionEval?.passed === true && activeReadiness.ready && input.allowAutoPromote !== false) {
       const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now);
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
@@ -17320,7 +17391,21 @@ async function proposeCodexMemoryCandidate(input) {
       });
     }
     await markDreamDueFailOpen(lockedMemoryRoot, now);
-    const reason = decision2.action === "auto_write" ? input.allowAutoPromote === false ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.` : autoPromotion.allowed && autoPromotionEval?.passed === false ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.` : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision2.reason;
+    const activeReadinessReason = `Active-readiness requires rewrite before auto-promotion: ${activeReadiness.reasons.join(", ")}; pending for manual review.`;
+    let reason = decision2.reason;
+    if (decision2.action === "auto_write") {
+      if (input.allowAutoPromote === false) {
+        reason = `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.`;
+      } else if (!activeReadiness.ready) {
+        reason = activeReadinessReason;
+      } else if (autoPromotion.allowed && autoPromotionEval?.passed === false) {
+        reason = `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.`;
+      } else {
+        reason = `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.`;
+      }
+    } else if (!activeReadiness.ready && autoPromotion.allowed && autoPromotionEval?.passed === true) {
+      reason = activeReadinessReason;
+    }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID8(),
       action: "pending",
@@ -21059,6 +21144,9 @@ function writeResultToApi(reviewResult, action, reviewHash, now) {
   if (result2.action === "rejected_by_validator") {
     return failure(400, "rejected_by_validator", result2.reason, { result: result2 });
   }
+  if (result2.action === "needs_rewrite") {
+    return failure(400, "needs_rewrite", result2.reason, { result: result2 });
+  }
   const summary = summaryForWriteResult(action, result2.action);
   const receipt = writeReceipt(action, result2.candidateId, reviewHash, summary, now);
   if (result2.action === "promote") return ok({ receipt, memory: result2.memory });
@@ -23498,6 +23586,31 @@ async function buildDreamProposalForRoot(input) {
       summary.reject += 1;
       continue;
     }
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: candidate.content,
+      candidateKind: deriveMemoryCandidateKind(candidate),
+      domain: candidate.domain,
+      type: candidate.type,
+      tags: candidate.tags
+    });
+    if (!activeReadiness.ready) {
+      const reason = `Active-readiness requires rewrite before promotion: ${activeReadiness.reasons.join(", ")}`;
+      proposedChanges.push({
+        action: "keep_pending",
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason,
+        distinctEvidenceCount: distinctEvidenceCount2(candidate)
+      });
+      applyPlan.push({
+        action: "keep_pending",
+        candidate,
+        reason
+      });
+      diff.keepPendingCandidateIds.push(candidate.id);
+      summary.keepPending += 1;
+      continue;
+    }
     const evaluation = evaluatePendingPromotion(candidate, input.now);
     if (!evaluation.promotable) {
       proposedChanges.push({
@@ -23596,6 +23709,11 @@ function tombstoneForExpiredPending(candidate, now) {
     createdAt: now,
     evidence: candidate.evidence
   };
+}
+function distinctEvidenceCount2(candidate) {
+  return new Set(
+    candidate.evidence.map((item) => item.evidenceGroupId ?? item.runId ?? item.sessionId ?? item.summary)
+  ).size;
 }
 function isFileErrorCode13(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;

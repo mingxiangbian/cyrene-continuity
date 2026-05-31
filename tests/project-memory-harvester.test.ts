@@ -323,6 +323,35 @@ describe('runCodexProjectMemoryHarvest', () => {
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('routes implementation notes to admission without pending write', async () => {
+    const home = await createTempDir('cyrene-harvester-implementation-note-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-harvester-implementation-note-project-')
+    collectSignals.mockResolvedValue({ signals: sampleSignals(), warnings: [] })
+
+    const result = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          candidates: [{
+            candidateKind: 'project_decision',
+            content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+            signalIndexes: [1]
+          }]
+        })),
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('noop')
+    if (result.action !== 'noop') throw new Error(`Expected noop, got ${result.action}`)
+    expect(result.reason).toContain('No project memory candidates survived admission.')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('implementation_note')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('writes candidate drafts beside existing project harvest pending candidates', async () => {
     const home = await createTempDir('cyrene-harvester-draft-home-')
     vi.stubEnv('HOME', home)

@@ -338,6 +338,44 @@ describe('Codex memory propose', () => {
     })
   })
 
+  it('does not auto-promote repeated implementation notes before rewrite', async () => {
+    const home = await createTempDir('cyrene-propose-auto-promote-rewrite-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-propose-auto-promote-rewrite-project-')
+    const candidate = {
+      domain: 'project' as const,
+      type: 'project_fact' as const,
+      scope: 'project' as const,
+      source: 'file' as const,
+      candidateKind: 'project_fact' as const,
+      content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+      normalizedKey: 'v1-admission-gate-subagent-worktree',
+      evidence: [{ summary: 'Review summary recorded v1 implementation flow.', evidenceGroupId: 'file-1', sourceKind: 'file' as const }],
+      scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.8, safety: 0.95, sensitivity: 0.05 },
+      tags: ['project_harvest', 'project_fact']
+    }
+
+    const first = await proposeCodexMemoryCandidate({ cwd, candidate, now: '2026-05-30T00:00:00.000Z' })
+    expect(first.result.action).toBe('pending')
+
+    const second = await proposeCodexMemoryCandidate({
+      cwd,
+      candidate: {
+        ...candidate,
+        evidence: [{ summary: 'Tool trace recorded isolated worktree execution.', evidenceGroupId: 'tool-1', sourceKind: 'tool_trace' as const }]
+      },
+      now: '2026-05-30T01:00:00.000Z'
+    })
+
+    expect(second.result.action).toBe('pending')
+    if (second.result.action !== 'pending') throw new Error(`Expected pending, got ${second.result.action}`)
+    expect(second.result.reason).toContain('Active-readiness requires rewrite before auto-promotion')
+    const pending = await readFile(join(second.memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pending).toContain(candidate.content)
+    expect(pending).toContain('"seenCount":2')
+    await expect(readFile(join(second.memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('evicts the weakest pending candidate before writing a stronger incoming candidate over budget', async () => {
     const home = await createTempDir('cyrene-propose-budget-evict-home-')
     vi.stubEnv('HOME', home)
