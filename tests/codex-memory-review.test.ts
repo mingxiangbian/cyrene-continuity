@@ -175,7 +175,7 @@ describe('Codex pending memory review', () => {
       domain: 'project',
       type: 'project_fact',
       candidateKind: 'project_decision',
-      content: '实现了 active memory readiness gate，防止未压缩的候选直接进入 active memory。',
+      content: '实现 active memory readiness gate，防止未压缩的候选直接进入 active memory',
       normalizedKey: 'implemented-active-memory-readiness-gate',
       seenCount: 2,
       evidence: [

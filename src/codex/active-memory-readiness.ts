@@ -31,7 +31,7 @@ const VERSION_OR_SESSION_PATTERN = /(?:\bv\d+(?:\.\d+)*\b|本轮|这次|当前|�
 const IMPLEMENTATION_NOTE_PATTERN =
   /(?:核心实现|实现采用|采用.+执行方案|创建隔离工作区|created.+worktree|used.+workflow|implementation used)/i
 const COMPLETED_IMPLEMENTATION_PATTERN =
-  /(?:实现了|加固了|引入了|修复了|完成了|移除了|切换到|implemented|hardened|introduced|fixed|completed|removed|switched to)/i
+  /(?:实现(?:了|\s+[A-Za-z0-9])|加固了|引入了|修复了|完成了|移除了|切换到|implemented|hardened|introduced|fixed|completed|removed|switched to)/i
 const FILE_RULE_EXCERPT_PATTERN =
   /\b(?:AGENTS\.md|README\.md|CONTRIBUTING\.md|package\.json|tsconfig\.json)\b.*(?:中规定|定义|要求|states?|says?|requires?)/i
 const SOURCE_OF_TRUTH_PATTERN = /(?:source of truth|source-of-truth|source_of_truth|事实来源|权威来源)/i
