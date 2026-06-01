@@ -417,31 +417,54 @@ PR5 depends on the v2 active store and router policy.
 
 ## Testing
 
-Required test coverage:
+Testing has two goals:
+
+1. Prove v2 never loses or silently widens durable approved memory.
+2. Prove every automatic path is gated, auditable, and module-aware.
+
+Required test objectives:
 
 ```txt
-schema v2 migration:
-  old active -> SemanticMemory(active)
-  old pending -> dropped/reset with event
-  migration never promotes old pending
+1. Migration preserves approved active memory and resets provisional pending memory.
+   Pass when:
+     old active -> SemanticMemory(status='active')
+     old pending -> dropped/reset with migration event
+     old pending never becomes active or review-approved by migration
+     migration writes MemoryEvent receipts
 
-admission/distillation:
-  admit_to_distillation writes DistillationInput
-  distillation reads drafts/decisions/episodes/semantic_memories
-  output has useWhen/doNotUseWhen/sourceOfTruth/evidence
+2. Admission hands distillation candidates to a real input store.
+   Pass when:
+     AdmissionDecision(action='admit_to_distillation') writes DistillationInput
+     DistillationInput links draft ids, episode ids, semantic memory ids, and admission decision ids
+     episode_only / auto_drop / reject_duplicate do not create DistillationInput
 
-router/policy:
-  module classification is deterministic
-  high-risk modules never auto-promote
-  low-risk project/procedural can strict auto-promote only with gates
+3. Distillation outputs usable semantic memory, not raw summaries.
+   Pass when:
+     distillation reads drafts, decisions, episodes, and semantic_memories
+     output is SemanticMemory(status='candidate')
+     output contains content, useWhen, doNotUseWhen, sourceOfTruth when known, structured evidence, and supersedes when applicable
+     implementation notes and transient summaries are rewritten or rejected
 
-activation/reflection:
-  retrieval writes ActivationEvent
-  reflection creates candidates, not active mutations
+4. Router and ReviewPolicy enforce module boundaries.
+   Pass when:
+     module classification is deterministic for representative project/procedural/system/preference/global/relationship/principle cases
+     high-risk modules never auto-promote
+     low-risk project/procedural candidates auto-promote only with eval gate, daily cap, no conflicts, and MemoryEvent receipt
+     preference/global policy remain manual in first-wave defaults
 
-UI/API:
-  pending review is SemanticMemory(status='pending')
-  detail view shows semantic/evidence/routing/action sections
+5. Activation and Reflection close the loop without bypassing review.
+   Pass when:
+     retrieval/context writes ActivationEvent for retrieved/used/ignored/contradicted/stale cases
+     reflection writes ReflectionCandidate for reinforce/rewrite/deprecate/split/merge
+     reflection never directly mutates SemanticMemory(status='active')
+     reflection candidates re-enter admission/router/review policy
+
+6. UI/API expose the v2 review model.
+   Pass when:
+     pending review lists SemanticMemory(status='pending')
+     detail view shows Proposed Semantic Memory, Structured Evidence, Routing + Review Policy, and Review Action
+     approve/reject/edit/defer still require reviewHash validation
+     edit keeps the memory pending and generates a fresh review hash
 ```
 
 Verification commands for implementation PRs:
