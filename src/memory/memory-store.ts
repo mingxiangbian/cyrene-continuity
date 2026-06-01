@@ -2,14 +2,20 @@ import { appendFile, lstat, mkdir, readFile, realpath, rename, writeFile } from 
 import { join } from 'node:path'
 import { ensureMemoryRoot, getReadableMemoryRoot } from './paths.js'
 import type {
+  ActivationEvent,
   AdmissionDecision,
   CandidateDraft,
   CyreneMemory,
+  DistillationInput,
   EpisodeMemory,
   MemoryEvent,
   MemoryScores,
   MemoryTombstone,
-  PendingMemory
+  PendingMemory,
+  ReflectionCandidate,
+  ReviewDecision,
+  RoutingDecision,
+  SemanticMemory
 } from './types.js'
 
 const INDEX_FILE = 'index.jsonl'
@@ -17,6 +23,12 @@ const PENDING_FILE = 'pending.jsonl'
 const EPISODES_FILE = 'episodes.jsonl'
 const CANDIDATE_DRAFTS_FILE = 'candidate_drafts.jsonl'
 const ADMISSION_DECISIONS_FILE = 'admission_decisions.jsonl'
+const SEMANTIC_MEMORIES_FILE = 'semantic_memories.jsonl'
+const DISTILLATION_INPUTS_FILE = 'distillation_inputs.jsonl'
+const ROUTING_DECISIONS_FILE = 'routing_decisions.jsonl'
+const REVIEW_DECISIONS_FILE = 'review_decisions.jsonl'
+const ACTIVATION_EVENTS_FILE = 'activation_events.jsonl'
+const REFLECTION_CANDIDATES_FILE = 'reflection_candidates.jsonl'
 const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
@@ -152,6 +164,102 @@ export async function readAdmissionDecisionsFromRoot(memoryRoot: string): Promis
     return []
   }
   return readJsonLines<AdmissionDecision>(join(memoryRoot, ADMISSION_DECISIONS_FILE))
+}
+
+export async function readSemanticMemoriesFromRoot(memoryRoot: string): Promise<SemanticMemory[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<SemanticMemory>(join(memoryRoot, SEMANTIC_MEMORIES_FILE))
+}
+
+export async function writeSemanticMemoriesFromRoot(
+  memoryRoot: string,
+  memories: SemanticMemory[]
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await writeJsonLinesAtomic(join(root, SEMANTIC_MEMORIES_FILE), memories)
+}
+
+export async function appendDistillationInputFromRoot(
+  memoryRoot: string,
+  input: DistillationInput
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, DISTILLATION_INPUTS_FILE), input)
+}
+
+export async function readDistillationInputsFromRoot(memoryRoot: string): Promise<DistillationInput[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<DistillationInput>(join(memoryRoot, DISTILLATION_INPUTS_FILE))
+}
+
+export async function appendRoutingDecisionFromRoot(
+  memoryRoot: string,
+  decision: RoutingDecision
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, ROUTING_DECISIONS_FILE), decision)
+}
+
+export async function readRoutingDecisionsFromRoot(memoryRoot: string): Promise<RoutingDecision[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<RoutingDecision>(join(memoryRoot, ROUTING_DECISIONS_FILE))
+}
+
+export async function appendReviewDecisionFromRoot(
+  memoryRoot: string,
+  decision: ReviewDecision
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, REVIEW_DECISIONS_FILE), decision)
+}
+
+export async function readReviewDecisionsFromRoot(memoryRoot: string): Promise<ReviewDecision[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<ReviewDecision>(join(memoryRoot, REVIEW_DECISIONS_FILE))
+}
+
+export async function appendActivationEventFromRoot(
+  memoryRoot: string,
+  event: ActivationEvent
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, ACTIVATION_EVENTS_FILE), event)
+}
+
+export async function readActivationEventsFromRoot(memoryRoot: string): Promise<ActivationEvent[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<ActivationEvent>(join(memoryRoot, ACTIVATION_EVENTS_FILE))
+}
+
+export async function appendReflectionCandidateFromRoot(
+  memoryRoot: string,
+  candidate: ReflectionCandidate
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, REFLECTION_CANDIDATES_FILE), candidate)
+}
+
+export async function readReflectionCandidatesFromRoot(memoryRoot: string): Promise<ReflectionCandidate[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<ReflectionCandidate>(join(memoryRoot, REFLECTION_CANDIDATES_FILE))
 }
 
 export async function appendMemoryEvent(cwd: string, event: MemoryEvent): Promise<void> {

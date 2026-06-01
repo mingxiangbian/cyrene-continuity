@@ -51,6 +51,42 @@ export const MEMORY_CANDIDATE_KINDS = [
 ] as const
 export type MemoryCandidateKind = typeof MEMORY_CANDIDATE_KINDS[number]
 
+export const MEMORY_MODULES = [
+  'project_semantic',
+  'procedural',
+  'system',
+  'preference',
+  'global_policy',
+  'relationship_affective',
+  'principle_candidate'
+] as const
+export type MemoryModule = typeof MEMORY_MODULES[number]
+
+export const SEMANTIC_MEMORY_STATUSES = [
+  'candidate',
+  'pending',
+  'active',
+  'archived',
+  'rejected',
+  'superseded'
+] as const
+export type SemanticMemoryStatus = typeof SEMANTIC_MEMORY_STATUSES[number]
+
+export const UPDATE_POLICIES = [
+  'strict_auto_promote',
+  'pending_review',
+  'manual_only',
+  'drop',
+  'defer'
+] as const
+export type UpdatePolicy = typeof UPDATE_POLICIES[number]
+
+export const ACTIVATION_EVENT_TYPES = ['retrieved', 'used', 'ignored', 'contradicted', 'stale'] as const
+export type ActivationEventType = typeof ACTIVATION_EVENT_TYPES[number]
+
+export const REFLECTION_ACTIONS = ['reinforce', 'rewrite', 'deprecate', 'split', 'merge'] as const
+export type ReflectionAction = typeof REFLECTION_ACTIONS[number]
+
 export const MEMORY_CONFLICT_RESOLUTIONS = ['supersede', 'keep_both', 'reject_new'] as const
 export type MemoryConflictResolution = typeof MEMORY_CONFLICT_RESOLUTIONS[number]
 
@@ -171,6 +207,95 @@ export interface AdmissionDecision {
   scores: AdmissionScores
   targetMemoryId?: string
   targetClusterId?: string
+  createdAt: string
+}
+
+export interface StructuredEvidence {
+  id: string
+  sourceKind: string
+  sourceRef: string
+  when?: string
+  whatHappened: string
+  whyImportant: string
+  result?: string
+}
+
+export interface RoutedMemoryTarget {
+  module: MemoryModule
+  updatePolicy: UpdatePolicy
+  risk: 'low' | 'medium' | 'high'
+  reasons: string[]
+}
+
+export interface SemanticMemory {
+  id: string
+  status: SemanticMemoryStatus
+  module: MemoryModule
+  kind: MemoryCandidateKind
+  scope: MemoryScope
+  domain: MemoryDomain
+  content: string
+  useWhen: string[]
+  doNotUseWhen: string[]
+  sourceOfTruth?: string
+  evidence: StructuredEvidence[]
+  routing?: RoutedMemoryTarget
+  reviewPolicy: UpdatePolicy
+  supersedes: string[]
+  expiresAt?: string
+  reviewAfter?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DistillationInput {
+  id: string
+  sourceDraftIds: string[]
+  sourceEpisodeIds: string[]
+  sourceSemanticMemoryIds: string[]
+  admissionDecisionIds: string[]
+  normalizedKey?: string
+  candidateKind: MemoryCandidateKind
+  scope: MemoryScope
+  domain: MemoryDomain
+  sourceKinds: string[]
+  rawContents: string[]
+  evidenceRefs: string[]
+  createdAt: string
+}
+
+export interface RoutingDecision {
+  id: string
+  semanticMemoryId: string
+  target: RoutedMemoryTarget
+  createdAt: string
+}
+
+export interface ReviewDecision {
+  id: string
+  semanticMemoryId: string
+  policy: UpdatePolicy
+  reviewHash?: string
+  reasons: string[]
+  createdAt: string
+}
+
+export interface ActivationEvent {
+  id: string
+  memoryId: string
+  projectId?: string
+  queryHash?: string
+  event: ActivationEventType
+  evidenceRef?: string
+  createdAt: string
+}
+
+export interface ReflectionCandidate {
+  id: string
+  sourceActivationEventIds: string[]
+  proposedAction: ReflectionAction
+  candidate: SemanticMemory
+  reasons: string[]
   createdAt: string
 }
 
