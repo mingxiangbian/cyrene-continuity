@@ -399,6 +399,7 @@ function renderSemanticReviewCard(candidate, options = {}) {
   const evidence = Array.isArray(memory.evidence) ? memory.evidence : []
   const evidencePreview = evidence[0] || candidate.episodeEvidence || {}
   const updatePolicy = memory.routing?.updatePolicy || memory.reviewPolicy || 'pending_review'
+  const reviewPolicy = memory.reviewPolicy || updatePolicy
   const routingReasons = Array.isArray(memory.routing?.reasons) ? memory.routing.reasons : []
   const sourceOfTruth = memory.sourceOfTruth || candidate.normalizedKey || 'unknown'
   const evidenceRef = evidencePreview.sourceRef || evidencePreview.evidenceRef || candidate.evidenceRef || sourceOfTruth
@@ -429,6 +430,7 @@ function renderSemanticReviewCard(candidate, options = {}) {
         ])}
         ${reviewSection('Policy', [
           ['Update policy', updatePolicy],
+          ['Review policy', reviewPolicy],
           ['Readiness', `${readinessStatus} · ${targetShape}`],
           ['Recommendation', candidate.recommendation || 'review'],
           ['Routing reasons', formatValueList(routingReasons)],
