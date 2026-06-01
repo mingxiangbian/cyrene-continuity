@@ -21814,9 +21814,11 @@ async function readProjects(cwd) {
   ]);
   const projects = /* @__PURE__ */ new Map();
   for (const entry of entries) {
+    if (entry.disabled) continue;
     projects.set(entry.projectId, projectOptionFromRegistryEntry(entry, currentProject, indexedProjectNames.get(entry.projectId)));
   }
-  if (!projects.has(currentProject.projectId)) {
+  const currentRegistryEntry = entries.find((entry) => entry.projectId === currentProject.projectId);
+  if (!projects.has(currentProject.projectId) && currentRegistryEntry?.disabled !== true) {
     const memoryRoot = codexProjectMemoryRoot(currentProject.projectId);
     projects.set(currentProject.projectId, {
       projectId: currentProject.projectId,

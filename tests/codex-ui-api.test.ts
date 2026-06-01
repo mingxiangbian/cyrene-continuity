@@ -449,7 +449,7 @@ describe('handleCodexUiApiRequest', () => {
     expect(projects.body.ok).toBe(true)
     if (projects.body.ok) {
       const data = projects.body.data as { projects: Array<{ projectId: string; disabled?: boolean }> }
-      expect(data.projects).toContainEqual(expect.objectContaining({ projectId, disabled: true }))
+      expect(data.projects).not.toContainEqual(expect.objectContaining({ projectId }))
     }
   })
 
