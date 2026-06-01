@@ -61,6 +61,10 @@ interface CodexStructuredReadinessGate {
   reasons: CodexPendingReadinessReason[]
 }
 
+type CodexPendingPromotionReadiness = Omit<ActiveMemoryReadinessResult, 'reasons'> & {
+  reasons: string[]
+}
+
 export interface CodexPendingReadinessReview {
   status: ActiveMemoryReadinessResult['status']
   targetShape: string
@@ -205,7 +209,7 @@ export interface CodexPendingMemoryPromoteResult {
         action: 'needs_rewrite'
         candidateId: string
         reason: string
-        readiness: ActiveMemoryReadinessResult
+        readiness: CodexPendingPromotionReadiness
         reviewHash: string
       }
     | {
@@ -459,7 +463,7 @@ function deriveReadinessReasons(
 
 function pendingReviewSemanticMemory(candidate: PendingMemory): SemanticMemory {
   const semanticMemory = pendingMemoryToSemanticMemory(candidate)
-  const sourceOfTruth = candidate.normalizedKey.trim()
+  const sourceOfTruth = sourceOfTruthForPendingMemory(candidate)
   return {
     ...semanticMemory,
     sourceOfTruth,
@@ -472,6 +476,10 @@ function pendingReviewSemanticMemory(candidate: PendingMemory): SemanticMemory {
   }
 }
 
+function sourceOfTruthForPendingMemory(candidate: PendingMemory): string {
+  return (candidate.normalizedKey ?? '').trim()
+}
+
 function evaluateStructuredReadinessGate(
   candidate: PendingMemory,
   semanticMemory: SemanticMemory
@@ -480,13 +488,28 @@ function evaluateStructuredReadinessGate(
   if (candidate.evidence.length === 0 || semanticMemory.evidence.length === 0) {
     reasons.push(readinessReason('missing_structured_evidence', 'Candidate needs structured evidence before promotion review.'))
   }
-  if (semanticMemory.sourceOfTruth === undefined || semanticMemory.sourceOfTruth.trim() === '') {
+  if (sourceOfTruthForPendingMemory(candidate) === '' || semanticMemory.sourceOfTruth === undefined || semanticMemory.sourceOfTruth.trim() === '') {
     reasons.push(readinessReason('missing_source_of_truth', 'Candidate needs a source of truth before promotion review.'))
   }
   return {
     ready: reasons.length === 0,
     reasons
   }
+}
+
+function structuredPromotionReadiness(gate: CodexStructuredReadinessGate): CodexPendingPromotionReadiness {
+  const reasonCodes = gate.reasons.map((reason) => reason.code)
+  return {
+    ready: false,
+    status: 'needs_rewrite',
+    reasons: reasonCodes,
+    suggestedShape: 'active_memory',
+    rewriteHint: `Resolve structured review blockers before promotion: ${reasonCodes.join(', ')}.`
+  }
+}
+
+function structuredPromotionBlockReason(gate: CodexStructuredReadinessGate): string {
+  return `Pending memory needs structured review before promotion: ${gate.reasons.map((reason) => reason.code).join(', ')}.`
 }
 
 function blockingReasonText(code: string): string {
@@ -685,6 +708,21 @@ export async function promoteCodexPendingMemory(input: {
     }
   }
 
+  const structuredGate = evaluateStructuredReadinessGate(candidate, pendingReviewSemanticMemory(candidate))
+  if (!structuredGate.ready) {
+    return {
+      project,
+      memoryRoot,
+      result: {
+        action: 'needs_rewrite',
+        candidateId: candidate.id,
+        reason: structuredPromotionBlockReason(structuredGate),
+        readiness: structuredPromotionReadiness(structuredGate),
+        reviewHash: latestReviewHash
+      }
+    }
+  }
+
   const [active, tombstones] = await Promise.all([
     readActiveMemoriesFromRoot(memoryRoot),
     readTombstonesFromRoot(memoryRoot)
@@ -741,6 +779,21 @@ export async function promoteCodexPendingMemory(input: {
           candidateId: candidate.id,
           reason: 'Pending memory candidate changed since review',
           latest: summarizePendingMemory(lockedCandidate)
+        }
+      }
+    }
+
+    const lockedStructuredGate = evaluateStructuredReadinessGate(lockedCandidate, pendingReviewSemanticMemory(lockedCandidate))
+    if (!lockedStructuredGate.ready) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'needs_rewrite',
+          candidateId: lockedCandidate.id,
+          reason: structuredPromotionBlockReason(lockedStructuredGate),
+          readiness: structuredPromotionReadiness(lockedStructuredGate),
+          reviewHash: lockedReviewHash
         }
       }
     }

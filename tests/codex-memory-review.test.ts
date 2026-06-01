@@ -280,6 +280,26 @@ describe('Codex pending memory review', () => {
     ])
   })
 
+  it('summarizes runtime-missing normalizedKey as missing source of truth', () => {
+    const { normalizedKey: _normalizedKey, ...candidateWithoutKey } = createPending({
+      id: 'runtime-missing-source-of-truth',
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', summary: 'First workflow evidence.' },
+        { runId: 'run-2', summary: 'Second workflow evidence.' }
+      ]
+    })
+
+    expect(() => summarizePendingMemory(candidateWithoutKey as unknown as PendingMemory)).not.toThrow()
+    const summary = summarizePendingMemory(candidateWithoutKey as unknown as PendingMemory)
+
+    expect(summary.recommendation).toBe('defer')
+    expect(summary.semanticMemory.sourceOfTruth).toBe('')
+    expect(summary.readiness.reasons).toEqual([
+      expect.objectContaining({ code: 'missing_source_of_truth' })
+    ])
+  })
+
   it('summarizes active-memory readiness for pending rewrite candidates', async () => {
     const home = await createTempDir('cyrene-review-readiness-home-')
     vi.stubEnv('HOME', home)
@@ -591,6 +611,42 @@ describe('Codex pending memory review', () => {
     })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
+  it('requires structured review before promoting candidates missing evidence and source of truth', async () => {
+    const home = await createTempDir('cyrene-review-structured-gate-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-structured-gate-project-')
+    const candidate = createPending({
+      id: 'pending-structured-gate',
+      normalizedKey: '   ',
+      seenCount: 2,
+      evidence: []
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'needs_rewrite',
+      candidateId: candidate.id,
+      reason: 'Pending memory needs structured review before promotion: missing_structured_evidence, missing_source_of_truth.',
+      readiness: expect.objectContaining({
+        ready: false,
+        status: 'needs_rewrite',
+        suggestedShape: 'active_memory',
+        reasons: expect.arrayContaining(['missing_structured_evidence', 'missing_source_of_truth'])
+      }),
+      reviewHash: reviewHashForPendingMemory(candidate)
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('requires explicit resolution before promoting a normalizedKey conflict', async () => {
