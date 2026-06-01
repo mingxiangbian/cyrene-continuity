@@ -191,6 +191,52 @@ describe('Codex memory distillation dry run', () => {
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
   })
 
+  it('includes singleton v2 distillation input as a structured semantic preview candidate without mutating stores', async () => {
+    const memoryRoot = await createTempDir('cyrene-distill-v2-singleton-')
+    const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
+    const indexPath = join(memoryRoot, 'index.jsonl')
+    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    await mkdir(memoryRoot, { recursive: true })
+    const distillationInputsBefore = await writeJsonLines(distillationInputsPath, [
+      createDistillationInput({
+        normalizedKey: 'workflow-agents-md-surgical-edits',
+        sourceOfTruth: 'AGENTS.md',
+        rawContents: ['For non-trivial code changes, edits must stay surgical. Source of truth: AGENTS.md.'],
+        evidenceRefs: ['AGENTS.md']
+      })
+    ])
+    await writeFile(indexPath, '', 'utf8')
+    await writeFile(pendingPath, '', 'utf8')
+    const indexBefore = await readFile(indexPath, 'utf8')
+    const pendingBefore = await readFile(pendingPath, 'utf8')
+
+    const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
+
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]).toMatchObject({
+      id: 'distill-workflow-agents-md-surgical-edits',
+      normalizedKey: 'workflow-agents-md-surgical-edits',
+      sourceOfTruth: 'AGENTS.md',
+      recommendedAction: 'needs_review',
+      risk: 'low',
+      semanticMemory: {
+        module: 'procedural',
+        reviewPolicy: 'pending_review',
+        sourceOfTruth: 'AGENTS.md',
+        evidence: [
+          expect.objectContaining({
+            sourceKind: 'review_summary',
+            sourceRef: 'AGENTS.md',
+            whatHappened: 'For non-trivial code changes, edits must stay surgical. Source of truth: AGENTS.md.'
+          })
+        ]
+      }
+    })
+    await expect(readFile(distillationInputsPath, 'utf8')).resolves.toBe(distillationInputsBefore)
+    await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
+  })
+
   it('clusters duplicate pending candidates into an auditable dry-run candidate without mutating stores', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-memory-')
     const pendingPath = join(memoryRoot, 'pending.jsonl')
