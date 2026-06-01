@@ -138,6 +138,11 @@ export const CANDIDATE_DRAFT_SOURCE_KINDS = [
 ] as const
 export type CandidateDraftSourceKind = typeof CANDIDATE_DRAFT_SOURCE_KINDS[number]
 
+export interface CandidateTaskState {
+  kind: 'temporary_status' | 'one_time_action' | 'implementation_progress'
+  summary: string
+}
+
 export interface CandidateDraft {
   id: string
   episodeId?: string
@@ -149,6 +154,8 @@ export interface CandidateDraft {
   sourceEpisodeIds: string[]
   evidenceRefs: string[]
   normalizedKey?: string
+  sourceOfTruth?: string
+  taskState?: CandidateTaskState
   tags: string[]
   createdAt: string
 }
@@ -177,7 +184,9 @@ export const ADMISSION_REASONS = [
   'needs_active_memory_rewrite',
   'duplicate_pending',
   'duplicate_active',
+  'source_of_truth_duplicate',
   'conflicts_with_tombstone',
+  'task_state',
   'valuable_project_decision',
   'valuable_workflow_rule',
   'valuable_known_pitfall',
@@ -285,6 +294,7 @@ export interface DistillationInput {
   sourceKinds: string[]
   rawContents: string[]
   evidenceRefs: string[]
+  sourceOfTruth?: string
   createdAt: string
 }
 

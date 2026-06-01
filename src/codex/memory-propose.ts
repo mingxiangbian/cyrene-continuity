@@ -53,6 +53,7 @@ export interface CodexMemoryCandidateInput {
   scope?: MemoryScope
   content: string
   normalizedKey?: string
+  sourceOfTruth?: string
   candidateKind?: MemoryCandidateKind
   candidate_kind?: MemoryCandidateKind
   source?: MemorySource
