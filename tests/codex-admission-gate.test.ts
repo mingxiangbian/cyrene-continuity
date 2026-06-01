@@ -213,6 +213,42 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.targetMemoryId).toBe('active-1')
   })
 
+  it('rejects source-of-truth duplicate active memory with exact reasons', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({ normalizedKey: 'duplicate-key', sourceOfTruth: 'AGENTS.md' }),
+      pending: [],
+      active: [active('duplicate-key')],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('reject_duplicate')
+    expect(decision.reasons).toEqual(['duplicate_active', 'source_of_truth_duplicate'])
+    expect(decision.targetMemoryId).toBe('active-1')
+  })
+
+  it('routes implementation progress task state to episode only before durable handling', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'Core memory pipeline changes must preserve review-hash validation. 当前 Task 2 implementation is in progress.',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'task-state-implementation-progress',
+        taskState: {
+          kind: 'implementation_progress',
+          summary: 'Task 2 implementation is in progress.'
+        }
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('episode_only')
+    expect(decision.reasons).toContain('task_state')
+    expect(decision.reasons).toContain('temporary_status')
+  })
+
   it('merges duplicate pending memory by normalizedKey', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({ normalizedKey: 'duplicate-pending-key' }),

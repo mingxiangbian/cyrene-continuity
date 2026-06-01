@@ -30,9 +30,16 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
   const now = input.now ?? new Date().toISOString()
   const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey)
   if (duplicateActive !== undefined) {
-    return decision(input.draft, 'reject_duplicate', ['duplicate_active'], scoresFor(input.draft, { redundancy: 1 }), now, {
-      targetMemoryId: duplicateActive.id
-    })
+    return decision(
+      input.draft,
+      'reject_duplicate',
+      duplicateActiveReasons(input.draft),
+      scoresFor(input.draft, { redundancy: 1 }),
+      now,
+      {
+        targetMemoryId: duplicateActive.id
+      }
+    )
   }
 
   const tombstone = findActiveTombstone(input.tombstones, input.draft, now)
@@ -91,6 +98,9 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   if (TEMPORARY_STATUS_PATTERN.test(draft.content)) {
     reasons.push('temporary_status')
   }
+  if (draft.taskState !== undefined) {
+    reasons.push('task_state')
+  }
   if (!durableGuidance && (draft.content.length < 24 || VAGUE_PATTERN.test(draft.content))) {
     reasons.push('too_vague')
   }
@@ -98,6 +108,12 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
     reasons.push(...readiness.reasons)
   }
   return Array.from(new Set(reasons))
+}
+
+function duplicateActiveReasons(draft: CandidateDraft): AdmissionReason[] {
+  return draft.sourceOfTruth === undefined
+    ? ['duplicate_active']
+    : ['duplicate_active', 'source_of_truth_duplicate']
 }
 
 function isDurablePrescriptiveGuidance(draft: CandidateDraft): boolean {
@@ -204,6 +220,7 @@ function admissionScoreFor(scores: AdmissionScores): number {
 
 function actionFor(draft: CandidateDraft, reasons: AdmissionReason[], score: number): AdmissionDecision['action'] {
   if (reasons.includes('explicit_user_instruction')) return 'admit_to_pending'
+  if (reasons.includes('task_state')) return 'episode_only'
   if (reasons.includes('needs_active_memory_rewrite')) return 'admit_to_distillation'
   if (
     reasons.includes('valuable_workflow_rule') ||

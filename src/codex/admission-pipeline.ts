@@ -2,12 +2,15 @@ import { evaluateCandidateAdmission } from './admission-gate.js'
 import { toCandidateDraft } from './candidate-drafts.js'
 import { codexProjectMemoryRoot, ensureCodexGlobalMemoryRoot, ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import { proposeCodexMemoryCandidate, type CodexMemoryCandidateInput, type CodexMemoryProposeResult } from './memory-propose.js'
+import { reviewDecisionForRoute, routeCandidateDraft, semanticCandidateFromDraft } from './memory-router.js'
 import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import {
   appendAdmissionDecisionFromRoot,
   appendCandidateDraftFromRoot,
   appendDistillationInputFromRoot,
+  appendReviewDecisionFromRoot,
+  appendRoutingDecisionFromRoot,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
@@ -70,12 +73,19 @@ export async function runCodexAdmissionPipeline(
   ])
   const admission = evaluateCandidateAdmission({ draft, pending, active, tombstones, now: input.now })
   await appendAdmissionDecisionFromRoot(memoryRoot, admission)
+  const route = routeCandidateDraft({ draft, admission })
+  const semanticCandidate = semanticCandidateFromDraft({ draft, admission, route, now: admission.createdAt })
 
   if (admission.action === 'admit_to_distillation') {
     await appendDistillationInputFromRoot(memoryRoot, distillationInputFromAdmission(draft, admission))
   }
 
   if (admission.action !== 'admit_to_pending' && admission.action !== 'merge_with_existing') {
+    await appendRoutingAndReviewDecisions(memoryRoot, {
+      admission,
+      route,
+      semanticMemoryId: semanticCandidate.id
+    })
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
       memoryRoot,
@@ -100,11 +110,43 @@ export async function runCodexAdmissionPipeline(
     allowAutoPromote: input.allowAutoPromote
   })
 
+  if (proposed.result.action !== 'reject') {
+    await appendRoutingAndReviewDecisions(memoryRoot, {
+      admission,
+      route,
+      semanticMemoryId: semanticCandidate.id
+    })
+  }
+
   return {
     ...proposed,
     action: proposed.result.action,
     admission
   }
+}
+
+async function appendRoutingAndReviewDecisions(
+  memoryRoot: string,
+  input: {
+    admission: AdmissionDecision
+    route: ReturnType<typeof routeCandidateDraft>
+    semanticMemoryId: string
+  }
+): Promise<void> {
+  await appendRoutingDecisionFromRoot(memoryRoot, {
+    id: `routing-${input.admission.id}`,
+    semanticMemoryId: input.semanticMemoryId,
+    target: input.route,
+    createdAt: input.admission.createdAt
+  })
+  await appendReviewDecisionFromRoot(
+    memoryRoot,
+    reviewDecisionForRoute({
+      semanticMemoryId: input.semanticMemoryId,
+      route: input.route,
+      now: input.admission.createdAt
+    })
+  )
 }
 
 function distillationInputFromAdmission(draft: CandidateDraft, admission: AdmissionDecision): DistillationInput {
@@ -121,6 +163,7 @@ function distillationInputFromAdmission(draft: CandidateDraft, admission: Admiss
     sourceKinds: [draft.sourceKind],
     rawContents: [draft.content],
     evidenceRefs: draft.evidenceRefs,
+    ...(draft.sourceOfTruth === undefined ? {} : { sourceOfTruth: draft.sourceOfTruth }),
     createdAt: admission.createdAt
   }
 }

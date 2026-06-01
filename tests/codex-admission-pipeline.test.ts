@@ -6,7 +6,11 @@ import { runCodexAdmissionPipeline } from '../src/codex/admission-pipeline.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
-import { readDistillationInputsFromRoot } from '../src/memory/memory-store.js'
+import {
+  readDistillationInputsFromRoot,
+  readReviewDecisionsFromRoot,
+  readRoutingDecisionsFromRoot
+} from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -175,6 +179,81 @@ describe('runCodexAdmissionPipeline', () => {
     expect(pending).toContain('"admittedBy":"admission_gate_v1"')
     expect(pending).toContain('"sourceEpisodeIds":["episode-1"]')
     expect(pending).toContain('"sourceDraftIds"')
+  })
+
+  it('writes routing and review decisions for admitted pending source-of-truth candidates', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-routing-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-routing-project-')
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'file',
+      sourceEpisodeIds: ['episode-1'],
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'For non-trivial code changes, repository edits must remain surgical and trace directly to the requested task.',
+        normalizedKey: 'agents-md-surgical-edits',
+        sourceOfTruth: 'AGENTS.md',
+        evidence: [{ summary: 'AGENTS.md', sourceKind: 'file' }],
+        source: 'file',
+        scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.8, safety: 0.95, sensitivity: 0.1 }
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('pending')
+
+    const routing = await readRoutingDecisionsFromRoot(result.memoryRoot)
+    expect(routing).toHaveLength(1)
+    expect(routing[0]).toMatchObject({
+      id: `routing-${result.admission.id}`,
+      semanticMemoryId: `semantic-${result.admission.draftId}`,
+      target: {
+        module: 'procedural',
+        updatePolicy: 'pending_review',
+        risk: 'low'
+      },
+      createdAt: result.admission.createdAt
+    })
+
+    const review = await readReviewDecisionsFromRoot(result.memoryRoot)
+    expect(review).toHaveLength(1)
+    expect(review[0]).toMatchObject({
+      id: `review-semantic-${result.admission.draftId}`,
+      semanticMemoryId: `semantic-${result.admission.draftId}`,
+      policy: 'pending_review',
+      createdAt: result.admission.createdAt
+    })
+    expect(review[0]?.reasons).toEqual(routing[0]?.target.reasons)
+  })
+
+  it('does not write routing or review decisions when proposal rejects admitted candidates', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-proposal-reject-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-proposal-reject-project-')
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'user_explicit',
+      recordRejectedCandidate: false,
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'user_instruction',
+        content: 'Repository memory changes must stay surgical and trace directly to the requested task.',
+        normalizedKey: 'user-instruction-surgical-memory-changes',
+        evidence: []
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('reject')
+    expect(result.admission.action).toBe('admit_to_pending')
+    await expect(readRoutingDecisionsFromRoot(result.memoryRoot)).resolves.toEqual([])
+    await expect(readReviewDecisionsFromRoot(result.memoryRoot)).resolves.toEqual([])
   })
 
   it('merges admission lineage into existing pending memory', async () => {
