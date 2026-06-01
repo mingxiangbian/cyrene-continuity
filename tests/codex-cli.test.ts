@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -902,6 +902,123 @@ describe('cyrene-continuity codex CLI', () => {
     expect(parsed.dbPath).toBe(join(home, '.cyrene', 'codex', 'memory.db'))
     expect(parsed.diagnostics.available).toBe(true)
     expect(parsed.syncedRoots).toBeGreaterThanOrEqual(1)
+  })
+
+  it('runs semantic memory v2 migration from the CLI for global and current project roots', async () => {
+    const home = await createTempDir('cyrene-codex-cli-migrate-v2-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-migrate-v2-repo-')
+    const identity = await identifyCodexProject(repo)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(globalMemoryRoot, { recursive: true })
+    await mkdir(projectMemoryRoot, { recursive: true })
+    const globalMemoryRootReal = await realpath(globalMemoryRoot)
+    const projectMemoryRootReal = await realpath(projectMemoryRoot)
+    await writeFile(join(globalMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({
+      id: 'cli-global-v2-active',
+      scope: 'global',
+      normalizedKey: 'cli-global-v2-active',
+      content: 'Global CLI migration keeps active memory.'
+    }))}\n`)
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({
+      id: 'cli-project-v2-active',
+      normalizedKey: 'cli-project-v2-active',
+      content: 'Project CLI migration keeps active memory.'
+    }))}\n`)
+    await writeFile(join(projectMemoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+      id: 'cli-project-v2-pending',
+      normalizedKey: 'cli-project-v2-pending'
+    }))}\n`)
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'migrate-v2'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      action: string
+      roots: Array<{
+        scope: string
+        projectId?: string
+        memoryRoot: string
+        migratedActive?: number
+        droppedLegacyPending?: number
+        semanticMemories?: number
+      }>
+    }
+    expect(parsed.action).toBe('migrate_semantic_memory_v2')
+    expect(parsed.roots.find((root) => root.scope === 'global')).toMatchObject({
+      scope: 'global',
+      memoryRoot: globalMemoryRootReal,
+      migratedActive: 1,
+      droppedLegacyPending: 0,
+      semanticMemories: 1
+    })
+    expect(parsed.roots.find((root) => root.projectId === identity.projectId)).toMatchObject({
+      scope: 'project',
+      projectId: identity.projectId,
+      memoryRoot: projectMemoryRootReal,
+      migratedActive: 1,
+      droppedLegacyPending: 1,
+      semanticMemories: 1
+    })
+    await expect(readFile(join(projectMemoryRoot, 'semantic_memories.jsonl'), 'utf8')).resolves.toContain('cli-project-v2-active')
+    await expect(readFile(join(projectMemoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+  })
+
+  it('memory migrate-v2 --all-projects includes registered non-current project roots', async () => {
+    const home = await createTempDir('cyrene-codex-cli-migrate-v2-all-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-migrate-v2-all-repo-')
+    const identity = await identifyCodexProject(repo)
+    const currentMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const otherProjectId = 'cli-legacy-v2-project'
+    const otherMemoryRoot = codexProjectMemoryRoot(otherProjectId)
+    await mkdir(codexGlobalMemoryRoot(), { recursive: true })
+    await mkdir(currentMemoryRoot, { recursive: true })
+    await mkdir(otherMemoryRoot, { recursive: true })
+    await writeFile(join(currentMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({
+      id: 'cli-current-v2-active',
+      normalizedKey: 'cli-current-v2-active',
+      content: 'Current project CLI migration keeps active memory.'
+    }))}\n`)
+    await writeFile(join(otherMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({
+      id: 'cli-other-v2-active',
+      normalizedKey: 'cli-other-v2-active',
+      content: 'Other project CLI migration keeps active memory.'
+    }))}\n`)
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'migrate-v2',
+        '--all-projects'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      roots: Array<{ scope: string; projectId?: string; migratedActive?: number }>
+    }
+    const projectIds = parsed.roots.filter((root) => root.scope === 'project').map((root) => root.projectId)
+    expect(projectIds).toContain(identity.projectId)
+    expect(projectIds).toContain(otherProjectId)
+    expect(parsed.roots.find((root) => root.projectId === otherProjectId)).toMatchObject({
+      scope: 'project',
+      projectId: otherProjectId,
+      migratedActive: 1
+    })
+    await expect(readFile(join(otherMemoryRoot, 'semantic_memories.jsonl'), 'utf8')).resolves.toContain('cli-other-v2-active')
   })
 
   it('doctor reports memory index diagnostics', async () => {
