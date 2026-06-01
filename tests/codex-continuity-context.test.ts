@@ -8,6 +8,7 @@ import { rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { readActivationEventsFromRoot, readReflectionCandidatesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -168,6 +169,105 @@ describe('Codex continuity context', () => {
     expect(context.memory.items).toEqual([])
     expect(context.strategy.tone).toBeDefined()
     expect(context.dissent.mode).toBeDefined()
+  })
+
+  it('records an activation event for retrieved project memory without reflection candidates', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-activation-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-activation-repo-')
+    const identity = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), JSON.stringify(createMemory()) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'phase 3 affective memory validator',
+      task: 'coding'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).toEqual(['memory-1'])
+    await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({
+        memoryId: 'memory-1',
+        projectId: identity.projectId,
+        event: 'retrieved',
+        queryHash: expect.stringMatching(/^[a-f0-9]{16}$/)
+      })
+    ])
+    await expect(readReflectionCandidatesFromRoot(memoryRoot)).resolves.toEqual([])
+  })
+
+  it('does not write canonical global activation events for legacy global fallback memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-legacy-activation-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-legacy-current-repo-')
+    const oldRepo = await createTempDir('cyrene-codex-continuity-legacy-old-repo-')
+    await identifyCodexProject(repo)
+    const oldProject = await identifyCodexProject(oldRepo)
+    const oldProjectRoot = codexProjectMemoryRoot(oldProject.projectId)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    await mkdir(oldProjectRoot, { recursive: true })
+    await writeFile(join(oldProjectRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'legacy-global-memory',
+      scope: 'global',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      content: 'Legacy global memory stored in an old project root.',
+      normalizedKey: 'legacy-global-old-project-root'
+    })) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'legacy global old project root',
+      task: 'coding'
+    })
+
+    expect(context.globalMemory.map((item) => item.id)).toContain('legacy-global-memory')
+    expect(await readActivationEventsFromRoot(globalMemoryRoot)).toEqual([])
+  })
+
+  it('does not write canonical global activation events for shared-id legacy global fallback memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-shared-legacy-activation-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-shared-current-repo-')
+    const oldRepo = await createTempDir('cyrene-codex-continuity-shared-old-repo-')
+    await identifyCodexProject(repo)
+    const oldProject = await identifyCodexProject(oldRepo)
+    const oldProjectRoot = codexProjectMemoryRoot(oldProject.projectId)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    await mkdir(oldProjectRoot, { recursive: true })
+    await mkdir(globalMemoryRoot, { recursive: true })
+    await writeFile(join(globalMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'shared-global-id',
+      scope: 'global',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      content: 'Canonical unrelated content.',
+      normalizedKey: 'canonical-unrelated-global-memory'
+    })) + '\n')
+    await writeFile(join(oldProjectRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'shared-global-id',
+      scope: 'global',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      content: 'Shared legacy activation phrase matches query.',
+      normalizedKey: 'shared-legacy-global-memory'
+    })) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'shared legacy activation phrase',
+      task: 'coding'
+    })
+
+    expect(context.globalMemory).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'shared-global-id',
+        content: 'Shared legacy activation phrase matches query.'
+      })
+    ]))
+    expect(await readActivationEventsFromRoot(globalMemoryRoot)).toEqual([])
   })
 
   it('returns pending review notice without exposing pending content as active memory', async () => {

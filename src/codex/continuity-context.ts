@@ -48,6 +48,7 @@ import {
 import { getCodexPendingReviewNotice } from './memory-review.js'
 import { buildCodexProjectFingerprint } from './project-fingerprint.js'
 import { identifyCodexProject } from './project-id.js'
+import { appendActivationEventsFailOpen } from './memory-feedback.js'
 import type { CodexPendingReviewNotice } from './memory-review.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
@@ -239,6 +240,23 @@ export async function getCodexContinuityContext(input: {
     retrievalPlan,
     fallback: legacyRetrievalInput
   })
+  const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot)
+  await Promise.all([
+    appendActivationEventsFailOpen({
+      memoryRoot: globalMemoryRoot,
+      memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
+      projectId: project.projectId,
+      query: input.userMessage,
+      event: 'retrieved'
+    }),
+    appendActivationEventsFailOpen({
+      memoryRoot: projectMemoryRoot,
+      memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
+      projectId: project.projectId,
+      query: input.userMessage,
+      event: 'retrieved'
+    })
+  ])
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory]
   const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory)
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join('\n\n')
@@ -592,6 +610,54 @@ async function readFallbackPendingHypotheses(input: RetrieveMemoriesInput, proje
     6,
     400
   )
+}
+
+async function readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot: string): Promise<Set<string>> {
+  try {
+    return new Set((await readActiveMemoriesFromRoot(globalMemoryRoot)).map(canonicalGlobalMemorySignature))
+  } catch {
+    return new Set()
+  }
+}
+
+function isCanonicalGlobalRoutedMemory(
+  item: IndexedActiveMemory | RetrievedMemory,
+  canonicalGlobalMemorySignatures: Set<string>
+): boolean {
+  if ('homeProjectId' in item) {
+    return item.homeProjectId === null
+  }
+  return canonicalGlobalMemorySignatures.has(canonicalGlobalMemorySignature(item.memory))
+}
+
+function canonicalGlobalActivationMemoryIds(
+  items: Array<IndexedActiveMemory | RetrievedMemory>,
+  canonicalGlobalMemorySignatures: Set<string>
+): string[] {
+  const nonCanonicalFallbackIds = new Set(
+    items
+      .filter((item): item is RetrievedMemory => !('homeProjectId' in item))
+      .filter((item) => !canonicalGlobalMemorySignatures.has(canonicalGlobalMemorySignature(item.memory)))
+      .map((item) => item.memory.id)
+  )
+  return items
+    .filter((item) => (
+      isCanonicalGlobalRoutedMemory(item, canonicalGlobalMemorySignatures) &&
+      !(!('homeProjectId' in item) && nonCanonicalFallbackIds.has(item.memory.id))
+    ))
+    .map((item) => item.memory.id)
+}
+
+function canonicalGlobalMemorySignature(memory: CyreneMemory): string {
+  return JSON.stringify([
+    memory.id,
+    memory.normalizedKey,
+    memory.content,
+    memory.domain,
+    memory.type,
+    memory.scope,
+    memory.updatedAt
+  ])
 }
 
 function scorePendingMemory(memory: PendingMemory, query: string): number {
