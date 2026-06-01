@@ -166,6 +166,98 @@ describe('Codex pending memory review', () => {
     expect(result.pending[0]?.suggestedAction).not.toContain('cyrene-continuity codex memory')
   })
 
+  it('summarizes structured pending review sections with bounded reasons', async () => {
+    const home = await createTempDir('cyrene-review-structured-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-structured-project-')
+    const candidate = createPending({
+      id: 'structured-known-pitfall',
+      candidateKind: 'known_pitfall',
+      content: 'Readiness heuristics should recognize implementation-pattern phrases before showing pending UI readiness.',
+      normalizedKey: 'readiness-heuristics-implementation-pattern',
+      source: 'review_event',
+      evidence: [
+        {
+          runId: 'run-structured',
+          evidenceGroupId: 'group-structured',
+          summary: 'During pending UI review, the readiness heuristic missed implementation-pattern phrases and made the UI look unstructured.'
+        }
+      ]
+    })
+    await seedPending(cwd, [candidate])
+
+    const result = await listCodexPendingMemories({ cwd })
+    const pending = result.pending[0]
+
+    expect(pending).toMatchObject({
+      id: 'structured-known-pitfall',
+      readiness: {
+        status: 'ready',
+        targetShape: 'project_known_pitfall'
+      },
+      episodeEvidence: {
+        when: candidate.lastSeenAt,
+        source: 'review_event'
+      },
+      proposedSemanticMemory: {
+        type: 'known_pitfall',
+        scope: 'project',
+        content: candidate.content,
+        evidenceStrength: 'high',
+        futureUsefulness: 'high'
+      }
+    })
+    expect(pending?.readiness.reasons.length).toBeGreaterThan(0)
+    expect(pending?.readiness.reasons.every((reason) => reason.text.length <= 120)).toBe(true)
+    expect(pending?.episodeEvidence.whatHappened).toContain('readiness heuristic missed')
+    expect(pending?.episodeEvidence.whyImportant).not.toBe('')
+    expect(pending?.proposedSemanticMemory.useWhen.length).toBeGreaterThan(0)
+    expect(pending?.proposedSemanticMemory.doNotUseWhen.length).toBeGreaterThan(0)
+  })
+
+  it('summarizes active-memory readiness for pending rewrite candidates', async () => {
+    const home = await createTempDir('cyrene-review-readiness-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-readiness-project-')
+    const candidate = createPending({
+      id: 'pending-implementation-note',
+      domain: 'project',
+      type: 'project_fact',
+      candidateKind: 'project_decision',
+      content: '实现 active memory readiness gate，防止未压缩的候选直接进入 active memory',
+      normalizedKey: 'implemented-active-memory-readiness-gate',
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First implementation note.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second implementation note.' }
+      ]
+    })
+    await seedPending(cwd, [candidate])
+
+    const result = await listCodexPendingMemories({ cwd })
+
+    expect(result.pending[0]).toMatchObject({
+      id: 'pending-implementation-note',
+      recommendation: 'defer',
+      activeReadiness: {
+        ready: false,
+        status: 'needs_rewrite',
+        suggestedShape: 'episode',
+        reasons: expect.arrayContaining(['implementation_note', 'needs_active_memory_rewrite'])
+      },
+      readiness: {
+        status: 'needs_rewrite',
+        targetShape: 'episode',
+        reasons: expect.arrayContaining([
+          expect.objectContaining({ code: 'implementation_note' }),
+          expect.objectContaining({ code: 'needs_active_memory_rewrite' })
+        ])
+      }
+    })
+    expect(result.pending[0]?.activeReadiness.rewriteHint).toContain('episode')
+    expect(result.pending[0]?.readiness.reasons.every((reason) => reason.text.length <= 120)).toBe(true)
+  })
+
   it('uses explicit candidate kind in review metadata and review hashes', async () => {
     const home = await createTempDir('cyrene-review-kind-home-')
     vi.stubEnv('HOME', home)
@@ -395,6 +487,42 @@ describe('Codex pending memory review', () => {
       action: 'rejected_by_validator',
       candidateId: candidate.id,
       reason: 'Open question memory candidates cannot become active'
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
+  it('requires rewrite before promoting implementation notes as active memory', async () => {
+    const home = await createTempDir('cyrene-review-needs-rewrite-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-needs-rewrite-project-')
+    const candidate = createPending({
+      id: 'pending-implementation-note',
+      domain: 'project',
+      type: 'project_fact',
+      strength: 'soft',
+      content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+      normalizedKey: 'v1-admission-gate-subagent-worktree',
+      candidateKind: 'project_decision',
+      tags: ['project_harvest', 'project_decision']
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'needs_rewrite',
+      candidateId: candidate.id,
+      reason: 'Pending memory must be rewritten before it can become active memory.',
+      readiness: expect.objectContaining({
+        ready: false,
+        reasons: expect.arrayContaining(['implementation_note', 'needs_active_memory_rewrite'])
+      })
     })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)

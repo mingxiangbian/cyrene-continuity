@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createDefaultConfig } from '../config.js'
+import { evaluateActiveMemoryReadiness, type ActiveMemoryReadinessResult } from './active-memory-readiness.js'
 import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
@@ -44,6 +45,40 @@ export type CodexMemoryConflictResolution = MemoryConflictResolution
 
 export type CodexPendingMemoryRecommendation = 'promote' | 'reject' | 'defer'
 export type CodexPendingMemoryRisk = 'low' | 'medium' | 'high'
+export type CodexPendingReviewScore = 'low' | 'medium' | 'high'
+
+const READINESS_REASON_TEXT_LIMIT = 120
+
+export interface CodexPendingReadinessReason {
+  code: string
+  text: string
+}
+
+export interface CodexPendingReadinessReview {
+  status: ActiveMemoryReadinessResult['status']
+  targetShape: string
+  reasons: CodexPendingReadinessReason[]
+  rewriteHint: string
+}
+
+export interface CodexPendingEpisodeEvidence {
+  when: string
+  whatHappened: string
+  whyImportant: string
+  result: string
+  source: PendingMemory['source']
+}
+
+export interface CodexPendingProposedSemanticMemory {
+  type: CodexMemoryCandidateKind
+  scope: PendingMemory['scope']
+  content: string
+  useWhen: string[]
+  doNotUseWhen: string[]
+  evidenceStrength: CodexPendingReviewScore
+  futureUsefulness: CodexPendingReviewScore
+  expiry: string
+}
 
 export interface CodexNormalizedKeyConflict {
   id: string
@@ -64,6 +99,10 @@ export interface CodexPendingMemorySummary {
   candidateKind: CodexMemoryCandidateKind
   recommendation: CodexPendingMemoryRecommendation
   suggestedAction: string
+  activeReadiness: ActiveMemoryReadinessResult
+  readiness: CodexPendingReadinessReview
+  episodeEvidence: CodexPendingEpisodeEvidence
+  proposedSemanticMemory: CodexPendingProposedSemanticMemory
   risk: CodexPendingMemoryRisk
   sensitivity: number
   evidenceCount: number
@@ -108,6 +147,7 @@ export interface CodexPendingMemoryGetResult {
         action: 'get'
         candidate: PendingMemory
         reviewHash: string
+        review: CodexPendingMemorySummary
       }
     | {
         action: 'not_found'
@@ -152,6 +192,13 @@ export interface CodexPendingMemoryPromoteResult {
         reason: string
         conflicts: CodexNormalizedKeyConflict[]
         resolutionOptions: MemoryConflictResolution[]
+      }
+    | {
+        action: 'needs_rewrite'
+        candidateId: string
+        reason: string
+        readiness: ActiveMemoryReadinessResult
+        reviewHash: string
       }
     | {
         action: 'rejected_by_validator'
@@ -285,17 +332,30 @@ export function reviewHashForPendingMemory(candidate: PendingMemory): string {
 
 export function summarizePendingMemory(candidate: PendingMemory, now = new Date().toISOString()): CodexPendingMemorySummary {
   const reviewHash = reviewHashForPendingMemory(candidate)
-  const recommendation = deriveRecommendation(candidate, now)
+  const candidateKind = deriveMemoryCandidateKind(candidate)
+  const activeReadiness = evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind,
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  })
+  const recommendation = deriveRecommendation(candidate, now, activeReadiness)
+  const risk = deriveRisk(candidate)
   return {
     id: candidate.id,
     domain: candidate.domain,
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
-    candidateKind: deriveMemoryCandidateKind(candidate),
+    candidateKind,
     recommendation,
     suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
-    risk: deriveRisk(candidate),
+    activeReadiness,
+    readiness: deriveStructuredReadiness(candidate, candidateKind, activeReadiness),
+    episodeEvidence: deriveEpisodeEvidence(candidate, candidateKind, recommendation, activeReadiness.status, risk),
+    proposedSemanticMemory: deriveProposedSemanticMemory(candidate, candidateKind, activeReadiness),
+    risk,
     sensitivity: candidate.scores.sensitivity,
     evidenceCount: candidate.evidence.length,
     content: candidate.content,
@@ -315,9 +375,16 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
   }
 }
 
-function deriveRecommendation(candidate: PendingMemory, now: string): CodexPendingMemoryRecommendation {
+function deriveRecommendation(
+  candidate: PendingMemory,
+  now: string,
+  activeReadiness: ActiveMemoryReadinessResult
+): CodexPendingMemoryRecommendation {
   if (candidate.expiresAt <= now) {
     return 'reject'
+  }
+  if (!activeReadiness.ready) {
+    return 'defer'
   }
   const promotion = evaluatePendingPromotion(candidate, now)
   return promotion.promotable ? 'promote' : 'defer'
@@ -330,6 +397,164 @@ function deriveRisk(candidate: PendingMemory): CodexPendingMemoryRisk {
   if (candidate.scores.safety < 0.8 || candidate.scores.sensitivity > 0.45) {
     return 'medium'
   }
+  return 'low'
+}
+
+function deriveStructuredReadiness(
+  candidate: PendingMemory,
+  candidateKind: CodexMemoryCandidateKind,
+  activeReadiness: ActiveMemoryReadinessResult
+): CodexPendingReadinessReview {
+  return {
+    status: activeReadiness.status,
+    targetShape: deriveTargetShape(candidate, candidateKind, activeReadiness),
+    reasons: deriveReadinessReasons(candidate, candidateKind, activeReadiness),
+    rewriteHint: activeReadiness.rewriteHint
+  }
+}
+
+function deriveTargetShape(
+  candidate: PendingMemory,
+  candidateKind: CodexMemoryCandidateKind,
+  activeReadiness: ActiveMemoryReadinessResult
+): string {
+  if (!activeReadiness.ready && activeReadiness.suggestedShape === 'episode') return 'episode'
+  const scope = candidate.scope === 'global' ? 'global' : 'project'
+  if (candidateKind === 'known_pitfall') return `${scope}_known_pitfall`
+  if (candidateKind === 'workflow_rule') return `${scope}_workflow_rule`
+  if (candidateKind === 'project_decision') return `${scope}_project_decision`
+  if (activeReadiness.suggestedShape === 'project_policy' || candidate.type === 'system_policy') return `${scope}_policy`
+  if (candidate.type === 'episode') return 'episode'
+  return `${scope}_${candidate.type}`
+}
+
+function deriveReadinessReasons(
+  candidate: PendingMemory,
+  candidateKind: CodexMemoryCandidateKind,
+  activeReadiness: ActiveMemoryReadinessResult
+): CodexPendingReadinessReason[] {
+  if (!activeReadiness.ready) {
+    const blockerReasons = activeReadiness.reasons.map((code) => readinessReason(code, blockingReasonText(code)))
+    return blockerReasons.length > 0
+      ? blockerReasons
+      : [readinessReason('needs_active_memory_rewrite', blockingReasonText('needs_active_memory_rewrite'))]
+  }
+
+  const reasons = [
+    readinessReason('explicit_memory_kind', `Candidate is typed as ${candidateKind} for structured review.`),
+    readinessReason('scoped_for_review', `Candidate is scoped to ${candidate.scope} memory review.`)
+  ]
+  if (candidate.evidence.length > 0) {
+    reasons.push(readinessReason('has_review_evidence', 'Candidate includes review evidence for the proposed memory.'))
+  }
+  if (candidate.scores.usefulness >= 0.5) {
+    reasons.push(readinessReason('actionable_future_use', 'Candidate is likely useful for future project behavior or review.'))
+  }
+  return reasons.length > 0 ? reasons : [readinessReason('reviewable_candidate_shape', 'Candidate has no blocking active-memory rewrite signals.')]
+}
+
+function blockingReasonText(code: string): string {
+  if (code === 'implementation_note') {
+    return 'Implementation history should become an episode or reusable rule before promotion.'
+  }
+  if (code === 'raw_file_rule_excerpt') {
+    return 'Raw file-rule excerpts should name the source of truth instead of duplicating policy text.'
+  }
+  if (code === 'overbroad_workflow_rule') {
+    return 'Broad workflow rules need narrower applicability before promotion.'
+  }
+  if (code === 'needs_active_memory_rewrite') {
+    return 'Candidate needs rewriting before active-memory review.'
+  }
+  return 'Candidate has a readiness blocker that needs review.'
+}
+
+function readinessReason(code: string, text: string): CodexPendingReadinessReason {
+  return {
+    code,
+    text: truncateReason(text)
+  }
+}
+
+function truncateReason(text: string): string {
+  const normalized = text.trim().replace(/\s+/g, ' ')
+  if (normalized.length <= READINESS_REASON_TEXT_LIMIT) return normalized
+  return `${normalized.slice(0, READINESS_REASON_TEXT_LIMIT - 3)}...`
+}
+
+function deriveEpisodeEvidence(
+  candidate: PendingMemory,
+  candidateKind: CodexMemoryCandidateKind,
+  recommendation: CodexPendingMemoryRecommendation,
+  readinessStatus: ActiveMemoryReadinessResult['status'],
+  risk: CodexPendingMemoryRisk
+): CodexPendingEpisodeEvidence {
+  const evidence = candidate.evidence[0]
+  return {
+    when: candidate.lastSeenAt || candidate.firstSeenAt,
+    whatHappened: evidence?.summary || evidence?.quote || candidate.content,
+    whyImportant: deriveWhyImportant(candidateKind, readinessStatus),
+    result: `Recommended action: ${recommendation}; readiness: ${readinessStatus}; risk: ${risk}.`,
+    source: candidate.source
+  }
+}
+
+function deriveWhyImportant(candidateKind: CodexMemoryCandidateKind, readinessStatus: ActiveMemoryReadinessResult['status']): string {
+  if (readinessStatus === 'needs_rewrite') {
+    return 'The candidate should not enter active memory until it is reshaped for future use.'
+  }
+  if (candidateKind === 'known_pitfall') {
+    return 'Capturing the pitfall can prevent repeated project mistakes.'
+  }
+  if (candidateKind === 'workflow_rule') {
+    return 'The candidate may guide future project workflow.'
+  }
+  if (candidateKind === 'project_decision') {
+    return 'The candidate may preserve project context for future work.'
+  }
+  return 'The candidate may affect future memory review behavior.'
+}
+
+function deriveProposedSemanticMemory(
+  candidate: PendingMemory,
+  candidateKind: CodexMemoryCandidateKind,
+  activeReadiness: ActiveMemoryReadinessResult
+): CodexPendingProposedSemanticMemory {
+  return {
+    type: candidateKind,
+    scope: candidate.scope,
+    content: candidate.content,
+    useWhen: deriveUseWhen(candidateKind),
+    doNotUseWhen: deriveDoNotUseWhen(activeReadiness),
+    evidenceStrength: scoreLabel(candidate.scores.evidenceStrength),
+    futureUsefulness: scoreLabel(candidate.scores.usefulness),
+    expiry: candidate.expiresAt ?? 'none'
+  }
+}
+
+function deriveUseWhen(candidateKind: CodexMemoryCandidateKind): string[] {
+  if (candidateKind === 'known_pitfall') {
+    return ['Diagnosing similar project failures.', 'Modifying related memory or readiness behavior.']
+  }
+  if (candidateKind === 'workflow_rule') {
+    return ['Planning non-trivial project changes.', 'Reviewing future implementation workflow.']
+  }
+  if (candidateKind === 'project_decision') {
+    return ['Continuing related project work.', 'Checking whether this project context is still current.']
+  }
+  return ['Reviewing future project memory candidates.']
+}
+
+function deriveDoNotUseWhen(activeReadiness: ActiveMemoryReadinessResult): string[] {
+  if (!activeReadiness.ready) {
+    return ['Promoting directly to active memory without rewriting.', 'Reviewing unrelated UI or workflow issues.']
+  }
+  return ['The candidate is stale or contradicted by source files.', 'The future task is unrelated to this project scope.']
+}
+
+function scoreLabel(score: number): CodexPendingReviewScore {
+  if (score >= 0.75) return 'high'
+  if (score >= 0.45) return 'medium'
   return 'low'
 }
 
@@ -381,7 +606,8 @@ export async function getCodexPendingMemory(input: {
     result: {
       action: 'get',
       candidate,
-      reviewHash: reviewHashForPendingMemory(candidate)
+      reviewHash: reviewHashForPendingMemory(candidate),
+      review: summarizePendingMemory(candidate)
     }
   }
 }
@@ -503,6 +729,27 @@ export async function promoteCodexPendingMemory(input: {
           candidateId: lockedCandidate.id,
           reason: lockedDecision.reason,
           tombstone: lockedDecision.tombstone
+        }
+      }
+    }
+
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: lockedCandidate.content,
+      candidateKind: deriveMemoryCandidateKind(lockedCandidate),
+      domain: lockedCandidate.domain,
+      type: lockedCandidate.type,
+      tags: lockedCandidate.tags
+    })
+    if (!activeReadiness.ready) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: 'needs_rewrite',
+          candidateId: lockedCandidate.id,
+          reason: 'Pending memory must be rewritten before it can become active memory.',
+          readiness: activeReadiness,
+          reviewHash: lockedReviewHash
         }
       }
     }

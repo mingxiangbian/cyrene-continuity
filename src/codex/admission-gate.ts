@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { evaluateActiveMemoryReadiness } from './active-memory-readiness.js'
 import type {
   AdmissionDecision,
   AdmissionReason,
@@ -65,6 +66,7 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
 function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   const reasons: AdmissionReason[] = []
   const durableGuidance = isDurablePrescriptiveGuidance(draft)
+  const readiness = evaluateActiveMemoryReadiness(draft)
   if (draft.candidateKind === 'user_instruction' || draft.sourceKind === 'user_explicit') {
     reasons.push('explicit_user_instruction')
   }
@@ -92,6 +94,9 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   if (!durableGuidance && (draft.content.length < 24 || VAGUE_PATTERN.test(draft.content))) {
     reasons.push('too_vague')
   }
+  if (!readiness.ready) {
+    reasons.push(...readiness.reasons)
+  }
   return Array.from(new Set(reasons))
 }
 
@@ -112,7 +117,11 @@ function scoreOverridesForReasons(reasons: AdmissionReason[]): Partial<Admission
       reason === 'stale_numeric_snapshot' ||
       reason === 'low_future_usefulness' ||
       reason === 'low_actionability' ||
-      reason === 'too_vague'
+      reason === 'too_vague' ||
+      reason === 'implementation_note' ||
+      reason === 'raw_file_rule_excerpt' ||
+      reason === 'overbroad_workflow_rule' ||
+      reason === 'needs_active_memory_rewrite'
   )
   const valuable = reasons.some(
     (reason) =>
@@ -195,6 +204,7 @@ function admissionScoreFor(scores: AdmissionScores): number {
 
 function actionFor(draft: CandidateDraft, reasons: AdmissionReason[], score: number): AdmissionDecision['action'] {
   if (reasons.includes('explicit_user_instruction')) return 'admit_to_pending'
+  if (reasons.includes('needs_active_memory_rewrite')) return 'admit_to_distillation'
   if (
     reasons.includes('valuable_workflow_rule') ||
     reasons.includes('valuable_known_pitfall') ||

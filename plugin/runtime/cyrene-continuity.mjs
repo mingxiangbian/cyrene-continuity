@@ -13549,6 +13549,72 @@ function overlapScore(label, sourceValues, targetValues, weight, reason) {
 // src/codex/memory-review.ts
 import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 
+// src/codex/active-memory-readiness.ts
+var VERSION_OR_SESSION_PATTERN = /(?:\bv\d+(?:\.\d+)*\b|本轮|这次|当前|目前|刚刚|today|this round|current)/i;
+var IMPLEMENTATION_NOTE_PATTERN = /(?:核心实现|实现采用|采用.+执行方案|创建隔离工作区|created.+worktree|used.+workflow|implementation used)/i;
+var COMPLETED_IMPLEMENTATION_PATTERN = /(?:实现(?:了|\s+[A-Za-z0-9])|加固了|引入了|修复了|完成了|移除了|切换到|implemented|hardened|introduced|fixed|completed|removed|switched to)/i;
+var FILE_RULE_EXCERPT_PATTERN = /\b(?:AGENTS\.md|README\.md|CONTRIBUTING\.md|package\.json|tsconfig\.json)\b.*(?:中规定|定义|要求|states?|says?|requires?)/i;
+var SOURCE_OF_TRUTH_PATTERN = /(?:source of truth|source-of-truth|source_of_truth|事实来源|权威来源)/i;
+var OVERBROAD_EDIT_RULE_PATTERN = /(?:所有|每次|all|every).{0,16}(?:修改|更改|edits?|changes?).{0,32}(?:issue|task|任务|手术|surgical|trace|追溯)/i;
+var NON_TRIVIAL_QUALIFIER_PATTERN = /(?:non-trivial|非琐碎|非平凡|非简单|代码\/架构|code or architecture)/i;
+function evaluateActiveMemoryReadiness(input) {
+  const reasons = [];
+  if (isImplementationNote(input)) {
+    reasons.push("implementation_note");
+  }
+  if (isRawFileRuleExcerpt(input)) {
+    reasons.push("raw_file_rule_excerpt");
+  }
+  if (isOverbroadWorkflowRule(input)) {
+    reasons.push("overbroad_workflow_rule");
+  }
+  if (reasons.length > 0) {
+    reasons.push("needs_active_memory_rewrite");
+  }
+  const uniqueReasons = Array.from(new Set(reasons));
+  return {
+    ready: uniqueReasons.length === 0,
+    status: uniqueReasons.length === 0 ? "ready" : "needs_rewrite",
+    reasons: uniqueReasons,
+    suggestedShape: suggestedShapeForReasons(uniqueReasons),
+    rewriteHint: rewriteHintForReasons(uniqueReasons)
+  };
+}
+function isImplementationNote(input) {
+  const kind = input.candidateKind;
+  const projectLike = kind === "project_fact" || kind === "project_decision" || input.domain === "project";
+  return projectLike && (VERSION_OR_SESSION_PATTERN.test(input.content) && IMPLEMENTATION_NOTE_PATTERN.test(input.content) || COMPLETED_IMPLEMENTATION_PATTERN.test(input.content));
+}
+function isRawFileRuleExcerpt(input) {
+  return FILE_RULE_EXCERPT_PATTERN.test(input.content) && !SOURCE_OF_TRUTH_PATTERN.test(input.content);
+}
+function isOverbroadWorkflowRule(input) {
+  const workflowLike = input.candidateKind === "workflow_rule" || input.type === "procedural_rule";
+  return workflowLike && OVERBROAD_EDIT_RULE_PATTERN.test(input.content) && !NON_TRIVIAL_QUALIFIER_PATTERN.test(input.content);
+}
+function suggestedShapeForReasons(reasons) {
+  if (reasons.includes("implementation_note")) return "episode";
+  if (reasons.includes("raw_file_rule_excerpt")) return "project_policy";
+  if (reasons.includes("overbroad_workflow_rule")) return "workflow_rule";
+  return "active_memory";
+}
+function rewriteHintForReasons(reasons) {
+  if (reasons.length === 0) {
+    return "Candidate is already shaped for active memory review.";
+  }
+  const hints = [];
+  if (reasons.includes("implementation_note")) {
+    hints.push("Convert implementation history into an episode, or extract only the reusable rule with applicability and rationale.");
+  }
+  if (reasons.includes("raw_file_rule_excerpt")) {
+    hints.push("Rewrite file excerpts as behavioral guidance and name the source of truth instead of duplicating raw policy text.");
+  }
+  if (reasons.includes("overbroad_workflow_rule")) {
+    hints.push("Constrain broad workflow rules to non-trivial code or architecture changes and avoid absolute all/every wording.");
+  }
+  return hints.join(" ");
+}
+
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { lstat as lstat10, mkdir as mkdir8, readFile as readFile10, rm as rm2, writeFile as writeFile6 } from "node:fs/promises";
@@ -13875,8 +13941,8 @@ function cleanEvidencePart(value) {
   const trimmed = value?.trim();
   return trimmed === void 0 || trimmed === "" ? void 0 : trimmed;
 }
-function pendingResult(reason, distinctEvidenceCount2) {
-  return { promotable: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
+function pendingResult(reason, distinctEvidenceCount3) {
+  return { promotable: false, reason, distinctEvidenceCount: distinctEvidenceCount3 };
 }
 function promotionThreshold(candidate) {
   if (candidate.domain === "personal" || candidate.domain === "relationship") {
@@ -15212,6 +15278,7 @@ var MEMORY_CANDIDATE_KINDS2 = [
 var MEMORY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
 
 // src/codex/memory-review.ts
+var READINESS_REASON_TEXT_LIMIT = 120;
 var NORMALIZED_KEY_CONFLICT_RESOLUTIONS = [...MEMORY_CONFLICT_RESOLUTIONS];
 function reviewHashForPendingMemory(candidate) {
   const payload = {
@@ -15259,17 +15326,30 @@ function reviewHashForPendingMemory(candidate) {
 }
 function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).toISOString()) {
   const reviewHash = reviewHashForPendingMemory(candidate);
-  const recommendation = deriveRecommendation(candidate, now);
+  const candidateKind = deriveMemoryCandidateKind(candidate);
+  const activeReadiness = evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind,
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  });
+  const recommendation = deriveRecommendation(candidate, now, activeReadiness);
+  const risk = deriveRisk(candidate);
   return {
     id: candidate.id,
     domain: candidate.domain,
     type: candidate.type,
     strength: candidate.strength,
     scope: candidate.scope,
-    candidateKind: deriveMemoryCandidateKind(candidate),
+    candidateKind,
     recommendation,
     suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
-    risk: deriveRisk(candidate),
+    activeReadiness,
+    readiness: deriveStructuredReadiness(candidate, candidateKind, activeReadiness),
+    episodeEvidence: deriveEpisodeEvidence(candidate, candidateKind, recommendation, activeReadiness.status, risk),
+    proposedSemanticMemory: deriveProposedSemanticMemory(candidate, candidateKind, activeReadiness),
+    risk,
     sensitivity: candidate.scores.sensitivity,
     evidenceCount: candidate.evidence.length,
     content: candidate.content,
@@ -15286,9 +15366,12 @@ function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).to
     scores: candidate.scores
   };
 }
-function deriveRecommendation(candidate, now) {
+function deriveRecommendation(candidate, now, activeReadiness) {
   if (candidate.expiresAt <= now) {
     return "reject";
+  }
+  if (!activeReadiness.ready) {
+    return "defer";
   }
   const promotion = evaluatePendingPromotion(candidate, now);
   return promotion.promotable ? "promote" : "defer";
@@ -15300,6 +15383,127 @@ function deriveRisk(candidate) {
   if (candidate.scores.safety < 0.8 || candidate.scores.sensitivity > 0.45) {
     return "medium";
   }
+  return "low";
+}
+function deriveStructuredReadiness(candidate, candidateKind, activeReadiness) {
+  return {
+    status: activeReadiness.status,
+    targetShape: deriveTargetShape(candidate, candidateKind, activeReadiness),
+    reasons: deriveReadinessReasons(candidate, candidateKind, activeReadiness),
+    rewriteHint: activeReadiness.rewriteHint
+  };
+}
+function deriveTargetShape(candidate, candidateKind, activeReadiness) {
+  if (!activeReadiness.ready && activeReadiness.suggestedShape === "episode") return "episode";
+  const scope = candidate.scope === "global" ? "global" : "project";
+  if (candidateKind === "known_pitfall") return `${scope}_known_pitfall`;
+  if (candidateKind === "workflow_rule") return `${scope}_workflow_rule`;
+  if (candidateKind === "project_decision") return `${scope}_project_decision`;
+  if (activeReadiness.suggestedShape === "project_policy" || candidate.type === "system_policy") return `${scope}_policy`;
+  if (candidate.type === "episode") return "episode";
+  return `${scope}_${candidate.type}`;
+}
+function deriveReadinessReasons(candidate, candidateKind, activeReadiness) {
+  if (!activeReadiness.ready) {
+    const blockerReasons = activeReadiness.reasons.map((code) => readinessReason(code, blockingReasonText(code)));
+    return blockerReasons.length > 0 ? blockerReasons : [readinessReason("needs_active_memory_rewrite", blockingReasonText("needs_active_memory_rewrite"))];
+  }
+  const reasons = [
+    readinessReason("explicit_memory_kind", `Candidate is typed as ${candidateKind} for structured review.`),
+    readinessReason("scoped_for_review", `Candidate is scoped to ${candidate.scope} memory review.`)
+  ];
+  if (candidate.evidence.length > 0) {
+    reasons.push(readinessReason("has_review_evidence", "Candidate includes review evidence for the proposed memory."));
+  }
+  if (candidate.scores.usefulness >= 0.5) {
+    reasons.push(readinessReason("actionable_future_use", "Candidate is likely useful for future project behavior or review."));
+  }
+  return reasons.length > 0 ? reasons : [readinessReason("reviewable_candidate_shape", "Candidate has no blocking active-memory rewrite signals.")];
+}
+function blockingReasonText(code) {
+  if (code === "implementation_note") {
+    return "Implementation history should become an episode or reusable rule before promotion.";
+  }
+  if (code === "raw_file_rule_excerpt") {
+    return "Raw file-rule excerpts should name the source of truth instead of duplicating policy text.";
+  }
+  if (code === "overbroad_workflow_rule") {
+    return "Broad workflow rules need narrower applicability before promotion.";
+  }
+  if (code === "needs_active_memory_rewrite") {
+    return "Candidate needs rewriting before active-memory review.";
+  }
+  return "Candidate has a readiness blocker that needs review.";
+}
+function readinessReason(code, text) {
+  return {
+    code,
+    text: truncateReason(text)
+  };
+}
+function truncateReason(text) {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (normalized.length <= READINESS_REASON_TEXT_LIMIT) return normalized;
+  return `${normalized.slice(0, READINESS_REASON_TEXT_LIMIT - 3)}...`;
+}
+function deriveEpisodeEvidence(candidate, candidateKind, recommendation, readinessStatus, risk) {
+  const evidence = candidate.evidence[0];
+  return {
+    when: candidate.lastSeenAt || candidate.firstSeenAt,
+    whatHappened: evidence?.summary || evidence?.quote || candidate.content,
+    whyImportant: deriveWhyImportant(candidateKind, readinessStatus),
+    result: `Recommended action: ${recommendation}; readiness: ${readinessStatus}; risk: ${risk}.`,
+    source: candidate.source
+  };
+}
+function deriveWhyImportant(candidateKind, readinessStatus) {
+  if (readinessStatus === "needs_rewrite") {
+    return "The candidate should not enter active memory until it is reshaped for future use.";
+  }
+  if (candidateKind === "known_pitfall") {
+    return "Capturing the pitfall can prevent repeated project mistakes.";
+  }
+  if (candidateKind === "workflow_rule") {
+    return "The candidate may guide future project workflow.";
+  }
+  if (candidateKind === "project_decision") {
+    return "The candidate may preserve project context for future work.";
+  }
+  return "The candidate may affect future memory review behavior.";
+}
+function deriveProposedSemanticMemory(candidate, candidateKind, activeReadiness) {
+  return {
+    type: candidateKind,
+    scope: candidate.scope,
+    content: candidate.content,
+    useWhen: deriveUseWhen(candidateKind),
+    doNotUseWhen: deriveDoNotUseWhen(activeReadiness),
+    evidenceStrength: scoreLabel(candidate.scores.evidenceStrength),
+    futureUsefulness: scoreLabel(candidate.scores.usefulness),
+    expiry: candidate.expiresAt ?? "none"
+  };
+}
+function deriveUseWhen(candidateKind) {
+  if (candidateKind === "known_pitfall") {
+    return ["Diagnosing similar project failures.", "Modifying related memory or readiness behavior."];
+  }
+  if (candidateKind === "workflow_rule") {
+    return ["Planning non-trivial project changes.", "Reviewing future implementation workflow."];
+  }
+  if (candidateKind === "project_decision") {
+    return ["Continuing related project work.", "Checking whether this project context is still current."];
+  }
+  return ["Reviewing future project memory candidates."];
+}
+function deriveDoNotUseWhen(activeReadiness) {
+  if (!activeReadiness.ready) {
+    return ["Promoting directly to active memory without rewriting.", "Reviewing unrelated UI or workflow issues."];
+  }
+  return ["The candidate is stale or contradicted by source files.", "The future task is unrelated to this project scope."];
+}
+function scoreLabel(score) {
+  if (score >= 0.75) return "high";
+  if (score >= 0.45) return "medium";
   return "low";
 }
 function suggestedReviewAction(candidateId, reviewHash, recommendation) {
@@ -15335,7 +15539,8 @@ async function getCodexPendingMemory(input) {
     result: {
       action: "get",
       candidate,
-      reviewHash: reviewHashForPendingMemory(candidate)
+      reviewHash: reviewHashForPendingMemory(candidate),
+      review: summarizePendingMemory(candidate)
     }
   };
 }
@@ -15442,6 +15647,26 @@ async function promoteCodexPendingMemory(input) {
           candidateId: lockedCandidate.id,
           reason: lockedDecision.reason,
           tombstone: lockedDecision.tombstone
+        }
+      };
+    }
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: lockedCandidate.content,
+      candidateKind: deriveMemoryCandidateKind(lockedCandidate),
+      domain: lockedCandidate.domain,
+      type: lockedCandidate.type,
+      tags: lockedCandidate.tags
+    });
+    if (!activeReadiness.ready) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "needs_rewrite",
+          candidateId: lockedCandidate.id,
+          reason: "Pending memory must be rewritten before it can become active memory.",
+          readiness: activeReadiness,
+          reviewHash: lockedReviewHash
         }
       };
     }
@@ -16825,6 +17050,7 @@ function evaluateCandidateAdmission(input) {
 function reasonsForDraft(draft) {
   const reasons = [];
   const durableGuidance = isDurablePrescriptiveGuidance(draft);
+  const readiness = evaluateActiveMemoryReadiness(draft);
   if (draft.candidateKind === "user_instruction" || draft.sourceKind === "user_explicit") {
     reasons.push("explicit_user_instruction");
   }
@@ -16852,6 +17078,9 @@ function reasonsForDraft(draft) {
   if (!durableGuidance && (draft.content.length < 24 || VAGUE_PATTERN.test(draft.content))) {
     reasons.push("too_vague");
   }
+  if (!readiness.ready) {
+    reasons.push(...readiness.reasons);
+  }
   return Array.from(new Set(reasons));
 }
 function isDurablePrescriptiveGuidance(draft) {
@@ -16860,7 +17089,7 @@ function isDurablePrescriptiveGuidance(draft) {
 }
 function scoreOverridesForReasons(reasons) {
   const noisy = reasons.some(
-    (reason) => reason === "one_time_action" || reason === "temporary_status" || reason === "stale_numeric_snapshot" || reason === "low_future_usefulness" || reason === "low_actionability" || reason === "too_vague"
+    (reason) => reason === "one_time_action" || reason === "temporary_status" || reason === "stale_numeric_snapshot" || reason === "low_future_usefulness" || reason === "low_actionability" || reason === "too_vague" || reason === "implementation_note" || reason === "raw_file_rule_excerpt" || reason === "overbroad_workflow_rule" || reason === "needs_active_memory_rewrite"
   );
   const valuable = reasons.some(
     (reason) => reason === "valuable_project_decision" || reason === "valuable_workflow_rule" || reason === "valuable_known_pitfall" || reason === "valuable_rejected_approach" || reason === "explicit_user_instruction"
@@ -16927,6 +17156,7 @@ function admissionScoreFor(scores) {
 }
 function actionFor(draft, reasons, score) {
   if (reasons.includes("explicit_user_instruction")) return "admit_to_pending";
+  if (reasons.includes("needs_active_memory_rewrite")) return "admit_to_distillation";
   if (reasons.includes("valuable_workflow_rule") || reasons.includes("valuable_known_pitfall") || reasons.includes("valuable_rejected_approach") || reasons.includes("valuable_project_decision")) {
     return score >= 0.5 ? "admit_to_pending" : "admit_to_distillation";
   }
@@ -17096,8 +17326,8 @@ function rankPendingForEviction(pending, now) {
     };
   }).sort((left, right) => left.score - right.score || left.candidateId.localeCompare(right.candidateId));
 }
-function denied(reason, distinctEvidenceCount2) {
-  return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
+function denied(reason, distinctEvidenceCount3) {
+  return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount3 };
 }
 function candidateIdsForDecisions(decisions) {
   const ids = /* @__PURE__ */ new Set();
@@ -17238,6 +17468,13 @@ async function proposeCodexMemoryCandidate(input) {
     const promotionScope = mergedCandidate.scope === "global" ? "global" : "project";
     const promotionsUsedToday = countAutoPromotionsForDay(events, now);
     const dailyCap = promotionScope === "global" ? config2.memoryAutoReviewGlobalPromotePerDay : config2.memoryAutoReviewProjectPromotePerDay;
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: mergedCandidate.content,
+      candidateKind: deriveMemoryCandidateKind(mergedCandidate),
+      domain: mergedCandidate.domain,
+      type: mergedCandidate.type,
+      tags: mergedCandidate.tags
+    });
     const autoPromotion = evaluateAutoPromotionPolicy({
       candidate: mergedCandidate,
       scope: promotionScope,
@@ -17256,7 +17493,7 @@ async function proposeCodexMemoryCandidate(input) {
       usedToday: promotionsUsedToday,
       dailyCap
     }) : void 0;
-    if (autoPromotion.allowed && autoPromotionEval?.passed === true && input.allowAutoPromote !== false) {
+    if (autoPromotion.allowed && autoPromotionEval?.passed === true && activeReadiness.ready && input.allowAutoPromote !== false) {
       const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now);
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
@@ -17320,7 +17557,21 @@ async function proposeCodexMemoryCandidate(input) {
       });
     }
     await markDreamDueFailOpen(lockedMemoryRoot, now);
-    const reason = decision2.action === "auto_write" ? input.allowAutoPromote === false ? `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.` : autoPromotion.allowed && autoPromotionEval?.passed === false ? `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.` : `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.` : decision2.reason;
+    const activeReadinessReason = `Active-readiness requires rewrite before auto-promotion: ${activeReadiness.reasons.join(", ")}; pending for manual review.`;
+    let reason = decision2.reason;
+    if (decision2.action === "auto_write") {
+      if (input.allowAutoPromote === false) {
+        reason = `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.`;
+      } else if (!activeReadiness.ready) {
+        reason = activeReadinessReason;
+      } else if (autoPromotion.allowed && autoPromotionEval?.passed === false) {
+        reason = `Auto-promotion denied by eval gate: ${autoPromotionEval.failedChecks.join(", ")}; pending for manual review.`;
+      } else {
+        reason = `Auto-promotion denied by v5 policy: ${autoPromotion.reason}; pending for manual review.`;
+      }
+    } else if (!activeReadiness.ready && autoPromotion.allowed && autoPromotionEval?.passed === true) {
+      reason = activeReadinessReason;
+    }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
       id: randomUUID8(),
       action: "pending",
@@ -21059,6 +21310,9 @@ function writeResultToApi(reviewResult, action, reviewHash, now) {
   if (result2.action === "rejected_by_validator") {
     return failure(400, "rejected_by_validator", result2.reason, { result: result2 });
   }
+  if (result2.action === "needs_rewrite") {
+    return failure(400, "needs_rewrite", result2.reason, { result: result2 });
+  }
   const summary = summaryForWriteResult(action, result2.action);
   const receipt = writeReceipt(action, result2.candidateId, reviewHash, summary, now);
   if (result2.action === "promote") return ok({ receipt, memory: result2.memory });
@@ -21989,6 +22243,12 @@ function renderInbox() {
 
 function renderCandidateRow(candidate) {
   const selected = state.selectedPendingId === candidate.id
+  const readiness = candidate.readiness || candidate.activeReadiness || {}
+  const readinessStatus = readiness.status || (readiness.ready === false ? 'needs_rewrite' : 'ready')
+  const targetShape = readiness.targetShape || readiness.suggestedShape || 'review'
+  const readinessLabel = readinessStatus === 'needs_rewrite'
+    ? \`needs rewrite \xB7 \${targetShape}\`
+    : \`\${readinessStatus} \xB7 \${targetShape}\`
   return \`
     <article class="data-row candidate-row selectable-row \${selected ? 'selected' : ''}" data-pending-id="\${escapeHtml(candidate.id)}">
       <div>
@@ -21996,9 +22256,14 @@ function renderCandidateRow(candidate) {
         <div class="row-meta">
           \${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
           \${candidate.reviewHash ? \` \xB7 review \${escapeHtml(shortHash(candidate.reviewHash))}\` : ''}
+          \xB7 target \${escapeHtml(targetShape)}
         </div>
       </div>
-      \${statusChip(candidate.recommendation || 'review', candidate.risk || 'pending', candidate.risk === 'high' ? 'error' : 'warn')}
+      <div class="row-actions">
+        \${statusChip('Readiness', readinessLabel, readinessTone(readinessStatus))}
+        \${statusChip('Action', candidate.recommendation || 'review', recommendationTone(candidate.recommendation))}
+        \${statusChip('Risk', candidate.risk || 'pending', riskTone(candidate.risk))}
+      </div>
     </article>
   \`
 }
@@ -22618,6 +22883,11 @@ function renderPendingDetail(candidate) {
         <h3>Pending detail</h3>
         <p>\${escapeHtml(candidate.content)}</p>
         <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
+        <div class="soft-inset rail-item"><strong>Recommended action</strong><span>\${escapeHtml(candidate.recommendation || 'review')}</span></div>
+        <div class="soft-inset rail-item"><strong>Priority / Risk</strong><span>\${escapeHtml(candidate.risk || 'pending')}</span></div>
+        \${renderReadinessReview(candidate.readiness, candidate.activeReadiness)}
+        \${renderEpisodeEvidence(candidate.episodeEvidence)}
+        \${renderProposedSemanticMemory(candidate.proposedSemanticMemory)}
       </div>
       <div class="soft-panel">
         <h3>Actions</h3>
@@ -22631,6 +22901,125 @@ function renderPendingDetail(candidate) {
       </div>
     </div>
   \`
+}
+
+function renderReadinessReview(readiness, activeReadiness) {
+  const review = readiness || activeReadiness
+  if (!review) return ''
+  const status = review.status || (review.ready === false ? 'needs_rewrite' : 'ready')
+  const targetShape = review.targetShape || review.suggestedShape || 'active_memory'
+  const reasons = readinessReasonItems(review, activeReadiness)
+  return \`
+    <div class="soft-inset rail-item">
+      <strong>Readiness</strong>
+      <span>\${escapeHtml(status)}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Target shape</strong>
+      <span>\${escapeHtml(targetShape)}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Reasons</strong>
+      <span>\${escapeHtml(reasons.map(formatReadinessReason).join(' \xB7 '))}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Rewrite hint</strong>
+      <span>\${escapeHtml(review.rewriteHint || activeReadiness?.rewriteHint || 'No rewrite needed.')}</span>
+    </div>
+  \`
+}
+
+function readinessReasonItems(readiness, activeReadiness) {
+  if (Array.isArray(readiness?.reasons) && readiness.reasons.length > 0) {
+    return readiness.reasons.map((reason) => {
+      if (typeof reason === 'string') return { code: reason, text: reason }
+      return {
+        code: reason.code || 'review_reason',
+        text: reason.text || reason.code || 'Review reason present.'
+      }
+    })
+  }
+  if (Array.isArray(activeReadiness?.reasons) && activeReadiness.reasons.length > 0) {
+    return activeReadiness.reasons.map((reason) => ({ code: reason, text: reason }))
+  }
+  return [{ code: 'reviewable_candidate_shape', text: 'Candidate has no blocking active-memory rewrite signals.' }]
+}
+
+function formatReadinessReason(reason) {
+  return reason.code === reason.text
+    ? reason.text
+    : \`\${reason.code}: \${reason.text}\`
+}
+
+function renderEpisodeEvidence(evidence) {
+  if (!evidence) return ''
+  return \`
+    <h3>Episode Evidence</h3>
+    <div class="soft-inset rail-item">
+      <strong>When</strong>
+      <span>\${escapeHtml(evidence.when || 'unknown')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>What happened</strong>
+      <span>\${escapeHtml(evidence.whatHappened || 'No event summary available.')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Why important</strong>
+      <span>\${escapeHtml(evidence.whyImportant || 'No importance summary available.')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Result</strong>
+      <span>\${escapeHtml(evidence.result || 'No result summary available.')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Source</strong>
+      <span>\${escapeHtml(evidence.source || 'unknown')}</span>
+    </div>
+  \`
+}
+
+function renderProposedSemanticMemory(memory) {
+  if (!memory) return ''
+  return \`
+    <h3>Proposed Semantic Memory</h3>
+    <div class="soft-inset rail-item">
+      <strong>Type</strong>
+      <span>\${escapeHtml(memory.type || 'memory')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Scope</strong>
+      <span>\${escapeHtml(memory.scope || 'project')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Content</strong>
+      <span>\${escapeHtml(memory.content || '')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Use when</strong>
+      <span>\${escapeHtml(formatValueList(memory.useWhen))}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Do not use when</strong>
+      <span>\${escapeHtml(formatValueList(memory.doNotUseWhen))}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Evidence strength</strong>
+      <span>\${escapeHtml(memory.evidenceStrength || 'unknown')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Future usefulness</strong>
+      <span>\${escapeHtml(memory.futureUsefulness || 'unknown')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Expiry</strong>
+      <span>\${escapeHtml(memory.expiry || 'none')}</span>
+    </div>
+  \`
+}
+
+function formatValueList(value) {
+  if (!Array.isArray(value) || value.length === 0) return 'none'
+  return value.join(' \xB7 ')
 }
 
 function renderConfirmForm(candidate, action) {
@@ -22930,6 +23319,26 @@ function renderTimelineDiagnostic() {
 
 function statusChip(label, value, tone) {
   return \`<span class="status-chip \${escapeHtml(tone || 'muted')}"><b>\${escapeHtml(label)}</b>\${escapeHtml(value)}</span>\`
+}
+
+function readinessTone(status) {
+  if (status === 'ready') return 'ok'
+  if (status === 'needs_rewrite') return 'warn'
+  return 'muted'
+}
+
+function recommendationTone(recommendation) {
+  if (recommendation === 'promote') return 'ok'
+  if (recommendation === 'reject') return 'error'
+  if (recommendation === 'defer') return 'warn'
+  return 'muted'
+}
+
+function riskTone(risk) {
+  if (risk === 'high') return 'error'
+  if (risk === 'medium') return 'warn'
+  if (risk === 'low') return 'muted'
+  return 'warn'
 }
 
 function scopeLabel(scope) {
@@ -23270,6 +23679,17 @@ async function formatCodexMemoryReview(input) {
       `  scope: ${item.scope}`,
       `  domain: ${item.domain}`,
       `  candidate kind: ${item.candidateKind}`,
+      `  readiness: ${item.readiness.status}`,
+      `  target shape: ${item.readiness.targetShape}`,
+      `  readiness reasons: ${formatReadinessReasons(item.readiness.reasons)}`,
+      `  rewrite hint: ${item.readiness.rewriteHint}`,
+      `  episode evidence: ${item.episodeEvidence.whatHappened}`,
+      `  episode importance: ${item.episodeEvidence.whyImportant}`,
+      `  proposed memory: ${item.proposedSemanticMemory.type}/${item.proposedSemanticMemory.scope}`,
+      `  use when: ${item.proposedSemanticMemory.useWhen.join("; ")}`,
+      `  do not use when: ${item.proposedSemanticMemory.doNotUseWhen.join("; ")}`,
+      `  evidence strength: ${item.proposedSemanticMemory.evidenceStrength}`,
+      `  future usefulness: ${item.proposedSemanticMemory.futureUsefulness}`,
       `  content: ${item.content}`,
       `  evidence count: ${item.evidenceCount}`,
       `  risk: ${item.risk}`,
@@ -23280,6 +23700,12 @@ async function formatCodexMemoryReview(input) {
   }
   return `${lines2.join("\n")}
 `;
+}
+function formatReadinessReasons(reasons) {
+  if (reasons.length === 0) {
+    return "reviewable_candidate_shape: Candidate has no blocking active-memory rewrite signals.";
+  }
+  return reasons.map((reason) => `${reason.code}: ${reason.text}`).join("; ");
 }
 async function runCodexMemoryApprove(input) {
   return `${JSON.stringify(await promoteCodexPendingMemory(input), null, 2)}
@@ -23498,6 +23924,31 @@ async function buildDreamProposalForRoot(input) {
       summary.reject += 1;
       continue;
     }
+    const activeReadiness = evaluateActiveMemoryReadiness({
+      content: candidate.content,
+      candidateKind: deriveMemoryCandidateKind(candidate),
+      domain: candidate.domain,
+      type: candidate.type,
+      tags: candidate.tags
+    });
+    if (!activeReadiness.ready) {
+      const reason = `Active-readiness requires rewrite before promotion: ${activeReadiness.reasons.join(", ")}`;
+      proposedChanges.push({
+        action: "keep_pending",
+        candidateId: candidate.id,
+        normalizedKey: candidate.normalizedKey,
+        reason,
+        distinctEvidenceCount: distinctEvidenceCount2(candidate)
+      });
+      applyPlan.push({
+        action: "keep_pending",
+        candidate,
+        reason
+      });
+      diff.keepPendingCandidateIds.push(candidate.id);
+      summary.keepPending += 1;
+      continue;
+    }
     const evaluation = evaluatePendingPromotion(candidate, input.now);
     if (!evaluation.promotable) {
       proposedChanges.push({
@@ -23596,6 +24047,11 @@ function tombstoneForExpiredPending(candidate, now) {
     createdAt: now,
     evidence: candidate.evidence
   };
+}
+function distinctEvidenceCount2(candidate) {
+  return new Set(
+    candidate.evidence.map((item) => item.evidenceGroupId ?? item.runId ?? item.sessionId ?? item.summary)
+  ).size;
 }
 function isFileErrorCode13(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;

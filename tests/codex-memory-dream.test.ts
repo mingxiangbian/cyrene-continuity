@@ -344,6 +344,37 @@ describe('Codex memory dream runtime', () => {
     await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('keeps implementation notes pending for rewrite instead of recommending promotion', async () => {
+    const home = await createTempDir('cyrene-dream-rewrite-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-dream-rewrite-project-')
+    const candidate = createPending({
+      domain: 'project',
+      type: 'project_fact',
+      candidateKind: 'project_decision',
+      content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+      normalizedKey: 'v1-admission-gate-subagent-worktree',
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', evidenceGroupId: 'group-1', summary: 'First.' },
+        { runId: 'run-2', evidenceGroupId: 'group-2', summary: 'Second.' }
+      ]
+    })
+    const memoryRoot = await seedProjectPending(cwd, [candidate])
+
+    const proposal = await buildDreamProposalForRoot({ memoryRoot, now: '2026-05-26T00:00:00.000Z' })
+
+    expect(proposal.summary).toMatchObject({ recommendedPromotions: 0, keepPending: 1 })
+    expect(proposal.proposedChanges[0]).toMatchObject({
+      action: 'keep_pending',
+      candidateId: candidate.id,
+      normalizedKey: candidate.normalizedKey,
+      reason: expect.stringContaining('Active-readiness requires rewrite before promotion')
+    })
+    expect(proposal.diff.recommendActiveMemoryIds).toEqual([])
+    expect(proposal.diff.keepPendingCandidateIds).toEqual([candidate.id])
+  })
+
   it('deep-preview writes review artifacts without mutating memory source files or dream state', async () => {
     const home = await createTempDir('cyrene-dream-home-')
     vi.stubEnv('HOME', home)

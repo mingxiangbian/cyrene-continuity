@@ -232,9 +232,22 @@ describe('handleCodexUiApiRequest', () => {
     expect(result.status).toBe(200)
     expect(result.body.ok).toBe(true)
     if (result.body.ok) {
-      const data = result.body.data as { pending: Array<{ id: string; reviewHash: string }> }
+      const data = result.body.data as {
+        pending: Array<{
+          id: string
+          reviewHash: string
+          readiness: { status: string; reasons: Array<{ code: string; text: string }> }
+          episodeEvidence: { when: string; whatHappened: string }
+          proposedSemanticMemory: { type: string; useWhen: string[] }
+        }>
+      }
       expect(data.pending[0]).toMatchObject({ id: 'pending-1' })
       expect(data.pending[0].reviewHash).toMatch(/^[a-f0-9]{64}$/)
+      expect(data.pending[0].readiness.status).toBe('ready')
+      expect(data.pending[0].readiness.reasons.length).toBeGreaterThan(0)
+      expect(data.pending[0].readiness.reasons.every((reason) => reason.text.length <= 120)).toBe(true)
+      expect(data.pending[0].episodeEvidence.whatHappened).not.toBe('')
+      expect(data.pending[0].proposedSemanticMemory.useWhen.length).toBeGreaterThan(0)
     }
   })
 
