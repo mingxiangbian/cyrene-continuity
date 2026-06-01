@@ -12,7 +12,8 @@ import {
   listCodexPendingMemories,
   promoteCodexPendingMemory,
   rejectCodexPendingMemory,
-  reviewHashForPendingMemory
+  reviewHashForPendingMemory,
+  summarizePendingMemory
 } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { renderMemoryProjectionsFromRoot } from '../src/memory/memory-exporter.js'
@@ -213,6 +214,70 @@ describe('Codex pending memory review', () => {
     expect(pending?.episodeEvidence.whyImportant).not.toBe('')
     expect(pending?.proposedSemanticMemory.useWhen.length).toBeGreaterThan(0)
     expect(pending?.proposedSemanticMemory.doNotUseWhen.length).toBeGreaterThan(0)
+  })
+
+  it('exposes structured semantic review fields for pending workflow rules', () => {
+    const candidate = createPending({
+      id: 'structured-workflow-rule',
+      candidateKind: 'workflow_rule',
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', summary: 'First workflow evidence.' },
+        { runId: 'run-2', summary: 'Second workflow evidence.' }
+      ]
+    })
+
+    const summary = summarizePendingMemory(candidate)
+
+    expect(summary.semanticMemory).toMatchObject({
+      module: 'procedural',
+      reviewPolicy: 'pending_review',
+      sourceOfTruth: candidate.normalizedKey,
+      routing: {
+        updatePolicy: 'pending_review'
+      }
+    })
+    expect(summary.semanticMemory.evidence).toEqual([
+      expect.objectContaining({ sourceRef: candidate.normalizedKey }),
+      expect.objectContaining({ sourceRef: candidate.normalizedKey })
+    ])
+    expect(summary.readiness.reasons.map((reason) => reason.code)).not.toContain('none')
+  })
+
+  it('defers pending review when structured evidence is missing', () => {
+    const candidate = createPending({
+      id: 'missing-structured-evidence',
+      seenCount: 2,
+      evidence: []
+    })
+
+    const summary = summarizePendingMemory(candidate)
+
+    expect(summary.recommendation).toBe('defer')
+    expect(summary.semanticMemory.evidence).toEqual([])
+    expect(summary.readiness.reasons).toEqual([
+      expect.objectContaining({ code: 'missing_structured_evidence' })
+    ])
+  })
+
+  it('defers pending review when source of truth is missing', () => {
+    const candidate = createPending({
+      id: 'missing-source-of-truth',
+      normalizedKey: '   ',
+      seenCount: 2,
+      evidence: [
+        { runId: 'run-1', summary: 'First workflow evidence.' },
+        { runId: 'run-2', summary: 'Second workflow evidence.' }
+      ]
+    })
+
+    const summary = summarizePendingMemory(candidate)
+
+    expect(summary.recommendation).toBe('defer')
+    expect(summary.semanticMemory.sourceOfTruth).toBe('')
+    expect(summary.readiness.reasons).toEqual([
+      expect.objectContaining({ code: 'missing_source_of_truth' })
+    ])
   })
 
   it('summarizes active-memory readiness for pending rewrite candidates', async () => {

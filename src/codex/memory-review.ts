@@ -56,6 +56,11 @@ export interface CodexPendingReadinessReason {
   text: string
 }
 
+interface CodexStructuredReadinessGate {
+  ready: boolean
+  reasons: CodexPendingReadinessReason[]
+}
+
 export interface CodexPendingReadinessReview {
   status: ActiveMemoryReadinessResult['status']
   targetShape: string
@@ -289,7 +294,7 @@ export interface CodexPendingMemoryDeferResult {
 const NORMALIZED_KEY_CONFLICT_RESOLUTIONS: MemoryConflictResolution[] = [...MEMORY_CONFLICT_RESOLUTIONS]
 
 export function reviewHashForPendingMemory(candidate: PendingMemory): string {
-  return reviewHashForSemanticMemory(pendingMemoryToSemanticMemory(candidate))
+  return reviewHashForSemanticMemory(pendingReviewSemanticMemory(candidate))
 }
 
 export function reviewHashForSemanticMemory(memory: SemanticMemory): string {
@@ -318,7 +323,7 @@ export function reviewHashForSemanticMemory(memory: SemanticMemory): string {
 }
 
 export function summarizePendingMemory(candidate: PendingMemory, now = new Date().toISOString()): CodexPendingMemorySummary {
-  const semanticMemory = pendingMemoryToSemanticMemory(candidate)
+  const semanticMemory = pendingReviewSemanticMemory(candidate)
   const reviewHash = reviewHashForPendingMemory(candidate)
   const candidateKind = deriveMemoryCandidateKind(candidate)
   const activeReadiness = evaluateActiveMemoryReadiness({
@@ -328,7 +333,8 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
     type: candidate.type,
     tags: candidate.tags
   })
-  const recommendation = deriveRecommendation(candidate, now, activeReadiness)
+  const structuredGate = evaluateStructuredReadinessGate(candidate, semanticMemory)
+  const recommendation = deriveRecommendation(candidate, now, activeReadiness, structuredGate)
   const risk = deriveRisk(candidate)
   return {
     id: candidate.id,
@@ -340,7 +346,7 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
     recommendation,
     suggestedAction: suggestedReviewAction(candidate.id, reviewHash, recommendation),
     activeReadiness,
-    readiness: deriveStructuredReadiness(candidate, candidateKind, activeReadiness),
+    readiness: deriveStructuredReadiness(candidate, candidateKind, activeReadiness, structuredGate),
     episodeEvidence: deriveEpisodeEvidence(candidate, candidateKind, recommendation, activeReadiness.status, risk),
     semanticMemory,
     proposedSemanticMemory: deriveProposedSemanticMemory(candidate, candidateKind, activeReadiness),
@@ -367,10 +373,14 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
 function deriveRecommendation(
   candidate: PendingMemory,
   now: string,
-  activeReadiness: ActiveMemoryReadinessResult
+  activeReadiness: ActiveMemoryReadinessResult,
+  structuredGate: CodexStructuredReadinessGate
 ): CodexPendingMemoryRecommendation {
   if (candidate.expiresAt <= now) {
     return 'reject'
+  }
+  if (!structuredGate.ready) {
+    return 'defer'
   }
   if (!activeReadiness.ready) {
     return 'defer'
@@ -392,12 +402,13 @@ function deriveRisk(candidate: PendingMemory): CodexPendingMemoryRisk {
 function deriveStructuredReadiness(
   candidate: PendingMemory,
   candidateKind: CodexMemoryCandidateKind,
-  activeReadiness: ActiveMemoryReadinessResult
+  activeReadiness: ActiveMemoryReadinessResult,
+  structuredGate: CodexStructuredReadinessGate
 ): CodexPendingReadinessReview {
   return {
     status: activeReadiness.status,
     targetShape: deriveTargetShape(candidate, candidateKind, activeReadiness),
-    reasons: deriveReadinessReasons(candidate, candidateKind, activeReadiness),
+    reasons: deriveReadinessReasons(candidate, candidateKind, activeReadiness, structuredGate),
     rewriteHint: activeReadiness.rewriteHint
   }
 }
@@ -420,8 +431,12 @@ function deriveTargetShape(
 function deriveReadinessReasons(
   candidate: PendingMemory,
   candidateKind: CodexMemoryCandidateKind,
-  activeReadiness: ActiveMemoryReadinessResult
+  activeReadiness: ActiveMemoryReadinessResult,
+  structuredGate: CodexStructuredReadinessGate
 ): CodexPendingReadinessReason[] {
+  if (!structuredGate.ready) {
+    return structuredGate.reasons
+  }
   if (!activeReadiness.ready) {
     const blockerReasons = activeReadiness.reasons.map((code) => readinessReason(code, blockingReasonText(code)))
     return blockerReasons.length > 0
@@ -440,6 +455,38 @@ function deriveReadinessReasons(
     reasons.push(readinessReason('actionable_future_use', 'Candidate is likely useful for future project behavior or review.'))
   }
   return reasons.length > 0 ? reasons : [readinessReason('reviewable_candidate_shape', 'Candidate has no blocking active-memory rewrite signals.')]
+}
+
+function pendingReviewSemanticMemory(candidate: PendingMemory): SemanticMemory {
+  const semanticMemory = pendingMemoryToSemanticMemory(candidate)
+  const sourceOfTruth = candidate.normalizedKey.trim()
+  return {
+    ...semanticMemory,
+    sourceOfTruth,
+    evidence: candidate.evidence.length === 0
+      ? []
+      : semanticMemory.evidence.map((entry) => ({
+          ...entry,
+          sourceRef: sourceOfTruth
+        }))
+  }
+}
+
+function evaluateStructuredReadinessGate(
+  candidate: PendingMemory,
+  semanticMemory: SemanticMemory
+): CodexStructuredReadinessGate {
+  const reasons: CodexPendingReadinessReason[] = []
+  if (candidate.evidence.length === 0 || semanticMemory.evidence.length === 0) {
+    reasons.push(readinessReason('missing_structured_evidence', 'Candidate needs structured evidence before promotion review.'))
+  }
+  if (semanticMemory.sourceOfTruth === undefined || semanticMemory.sourceOfTruth.trim() === '') {
+    reasons.push(readinessReason('missing_source_of_truth', 'Candidate needs a source of truth before promotion review.'))
+  }
+  return {
+    ready: reasons.length === 0,
+    reasons
+  }
 }
 
 function blockingReasonText(code: string): string {
