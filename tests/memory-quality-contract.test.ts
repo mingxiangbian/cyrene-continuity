@@ -5,6 +5,7 @@ import {
   MEMORY_QUALITY_RUBRIC,
   REQUIRED_MEMORY_QUALITY_FIXTURE_IDS,
   fixtureById,
+  validateMemoryDeltaReport,
   validateMemoryQualityFixtures,
   type MemoryQualityFixture
 } from '../src/codex/memory-quality-contract.js'
@@ -92,6 +93,69 @@ describe('memory quality contract fixtures', () => {
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Captured durable signals')
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Why no durable signal was dropped')
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Why pending / active stayed clean')
+  })
+
+  it('validates memory delta report handoffs', () => {
+    const handoffReport = `# Memory Delta Report
+
+## Captured durable signals
+- explicit_user_instruction: user asked for future specs and plans in Chinese.
+
+## Generated candidates / distillation inputs / reflection candidates
+- Candidate: procedural rule with explicit user evidence and project scope.
+
+## Episode-only or task-state signals
+- Current implementation checkpoint stayed as task state.
+
+## No-memory decisions and reasons
+
+Signals reviewed: explicit user instruction, current checkpoint state.
+Decision: generate one procedural candidate and keep checkpoint state out of pending / active memory.
+Why no durable memory candidate: Not applicable; the durable instruction produced a candidate.
+Why no durable signal was dropped: the durable instruction is listed in generated candidates.
+Why pending / active stayed clean: transient checkpoint state remained episode-only.
+
+## Pollution safeguards
+- Low-value task status was not promoted.
+
+## Recall safeguards
+- Explicit user instruction was captured.
+
+## Fixture coverage
+- Covers explicit_user_instruction and short_term_task_state.
+
+## Open risks
+- None.
+`
+
+    expect(validateMemoryDeltaReport(handoffReport)).toEqual([])
+    expect(validateMemoryDeltaReport(MEMORY_DELTA_REPORT_TEMPLATE)).toEqual(expect.arrayContaining([
+      'memory delta report section is empty: Captured durable signals',
+      'memory delta report field is empty: Why no durable signal was dropped:'
+    ]))
+    expect(validateMemoryDeltaReport('')).toEqual(['memory delta report is empty'])
+
+    const missingHeading = MEMORY_DELTA_REPORT_TEMPLATE.replace('## Fixture coverage\n', '')
+    expect(validateMemoryDeltaReport(missingHeading)).toContain('missing memory delta report heading: Fixture coverage')
+
+    const missingField = MEMORY_DELTA_REPORT_TEMPLATE.replace('Why no durable signal was dropped:\n', '')
+    expect(validateMemoryDeltaReport(missingField)).toContain(
+      'missing memory delta report field: Why no durable signal was dropped:'
+    )
+
+    const fieldOutsideNoMemorySection = handoffReport
+      .replace('Why no durable signal was dropped: the durable instruction is listed in generated candidates.\n', '')
+      .concat('\nWhy no durable signal was dropped: duplicated outside the required section.\n')
+    expect(validateMemoryDeltaReport(fieldOutsideNoMemorySection)).toContain(
+      'missing memory delta report field: Why no durable signal was dropped:'
+    )
+
+    const duplicatedOutsideNoMemorySection = handoffReport.concat(
+      '\n## Additional notes\nWhy no durable signal was dropped: duplicated outside the required section.\n'
+    )
+    expect(validateMemoryDeltaReport(duplicatedOutsideNoMemorySection)).toContain(
+      'memory delta report field appears outside no-memory section: Why no durable signal was dropped:'
+    )
   })
 
   it('reports fixture contract drift', () => {

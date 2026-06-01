@@ -85,6 +85,31 @@ export interface MemoryQualityRubricSection {
   checks: string[]
 }
 
+export const MEMORY_DELTA_REPORT_TITLE = 'Memory Delta Report'
+
+export const MEMORY_DELTA_REPORT_REQUIRED_HEADINGS = [
+  'Captured durable signals',
+  'Generated candidates / distillation inputs / reflection candidates',
+  'Episode-only or task-state signals',
+  'No-memory decisions and reasons',
+  'Pollution safeguards',
+  'Recall safeguards',
+  'Fixture coverage',
+  'Open risks'
+] as const
+
+export type MemoryDeltaReportRequiredHeading = typeof MEMORY_DELTA_REPORT_REQUIRED_HEADINGS[number]
+
+export const MEMORY_DELTA_REPORT_REQUIRED_FIELDS = [
+  'Signals reviewed:',
+  'Decision:',
+  'Why no durable memory candidate:',
+  'Why no durable signal was dropped:',
+  'Why pending / active stayed clean:'
+] as const
+
+export type MemoryDeltaReportRequiredField = typeof MEMORY_DELTA_REPORT_REQUIRED_FIELDS[number]
+
 export const MEMORY_QUALITY_FIXTURES: MemoryQualityFixture[] = [
   {
     id: 'one_time_action',
@@ -305,6 +330,43 @@ Why pending / active stayed clean:
 ## Open risks
 `
 
+export function validateMemoryDeltaReport(report: string): string[] {
+  const errors: string[] = []
+  if (report.trim() === '') return ['memory delta report is empty']
+
+  if (!hasMarkdownHeading(report, 1, MEMORY_DELTA_REPORT_TITLE)) {
+    errors.push(`missing memory delta report title: ${MEMORY_DELTA_REPORT_TITLE}`)
+  }
+
+  for (const heading of MEMORY_DELTA_REPORT_REQUIRED_HEADINGS) {
+    if (!hasMarkdownHeading(report, 2, heading)) {
+      errors.push(`missing memory delta report heading: ${heading}`)
+      continue
+    }
+    if (markdownSectionBody(report, 2, heading).trim() === '') {
+      errors.push(`memory delta report section is empty: ${heading}`)
+    }
+  }
+
+  const noMemorySectionRange = markdownSectionRange(report, 2, 'No-memory decisions and reasons')
+  const noMemorySection = noMemorySectionRange?.body ?? ''
+  for (const field of MEMORY_DELTA_REPORT_REQUIRED_FIELDS) {
+    const fieldBody = markdownFieldBody(noMemorySection, field)
+    if (fieldBody === undefined) {
+      errors.push(`missing memory delta report field: ${field}`)
+      continue
+    }
+    if (fieldBody.trim() === '') {
+      errors.push(`memory delta report field is empty: ${field}`)
+    }
+    if (noMemorySectionRange !== undefined && markdownFieldAppearsOutsideRange(report, field, noMemorySectionRange)) {
+      errors.push(`memory delta report field appears outside no-memory section: ${field}`)
+    }
+  }
+
+  return errors
+}
+
 export function fixtureById(id: MemoryQualityFixtureId): MemoryQualityFixture {
   const fixture = MEMORY_QUALITY_FIXTURES.find((item) => item.id === id)
   if (fixture === undefined) {
@@ -376,4 +438,73 @@ export function validateMemoryQualityFixtures(fixtures: MemoryQualityFixture[] =
   }
 
   return errors
+}
+
+function hasMarkdownHeading(report: string, level: 1 | 2, heading: string): boolean {
+  const marker = '#'.repeat(level)
+  const pattern = new RegExp(`^${escapeRegExp(marker)}\\s+${escapeRegExp(heading)}\\s*$`, 'm')
+  return pattern.test(report)
+}
+
+function markdownSectionBody(report: string, level: 1 | 2, heading: string): string {
+  return markdownSectionRange(report, level, heading)?.body ?? ''
+}
+
+function markdownSectionRange(
+  report: string,
+  level: 1 | 2,
+  heading: string
+): { body: string, end: number, start: number } | undefined {
+  const marker = '#'.repeat(level)
+  const pattern = new RegExp(`^${escapeRegExp(marker)}\\s+${escapeRegExp(heading)}\\s*$`, 'm')
+  const match = pattern.exec(report)
+  if (match === null) return undefined
+
+  const bodyStart = match.index + match[0].length
+  const afterHeading = report.slice(bodyStart)
+  const boundary = new RegExp(`^#{1,${level}}\\s+`, 'm')
+  const nextHeading = boundary.exec(afterHeading)
+  const bodyEnd = nextHeading === null ? report.length : bodyStart + nextHeading.index
+  return {
+    body: report.slice(bodyStart, bodyEnd),
+    end: bodyEnd,
+    start: match.index
+  }
+}
+
+function markdownFieldBody(report: string, field: MemoryDeltaReportRequiredField): string | undefined {
+  const pattern = new RegExp(`^${escapeRegExp(field)}(?<inline>.*)$`, 'm')
+  const match = pattern.exec(report)
+  if (match === null) return undefined
+
+  const inline = match.groups?.inline ?? ''
+  if (inline.trim() !== '') return inline
+
+  const afterField = report.slice(match.index + match[0].length)
+  const boundaries = [
+    ...MEMORY_DELTA_REPORT_REQUIRED_FIELDS.map((requiredField) => new RegExp(`^${escapeRegExp(requiredField)}`, 'm')),
+    /^#/m
+  ]
+  const nextBoundaryIndex = boundaries
+    .map((boundary) => boundary.exec(afterField)?.index)
+    .filter((index): index is number => index !== undefined)
+    .sort((left, right) => left - right)[0]
+
+  return nextBoundaryIndex === undefined ? afterField : afterField.slice(0, nextBoundaryIndex)
+}
+
+function markdownFieldAppearsOutsideRange(
+  report: string,
+  field: MemoryDeltaReportRequiredField,
+  range: { end: number, start: number }
+): boolean {
+  const pattern = new RegExp(`^${escapeRegExp(field)}`, 'gm')
+  for (let match = pattern.exec(report); match !== null; match = pattern.exec(report)) {
+    if (match.index < range.start || match.index >= range.end) return true
+  }
+  return false
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

@@ -35,6 +35,12 @@ Coordinator review 至少检查以下证据：
 
 ## Memory Delta Report Template
 
+`MEMORY_DELTA_REPORT_TEMPLATE` 和 `validateMemoryDeltaReport()` 由
+`src/codex/memory-quality-contract.ts` 导出。Coordinator 应拒绝缺少必填标题
+或 no-memory decision 字段的 subagent handoff；空 section 或空字段也不能通过。
+No-memory decision 字段必须填写在 `No-memory decisions and reasons` section 内，
+不能在其他 section 重复或替代。
+
 ```txt
 # Memory Delta Report
 
@@ -67,4 +73,10 @@ Run the foundation tests with:
 
 ```bash
 npm test -- tests/memory-quality-contract.test.ts
+```
+
+接受 agent 交付前，先用 `validateMemoryDeltaReport()` 校验 handoff 文本：
+
+```ts
+const errors = validateMemoryDeltaReport(reportText)
 ```
