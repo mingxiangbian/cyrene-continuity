@@ -6,6 +6,7 @@ import { runCodexAdmissionPipeline } from '../src/codex/admission-pipeline.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
+import { readDistillationInputsFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -134,6 +135,16 @@ describe('runCodexAdmissionPipeline', () => {
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await expect(readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')).resolves.toContain('44 个测试文件')
     await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('stale_numeric_snapshot')
+    await expect(readDistillationInputsFromRoot(memoryRoot)).resolves.toMatchObject([
+      {
+        candidateKind: 'project_fact',
+        scope: 'project',
+        domain: 'project',
+        rawContents: ['项目包含 44 个测试文件，广泛覆盖 active memory、CLI、distill、MCP、memory index 等模块。'],
+        admissionDecisionIds: [result.admission.id],
+        sourceDraftIds: [result.admission.draftId]
+      }
+    ])
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 

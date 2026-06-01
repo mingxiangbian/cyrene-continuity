@@ -7,11 +7,12 @@ import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import {
   appendAdmissionDecisionFromRoot,
   appendCandidateDraftFromRoot,
+  appendDistillationInputFromRoot,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
 } from '../memory/memory-store.js'
-import type { AdmissionDecision, CandidateDraftSourceKind } from '../memory/types.js'
+import type { AdmissionDecision, CandidateDraft, CandidateDraftSourceKind, DistillationInput } from '../memory/types.js'
 
 export type CodexAdmissionPipelineResult =
   | (CodexMemoryProposeResult & { action: 'pending' | 'auto_promote' | 'reject'; admission: AdmissionDecision })
@@ -70,6 +71,10 @@ export async function runCodexAdmissionPipeline(
   const admission = evaluateCandidateAdmission({ draft, pending, active, tombstones, now: input.now })
   await appendAdmissionDecisionFromRoot(memoryRoot, admission)
 
+  if (admission.action === 'admit_to_distillation') {
+    await appendDistillationInputFromRoot(memoryRoot, distillationInputFromAdmission(draft, admission))
+  }
+
   if (admission.action !== 'admit_to_pending' && admission.action !== 'merge_with_existing') {
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
@@ -99,6 +104,24 @@ export async function runCodexAdmissionPipeline(
     ...proposed,
     action: proposed.result.action,
     admission
+  }
+}
+
+function distillationInputFromAdmission(draft: CandidateDraft, admission: AdmissionDecision): DistillationInput {
+  return {
+    id: `distillation-${admission.id}`,
+    sourceDraftIds: [draft.id],
+    sourceEpisodeIds: draft.sourceEpisodeIds,
+    sourceSemanticMemoryIds: admission.targetMemoryId === undefined ? [] : [admission.targetMemoryId],
+    admissionDecisionIds: [admission.id],
+    ...(draft.normalizedKey === undefined ? {} : { normalizedKey: draft.normalizedKey }),
+    candidateKind: draft.candidateKind,
+    scope: draft.scope,
+    domain: draft.domain,
+    sourceKinds: [draft.sourceKind],
+    rawContents: [draft.content],
+    evidenceRefs: draft.evidenceRefs,
+    createdAt: admission.createdAt
   }
 }
 

@@ -29,6 +29,17 @@ describe('Codex UI static assets', () => {
     expect(getCodexUiStaticAsset('/missing')).toBeUndefined()
   })
 
+  it('renders readable semantic memory review sections in the inbox bundle', async () => {
+    const appSource = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
+
+    expect(appSource).toContain('What will be remembered')
+    expect(appSource).toContain('Identity')
+    expect(appSource).toContain('Policy')
+    expect(appSource).toContain('Use boundaries')
+    expect(appSource).toContain('Evidence')
+    expect(appSource).toContain('Review Action')
+  })
+
   it('bundles expected initial UI content', () => {
     const html = getCodexUiStaticAsset('/')?.body
 

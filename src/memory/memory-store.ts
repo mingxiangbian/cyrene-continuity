@@ -1,6 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import { appendFile, lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ensureMemoryRoot, getReadableMemoryRoot } from './paths.js'
+import {
+  activeMemoryToSemanticMemory,
+  pendingMemoryToSemanticMemory,
+  semanticMemoryToActiveMemory,
+  semanticMemoryToPendingMemory
+} from './semantic-memory-adapter.js'
 import type {
   ActivationEvent,
   AdmissionDecision,
@@ -59,12 +66,21 @@ export async function readActiveMemoriesFromRoot(memoryRoot: string): Promise<Cy
   if (!readable) {
     return []
   }
+  if (await semanticMemoryStoreExists(memoryRoot)) {
+    return (await readSemanticMemoriesFromRoot(memoryRoot))
+      .filter((memory) => memory.status === 'active')
+      .map(semanticMemoryToActiveMemory)
+  }
   return (await readJsonLines<CyreneMemory>(join(memoryRoot, INDEX_FILE))).filter((memory) => memory.status === 'active')
 }
 
 export async function writeActiveMemoriesFromRoot(memoryRoot: string, memories: CyreneMemory[]): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
-  await writeJsonLinesAtomic(join(root, INDEX_FILE), memories.filter((memory) => memory.status === 'active'))
+  const active = memories.filter((memory) => memory.status === 'active')
+  const current = await semanticProjectionForWrite(root)
+  const next = replaceSemanticMemoriesByStatus(current, 'active', active.map(activeMemoryToSemanticMemory))
+  await writeSemanticMemoriesFromRoot(root, next)
+  await writeJsonLinesAtomic(join(root, INDEX_FILE), await orderActiveForLegacyProjection(root, active))
 }
 
 export async function ensureWritableMemoryRootPath(memoryRoot: string): Promise<string> {
@@ -93,6 +109,11 @@ export async function readPendingMemoriesFromRoot(memoryRoot: string): Promise<P
   if (!readable) {
     return []
   }
+  if (await semanticMemoryStoreExists(memoryRoot)) {
+    return (await readSemanticMemoriesFromRoot(memoryRoot))
+      .filter((memory) => memory.status === 'pending')
+      .map(semanticMemoryToPendingMemory)
+  }
   return (await readJsonLines<PendingMemory>(join(memoryRoot, PENDING_FILE))).filter((memory) => memory.status === 'pending')
 }
 
@@ -103,7 +124,11 @@ export async function writePendingMemories(cwd: string, memories: PendingMemory[
 
 export async function writePendingMemoriesFromRoot(memoryRoot: string, memories: PendingMemory[]): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
-  await writeJsonLinesAtomic(join(root, PENDING_FILE), memories.filter((memory) => memory.status === 'pending'))
+  const pending = memories.filter((memory) => memory.status === 'pending')
+  const current = await semanticProjectionForWrite(root)
+  const next = replaceSemanticMemoriesByStatus(current, 'pending', pending.map(pendingMemoryToSemanticMemory))
+  await writeSemanticMemoriesFromRoot(root, next)
+  await writeJsonLinesAtomic(join(root, PENDING_FILE), pending)
 }
 
 export async function upsertPendingMemoryFromRoot(memoryRoot: string, candidate: PendingMemory): Promise<PendingMemory> {
@@ -120,7 +145,7 @@ export async function upsertPendingMemoryFromRoot(memoryRoot: string, candidate:
     pending.push(candidate)
   }
 
-  await writeJsonLinesAtomic(join(root, PENDING_FILE), pending)
+  await writePendingMemoriesFromRoot(root, pending)
   return result
 }
 
@@ -180,6 +205,62 @@ export async function writeSemanticMemoriesFromRoot(
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
   await writeJsonLinesAtomic(join(root, SEMANTIC_MEMORIES_FILE), memories)
+}
+
+export interface SemanticMemoryV2MigrationResult {
+  memoryRoot: string
+  migratedActive: number
+  droppedLegacyPending: number
+  semanticMemories: number
+}
+
+export async function migrateMemoryRootToSemanticV2FromRoot(
+  memoryRoot: string,
+  input: { now?: string } = {}
+): Promise<SemanticMemoryV2MigrationResult> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  const now = input.now ?? new Date().toISOString()
+  const legacyActive = (await readJsonLines<CyreneMemory>(join(root, INDEX_FILE))).filter((memory) => memory.status === 'active')
+  const legacyPending = (await readJsonLines<PendingMemory>(join(root, PENDING_FILE))).filter((memory) => memory.status === 'pending')
+  const existingSemantic = await readSemanticMemoriesFromRoot(root)
+  const migratedActive = legacyActive.map(activeMemoryToSemanticMemory)
+  const activeIds = new Set(migratedActive.map((memory) => memory.id))
+  const preservedSemantic = existingSemantic.filter((memory) => !activeIds.has(memory.id))
+  const nextSemantic = upsertSemanticMemories(preservedSemantic, migratedActive)
+
+  await writeSemanticMemoriesFromRoot(root, nextSemantic)
+  await writeJsonLinesAtomic(join(root, INDEX_FILE), legacyActive)
+  await writeJsonLinesAtomic(
+    join(root, PENDING_FILE),
+    nextSemantic.filter((memory) => memory.status === 'pending').map(semanticMemoryToPendingMemory)
+  )
+  await appendMemoryEventFromRoot(root, {
+    id: randomUUID(),
+    action: 'audit',
+    at: now,
+    reason: 'Migrated active memory to SemanticMemory v2',
+    details: {
+      migratedActive: migratedActive.length,
+      semanticStore: SEMANTIC_MEMORIES_FILE
+    }
+  })
+  await appendMemoryEventFromRoot(root, {
+    id: randomUUID(),
+    action: 'audit',
+    at: now,
+    reason: 'Reset legacy pending memory after SemanticMemory v2 migration',
+    details: {
+      droppedLegacyPending: legacyPending.length,
+      legacyPendingStore: PENDING_FILE
+    }
+  })
+
+  return {
+    memoryRoot: root,
+    migratedActive: migratedActive.length,
+    droppedLegacyPending: legacyPending.length,
+    semanticMemories: nextSemantic.length
+  }
 }
 
 export async function appendDistillationInputFromRoot(
@@ -356,6 +437,77 @@ function latestIso(left: string, right: string): string {
 function uniqueOptional(values: string[]): string[] | undefined {
   const unique = Array.from(new Set(values))
   return unique.length === 0 ? undefined : unique
+}
+
+async function semanticProjectionForWrite(memoryRoot: string): Promise<SemanticMemory[]> {
+  if (await semanticMemoryStoreExists(memoryRoot)) {
+    return readSemanticMemoriesFromRoot(memoryRoot)
+  }
+  const [active, pending] = await Promise.all([
+    readJsonLines<CyreneMemory>(join(memoryRoot, INDEX_FILE)),
+    readJsonLines<PendingMemory>(join(memoryRoot, PENDING_FILE))
+  ])
+  return [
+    ...active.filter((memory) => memory.status === 'active').map(activeMemoryToSemanticMemory),
+    ...pending.filter((memory) => memory.status === 'pending').map(pendingMemoryToSemanticMemory)
+  ]
+}
+
+async function orderActiveForLegacyProjection(memoryRoot: string, active: CyreneMemory[]): Promise<CyreneMemory[]> {
+  const previous = (await readJsonLines<CyreneMemory>(join(memoryRoot, INDEX_FILE))).filter((memory) => memory.status === 'active')
+  if (previous.length === 0 || active.length <= 1) {
+    return active
+  }
+  const previousOrder = new Map(previous.map((memory, index) => [memory.id, index]))
+  const incomingOrder = new Map(active.map((memory, index) => [memory.id, index]))
+  return [...active].sort((left, right) => {
+    const leftPrevious = previousOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER
+    const rightPrevious = previousOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER
+    if (leftPrevious !== rightPrevious) {
+      return leftPrevious - rightPrevious
+    }
+    return (incomingOrder.get(left.id) ?? 0) - (incomingOrder.get(right.id) ?? 0)
+  })
+}
+
+function replaceSemanticMemoriesByStatus(
+  current: SemanticMemory[],
+  status: SemanticMemory['status'],
+  replacements: SemanticMemory[]
+): SemanticMemory[] {
+  return upsertSemanticMemories(current.filter((memory) => memory.status !== status), replacements)
+}
+
+function upsertSemanticMemories(current: SemanticMemory[], replacements: SemanticMemory[]): SemanticMemory[] {
+  const next = [...current]
+  for (const replacement of replacements) {
+    const index = next.findIndex((memory) => memory.id === replacement.id)
+    if (index < 0) {
+      next.push(replacement)
+    } else {
+      next[index] = replacement
+    }
+  }
+  return next
+}
+
+async function semanticMemoryStoreExists(memoryRoot: string): Promise<boolean> {
+  const filePath = join(memoryRoot, SEMANTIC_MEMORIES_FILE)
+  try {
+    const stats = await lstat(filePath)
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use memory data file symlink: ${filePath}`)
+    }
+    if (!stats.isFile()) {
+      throw new Error(`Refusing to use non-file memory data path: ${filePath}`)
+    }
+    return true
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return false
+    }
+    throw error
+  }
 }
 
 async function isReadableMemoryRoot(memoryRoot: string): Promise<boolean> {

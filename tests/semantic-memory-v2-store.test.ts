@@ -8,17 +8,26 @@ import {
   appendReflectionCandidateFromRoot,
   appendReviewDecisionFromRoot,
   appendRoutingDecisionFromRoot,
+  migrateMemoryRootToSemanticV2FromRoot,
+  readActiveMemoriesFromRoot,
   readActivationEventsFromRoot,
   readDistillationInputsFromRoot,
+  readMemoryEventsFromRoot,
+  readPendingMemoriesFromRoot,
   readReflectionCandidatesFromRoot,
   readReviewDecisionsFromRoot,
   readRoutingDecisionsFromRoot,
   readSemanticMemoriesFromRoot,
+  writeActiveMemoriesFromRoot,
+  writePendingMemoriesFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../src/memory/memory-store.js'
 import type {
   ActivationEvent,
+  CyreneMemory,
   DistillationInput,
+  MemoryEvent,
+  PendingMemory,
   ReflectionCandidate,
   ReviewDecision,
   RoutingDecision,
@@ -64,6 +73,50 @@ function semanticMemory(overrides: Partial<SemanticMemory> = {}): SemanticMemory
     supersedes: [],
     createdAt: '2026-06-01T00:00:00.000Z',
     updatedAt: '2026-06-01T00:00:00.000Z',
+    ...overrides
+  }
+}
+
+function activeMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
+  return {
+    id: 'active-1',
+    domain: 'project',
+    type: 'project_fact',
+    strength: 'hard',
+    scope: 'project',
+    status: 'active',
+    content: 'Active memory must migrate into semantic memory v2.',
+    normalizedKey: 'active-memory-migrate-semantic-v2',
+    evidence: [{ summary: 'Legacy active evidence.', sourceKind: 'file' }],
+    source: 'file',
+    scores: { evidenceStrength: 0.9, stability: 0.9, usefulness: 0.8, safety: 0.95, sensitivity: 0.1 },
+    createdAt: '2026-05-31T00:00:00.000Z',
+    updatedAt: '2026-05-31T00:00:00.000Z',
+    tags: ['project_decision'],
+    candidateKind: 'project_decision',
+    ...overrides
+  }
+}
+
+function pendingMemory(overrides: Partial<PendingMemory> = {}): PendingMemory {
+  return {
+    id: 'pending-1',
+    domain: 'procedural',
+    type: 'procedural_rule',
+    strength: 'soft',
+    scope: 'project',
+    status: 'pending',
+    content: 'Pending memory must be stored as SemanticMemory status pending.',
+    normalizedKey: 'pending-memory-semantic-v2',
+    evidence: [{ summary: 'Legacy pending evidence.', sourceKind: 'review_event' }],
+    source: 'review_event',
+    scores: { evidenceStrength: 0.8, stability: 0.75, usefulness: 0.8, safety: 0.95, sensitivity: 0.1 },
+    seenCount: 1,
+    firstSeenAt: '2026-05-31T00:00:00.000Z',
+    lastSeenAt: '2026-05-31T00:00:00.000Z',
+    expiresAt: '2026-06-30T00:00:00.000Z',
+    tags: ['workflow_rule'],
+    candidateKind: 'workflow_rule',
     ...overrides
   }
 }
@@ -153,6 +206,60 @@ describe('Semantic memory v2 store', () => {
       semanticMemory({ id: 'semantic-2', status: 'active', content: 'Second memory.' })
     ])
     await expect(readFile(join(root, 'semantic_memories.jsonl'), 'utf8')).resolves.toContain('"id":"semantic-1"')
+  })
+
+  it('uses semantic memories as the source for active and pending compatibility reads', async () => {
+    const root = await createTempDir('cyrene-v2-source-root-')
+
+    await writeActiveMemoriesFromRoot(root, [activeMemory()])
+    await writePendingMemoriesFromRoot(root, [pendingMemory()])
+
+    const semantic = await readSemanticMemoriesFromRoot(root)
+    expect(semantic.map((memory) => [memory.id, memory.status])).toEqual([
+      ['active-1', 'active'],
+      ['pending-1', 'pending']
+    ])
+    expect(semantic.find((memory) => memory.id === 'pending-1')).toMatchObject({
+      status: 'pending',
+      module: 'procedural',
+      kind: 'workflow_rule',
+      content: 'Pending memory must be stored as SemanticMemory status pending.'
+    })
+    await expect(readActiveMemoriesFromRoot(root)).resolves.toMatchObject([
+      { id: 'active-1', normalizedKey: 'active-memory-migrate-semantic-v2' }
+    ])
+    await expect(readPendingMemoriesFromRoot(root)).resolves.toMatchObject([
+      { id: 'pending-1', normalizedKey: 'pending-memory-semantic-v2' }
+    ])
+  })
+
+  it('migrates legacy active memory and resets legacy pending memory with audit events', async () => {
+    const root = await createTempDir('cyrene-v2-migration-root-')
+    await writeFile(join(root, 'index.jsonl'), `${JSON.stringify(activeMemory())}\n`)
+    await writeFile(join(root, 'pending.jsonl'), `${JSON.stringify(pendingMemory())}\n`)
+
+    const result = await migrateMemoryRootToSemanticV2FromRoot(root, {
+      now: '2026-06-01T00:00:00.000Z'
+    })
+
+    expect(result).toMatchObject({ migratedActive: 1, droppedLegacyPending: 1 })
+    await expect(readSemanticMemoriesFromRoot(root)).resolves.toMatchObject([
+      {
+        id: 'active-1',
+        status: 'active',
+        module: 'project_semantic',
+        kind: 'project_decision',
+        content: 'Active memory must migrate into semantic memory v2.'
+      }
+    ])
+    await expect(readPendingMemoriesFromRoot(root)).resolves.toEqual([])
+    await expect(readFile(join(root, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+    const events = await readMemoryEventsFromRoot(root)
+    expect(events.map((event: MemoryEvent) => event.action)).toEqual(['audit', 'audit'])
+    expect(events.map((event) => event.details)).toEqual([
+      expect.objectContaining({ migratedActive: 1 }),
+      expect.objectContaining({ droppedLegacyPending: 1 })
+    ])
   })
 
   it('appends and reads v2 sidecar records from memory root', async () => {

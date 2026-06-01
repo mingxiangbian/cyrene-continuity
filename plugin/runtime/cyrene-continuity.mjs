@@ -10099,6 +10099,7 @@ function isFileErrorCode(error2, code) {
 }
 
 // src/memory/memory-store.ts
+import { randomUUID } from "node:crypto";
 import { appendFile, lstat as lstat3, mkdir as mkdir2, readFile as readFile2, realpath as realpath2, rename, writeFile } from "node:fs/promises";
 import { join as join4 } from "node:path";
 
@@ -10145,12 +10146,331 @@ function isFileErrorCode2(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/memory/candidate-kind.ts
+var MEMORY_CANDIDATE_KINDS = [
+  "project_fact",
+  "project_decision",
+  "user_instruction",
+  "workflow_rule",
+  "known_pitfall",
+  "rejected_approach",
+  "open_question"
+];
+function isMemoryCandidateKind(value) {
+  return typeof value === "string" && MEMORY_CANDIDATE_KINDS.includes(value);
+}
+function deriveMemoryCandidateKind(candidate) {
+  if (isMemoryCandidateKind(candidate.candidateKind)) {
+    return candidate.candidateKind;
+  }
+  if (isMemoryCandidateKind(candidate.candidate_kind)) {
+    return candidate.candidate_kind;
+  }
+  const tagKind = (candidate.tags ?? []).find(isMemoryCandidateKind);
+  if (tagKind !== void 0) {
+    return tagKind;
+  }
+  if (candidate.type === "project_fact") {
+    return "project_fact";
+  }
+  if (candidate.type === "procedural_rule" || candidate.type === "system_policy") {
+    return "workflow_rule";
+  }
+  if (candidate.type === "user_preference" || candidate.type === "interaction_style" || candidate.type === "relationship_boundary" || candidate.type === "affective_pattern") {
+    return "user_instruction";
+  }
+  if (candidate.type === "episode") {
+    return "project_fact";
+  }
+  return "project_fact";
+}
+
+// src/memory/semantic-memory-adapter.ts
+var DEFAULT_SCORES = {
+  evidenceStrength: 0.65,
+  stability: 0.65,
+  usefulness: 0.65,
+  safety: 0.9,
+  sensitivity: 0.1
+};
+var MEMORY_SOURCES = [
+  "user_explicit",
+  "user_implicit",
+  "assistant_observed",
+  "tool_trace",
+  "file",
+  "legacy_markdown",
+  "review_event"
+];
+function activeMemoryToSemanticMemory(memory) {
+  const kind = deriveMemoryCandidateKind(memory);
+  const module = moduleForMemory(memory.domain, memory.type, kind, memory.scope);
+  const scores = memory.scores ?? DEFAULT_SCORES;
+  return {
+    id: memory.id,
+    status: "active",
+    module,
+    kind,
+    scope: memory.scope,
+    domain: memory.domain,
+    content: memory.content,
+    useWhen: useWhenForKind(kind),
+    doNotUseWhen: doNotUseWhenForKind(kind),
+    sourceOfTruth: memory.normalizedKey,
+    evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.createdAt, memory.content, kind),
+    routing: routingForMemory(module, scores, "active"),
+    reviewPolicy: reviewPolicyForMemory(module, scores, "active"),
+    reviewState: {
+      normalizedKey: memory.normalizedKey,
+      type: memory.type,
+      strength: memory.strength,
+      source: memory.source,
+      ...memory.portability === void 0 ? {} : { portability: memory.portability },
+      ...memory.profileVisibility === void 0 ? {} : { profileVisibility: memory.profileVisibility },
+      scores,
+      tags: memory.tags,
+      ...memory.userConfirmed === void 0 ? {} : { userConfirmed: memory.userConfirmed },
+      ...memory.normalizedKeyConflictResolution === void 0 ? {} : { normalizedKeyConflictResolution: memory.normalizedKeyConflictResolution }
+    },
+    supersedes: memory.supersedes ?? [],
+    ...memory.expiresAt === void 0 ? {} : { expiresAt: memory.expiresAt },
+    createdAt: memory.createdAt,
+    updatedAt: memory.updatedAt
+  };
+}
+function pendingMemoryToSemanticMemory(memory) {
+  const kind = deriveMemoryCandidateKind(memory);
+  const module = moduleForMemory(memory.domain, memory.type, kind, memory.scope);
+  const scores = memory.scores ?? DEFAULT_SCORES;
+  return {
+    id: memory.id,
+    status: "pending",
+    module,
+    kind,
+    scope: memory.scope,
+    domain: memory.domain,
+    content: memory.content,
+    useWhen: useWhenForKind(kind),
+    doNotUseWhen: doNotUseWhenForKind(kind),
+    sourceOfTruth: memory.normalizedKey,
+    evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.lastSeenAt, memory.content, kind),
+    routing: routingForMemory(module, scores, "pending"),
+    reviewPolicy: reviewPolicyForMemory(module, scores, "pending"),
+    reviewState: {
+      normalizedKey: memory.normalizedKey,
+      type: memory.type,
+      strength: memory.strength,
+      source: memory.source,
+      ...memory.portability === void 0 ? {} : { portability: memory.portability },
+      ...memory.profileVisibility === void 0 ? {} : { profileVisibility: memory.profileVisibility },
+      scores,
+      seenCount: memory.seenCount,
+      firstSeenAt: memory.firstSeenAt,
+      lastSeenAt: memory.lastSeenAt,
+      ...memory.promoteAfter === void 0 ? {} : { promoteAfter: memory.promoteAfter },
+      ...memory.admittedBy === void 0 ? {} : { admittedBy: memory.admittedBy },
+      ...memory.admissionScore === void 0 ? {} : { admissionScore: memory.admissionScore },
+      ...memory.admissionReasons === void 0 ? {} : { admissionReasons: memory.admissionReasons },
+      ...memory.sourceEpisodeIds === void 0 ? {} : { sourceEpisodeIds: memory.sourceEpisodeIds },
+      ...memory.sourceDraftIds === void 0 ? {} : { sourceDraftIds: memory.sourceDraftIds },
+      ...memory.userConfirmed === void 0 ? {} : { userConfirmed: memory.userConfirmed },
+      tags: memory.tags,
+      ...memory.conflictsWith === void 0 ? {} : { conflictsWith: memory.conflictsWith }
+    },
+    supersedes: [],
+    expiresAt: memory.expiresAt,
+    ...memory.promoteAfter === void 0 ? {} : { reviewAfter: memory.promoteAfter },
+    createdAt: memory.firstSeenAt,
+    updatedAt: memory.lastSeenAt
+  };
+}
+function semanticMemoryToActiveMemory(memory) {
+  const reviewState = memory.reviewState ?? {};
+  const type = reviewState.type ?? typeForSemanticMemory(memory);
+  const scores = reviewState.scores ?? scoresForSemanticMemory(memory);
+  const source = memorySource(reviewState.source ?? firstEvidenceSource(memory.evidence));
+  return {
+    id: memory.id,
+    domain: memory.domain,
+    type,
+    strength: reviewState.strength ?? strengthForSemanticMemory(memory),
+    scope: memory.scope,
+    status: "active",
+    content: memory.content,
+    normalizedKey: reviewState.normalizedKey ?? memory.sourceOfTruth ?? normalizedKeyForContent(memory.domain, type, memory.content),
+    evidence: memoryEvidenceForSemantic(memory),
+    source,
+    ...reviewState.portability === void 0 ? {} : { portability: reviewState.portability },
+    scores,
+    createdAt: memory.createdAt,
+    updatedAt: memory.updatedAt,
+    ...memory.expiresAt === void 0 ? {} : { expiresAt: memory.expiresAt },
+    ...reviewState.userConfirmed === void 0 ? {} : { userConfirmed: reviewState.userConfirmed },
+    ...reviewState.profileVisibility === void 0 ? {} : { profileVisibility: reviewState.profileVisibility },
+    candidateKind: memory.kind,
+    ...reviewState.normalizedKeyConflictResolution === void 0 ? {} : { normalizedKeyConflictResolution: reviewState.normalizedKeyConflictResolution },
+    tags: reviewState.tags ?? [memory.kind],
+    supersedes: memory.supersedes
+  };
+}
+function semanticMemoryToPendingMemory(memory) {
+  const reviewState = memory.reviewState ?? {};
+  const type = reviewState.type ?? typeForSemanticMemory(memory);
+  const source = memorySource(reviewState.source ?? firstEvidenceSource(memory.evidence));
+  const updatedAt = memory.updatedAt || memory.createdAt;
+  const firstSeenAt = reviewState.firstSeenAt ?? memory.createdAt;
+  const lastSeenAt = reviewState.lastSeenAt ?? updatedAt;
+  return {
+    id: memory.id,
+    domain: memory.domain,
+    type,
+    strength: reviewState.strength ?? strengthForSemanticMemory(memory),
+    scope: memory.scope,
+    status: "pending",
+    content: memory.content,
+    normalizedKey: reviewState.normalizedKey ?? memory.sourceOfTruth ?? normalizedKeyForContent(memory.domain, type, memory.content),
+    evidence: memoryEvidenceForSemantic(memory),
+    source,
+    ...reviewState.portability === void 0 ? {} : { portability: reviewState.portability },
+    scores: reviewState.scores ?? scoresForSemanticMemory(memory),
+    seenCount: reviewState.seenCount ?? 1,
+    firstSeenAt,
+    lastSeenAt,
+    ...reviewState.promoteAfter === void 0 ? {} : { promoteAfter: reviewState.promoteAfter },
+    expiresAt: memory.expiresAt ?? addDays(lastSeenAt, 30),
+    ...reviewState.admittedBy === void 0 ? {} : { admittedBy: reviewState.admittedBy },
+    ...reviewState.admissionScore === void 0 ? {} : { admissionScore: reviewState.admissionScore },
+    ...reviewState.admissionReasons === void 0 ? {} : { admissionReasons: reviewState.admissionReasons },
+    ...reviewState.sourceEpisodeIds === void 0 ? {} : { sourceEpisodeIds: reviewState.sourceEpisodeIds },
+    ...reviewState.sourceDraftIds === void 0 ? {} : { sourceDraftIds: reviewState.sourceDraftIds },
+    ...reviewState.userConfirmed === void 0 ? {} : { userConfirmed: reviewState.userConfirmed },
+    ...reviewState.profileVisibility === void 0 ? {} : { profileVisibility: reviewState.profileVisibility },
+    candidateKind: memory.kind,
+    tags: reviewState.tags ?? [memory.kind],
+    ...reviewState.conflictsWith === void 0 ? {} : { conflictsWith: reviewState.conflictsWith }
+  };
+}
+function structuredEvidenceForMemory(memoryId, evidence, source, when, content, kind) {
+  const entries = evidence.length > 0 ? evidence : [{ summary: content, sourceKind: source }];
+  return entries.map((entry, index) => ({
+    id: entry.evidenceGroupId ?? entry.taskHash ?? entry.runId ?? `${memoryId}-evidence-${index + 1}`,
+    sourceKind: entry.sourceKind ?? source,
+    sourceRef: evidenceRef(entry, memoryId, index),
+    when,
+    whatHappened: entry.summary ?? entry.quote ?? content,
+    whyImportant: whyImportantForKind(kind),
+    ...entry.quoteHash === void 0 ? {} : { result: `quoteHash=${entry.quoteHash}` }
+  }));
+}
+function memoryEvidenceForSemantic(memory) {
+  if (memory.evidence.length === 0) {
+    return [{ summary: memory.content, sourceKind: memorySource(firstEvidenceSource(memory.evidence)) }];
+  }
+  return memory.evidence.map((entry) => ({
+    summary: entry.whatHappened || memory.content,
+    evidenceGroupId: entry.id,
+    sourceKind: memorySource(entry.sourceKind),
+    ...entry.sourceRef === "" ? {} : { traceRefs: [entry.sourceRef] }
+  }));
+}
+function moduleForMemory(domain, type, kind, scope) {
+  if (domain === "system" || type === "system_policy") return scope === "global" ? "global_policy" : "system";
+  if (domain === "procedural" || kind === "workflow_rule") return "procedural";
+  if (domain === "personal" || type === "user_preference" || type === "interaction_style" || kind === "user_instruction") {
+    return "preference";
+  }
+  if (domain === "relationship" || domain === "affective") return "relationship_affective";
+  return "project_semantic";
+}
+function typeForSemanticMemory(memory) {
+  if (memory.kind === "workflow_rule") return memory.module === "system" ? "system_policy" : "procedural_rule";
+  if (memory.kind === "user_instruction") return "user_preference";
+  return "project_fact";
+}
+function strengthForSemanticMemory(memory) {
+  if (memory.reviewPolicy === "manual_only") return "hard";
+  if (memory.status === "active") return "hard";
+  return "soft";
+}
+function routingForMemory(module, scores, status) {
+  const risk = riskForScores(scores);
+  const updatePolicy = reviewPolicyForMemory(module, scores, status);
+  return {
+    module,
+    updatePolicy,
+    risk,
+    reasons: [status === "pending" ? "review required before activation" : "migrated into semantic memory v2"]
+  };
+}
+function reviewPolicyForMemory(module, scores, status) {
+  if (module === "relationship_affective" || module === "global_policy" || scores.sensitivity > 0.6 || scores.safety < 0.65) {
+    return "manual_only";
+  }
+  return status === "pending" ? "pending_review" : "strict_auto_promote";
+}
+function scoresForSemanticMemory(memory) {
+  const evidenceStrength = memory.evidence.length > 0 ? 0.75 : 0.45;
+  const sensitivity = memory.routing?.risk === "high" ? 0.7 : memory.routing?.risk === "medium" ? 0.45 : 0.1;
+  return {
+    evidenceStrength,
+    stability: memory.status === "active" ? 0.8 : 0.65,
+    usefulness: memory.useWhen.length > 0 ? 0.75 : 0.55,
+    safety: memory.reviewPolicy === "manual_only" ? 0.7 : 0.9,
+    sensitivity
+  };
+}
+function riskForScores(scores) {
+  if (scores.sensitivity > 0.6 || scores.safety < 0.65) return "high";
+  if (scores.sensitivity > 0.45 || scores.safety < 0.8) return "medium";
+  return "low";
+}
+function useWhenForKind(kind) {
+  if (kind === "known_pitfall") return ["Diagnosing similar project failures.", "Changing related memory behavior."];
+  if (kind === "workflow_rule") return ["Planning non-trivial project changes.", "Reviewing future implementation workflow."];
+  if (kind === "project_decision") return ["Continuing related project work.", "Checking current project context."];
+  if (kind === "rejected_approach") return ["Considering a previously rejected approach.", "Avoiding repeated design churn."];
+  if (kind === "open_question") return ["Continuing the same project area.", "Resolving deferred design questions."];
+  return ["Reviewing future project memory candidates."];
+}
+function doNotUseWhenForKind(kind) {
+  if (kind === "open_question") return ["The question has been answered or superseded.", "The task is unrelated to this project scope."];
+  return ["The memory is stale or contradicted by source files.", "The future task is unrelated to this scope."];
+}
+function whyImportantForKind(kind) {
+  if (kind === "known_pitfall") return "Capturing the pitfall can prevent repeated project mistakes.";
+  if (kind === "workflow_rule") return "The rule can guide future project workflow.";
+  if (kind === "project_decision") return "The decision preserves project context for future work.";
+  if (kind === "rejected_approach") return "The rejected approach prevents repeated design churn.";
+  if (kind === "open_question") return "The question preserves unresolved project context.";
+  return "The memory may affect future review behavior.";
+}
+function evidenceRef(entry, memoryId, index) {
+  return entry.evidenceGroupId ?? entry.runId ?? entry.sessionId ?? entry.taskHash ?? entry.quoteHash ?? entry.traceRefs?.[0] ?? `memory:${memoryId}:evidence:${index + 1}`;
+}
+function firstEvidenceSource(evidence) {
+  return evidence[0]?.sourceKind;
+}
+function memorySource(value) {
+  return typeof value === "string" && MEMORY_SOURCES.includes(value) ? value : "review_event";
+}
+function normalizedKeyForContent(domain, type, content) {
+  const normalized = content.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return `${domain}-${type}-${normalized || "memory"}`;
+}
+function addDays(iso, days) {
+  const date3 = new Date(iso);
+  date3.setUTCDate(date3.getUTCDate() + days);
+  return date3.toISOString();
+}
+
 // src/memory/memory-store.ts
 var INDEX_FILE = "index.jsonl";
 var PENDING_FILE = "pending.jsonl";
 var EPISODES_FILE = "episodes.jsonl";
 var CANDIDATE_DRAFTS_FILE = "candidate_drafts.jsonl";
 var ADMISSION_DECISIONS_FILE = "admission_decisions.jsonl";
+var SEMANTIC_MEMORIES_FILE = "semantic_memories.jsonl";
+var DISTILLATION_INPUTS_FILE = "distillation_inputs.jsonl";
 var EVENTS_FILE = "events.jsonl";
 var TOMBSTONES_FILE = "tombstones.jsonl";
 var MAX_PENDING_EVIDENCE = 10;
@@ -10166,11 +10486,18 @@ async function readActiveMemoriesFromRoot(memoryRoot) {
   if (!readable) {
     return [];
   }
+  if (await semanticMemoryStoreExists(memoryRoot)) {
+    return (await readSemanticMemoriesFromRoot(memoryRoot)).filter((memory) => memory.status === "active").map(semanticMemoryToActiveMemory);
+  }
   return (await readJsonLines(join4(memoryRoot, INDEX_FILE))).filter((memory) => memory.status === "active");
 }
 async function writeActiveMemoriesFromRoot(memoryRoot, memories) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
-  await writeJsonLinesAtomic(join4(root, INDEX_FILE), memories.filter((memory) => memory.status === "active"));
+  const active = memories.filter((memory) => memory.status === "active");
+  const current = await semanticProjectionForWrite(root);
+  const next = replaceSemanticMemoriesByStatus(current, "active", active.map(activeMemoryToSemanticMemory));
+  await writeSemanticMemoriesFromRoot(root, next);
+  await writeJsonLinesAtomic(join4(root, INDEX_FILE), await orderActiveForLegacyProjection(root, active));
 }
 async function ensureWritableMemoryRootPath(memoryRoot) {
   return ensureWritableMemoryRoot(memoryRoot);
@@ -10196,11 +10523,18 @@ async function readPendingMemoriesFromRoot(memoryRoot) {
   if (!readable) {
     return [];
   }
+  if (await semanticMemoryStoreExists(memoryRoot)) {
+    return (await readSemanticMemoriesFromRoot(memoryRoot)).filter((memory) => memory.status === "pending").map(semanticMemoryToPendingMemory);
+  }
   return (await readJsonLines(join4(memoryRoot, PENDING_FILE))).filter((memory) => memory.status === "pending");
 }
 async function writePendingMemoriesFromRoot(memoryRoot, memories) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
-  await writeJsonLinesAtomic(join4(root, PENDING_FILE), memories.filter((memory) => memory.status === "pending"));
+  const pending = memories.filter((memory) => memory.status === "pending");
+  const current = await semanticProjectionForWrite(root);
+  const next = replaceSemanticMemoriesByStatus(current, "pending", pending.map(pendingMemoryToSemanticMemory));
+  await writeSemanticMemoriesFromRoot(root, next);
+  await writeJsonLinesAtomic(join4(root, PENDING_FILE), pending);
 }
 async function appendEpisodeMemoryFromRoot(memoryRoot, episode) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -10213,6 +10547,64 @@ async function appendCandidateDraftFromRoot(memoryRoot, draft) {
 async function appendAdmissionDecisionFromRoot(memoryRoot, decision2) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, ADMISSION_DECISIONS_FILE), decision2);
+}
+async function readSemanticMemoriesFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, SEMANTIC_MEMORIES_FILE));
+}
+async function writeSemanticMemoriesFromRoot(memoryRoot, memories) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await writeJsonLinesAtomic(join4(root, SEMANTIC_MEMORIES_FILE), memories);
+}
+async function migrateMemoryRootToSemanticV2FromRoot(memoryRoot, input = {}) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const legacyActive = (await readJsonLines(join4(root, INDEX_FILE))).filter((memory) => memory.status === "active");
+  const legacyPending = (await readJsonLines(join4(root, PENDING_FILE))).filter((memory) => memory.status === "pending");
+  const existingSemantic = await readSemanticMemoriesFromRoot(root);
+  const migratedActive = legacyActive.map(activeMemoryToSemanticMemory);
+  const activeIds = new Set(migratedActive.map((memory) => memory.id));
+  const preservedSemantic = existingSemantic.filter((memory) => !activeIds.has(memory.id));
+  const nextSemantic = upsertSemanticMemories(preservedSemantic, migratedActive);
+  await writeSemanticMemoriesFromRoot(root, nextSemantic);
+  await writeJsonLinesAtomic(join4(root, INDEX_FILE), legacyActive);
+  await writeJsonLinesAtomic(
+    join4(root, PENDING_FILE),
+    nextSemantic.filter((memory) => memory.status === "pending").map(semanticMemoryToPendingMemory)
+  );
+  await appendMemoryEventFromRoot(root, {
+    id: randomUUID(),
+    action: "audit",
+    at: now,
+    reason: "Migrated active memory to SemanticMemory v2",
+    details: {
+      migratedActive: migratedActive.length,
+      semanticStore: SEMANTIC_MEMORIES_FILE
+    }
+  });
+  await appendMemoryEventFromRoot(root, {
+    id: randomUUID(),
+    action: "audit",
+    at: now,
+    reason: "Reset legacy pending memory after SemanticMemory v2 migration",
+    details: {
+      droppedLegacyPending: legacyPending.length,
+      legacyPendingStore: PENDING_FILE
+    }
+  });
+  return {
+    memoryRoot: root,
+    migratedActive: migratedActive.length,
+    droppedLegacyPending: legacyPending.length,
+    semanticMemories: nextSemantic.length
+  };
+}
+async function appendDistillationInputFromRoot(memoryRoot, input) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await appendJsonLine(join4(root, DISTILLATION_INPUTS_FILE), input);
 }
 async function appendMemoryEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -10277,6 +10669,68 @@ function latestIso(left, right) {
 function uniqueOptional(values) {
   const unique2 = Array.from(new Set(values));
   return unique2.length === 0 ? void 0 : unique2;
+}
+async function semanticProjectionForWrite(memoryRoot) {
+  if (await semanticMemoryStoreExists(memoryRoot)) {
+    return readSemanticMemoriesFromRoot(memoryRoot);
+  }
+  const [active, pending] = await Promise.all([
+    readJsonLines(join4(memoryRoot, INDEX_FILE)),
+    readJsonLines(join4(memoryRoot, PENDING_FILE))
+  ]);
+  return [
+    ...active.filter((memory) => memory.status === "active").map(activeMemoryToSemanticMemory),
+    ...pending.filter((memory) => memory.status === "pending").map(pendingMemoryToSemanticMemory)
+  ];
+}
+async function orderActiveForLegacyProjection(memoryRoot, active) {
+  const previous = (await readJsonLines(join4(memoryRoot, INDEX_FILE))).filter((memory) => memory.status === "active");
+  if (previous.length === 0 || active.length <= 1) {
+    return active;
+  }
+  const previousOrder = new Map(previous.map((memory, index) => [memory.id, index]));
+  const incomingOrder = new Map(active.map((memory, index) => [memory.id, index]));
+  return [...active].sort((left, right) => {
+    const leftPrevious = previousOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightPrevious = previousOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+    if (leftPrevious !== rightPrevious) {
+      return leftPrevious - rightPrevious;
+    }
+    return (incomingOrder.get(left.id) ?? 0) - (incomingOrder.get(right.id) ?? 0);
+  });
+}
+function replaceSemanticMemoriesByStatus(current, status, replacements) {
+  return upsertSemanticMemories(current.filter((memory) => memory.status !== status), replacements);
+}
+function upsertSemanticMemories(current, replacements) {
+  const next = [...current];
+  for (const replacement of replacements) {
+    const index = next.findIndex((memory) => memory.id === replacement.id);
+    if (index < 0) {
+      next.push(replacement);
+    } else {
+      next[index] = replacement;
+    }
+  }
+  return next;
+}
+async function semanticMemoryStoreExists(memoryRoot) {
+  const filePath = join4(memoryRoot, SEMANTIC_MEMORIES_FILE);
+  try {
+    const stats = await lstat3(filePath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use memory data file symlink: ${filePath}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`Refusing to use non-file memory data path: ${filePath}`);
+    }
+    return true;
+  } catch (error2) {
+    if (isFileErrorCode3(error2, "ENOENT")) {
+      return false;
+    }
+    throw error2;
+  }
 }
 async function isReadableMemoryRoot(memoryRoot) {
   try {
@@ -12243,7 +12697,7 @@ function isRecord(value) {
 }
 
 // src/codex/memory-dream-state.ts
-import { randomUUID } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { lstat as lstat6, readFile as readFile5, rename as rename2, writeFile as writeFile4 } from "node:fs/promises";
 import { join as join10 } from "node:path";
 var DREAM_STATE_FILE = "dream-state.json";
@@ -12285,7 +12739,7 @@ async function writeCodexMemoryDreamState(memoryRoot, state) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join10(root, DREAM_STATE_FILE);
   await assertSafeMemoryDataFileTarget(targetPath);
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID2()}.tmp`;
   await writeFile4(tempPath, `${JSON.stringify(state, null, 2)}
 `, "utf8");
   await rename2(tempPath, targetPath);
@@ -13547,7 +14001,7 @@ function overlapScore(label, sourceValues, targetValues, weight, reason) {
 }
 
 // src/codex/memory-review.ts
-import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID7 } from "node:crypto";
 
 // src/codex/active-memory-readiness.ts
 var VERSION_OR_SESSION_PATTERN = /(?:\bv\d+(?:\.\d+)*\b|本轮|这次|当前|目前|刚刚|today|this round|current)/i;
@@ -13616,59 +14070,18 @@ function rewriteHintForReasons(reasons) {
 }
 
 // src/memory/memory-maintenance.ts
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 import { lstat as lstat10, mkdir as mkdir8, readFile as readFile10, rm as rm2, writeFile as writeFile6 } from "node:fs/promises";
 import { join as join15 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 // src/memory/memory-exporter.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 import { lstat as lstat8, open, readdir as readdir4, readFile as readFile8, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
 import { dirname as dirname8, isAbsolute as isAbsolute3, join as join13, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
 import { createHash as createHash4 } from "node:crypto";
-
-// src/memory/candidate-kind.ts
-var MEMORY_CANDIDATE_KINDS = [
-  "project_fact",
-  "project_decision",
-  "user_instruction",
-  "workflow_rule",
-  "known_pitfall",
-  "rejected_approach",
-  "open_question"
-];
-function isMemoryCandidateKind(value) {
-  return typeof value === "string" && MEMORY_CANDIDATE_KINDS.includes(value);
-}
-function deriveMemoryCandidateKind(candidate) {
-  if (isMemoryCandidateKind(candidate.candidateKind)) {
-    return candidate.candidateKind;
-  }
-  if (isMemoryCandidateKind(candidate.candidate_kind)) {
-    return candidate.candidate_kind;
-  }
-  const tagKind = (candidate.tags ?? []).find(isMemoryCandidateKind);
-  if (tagKind !== void 0) {
-    return tagKind;
-  }
-  if (candidate.type === "project_fact") {
-    return "project_fact";
-  }
-  if (candidate.type === "procedural_rule" || candidate.type === "system_policy") {
-    return "workflow_rule";
-  }
-  if (candidate.type === "user_preference" || candidate.type === "interaction_style" || candidate.type === "relationship_boundary" || candidate.type === "affective_pattern") {
-    return "user_instruction";
-  }
-  if (candidate.type === "episode") {
-    return "project_fact";
-  }
-  return "project_fact";
-}
-
-// src/memory/memory-validator.ts
 function validateMemoryCandidate(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const candidate = normalizeCandidate(input.candidate);
@@ -14060,7 +14473,7 @@ async function writeMemoryProjections(root, memories) {
 async function writeSafeGeneratedFile(root, parentDir, filename, content) {
   await assertSafeGeneratedFileTarget(root, parentDir, filename);
   const targetPath = join13(parentDir, filename);
-  const tempPath = join13(parentDir, `.${filename}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
+  const tempPath = join13(parentDir, `.${filename}.${process.pid}.${Date.now()}.${randomUUID3()}.tmp`);
   const file = await open(tempPath, "wx");
   try {
     await file.writeFile(content, "utf8");
@@ -14365,12 +14778,12 @@ function formatModelProfile(entries) {
 // src/memory/memory-snapshot.ts
 import { lstat as lstat9, mkdir as mkdir7, readFile as readFile9, readdir as readdir5, writeFile as writeFile5 } from "node:fs/promises";
 import { isAbsolute as isAbsolute4, join as join14, relative as relative4 } from "node:path";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 async function createMemorySnapshotFromRoot(memoryRoot, reason) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const dir = await ensureSnapshotDir(root);
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
-  const id = `memory-${createdAt.replace(/[:.]/g, "-")}-${randomUUID3().slice(0, 8)}`;
+  const id = `memory-${createdAt.replace(/[:.]/g, "-")}-${randomUUID4().slice(0, 8)}`;
   const snapshot = {
     version: 1,
     id,
@@ -14383,7 +14796,7 @@ async function createMemorySnapshotFromRoot(memoryRoot, reason) {
   await writeFile5(snapshotFilePath(dir, id), `${JSON.stringify(snapshot, null, 2)}
 `, { flag: "wx" });
   await appendMemoryEventFromRoot(root, {
-    id: randomUUID3(),
+    id: randomUUID4(),
     action: "snapshot",
     at: createdAt,
     reason,
@@ -14537,7 +14950,7 @@ async function withMemoryMaintenanceLockFromRoot(memoryRoot, task, options = {})
   const timeoutMs = options.timeoutMs ?? memoryMaintenanceLockTimeoutMs();
   const pollMs = options.pollMs ?? MAINTENANCE_LOCK_POLL_MS;
   const staleMs = options.staleMs ?? memoryMaintenanceLockStaleMs();
-  const token = randomUUID4();
+  const token = randomUUID5();
   while (true) {
     let acquired = false;
     try {
@@ -14812,7 +15225,7 @@ function tombstoneForMemory(memory, reason, now, replacementMemoryId) {
 }
 function eventForMemory(action, memory, now, reason) {
   return {
-    id: randomUUID4(),
+    id: randomUUID5(),
     action,
     at: now,
     reason,
@@ -14866,7 +15279,7 @@ function isProcessErrorCode(error2, code) {
 }
 
 // src/codex/project-registry.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID6 } from "node:crypto";
 import { execFile as execFile2 } from "node:child_process";
 import { mkdir as mkdir9, readFile as readFile11, rename as rename4, rm as rm3, writeFile as writeFile7 } from "node:fs/promises";
 import { basename as basename5, dirname as dirname9, join as join16 } from "node:path";
@@ -15139,7 +15552,7 @@ async function assertMergeJsonlFileSafe(filePath, role) {
   }
 }
 async function writeJsonLinesAtomic2(filePath, values) {
-  const tempPath = join16(dirname9(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID5()}.tmp`);
+  const tempPath = join16(dirname9(filePath), `.${basename5(filePath)}.${process.pid}.${randomUUID6()}.tmp`);
   let renamed = false;
   try {
     await writeFile7(tempPath, `${values.join("\n")}
@@ -15257,7 +15670,7 @@ var MEMORY_TYPES = [
 ];
 var MEMORY_STRENGTHS = ["hard", "soft", "session"];
 var MEMORY_SCOPES = ["global", "project", "session"];
-var MEMORY_SOURCES = [
+var MEMORY_SOURCES2 = [
   "user_explicit",
   "user_implicit",
   "assistant_observed",
@@ -15281,50 +15694,34 @@ var MEMORY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
 var READINESS_REASON_TEXT_LIMIT = 120;
 var NORMALIZED_KEY_CONFLICT_RESOLUTIONS = [...MEMORY_CONFLICT_RESOLUTIONS];
 function reviewHashForPendingMemory(candidate) {
+  return reviewHashForSemanticMemory(pendingMemoryToSemanticMemory(candidate));
+}
+function reviewHashForSemanticMemory(memory) {
   const payload = {
-    id: candidate.id,
-    domain: candidate.domain,
-    type: candidate.type,
-    strength: candidate.strength,
-    scope: candidate.scope,
-    status: candidate.status,
-    content: candidate.content,
-    normalizedKey: candidate.normalizedKey,
-    evidence: candidate.evidence.map((entry) => ({
-      runId: entry.runId ?? null,
-      messageIds: entry.messageIds ?? null,
-      traceRefs: entry.traceRefs ?? null,
-      quote: entry.quote ?? null,
-      summary: entry.summary ?? null,
-      evidenceGroupId: entry.evidenceGroupId ?? null,
-      sessionId: entry.sessionId ?? null,
-      taskHash: entry.taskHash ?? null,
-      quoteHash: entry.quoteHash ?? null,
-      sourceKind: entry.sourceKind ?? null
-    })),
-    source: candidate.source,
-    portability: candidate.portability ?? null,
-    profileVisibility: candidate.profileVisibility ?? null,
-    scores: {
-      evidenceStrength: candidate.scores.evidenceStrength,
-      stability: candidate.scores.stability,
-      usefulness: candidate.scores.usefulness,
-      safety: candidate.scores.safety,
-      sensitivity: candidate.scores.sensitivity
-    },
-    seenCount: candidate.seenCount,
-    firstSeenAt: candidate.firstSeenAt,
-    lastSeenAt: candidate.lastSeenAt,
-    promoteAfter: candidate.promoteAfter ?? null,
-    expiresAt: candidate.expiresAt,
-    userConfirmed: candidate.userConfirmed ?? null,
-    candidateKind: deriveMemoryCandidateKind(candidate),
-    tags: candidate.tags,
-    conflictsWith: candidate.conflictsWith ?? null
+    id: memory.id,
+    status: memory.status,
+    module: memory.module,
+    kind: memory.kind,
+    scope: memory.scope,
+    domain: memory.domain,
+    content: memory.content,
+    useWhen: memory.useWhen,
+    doNotUseWhen: memory.doNotUseWhen,
+    sourceOfTruth: memory.sourceOfTruth ?? null,
+    evidence: memory.evidence,
+    routing: memory.routing ?? null,
+    reviewPolicy: memory.reviewPolicy,
+    reviewState: memory.reviewState ?? null,
+    supersedes: memory.supersedes,
+    expiresAt: memory.expiresAt ?? null,
+    reviewAfter: memory.reviewAfter ?? null,
+    createdAt: memory.createdAt,
+    updatedAt: memory.updatedAt
   };
   return createHash5("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).toISOString()) {
+  const semanticMemory = pendingMemoryToSemanticMemory(candidate);
   const reviewHash = reviewHashForPendingMemory(candidate);
   const candidateKind = deriveMemoryCandidateKind(candidate);
   const activeReadiness = evaluateActiveMemoryReadiness({
@@ -15348,6 +15745,7 @@ function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).to
     activeReadiness,
     readiness: deriveStructuredReadiness(candidate, candidateKind, activeReadiness),
     episodeEvidence: deriveEpisodeEvidence(candidate, candidateKind, recommendation, activeReadiness.status, risk),
+    semanticMemory,
     proposedSemanticMemory: deriveProposedSemanticMemory(candidate, candidateKind, activeReadiness),
     risk,
     sensitivity: candidate.scores.sensitivity,
@@ -15685,7 +16083,7 @@ async function promoteCodexPendingMemory(input) {
       await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending2);
       await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID6(),
+        id: randomUUID7(),
         action: "reject",
         at: now,
         reason: input.reason ?? "Rejected by normalizedKey conflict resolution",
@@ -15697,7 +16095,7 @@ async function promoteCodexPendingMemory(input) {
         )
       });
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID6(),
+        id: randomUUID7(),
         action: "audit",
         at: now,
         reason: "NormalizedKey conflict resolved by rejecting the new candidate",
@@ -15740,7 +16138,7 @@ async function promoteCodexPendingMemory(input) {
         await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForSupersededMemory(conflict, lockedMemory, now));
       }
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID6(),
+        id: randomUUID7(),
         action: "supersede",
         at: now,
         reason: input.reason ?? "NormalizedKey conflict resolved by superseding active memory",
@@ -15750,7 +16148,7 @@ async function promoteCodexPendingMemory(input) {
       });
     } else if (input.conflictResolution === "keep_both") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID6(),
+        id: randomUUID7(),
         action: "audit",
         at: now,
         reason: input.reason ?? "NormalizedKey conflict resolved by keeping both memories",
@@ -15760,7 +16158,7 @@ async function promoteCodexPendingMemory(input) {
       });
     }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID6(),
+      id: randomUUID7(),
       action: "promote",
       at: now,
       reason: input.reason ?? "Approved by Codex pending memory review",
@@ -15845,7 +16243,7 @@ async function rejectCodexPendingMemory(input) {
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID6(),
+      id: randomUUID7(),
       action: "reject",
       at: now,
       reason: input.reason ?? "Rejected by Codex pending memory review",
@@ -15945,7 +16343,7 @@ async function editCodexPendingMemory(input) {
     );
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID6(),
+      id: randomUUID7(),
       action: "pending",
       at: now,
       reason: input.reason ?? "Edited by Codex pending memory review",
@@ -16011,14 +16409,14 @@ async function deferCodexPendingMemory(input) {
     }
     const deferredCandidate = {
       ...lockedCandidate,
-      promoteAfter: addDays(now, days)
+      promoteAfter: addDays2(now, days)
     };
     const nextPending = lockedPending.map(
       (memoryCandidate) => memoryCandidate.id === candidate.id ? deferredCandidate : memoryCandidate
     );
     await writePendingMemoriesFromRoot(lockedMemoryRoot, nextPending);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID6(),
+      id: randomUUID7(),
       action: "pending",
       at: now,
       reason: input.reason ?? "Deferred by Codex pending memory review",
@@ -16212,7 +16610,7 @@ function validateProjectId2(value) {
 function previewContent(content) {
   return content.length <= 160 ? content : `${content.slice(0, 157)}...`;
 }
-function addDays(iso, days) {
+function addDays2(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
@@ -16889,7 +17287,7 @@ function uniqueChecks(checks) {
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { lstat as lstat12, open as open3, readFile as readFile14, realpath as realpath6 } from "node:fs/promises";
 import { isAbsolute as isAbsolute5, join as join20, relative as relative5, resolve as resolve5 } from "node:path";
 
@@ -17008,7 +17406,7 @@ function mergeAbortSignals(timeoutSignal, inputSignal) {
 }
 
 // src/codex/admission-gate.ts
-import { randomUUID as randomUUID7 } from "node:crypto";
+import { randomUUID as randomUUID8 } from "node:crypto";
 var ONE_TIME_ACTION_PATTERN = /(?:使用|ran|run|checked|检查|修复|完成|准备|reviewed|looked at).*?(?:工具|tool|command|命令|问题|issue|review)/i;
 var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i;
 var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
@@ -17169,7 +17567,7 @@ function actionFor(draft, reasons, score) {
 }
 function decision(draft, action, reasons, scores, now, extras = {}) {
   return {
-    id: randomUUID7(),
+    id: randomUUID8(),
     draftId: draft.id,
     action,
     admissionScore: admissionScoreFor(scores),
@@ -17192,10 +17590,10 @@ function clamp(value) {
 }
 
 // src/codex/candidate-drafts.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 
 // src/codex/memory-propose.ts
-import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID9 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -17409,7 +17807,7 @@ function enforcePendingBudget(input) {
 function normalizedKeyForCodexMemoryCandidate(input) {
   return input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`);
 }
-var DEFAULT_SCORES = {
+var DEFAULT_SCORES2 = {
   evidenceStrength: 0.75,
   stability: 0.65,
   usefulness: 0.7,
@@ -17447,7 +17845,7 @@ async function proposeCodexMemoryCandidate(input) {
       if (input.recordRejectedCandidate !== false) {
         await appendTombstoneFromRoot(lockedMemoryRoot, decision2.tombstone);
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID8(),
+          id: randomUUID9(),
           action: "reject",
           at: now,
           reason: decision2.reason,
@@ -17498,7 +17896,7 @@ async function proposeCodexMemoryCandidate(input) {
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID8(),
+        id: randomUUID9(),
         action: "promote",
         at: now,
         reason: autoPromotion.reason,
@@ -17548,7 +17946,7 @@ async function proposeCodexMemoryCandidate(input) {
     }
     if (budgetResult.action === "evict_existing") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID8(),
+        id: randomUUID9(),
         action: "audit",
         at: now,
         reason: budgetResult.reason,
@@ -17573,7 +17971,7 @@ async function proposeCodexMemoryCandidate(input) {
       reason = activeReadinessReason;
     }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID8(),
+      id: randomUUID9(),
       action: "pending",
       at: now,
       reason,
@@ -17645,7 +18043,7 @@ function toPendingMemory(input, now) {
     type: input.type
   });
   return {
-    id: randomUUID8(),
+    id: randomUUID9(),
     domain: input.domain,
     type: input.type,
     strength: input.strength ?? "soft",
@@ -17655,11 +18053,11 @@ function toPendingMemory(input, now) {
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
     evidence: input.evidence,
     source: input.source ?? "assistant_observed",
-    scores: { ...DEFAULT_SCORES, ...input.scores },
+    scores: { ...DEFAULT_SCORES2, ...input.scores },
     seenCount: 1,
     firstSeenAt: now,
     lastSeenAt: now,
-    expiresAt: addDays2(now, 30),
+    expiresAt: addDays3(now, 30),
     ...input.admittedBy === void 0 ? {} : { admittedBy: input.admittedBy },
     ...input.admissionScore === void 0 ? {} : { admissionScore: input.admissionScore },
     ...input.admissionReasons === void 0 ? {} : { admissionReasons: input.admissionReasons },
@@ -17674,7 +18072,7 @@ function normalizeKey(value) {
   const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
   return slug.length > 0 ? slug : createHash6("sha256").update(value).digest("hex").slice(0, 16);
 }
-function addDays2(iso, days) {
+function addDays3(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
@@ -17690,7 +18088,7 @@ function toCandidateDraft(input) {
   });
   const scope = input.candidate.scope ?? "project";
   return {
-    id: randomUUID9(),
+    id: randomUUID10(),
     content: input.candidate.content,
     candidateKind,
     scope,
@@ -17739,6 +18137,9 @@ async function runCodexAdmissionPipeline(input) {
   ]);
   const admission = evaluateCandidateAdmission({ draft, pending, active, tombstones, now: input.now });
   await appendAdmissionDecisionFromRoot(memoryRoot, admission);
+  if (admission.action === "admit_to_distillation") {
+    await appendDistillationInputFromRoot(memoryRoot, distillationInputFromAdmission(draft, admission));
+  }
   if (admission.action !== "admit_to_pending" && admission.action !== "merge_with_existing") {
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
@@ -17768,6 +18169,23 @@ async function runCodexAdmissionPipeline(input) {
     admission
   };
 }
+function distillationInputFromAdmission(draft, admission) {
+  return {
+    id: `distillation-${admission.id}`,
+    sourceDraftIds: [draft.id],
+    sourceEpisodeIds: draft.sourceEpisodeIds,
+    sourceSemanticMemoryIds: admission.targetMemoryId === void 0 ? [] : [admission.targetMemoryId],
+    admissionDecisionIds: [admission.id],
+    ...draft.normalizedKey === void 0 ? {} : { normalizedKey: draft.normalizedKey },
+    candidateKind: draft.candidateKind,
+    scope: draft.scope,
+    domain: draft.domain,
+    sourceKinds: [draft.sourceKind],
+    rawContents: [draft.content],
+    evidenceRefs: draft.evidenceRefs,
+    createdAt: admission.createdAt
+  };
+}
 function disabledAdmission(input) {
   return {
     id: "admission-disabled-project",
@@ -17791,7 +18209,7 @@ function disabledAdmission(input) {
 }
 
 // src/codex/episode-memory.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 
 // src/codex/review-redaction.ts
 var RULES = [
@@ -17909,7 +18327,7 @@ function buildStopHookEpisode(input) {
   const sourceTraceIds = [sessionId, turnId].filter((value) => value !== void 0);
   const title = lastNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
   return {
-    id: input.id ?? randomUUID10(),
+    id: input.id ?? randomUUID11(),
     projectId: input.projectId,
     title: clean(title, ITEM_MAX_LENGTH),
     summary: clean(input.summary, SUMMARY_MAX_LENGTH),
@@ -18055,7 +18473,7 @@ function shortHash(value) {
 }
 
 // src/codex/hook-trace-store.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 import { appendFile as appendFile2, readFile as readFile12 } from "node:fs/promises";
 import { join as join17 } from "node:path";
 var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
@@ -18085,7 +18503,7 @@ async function appendCodexHookTrace(input) {
 }
 function createHookTraceRecord(input, cwd) {
   return {
-    id: randomUUID11(),
+    id: randomUUID12(),
     createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
     event: input.event,
     cwd: cleanString(cwd),
@@ -18920,7 +19338,7 @@ function isRecord3(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash9, randomUUID as randomUUID12 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID13 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile3 } from "node:fs/promises";
@@ -19019,7 +19437,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID12();
+  const summaryId = randomUUID13();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -19157,7 +19575,7 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor, con
   if (domain === void 0 || type === void 0 || content === void 0) {
     return void 0;
   }
-  const source = parseEnum(value.source, MEMORY_SOURCES);
+  const source = parseEnum(value.source, MEMORY_SOURCES2);
   const candidateKind = isMemoryCandidateKind(value.candidateKind) ? value.candidateKind : isMemoryCandidateKind(value.candidate_kind) ? value.candidate_kind : void 0;
   const candidate = {
     domain,
@@ -19374,7 +19792,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (messages.length === 0) {
     return { action: "noop", reason: "No transcript messages found." };
   }
-  const stopEpisodeId = randomUUID13();
+  const stopEpisodeId = randomUUID14();
   const review = await runReviewSummaryOrSkip({
     payload,
     cwd,
@@ -19537,7 +19955,7 @@ async function recordStopHookFailureSummary(cwd, payload, error2) {
       return { action: "noop", reason: "Project memory is disabled for this project." };
     }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID13();
+    const summaryId = randomUUID14();
     const sessionId = asString3(payload.session_id);
     const turnId = asString3(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -19572,7 +19990,7 @@ async function recordModelConfigSkippedSummary(cwd, payload) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID13();
+  const summaryId = randomUUID14();
   const sessionId = asString3(payload.session_id);
   const turnId = asString3(payload.turn_id);
   const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -20018,7 +20436,7 @@ async function removeExistingSkillSymlink(path) {
 }
 
 // src/codex/active-memory-review.ts
-import { createHash as createHash10, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash10, randomUUID as randomUUID15 } from "node:crypto";
 function contentHashForActiveMemory(memory) {
   return createHash10("sha256").update(JSON.stringify({
     id: memory.id,
@@ -20035,7 +20453,7 @@ async function archiveCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID14(),
+      id: randomUUID15(),
       action: "archive",
       at: now,
       reason: input.reason,
@@ -20066,12 +20484,12 @@ async function tombstoneCodexActiveMemory(input) {
     const tombstone = tombstoneForActiveMemory(memory, {
       reason: "deleted",
       now,
-      ...input.indefinite === true ? {} : { expiresAt: addDays3(now, input.days ?? 180) }
+      ...input.indefinite === true ? {} : { expiresAt: addDays4(now, input.days ?? 180) }
     });
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID14(),
+      id: randomUUID15(),
       action: "tombstone",
       at: now,
       reason: input.reason,
@@ -20098,7 +20516,7 @@ async function tombstoneCodexActiveMemory(input) {
 async function proposeEditCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, memory, now }) => {
     const candidate = {
-      id: randomUUID14(),
+      id: randomUUID15(),
       domain: memory.domain,
       type: memory.type,
       strength: memory.strength,
@@ -20113,7 +20531,7 @@ async function proposeEditCodexActiveMemory(input) {
       seenCount: 1,
       firstSeenAt: now,
       lastSeenAt: now,
-      expiresAt: addDays3(now, 30),
+      expiresAt: addDays4(now, 30),
       ...memory.userConfirmed === void 0 ? {} : { userConfirmed: memory.userConfirmed },
       ...memory.profileVisibility === void 0 ? {} : { profileVisibility: memory.profileVisibility },
       ...memory.candidateKind === void 0 ? {} : { candidateKind: memory.candidateKind },
@@ -20124,7 +20542,7 @@ async function proposeEditCodexActiveMemory(input) {
     const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
     await writePendingMemoriesFromRoot(lockedMemoryRoot, [...lockedPending, candidate]);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID14(),
+      id: randomUUID15(),
       action: "pending",
       at: now,
       reason: input.reason,
@@ -20236,7 +20654,7 @@ async function supersedeCodexActiveMemory(input) {
     await writePendingMemoriesFromRoot(lockedMemoryRoot, lockedPending.filter((item) => item.id !== candidate.id));
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID14(),
+      id: randomUUID15(),
       action: "supersede",
       at: now,
       reason: input.reason,
@@ -20346,7 +20764,7 @@ function lifecycleMemorySnapshot2(memory, status) {
     status
   };
 }
-function addDays3(iso, days) {
+function addDays4(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
@@ -20618,8 +21036,58 @@ function errorMessage3(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 
+// src/codex/codex-memory-migrate-v2.ts
+import { lstat as lstat14 } from "node:fs/promises";
+async function runCodexMemoryMigrateV2(input) {
+  const currentProject = await identifyCodexProject(input.cwd);
+  const roots = /* @__PURE__ */ new Map();
+  const addRoot = (root) => {
+    roots.set(`${root.scope}:${root.projectId ?? "global"}:${root.memoryRoot}`, root);
+  };
+  addRoot({ scope: "global", memoryRoot: codexGlobalMemoryRoot() });
+  addRoot({ scope: "project", projectId: currentProject.projectId, memoryRoot: codexProjectMemoryRoot(currentProject.projectId) });
+  if (input.allProjects === true) {
+    for (const project of await listCodexProjects().catch(() => [])) {
+      addRoot({ scope: "project", projectId: project.projectId, memoryRoot: codexProjectMemoryRoot(project.projectId) });
+    }
+  }
+  const results = [];
+  for (const root of roots.values()) {
+    const readable = await readableMemoryRoot(root.memoryRoot);
+    if (!readable.ok) {
+      results.push({
+        ...root,
+        skipped: true,
+        reason: readable.reason
+      });
+      continue;
+    }
+    results.push({
+      ...root,
+      ...await migrateMemoryRootToSemanticV2FromRoot(root.memoryRoot, { now: input.now })
+    });
+  }
+  return {
+    action: "migrate_semantic_memory_v2",
+    roots: results
+  };
+}
+async function readableMemoryRoot(memoryRoot) {
+  try {
+    const stats = await lstat14(memoryRoot);
+    if (stats.isSymbolicLink()) return { ok: false, reason: "memory root is a symlink" };
+    if (!stats.isDirectory()) return { ok: false, reason: "memory root is not a directory" };
+    return { ok: true };
+  } catch (error2) {
+    if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
+      return { ok: false, reason: "memory root does not exist" };
+    }
+    throw error2;
+  }
+}
+
 // src/codex/triage-apply.ts
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 function applySafeTriageDecisions(input) {
   const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
   const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
@@ -20670,7 +21138,7 @@ function applySafeTriageDecisions(input) {
       if (candidate === void 0 || !retainedIds.has(candidate.id)) continue;
       const deferredCandidate = {
         ...candidate,
-        promoteAfter: addDays4(input.now, decision2.days)
+        promoteAfter: addDays5(input.now, decision2.days)
       };
       byId.set(candidate.id, deferredCandidate);
       events.push(memoryEventForTriageDecision("pending", deferredCandidate, input.now, decision2.reason, {
@@ -20713,7 +21181,7 @@ function tombstoneForAutoDroppedCandidate(candidate, now) {
 }
 function memoryEventForTriageDecision(action, candidate, now, reason, details) {
   return {
-    id: randomUUID15(),
+    id: randomUUID16(),
     action,
     at: now,
     reason,
@@ -20747,7 +21215,7 @@ function pendingCandidateAuditSnapshot(candidate) {
     evidence: candidate.evidence
   };
 }
-function addDays4(iso, days) {
+function addDays5(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
@@ -22243,28 +22711,101 @@ function renderInbox() {
 
 function renderCandidateRow(candidate) {
   const selected = state.selectedPendingId === candidate.id
+  return renderSemanticReviewCard(candidate, { selected, compact: true })
+}
+
+function renderSemanticReviewCard(candidate, options = {}) {
+  const selected = options.selected === true
+  const compact = options.compact === true
+  const memory = semanticMemoryForCandidate(candidate)
   const readiness = candidate.readiness || candidate.activeReadiness || {}
   const readinessStatus = readiness.status || (readiness.ready === false ? 'needs_rewrite' : 'ready')
   const targetShape = readiness.targetShape || readiness.suggestedShape || 'review'
-  const readinessLabel = readinessStatus === 'needs_rewrite'
-    ? \`needs rewrite \xB7 \${targetShape}\`
-    : \`\${readinessStatus} \xB7 \${targetShape}\`
+  const evidence = Array.isArray(memory.evidence) ? memory.evidence : []
+  const evidencePreview = evidence[0] || candidate.episodeEvidence || {}
+  const reviewPolicy = memory.reviewPolicy || memory.routing?.updatePolicy || 'pending_review'
+  const risk = candidate.risk || memory.routing?.risk || 'pending'
   return \`
-    <article class="data-row candidate-row selectable-row \${selected ? 'selected' : ''}" data-pending-id="\${escapeHtml(candidate.id)}">
-      <div>
-        <div class="row-title">\${escapeHtml(candidate.content || candidate.id || 'Pending candidate')}</div>
-        <div class="row-meta">
-          \${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
-          \${candidate.reviewHash ? \` \xB7 review \${escapeHtml(shortHash(candidate.reviewHash))}\` : ''}
-          \xB7 target \${escapeHtml(targetShape)}
+    <article class="memory-review-card selectable-row \${selected ? 'selected' : ''}" data-pending-id="\${escapeHtml(candidate.id)}">
+      <header class="memory-review-header">
+        <div>
+          <p class="eyebrow">\${escapeHtml(memory.module || 'semantic memory')} \xB7 \${escapeHtml(memory.status || 'pending')}</p>
+          <h3>\${escapeHtml(memory.content || candidate.content || candidate.id || 'Pending candidate')}</h3>
         </div>
-      </div>
-      <div class="row-actions">
-        \${statusChip('Readiness', readinessLabel, readinessTone(readinessStatus))}
-        \${statusChip('Action', candidate.recommendation || 'review', recommendationTone(candidate.recommendation))}
-        \${statusChip('Risk', candidate.risk || 'pending', riskTone(candidate.risk))}
+        <div class="row-actions">
+          \${statusChip('Readiness', \`\${readinessStatus} \xB7 \${targetShape}\`, readinessTone(readinessStatus))}
+          \${statusChip('Action', candidate.recommendation || 'review', recommendationTone(candidate.recommendation))}
+          \${statusChip('Risk', risk, riskTone(risk))}
+        </div>
+      </header>
+      <div class="memory-review-sections \${compact ? 'compact' : ''}">
+        \${reviewSection('What will be remembered', [
+          ['Content', memory.content || candidate.content || ''],
+          ['Why it matters', evidencePreview.whyImportant || candidate.episodeEvidence?.whyImportant || 'Review before this becomes active memory.']
+        ])}
+        \${reviewSection('Identity', [
+          ['Kind', memory.kind || candidate.candidateKind || candidate.type || 'memory'],
+          ['Module', memory.module || 'project_semantic'],
+          ['Scope', memory.scope || candidate.scope || 'project'],
+          ['Domain', memory.domain || candidate.domain || 'project']
+        ])}
+        \${reviewSection('Policy', [
+          ['Review policy', reviewPolicy],
+          ['Readiness', \`\${readinessStatus} \xB7 \${targetShape}\`],
+          ['Recommendation', candidate.recommendation || 'review'],
+          ['Review hash', shortHash(candidate.reviewHash || '')]
+        ])}
+        \${reviewSection('Use boundaries', [
+          ['Use when', formatValueList(memory.useWhen || candidate.proposedSemanticMemory?.useWhen)],
+          ['Do not use when', formatValueList(memory.doNotUseWhen || candidate.proposedSemanticMemory?.doNotUseWhen)]
+        ])}
+        \${reviewSection('Evidence', [
+          ['When', evidencePreview.when || candidate.episodeEvidence?.when || 'unknown'],
+          ['What happened', evidencePreview.whatHappened || candidate.episodeEvidence?.whatHappened || 'No event summary available.'],
+          ['Source', evidencePreview.sourceKind || evidencePreview.source || candidate.source || 'unknown']
+        ])}
       </div>
     </article>
+  \`
+}
+
+function semanticMemoryForCandidate(candidate) {
+  if (candidate.semanticMemory) return candidate.semanticMemory
+  const proposed = candidate.proposedSemanticMemory || {}
+  return {
+    id: candidate.id,
+    status: 'pending',
+    module: candidate.domain === 'procedural' ? 'procedural' : 'project_semantic',
+    kind: candidate.candidateKind || proposed.type || candidate.type || 'project_fact',
+    scope: candidate.scope || proposed.scope || 'project',
+    domain: candidate.domain || 'project',
+    content: candidate.content || proposed.content || '',
+    useWhen: proposed.useWhen || [],
+    doNotUseWhen: proposed.doNotUseWhen || [],
+    reviewPolicy: 'pending_review',
+    routing: { risk: candidate.risk || 'low', updatePolicy: 'pending_review' },
+    evidence: candidate.episodeEvidence ? [{
+      when: candidate.episodeEvidence.when,
+      whatHappened: candidate.episodeEvidence.whatHappened,
+      whyImportant: candidate.episodeEvidence.whyImportant,
+      sourceKind: candidate.episodeEvidence.source
+    }] : []
+  }
+}
+
+function reviewSection(title, rows) {
+  return \`
+    <section class="review-section">
+      <h4>\${escapeHtml(title)}</h4>
+      <dl>
+        \${rows.map(([label, value]) => \`
+          <div>
+            <dt>\${escapeHtml(label)}</dt>
+            <dd>\${escapeHtml(value || 'none')}</dd>
+          </div>
+        \`).join('')}
+      </dl>
+    </section>
   \`
 }
 
@@ -22879,18 +23420,9 @@ function renderPendingDetail(candidate) {
   if (state.pendingAction) return renderConfirmForm(candidate, state.pendingAction)
   return \`
     <div class="rail-stack">
+      \${renderSemanticReviewCard(candidate, { compact: false })}
       <div class="soft-panel">
-        <h3>Pending detail</h3>
-        <p>\${escapeHtml(candidate.content)}</p>
-        <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
-        <div class="soft-inset rail-item"><strong>Recommended action</strong><span>\${escapeHtml(candidate.recommendation || 'review')}</span></div>
-        <div class="soft-inset rail-item"><strong>Priority / Risk</strong><span>\${escapeHtml(candidate.risk || 'pending')}</span></div>
-        \${renderReadinessReview(candidate.readiness, candidate.activeReadiness)}
-        \${renderEpisodeEvidence(candidate.episodeEvidence)}
-        \${renderProposedSemanticMemory(candidate.proposedSemanticMemory)}
-      </div>
-      <div class="soft-panel">
-        <h3>Actions</h3>
+        <h3>Review Action</h3>
         <p>\${escapeHtml(WRITE_ACTION_COPY)}</p>
         <div class="detail-actions">
           \${['approve', 'reject', 'defer', 'edit'].map((action) => \`
@@ -22946,9 +23478,7 @@ function readinessReasonItems(readiness, activeReadiness) {
 }
 
 function formatReadinessReason(reason) {
-  return reason.code === reason.text
-    ? reason.text
-    : \`\${reason.code}: \${reason.text}\`
+  return reason.text || reason.code || 'Review reason present.'
 }
 
 function renderEpisodeEvidence(evidence) {
@@ -23397,7 +23927,7 @@ export { TABS, WRITE_ACTION_COPY, escapeHtml }
   },
   "/styles.css": {
     "contentType": "text/css; charset=utf-8",
-    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.triage-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 12px;\n  margin-bottom: 12px;\n}\n\n.explain-list {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-list {\n  display: grid;\n  gap: 10px;\n  margin: 12px 0 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-item {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.row-actions {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 360px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.active-action-form {\n  border-color: rgba(93, 184, 166, 0.3);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n\n  .row-actions {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
+    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.triage-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 12px;\n  margin-bottom: 12px;\n}\n\n.explain-list {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-list {\n  display: grid;\n  gap: 10px;\n  margin: 12px 0 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-item {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.memory-review-card {\n  display: grid;\n  gap: 12px;\n  min-width: 0;\n  padding: 14px 0;\n  border-top: 1px solid var(--line);\n}\n\n.memory-review-card:first-of-type {\n  border-top: 0;\n}\n\n.memory-review-header {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.memory-review-header h3 {\n  margin: 2px 0 0;\n  color: var(--ink);\n  font-size: 15px;\n  line-height: 1.35;\n  overflow-wrap: anywhere;\n}\n\n.memory-review-sections {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 10px;\n}\n\n.memory-review-sections.compact {\n  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));\n}\n\n.review-section {\n  min-width: 0;\n  padding: 10px;\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.review-section h4 {\n  margin: 0 0 8px;\n  color: var(--ink);\n  font-size: 12px;\n  line-height: 1.25;\n}\n\n.review-section dl {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n}\n\n.review-section dl div {\n  display: grid;\n  gap: 2px;\n  min-width: 0;\n}\n\n.review-section dt {\n  color: var(--muted);\n  font-size: 11px;\n  font-weight: 650;\n}\n\n.review-section dd {\n  margin: 0;\n  color: var(--body);\n  font-size: 13px;\n  line-height: 1.35;\n  overflow-wrap: anywhere;\n}\n\n.detail-rail .memory-review-card {\n  cursor: default;\n  padding: 0;\n  border-top: 0;\n}\n\n.detail-rail .memory-review-header {\n  grid-template-columns: 1fr;\n}\n\n.detail-rail .memory-review-header .row-actions {\n  justify-content: flex-start;\n  max-width: none;\n}\n\n.detail-rail .memory-review-sections {\n  grid-template-columns: 1fr;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.row-actions {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 360px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.active-action-form {\n  border-color: rgba(93, 184, 166, 0.3);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n\n  .row-actions {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
   }
 };
 
@@ -23725,15 +24255,15 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
-import { lstat as lstat14, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { randomUUID as randomUUID17 } from "node:crypto";
+import { lstat as lstat15, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
 var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID16();
+  const proposalId = randomUUID17();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
     reportPath: join24(previewDir, DREAM_REPORT_FILE),
@@ -23820,7 +24350,7 @@ function renderDreamReport(input) {
 async function ensurePreviewDir(memoryRoot) {
   const previewDir = join24(memoryRoot, DREAM_PREVIEW_DIR);
   await mkdir11(previewDir, { recursive: true });
-  const stats = await lstat14(previewDir);
+  const stats = await lstat15(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
   }
@@ -23831,7 +24361,7 @@ async function ensurePreviewDir(memoryRoot) {
 }
 async function getExistingPreviewDir(memoryRoot) {
   const previewDir = join24(memoryRoot, DREAM_PREVIEW_DIR);
-  const stats = await lstat14(previewDir);
+  const stats = await lstat15(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
   }
@@ -23846,7 +24376,7 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID16()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID17()}.tmp`;
   await writeFile9(tempPath, content, "utf8");
   await rename5(tempPath, filePath);
 }
@@ -23855,12 +24385,12 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
-import { lstat as lstat16, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
+import { randomUUID as randomUUID18 } from "node:crypto";
+import { lstat as lstat17, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
 // src/codex/dream-proposal.ts
-import { lstat as lstat15, realpath as realpath8 } from "node:fs/promises";
+import { lstat as lstat16, realpath as realpath8 } from "node:fs/promises";
 async function buildDreamProposalForRoot(input) {
   const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot);
   const active = await readActiveMemoriesFromRoot(memoryRoot);
@@ -24020,7 +24550,7 @@ async function buildDreamProposalForRoot(input) {
 }
 async function resolveReadableMemoryRootPath(memoryRoot) {
   try {
-    const stats = await lstat15(memoryRoot);
+    const stats = await lstat16(memoryRoot);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use memory symlink: ${memoryRoot}`);
     }
@@ -24179,7 +24709,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID17(),
+      id: randomUUID18(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -24204,7 +24734,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID17(),
+        id: randomUUID18(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -24330,7 +24860,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID17(),
+        id: randomUUID18(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -24465,7 +24995,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
   const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID17();
+  const token = randomUUID18();
   while (true) {
     try {
       await mkdir12(lockDir);
@@ -24494,7 +25024,7 @@ async function ensureDreamLocksDir(memoryRoot) {
       throw error2;
     }
   });
-  const stats = await lstat16(locksDir);
+  const stats = await lstat17(locksDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream locks path: ${locksDir}`);
   }
@@ -24503,7 +25033,7 @@ async function ensureDreamLocksDir(memoryRoot) {
 async function readDreamLockOwner(lockDir) {
   let stats;
   try {
-    stats = await lstat16(lockDir);
+    stats = await lstat17(lockDir);
   } catch (error2) {
     if (isFileErrorCode14(error2, "ENOENT")) {
       return void 0;
@@ -24545,7 +25075,7 @@ async function removeDreamLockIfOwner(lockDir, expectedOwner) {
   return true;
 }
 async function isDreamLockDirStale(lockDir, now, ttlMs) {
-  const stats = await lstat16(lockDir);
+  const stats = await lstat17(lockDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
@@ -24576,8 +25106,8 @@ function isFileErrorCode14(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash11, randomUUID as randomUUID18 } from "node:crypto";
-import { lstat as lstat17, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
+import { createHash as createHash11, randomUUID as randomUUID19 } from "node:crypto";
+import { lstat as lstat18, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
@@ -24706,7 +25236,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID18(),
+      id: randomUUID19(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -24953,7 +25483,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID18()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID19()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -24963,7 +25493,7 @@ async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID18()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID19()}.tmp`;
   await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename6(tempPath, targetPath);
 }
@@ -25000,7 +25530,7 @@ function formatPendingProfilePatch(candidates) {
 }
 async function assertSafeProfileFileTarget(targetPath, label) {
   try {
-    const stats = await lstat17(targetPath);
+    const stats = await lstat18(targetPath);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use ${label} symlink: ${targetPath}`);
     }
@@ -25103,7 +25633,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash12, randomUUID as randomUUID19 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID20 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -25218,7 +25748,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID19(),
+      id: randomUUID20(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -25423,6 +25953,14 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
+  if (command === "memory" && input.args[1] === "migrate-v2") {
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryMigrateV2({
+      cwd: input.cwd,
+      allProjects: input.args.includes("--all-projects")
+    }), null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "active" && input.args[2] === "archive") {
     process.stdout.write(await runCodexMemoryActiveArchive({
       cwd: input.cwd,
@@ -25565,7 +26103,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory distill [--dry-run]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -40015,7 +40553,7 @@ var memoryCandidateSchema = external_exports.object({
   candidate_kind: memoryCandidateKindSchema.optional(),
   content: external_exports.string(),
   normalizedKey: external_exports.string().optional(),
-  source: external_exports.enum(MEMORY_SOURCES).optional(),
+  source: external_exports.enum(MEMORY_SOURCES2).optional(),
   evidence: external_exports.array(
     external_exports.object({
       runId: external_exports.string().optional(),
@@ -40025,7 +40563,7 @@ var memoryCandidateSchema = external_exports.object({
       sessionId: external_exports.string().optional(),
       taskHash: external_exports.string().optional(),
       quoteHash: external_exports.string().optional(),
-      sourceKind: external_exports.enum(MEMORY_SOURCES).optional()
+      sourceKind: external_exports.enum(MEMORY_SOURCES2).optional()
     })
   ),
   scores: external_exports.object({

@@ -237,6 +237,7 @@ describe('handleCodexUiApiRequest', () => {
           id: string
           reviewHash: string
           readiness: { status: string; reasons: Array<{ code: string; text: string }> }
+          semanticMemory: { status: string; module: string; kind: string; content: string; useWhen: string[]; evidence: unknown[] }
           episodeEvidence: { when: string; whatHappened: string }
           proposedSemanticMemory: { type: string; useWhen: string[] }
         }>
@@ -246,6 +247,14 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.pending[0].readiness.status).toBe('ready')
       expect(data.pending[0].readiness.reasons.length).toBeGreaterThan(0)
       expect(data.pending[0].readiness.reasons.every((reason) => reason.text.length <= 120)).toBe(true)
+      expect(data.pending[0].semanticMemory).toMatchObject({
+        status: 'pending',
+        module: 'procedural',
+        kind: 'workflow_rule',
+        content: 'Keep memory review pending-only in the UI.'
+      })
+      expect(data.pending[0].semanticMemory.useWhen.length).toBeGreaterThan(0)
+      expect(data.pending[0].semanticMemory.evidence.length).toBeGreaterThan(0)
       expect(data.pending[0].episodeEvidence.whatHappened).not.toBe('')
       expect(data.pending[0].proposedSemanticMemory.useWhen.length).toBeGreaterThan(0)
     }

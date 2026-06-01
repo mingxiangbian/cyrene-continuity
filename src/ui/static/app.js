@@ -386,28 +386,101 @@ function renderInbox() {
 
 function renderCandidateRow(candidate) {
   const selected = state.selectedPendingId === candidate.id
+  return renderSemanticReviewCard(candidate, { selected, compact: true })
+}
+
+function renderSemanticReviewCard(candidate, options = {}) {
+  const selected = options.selected === true
+  const compact = options.compact === true
+  const memory = semanticMemoryForCandidate(candidate)
   const readiness = candidate.readiness || candidate.activeReadiness || {}
   const readinessStatus = readiness.status || (readiness.ready === false ? 'needs_rewrite' : 'ready')
   const targetShape = readiness.targetShape || readiness.suggestedShape || 'review'
-  const readinessLabel = readinessStatus === 'needs_rewrite'
-    ? `needs rewrite · ${targetShape}`
-    : `${readinessStatus} · ${targetShape}`
+  const evidence = Array.isArray(memory.evidence) ? memory.evidence : []
+  const evidencePreview = evidence[0] || candidate.episodeEvidence || {}
+  const reviewPolicy = memory.reviewPolicy || memory.routing?.updatePolicy || 'pending_review'
+  const risk = candidate.risk || memory.routing?.risk || 'pending'
   return `
-    <article class="data-row candidate-row selectable-row ${selected ? 'selected' : ''}" data-pending-id="${escapeHtml(candidate.id)}">
-      <div>
-        <div class="row-title">${escapeHtml(candidate.content || candidate.id || 'Pending candidate')}</div>
-        <div class="row-meta">
-          ${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
-          ${candidate.reviewHash ? ` · review ${escapeHtml(shortHash(candidate.reviewHash))}` : ''}
-          · target ${escapeHtml(targetShape)}
+    <article class="memory-review-card selectable-row ${selected ? 'selected' : ''}" data-pending-id="${escapeHtml(candidate.id)}">
+      <header class="memory-review-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(memory.module || 'semantic memory')} · ${escapeHtml(memory.status || 'pending')}</p>
+          <h3>${escapeHtml(memory.content || candidate.content || candidate.id || 'Pending candidate')}</h3>
         </div>
-      </div>
-      <div class="row-actions">
-        ${statusChip('Readiness', readinessLabel, readinessTone(readinessStatus))}
-        ${statusChip('Action', candidate.recommendation || 'review', recommendationTone(candidate.recommendation))}
-        ${statusChip('Risk', candidate.risk || 'pending', riskTone(candidate.risk))}
+        <div class="row-actions">
+          ${statusChip('Readiness', `${readinessStatus} · ${targetShape}`, readinessTone(readinessStatus))}
+          ${statusChip('Action', candidate.recommendation || 'review', recommendationTone(candidate.recommendation))}
+          ${statusChip('Risk', risk, riskTone(risk))}
+        </div>
+      </header>
+      <div class="memory-review-sections ${compact ? 'compact' : ''}">
+        ${reviewSection('What will be remembered', [
+          ['Content', memory.content || candidate.content || ''],
+          ['Why it matters', evidencePreview.whyImportant || candidate.episodeEvidence?.whyImportant || 'Review before this becomes active memory.']
+        ])}
+        ${reviewSection('Identity', [
+          ['Kind', memory.kind || candidate.candidateKind || candidate.type || 'memory'],
+          ['Module', memory.module || 'project_semantic'],
+          ['Scope', memory.scope || candidate.scope || 'project'],
+          ['Domain', memory.domain || candidate.domain || 'project']
+        ])}
+        ${reviewSection('Policy', [
+          ['Review policy', reviewPolicy],
+          ['Readiness', `${readinessStatus} · ${targetShape}`],
+          ['Recommendation', candidate.recommendation || 'review'],
+          ['Review hash', shortHash(candidate.reviewHash || '')]
+        ])}
+        ${reviewSection('Use boundaries', [
+          ['Use when', formatValueList(memory.useWhen || candidate.proposedSemanticMemory?.useWhen)],
+          ['Do not use when', formatValueList(memory.doNotUseWhen || candidate.proposedSemanticMemory?.doNotUseWhen)]
+        ])}
+        ${reviewSection('Evidence', [
+          ['When', evidencePreview.when || candidate.episodeEvidence?.when || 'unknown'],
+          ['What happened', evidencePreview.whatHappened || candidate.episodeEvidence?.whatHappened || 'No event summary available.'],
+          ['Source', evidencePreview.sourceKind || evidencePreview.source || candidate.source || 'unknown']
+        ])}
       </div>
     </article>
+  `
+}
+
+function semanticMemoryForCandidate(candidate) {
+  if (candidate.semanticMemory) return candidate.semanticMemory
+  const proposed = candidate.proposedSemanticMemory || {}
+  return {
+    id: candidate.id,
+    status: 'pending',
+    module: candidate.domain === 'procedural' ? 'procedural' : 'project_semantic',
+    kind: candidate.candidateKind || proposed.type || candidate.type || 'project_fact',
+    scope: candidate.scope || proposed.scope || 'project',
+    domain: candidate.domain || 'project',
+    content: candidate.content || proposed.content || '',
+    useWhen: proposed.useWhen || [],
+    doNotUseWhen: proposed.doNotUseWhen || [],
+    reviewPolicy: 'pending_review',
+    routing: { risk: candidate.risk || 'low', updatePolicy: 'pending_review' },
+    evidence: candidate.episodeEvidence ? [{
+      when: candidate.episodeEvidence.when,
+      whatHappened: candidate.episodeEvidence.whatHappened,
+      whyImportant: candidate.episodeEvidence.whyImportant,
+      sourceKind: candidate.episodeEvidence.source
+    }] : []
+  }
+}
+
+function reviewSection(title, rows) {
+  return `
+    <section class="review-section">
+      <h4>${escapeHtml(title)}</h4>
+      <dl>
+        ${rows.map(([label, value]) => `
+          <div>
+            <dt>${escapeHtml(label)}</dt>
+            <dd>${escapeHtml(value || 'none')}</dd>
+          </div>
+        `).join('')}
+      </dl>
+    </section>
   `
 }
 
@@ -1022,18 +1095,9 @@ function renderPendingDetail(candidate) {
   if (state.pendingAction) return renderConfirmForm(candidate, state.pendingAction)
   return `
     <div class="rail-stack">
+      ${renderSemanticReviewCard(candidate, { compact: false })}
       <div class="soft-panel">
-        <h3>Pending detail</h3>
-        <p>${escapeHtml(candidate.content)}</p>
-        <div class="soft-inset rail-item"><strong>reviewHash</strong><span>${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
-        <div class="soft-inset rail-item"><strong>Recommended action</strong><span>${escapeHtml(candidate.recommendation || 'review')}</span></div>
-        <div class="soft-inset rail-item"><strong>Priority / Risk</strong><span>${escapeHtml(candidate.risk || 'pending')}</span></div>
-        ${renderReadinessReview(candidate.readiness, candidate.activeReadiness)}
-        ${renderEpisodeEvidence(candidate.episodeEvidence)}
-        ${renderProposedSemanticMemory(candidate.proposedSemanticMemory)}
-      </div>
-      <div class="soft-panel">
-        <h3>Actions</h3>
+        <h3>Review Action</h3>
         <p>${escapeHtml(WRITE_ACTION_COPY)}</p>
         <div class="detail-actions">
           ${['approve', 'reject', 'defer', 'edit'].map((action) => `
@@ -1089,9 +1153,7 @@ function readinessReasonItems(readiness, activeReadiness) {
 }
 
 function formatReadinessReason(reason) {
-  return reason.code === reason.text
-    ? reason.text
-    : `${reason.code}: ${reason.text}`
+  return reason.text || reason.code || 'Review reason present.'
 }
 
 function renderEpisodeEvidence(evidence) {

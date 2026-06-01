@@ -227,6 +227,29 @@ export interface RoutedMemoryTarget {
   reasons: string[]
 }
 
+export interface SemanticMemoryReviewState {
+  normalizedKey?: string
+  type?: MemoryType
+  strength?: MemoryStrength
+  source?: MemorySource
+  portability?: MemoryPortability
+  profileVisibility?: MemoryProfileVisibility
+  scores?: MemoryScores
+  tags?: string[]
+  seenCount?: number
+  firstSeenAt?: string
+  lastSeenAt?: string
+  promoteAfter?: string
+  admittedBy?: 'admission_gate_v1'
+  admissionScore?: number
+  admissionReasons?: string[]
+  sourceEpisodeIds?: string[]
+  sourceDraftIds?: string[]
+  userConfirmed?: boolean
+  normalizedKeyConflictResolution?: 'keep_both'
+  conflictsWith?: string[]
+}
+
 export interface SemanticMemory {
   id: string
   status: SemanticMemoryStatus
@@ -241,6 +264,7 @@ export interface SemanticMemory {
   evidence: StructuredEvidence[]
   routing?: RoutedMemoryTarget
   reviewPolicy: UpdatePolicy
+  reviewState?: SemanticMemoryReviewState
   supersedes: string[]
   expiresAt?: string
   reviewAfter?: string

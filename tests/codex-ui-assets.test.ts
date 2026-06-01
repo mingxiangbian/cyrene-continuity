@@ -20,7 +20,7 @@ describe('Codex UI source assets', () => {
     expect(css).toContain('.explain-list')
   })
 
-  it('renders structured pending review detail without raw evidence summaries', async () => {
+  it('renders semantic memory review detail without raw evidence summaries', async () => {
     const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
     const pendingDetailStart = source.indexOf('function renderPendingDetail(candidate)')
     const confirmFormStart = source.indexOf('function renderConfirmForm(candidate, action)')
@@ -28,27 +28,26 @@ describe('Codex UI source assets', () => {
 
     expect(pendingDetailStart).toBeGreaterThanOrEqual(0)
     expect(confirmFormStart).toBeGreaterThan(pendingDetailStart)
-    expect(pendingDetail).toContain('Pending detail')
-    expect(pendingDetail).toContain('reviewHash')
-    expect(pendingDetail).toContain('renderReadinessReview')
-    expect(pendingDetail).toContain('renderEpisodeEvidence')
-    expect(pendingDetail).toContain('renderProposedSemanticMemory')
-    expect(pendingDetail).toContain('Actions')
+    expect(pendingDetail).toContain('renderSemanticReviewCard')
+    expect(pendingDetail).toContain('Review Action')
+    expect(source).toContain('What will be remembered')
+    expect(source).toContain('Identity')
+    expect(source).toContain('Policy')
+    expect(source).toContain('Use boundaries')
+    expect(source).toContain('Evidence')
     expect(pendingDetail).not.toContain('renderEvidence')
     expect(pendingDetail).not.toContain('evidenceSummary')
     expect(source).not.toContain('function renderEvidence(candidate)')
   })
 
-  it('renders structured readiness review sections in pending rows and detail rail', async () => {
+  it('renders semantic review sections in pending rows and detail rail', async () => {
     const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
 
-    expect(source).toContain('renderReadinessReview')
-    expect(source).toContain('renderEpisodeEvidence')
-    expect(source).toContain('renderProposedSemanticMemory')
-    expect(source).toContain('Target shape')
-    expect(source).toContain('Episode Evidence')
-    expect(source).toContain('Proposed Semantic Memory')
-    expect(source).toContain('Rewrite hint')
+    expect(source).toContain('renderSemanticReviewCard')
+    expect(source).toContain('semanticMemoryForCandidate')
+    expect(source).toContain('Review policy')
+    expect(source).toContain('Review hash')
+    expect(source).toContain('What happened')
   })
 
   it('contains the Warm Cream Coral console shell and write-confirm review labels', async () => {

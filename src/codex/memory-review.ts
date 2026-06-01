@@ -29,6 +29,7 @@ import {
   validateMemoryCandidate
 } from '../memory/memory-validator.js'
 import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
+import { pendingMemoryToSemanticMemory } from '../memory/semantic-memory-adapter.js'
 import { listCodexProjects } from './project-registry.js'
 import type {
   CyreneMemory,
@@ -36,7 +37,8 @@ import type {
   MemoryConflictResolution,
   MemoryScores,
   MemoryTombstone,
-  PendingMemory
+  PendingMemory,
+  SemanticMemory
 } from '../memory/types.js'
 import { MEMORY_CONFLICT_RESOLUTIONS } from '../memory/types.js'
 
@@ -102,6 +104,7 @@ export interface CodexPendingMemorySummary {
   activeReadiness: ActiveMemoryReadinessResult
   readiness: CodexPendingReadinessReview
   episodeEvidence: CodexPendingEpisodeEvidence
+  semanticMemory: SemanticMemory
   proposedSemanticMemory: CodexPendingProposedSemanticMemory
   risk: CodexPendingMemoryRisk
   sensitivity: number
@@ -286,51 +289,36 @@ export interface CodexPendingMemoryDeferResult {
 const NORMALIZED_KEY_CONFLICT_RESOLUTIONS: MemoryConflictResolution[] = [...MEMORY_CONFLICT_RESOLUTIONS]
 
 export function reviewHashForPendingMemory(candidate: PendingMemory): string {
+  return reviewHashForSemanticMemory(pendingMemoryToSemanticMemory(candidate))
+}
+
+export function reviewHashForSemanticMemory(memory: SemanticMemory): string {
   const payload = {
-    id: candidate.id,
-    domain: candidate.domain,
-    type: candidate.type,
-    strength: candidate.strength,
-    scope: candidate.scope,
-    status: candidate.status,
-    content: candidate.content,
-    normalizedKey: candidate.normalizedKey,
-    evidence: candidate.evidence.map((entry) => ({
-      runId: entry.runId ?? null,
-      messageIds: entry.messageIds ?? null,
-      traceRefs: entry.traceRefs ?? null,
-      quote: entry.quote ?? null,
-      summary: entry.summary ?? null,
-      evidenceGroupId: entry.evidenceGroupId ?? null,
-      sessionId: entry.sessionId ?? null,
-      taskHash: entry.taskHash ?? null,
-      quoteHash: entry.quoteHash ?? null,
-      sourceKind: entry.sourceKind ?? null
-    })),
-    source: candidate.source,
-    portability: candidate.portability ?? null,
-    profileVisibility: candidate.profileVisibility ?? null,
-    scores: {
-      evidenceStrength: candidate.scores.evidenceStrength,
-      stability: candidate.scores.stability,
-      usefulness: candidate.scores.usefulness,
-      safety: candidate.scores.safety,
-      sensitivity: candidate.scores.sensitivity
-    },
-    seenCount: candidate.seenCount,
-    firstSeenAt: candidate.firstSeenAt,
-    lastSeenAt: candidate.lastSeenAt,
-    promoteAfter: candidate.promoteAfter ?? null,
-    expiresAt: candidate.expiresAt,
-    userConfirmed: candidate.userConfirmed ?? null,
-    candidateKind: deriveMemoryCandidateKind(candidate),
-    tags: candidate.tags,
-    conflictsWith: candidate.conflictsWith ?? null
+    id: memory.id,
+    status: memory.status,
+    module: memory.module,
+    kind: memory.kind,
+    scope: memory.scope,
+    domain: memory.domain,
+    content: memory.content,
+    useWhen: memory.useWhen,
+    doNotUseWhen: memory.doNotUseWhen,
+    sourceOfTruth: memory.sourceOfTruth ?? null,
+    evidence: memory.evidence,
+    routing: memory.routing ?? null,
+    reviewPolicy: memory.reviewPolicy,
+    reviewState: memory.reviewState ?? null,
+    supersedes: memory.supersedes,
+    expiresAt: memory.expiresAt ?? null,
+    reviewAfter: memory.reviewAfter ?? null,
+    createdAt: memory.createdAt,
+    updatedAt: memory.updatedAt
   }
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
 export function summarizePendingMemory(candidate: PendingMemory, now = new Date().toISOString()): CodexPendingMemorySummary {
+  const semanticMemory = pendingMemoryToSemanticMemory(candidate)
   const reviewHash = reviewHashForPendingMemory(candidate)
   const candidateKind = deriveMemoryCandidateKind(candidate)
   const activeReadiness = evaluateActiveMemoryReadiness({
@@ -354,6 +342,7 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
     activeReadiness,
     readiness: deriveStructuredReadiness(candidate, candidateKind, activeReadiness),
     episodeEvidence: deriveEpisodeEvidence(candidate, candidateKind, recommendation, activeReadiness.status, risk),
+    semanticMemory,
     proposedSemanticMemory: deriveProposedSemanticMemory(candidate, candidateKind, activeReadiness),
     risk,
     sensitivity: candidate.scores.sensitivity,
