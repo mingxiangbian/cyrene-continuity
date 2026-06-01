@@ -320,14 +320,32 @@ First-wave automation is intentionally conservative. The v2 contracts allow futu
 
 ## Review UI And MCP Tools
 
-Review surfaces should treat pending as `SemanticMemory(status='pending')` and show four sections:
+Review surfaces should treat pending as `SemanticMemory(status='pending')`, but should not
+render the record as a raw JSON/object dump. The default detail view should be a readable
+structured review card that maps one-to-one to `SemanticMemory` fields:
 
 ```txt
-1. Proposed Semantic Memory
-2. Structured Evidence
-3. Routing + Review Policy
-4. Review Action
+1. What will be remembered
+   content and short rationale
+
+2. Identity
+   status, module, kind, scope, domain
+
+3. Policy
+   reviewPolicy, risk, reviewHash, auto/manual status
+
+4. Use boundaries
+   useWhen and doNotUseWhen
+
+5. Evidence
+   source, observed facts, result
+
+6. Review Action
+   approve, edit, defer, reject
 ```
+
+Raw structured data may be available behind an advanced/debug affordance, but it should not
+be the primary review UI.
 
 Review tools must continue to require review-hash validation for approve/reject/edit/defer.
 Editing a pending semantic memory keeps it pending and creates a fresh review hash.
@@ -462,7 +480,8 @@ Required test objectives:
 6. UI/API expose the v2 review model.
    Pass when:
      pending review lists SemanticMemory(status='pending')
-     detail view shows Proposed Semantic Memory, Structured Evidence, Routing + Review Policy, and Review Action
+     detail view shows a readable structured card with remembered content, identity, policy, use boundaries, evidence, and actions
+     raw object/json display is not the default review surface
      approve/reject/edit/defer still require reviewHash validation
      edit keeps the memory pending and generates a fresh review hash
 ```
