@@ -166,6 +166,55 @@ describe('Codex pending memory review', () => {
     expect(result.pending[0]?.suggestedAction).not.toContain('cyrene-continuity codex memory')
   })
 
+  it('summarizes structured pending review sections with bounded reasons', async () => {
+    const home = await createTempDir('cyrene-review-structured-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-structured-project-')
+    const candidate = createPending({
+      id: 'structured-known-pitfall',
+      candidateKind: 'known_pitfall',
+      content: 'Readiness heuristics should recognize implementation-pattern phrases before showing pending UI readiness.',
+      normalizedKey: 'readiness-heuristics-implementation-pattern',
+      source: 'review_event',
+      evidence: [
+        {
+          runId: 'run-structured',
+          evidenceGroupId: 'group-structured',
+          summary: 'During pending UI review, the readiness heuristic missed implementation-pattern phrases and made the UI look unstructured.'
+        }
+      ]
+    })
+    await seedPending(cwd, [candidate])
+
+    const result = await listCodexPendingMemories({ cwd })
+    const pending = result.pending[0]
+
+    expect(pending).toMatchObject({
+      id: 'structured-known-pitfall',
+      readiness: {
+        status: 'ready',
+        targetShape: 'project_known_pitfall'
+      },
+      episodeEvidence: {
+        when: candidate.lastSeenAt,
+        source: 'review_event'
+      },
+      proposedSemanticMemory: {
+        type: 'known_pitfall',
+        scope: 'project',
+        content: candidate.content,
+        evidenceStrength: 'high',
+        futureUsefulness: 'high'
+      }
+    })
+    expect(pending?.readiness.reasons.length).toBeGreaterThan(0)
+    expect(pending?.readiness.reasons.every((reason) => reason.text.length <= 120)).toBe(true)
+    expect(pending?.episodeEvidence.whatHappened).toContain('readiness heuristic missed')
+    expect(pending?.episodeEvidence.whyImportant).not.toBe('')
+    expect(pending?.proposedSemanticMemory.useWhen.length).toBeGreaterThan(0)
+    expect(pending?.proposedSemanticMemory.doNotUseWhen.length).toBeGreaterThan(0)
+  })
+
   it('summarizes active-memory readiness for pending rewrite candidates', async () => {
     const home = await createTempDir('cyrene-review-readiness-home-')
     vi.stubEnv('HOME', home)
@@ -195,9 +244,18 @@ describe('Codex pending memory review', () => {
         status: 'needs_rewrite',
         suggestedShape: 'episode',
         reasons: expect.arrayContaining(['implementation_note', 'needs_active_memory_rewrite'])
+      },
+      readiness: {
+        status: 'needs_rewrite',
+        targetShape: 'episode',
+        reasons: expect.arrayContaining([
+          expect.objectContaining({ code: 'implementation_note' }),
+          expect.objectContaining({ code: 'needs_active_memory_rewrite' })
+        ])
       }
     })
     expect(result.pending[0]?.activeReadiness.rewriteHint).toContain('episode')
+    expect(result.pending[0]?.readiness.reasons.every((reason) => reason.text.length <= 120)).toBe(true)
   })
 
   it('uses explicit candidate kind in review metadata and review hashes', async () => {

@@ -386,10 +386,12 @@ function renderInbox() {
 
 function renderCandidateRow(candidate) {
   const selected = state.selectedPendingId === candidate.id
-  const readiness = candidate.activeReadiness || {}
-  const readinessLabel = readiness.status === 'needs_rewrite'
-    ? `needs rewrite · ${readiness.suggestedShape || 'review'}`
-    : 'ready'
+  const readiness = candidate.readiness || candidate.activeReadiness || {}
+  const readinessStatus = readiness.status || (readiness.ready === false ? 'needs_rewrite' : 'ready')
+  const targetShape = readiness.targetShape || readiness.suggestedShape || 'review'
+  const readinessLabel = readinessStatus === 'needs_rewrite'
+    ? `needs rewrite · ${targetShape}`
+    : `${readinessStatus} · ${targetShape}`
   return `
     <article class="data-row candidate-row selectable-row ${selected ? 'selected' : ''}" data-pending-id="${escapeHtml(candidate.id)}">
       <div>
@@ -397,10 +399,14 @@ function renderCandidateRow(candidate) {
         <div class="row-meta">
           ${escapeHtml(candidate.candidateKind || candidate.type || 'memory')}
           ${candidate.reviewHash ? ` · review ${escapeHtml(shortHash(candidate.reviewHash))}` : ''}
-          · ${escapeHtml(readinessLabel)}
+          · target ${escapeHtml(targetShape)}
         </div>
       </div>
-      ${statusChip(candidate.recommendation || 'review', candidate.risk || 'pending', candidate.risk === 'high' ? 'error' : 'warn')}
+      <div class="row-actions">
+        ${statusChip('Readiness', readinessLabel, readinessTone(readinessStatus))}
+        ${statusChip('Action', candidate.recommendation || 'review', recommendationTone(candidate.recommendation))}
+        ${statusChip('Risk', candidate.risk || 'pending', riskTone(candidate.risk))}
+      </div>
     </article>
   `
 }
@@ -1020,7 +1026,11 @@ function renderPendingDetail(candidate) {
         <h3>Pending detail</h3>
         <p>${escapeHtml(candidate.content)}</p>
         <div class="soft-inset rail-item"><strong>reviewHash</strong><span>${escapeHtml(shortHash(candidate.reviewHash || ''))}</span></div>
-        ${renderActiveReadiness(candidate.activeReadiness)}
+        <div class="soft-inset rail-item"><strong>Recommended action</strong><span>${escapeHtml(candidate.recommendation || 'review')}</span></div>
+        <div class="soft-inset rail-item"><strong>Priority / Risk</strong><span>${escapeHtml(candidate.risk || 'pending')}</span></div>
+        ${renderReadinessReview(candidate.readiness, candidate.activeReadiness)}
+        ${renderEpisodeEvidence(candidate.episodeEvidence)}
+        ${renderProposedSemanticMemory(candidate.proposedSemanticMemory)}
       </div>
       <div class="soft-panel">
         <h3>Actions</h3>
@@ -1036,30 +1046,123 @@ function renderPendingDetail(candidate) {
   `
 }
 
-function renderActiveReadiness(activeReadiness) {
-  if (!activeReadiness) return ''
-  const status = activeReadiness.status || (activeReadiness.ready === false ? 'needs_rewrite' : 'ready')
-  const reasons = Array.isArray(activeReadiness.reasons) && activeReadiness.reasons.length > 0
-    ? activeReadiness.reasons.join(', ')
-    : 'none'
+function renderReadinessReview(readiness, activeReadiness) {
+  const review = readiness || activeReadiness
+  if (!review) return ''
+  const status = review.status || (review.ready === false ? 'needs_rewrite' : 'ready')
+  const targetShape = review.targetShape || review.suggestedShape || 'active_memory'
+  const reasons = readinessReasonItems(review, activeReadiness)
   return `
     <div class="soft-inset rail-item">
-      <strong>Active readiness</strong>
+      <strong>Readiness</strong>
       <span>${escapeHtml(status)}</span>
     </div>
     <div class="soft-inset rail-item">
-      <strong>Suggested shape</strong>
-      <span>${escapeHtml(activeReadiness.suggestedShape || 'active_memory')}</span>
+      <strong>Target shape</strong>
+      <span>${escapeHtml(targetShape)}</span>
     </div>
     <div class="soft-inset rail-item">
       <strong>Reasons</strong>
-      <span>${escapeHtml(reasons)}</span>
+      <span>${escapeHtml(reasons.map(formatReadinessReason).join(' · '))}</span>
     </div>
     <div class="soft-inset rail-item">
       <strong>Rewrite hint</strong>
-      <span>${escapeHtml(activeReadiness.rewriteHint || 'No rewrite needed.')}</span>
+      <span>${escapeHtml(review.rewriteHint || activeReadiness?.rewriteHint || 'No rewrite needed.')}</span>
     </div>
   `
+}
+
+function readinessReasonItems(readiness, activeReadiness) {
+  if (Array.isArray(readiness?.reasons) && readiness.reasons.length > 0) {
+    return readiness.reasons.map((reason) => {
+      if (typeof reason === 'string') return { code: reason, text: reason }
+      return {
+        code: reason.code || 'review_reason',
+        text: reason.text || reason.code || 'Review reason present.'
+      }
+    })
+  }
+  if (Array.isArray(activeReadiness?.reasons) && activeReadiness.reasons.length > 0) {
+    return activeReadiness.reasons.map((reason) => ({ code: reason, text: reason }))
+  }
+  return [{ code: 'reviewable_candidate_shape', text: 'Candidate has no blocking active-memory rewrite signals.' }]
+}
+
+function formatReadinessReason(reason) {
+  return reason.code === reason.text
+    ? reason.text
+    : `${reason.code}: ${reason.text}`
+}
+
+function renderEpisodeEvidence(evidence) {
+  if (!evidence) return ''
+  return `
+    <h3>Episode Evidence</h3>
+    <div class="soft-inset rail-item">
+      <strong>When</strong>
+      <span>${escapeHtml(evidence.when || 'unknown')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>What happened</strong>
+      <span>${escapeHtml(evidence.whatHappened || 'No event summary available.')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Why important</strong>
+      <span>${escapeHtml(evidence.whyImportant || 'No importance summary available.')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Result</strong>
+      <span>${escapeHtml(evidence.result || 'No result summary available.')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Source</strong>
+      <span>${escapeHtml(evidence.source || 'unknown')}</span>
+    </div>
+  `
+}
+
+function renderProposedSemanticMemory(memory) {
+  if (!memory) return ''
+  return `
+    <h3>Proposed Semantic Memory</h3>
+    <div class="soft-inset rail-item">
+      <strong>Type</strong>
+      <span>${escapeHtml(memory.type || 'memory')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Scope</strong>
+      <span>${escapeHtml(memory.scope || 'project')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Content</strong>
+      <span>${escapeHtml(memory.content || '')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Use when</strong>
+      <span>${escapeHtml(formatValueList(memory.useWhen))}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Do not use when</strong>
+      <span>${escapeHtml(formatValueList(memory.doNotUseWhen))}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Evidence strength</strong>
+      <span>${escapeHtml(memory.evidenceStrength || 'unknown')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Future usefulness</strong>
+      <span>${escapeHtml(memory.futureUsefulness || 'unknown')}</span>
+    </div>
+    <div class="soft-inset rail-item">
+      <strong>Expiry</strong>
+      <span>${escapeHtml(memory.expiry || 'none')}</span>
+    </div>
+  `
+}
+
+function formatValueList(value) {
+  if (!Array.isArray(value) || value.length === 0) return 'none'
+  return value.join(' · ')
 }
 
 function renderConfirmForm(candidate, action) {
@@ -1359,6 +1462,26 @@ function renderTimelineDiagnostic() {
 
 function statusChip(label, value, tone) {
   return `<span class="status-chip ${escapeHtml(tone || 'muted')}"><b>${escapeHtml(label)}</b>${escapeHtml(value)}</span>`
+}
+
+function readinessTone(status) {
+  if (status === 'ready') return 'ok'
+  if (status === 'needs_rewrite') return 'warn'
+  return 'muted'
+}
+
+function recommendationTone(recommendation) {
+  if (recommendation === 'promote') return 'ok'
+  if (recommendation === 'reject') return 'error'
+  if (recommendation === 'defer') return 'warn'
+  return 'muted'
+}
+
+function riskTone(risk) {
+  if (risk === 'high') return 'error'
+  if (risk === 'medium') return 'warn'
+  if (risk === 'low') return 'muted'
+  return 'warn'
 }
 
 function scopeLabel(scope) {

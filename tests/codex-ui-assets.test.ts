@@ -20,7 +20,7 @@ describe('Codex UI source assets', () => {
     expect(css).toContain('.explain-list')
   })
 
-  it('omits evidence summaries from the Inbox pending detail rail', async () => {
+  it('renders structured pending review detail without raw evidence summaries', async () => {
     const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
     const pendingDetailStart = source.indexOf('function renderPendingDetail(candidate)')
     const confirmFormStart = source.indexOf('function renderConfirmForm(candidate, action)')
@@ -30,19 +30,24 @@ describe('Codex UI source assets', () => {
     expect(confirmFormStart).toBeGreaterThan(pendingDetailStart)
     expect(pendingDetail).toContain('Pending detail')
     expect(pendingDetail).toContain('reviewHash')
+    expect(pendingDetail).toContain('renderReadinessReview')
+    expect(pendingDetail).toContain('renderEpisodeEvidence')
+    expect(pendingDetail).toContain('renderProposedSemanticMemory')
     expect(pendingDetail).toContain('Actions')
     expect(pendingDetail).not.toContain('renderEvidence')
-    expect(pendingDetail).not.toContain('Evidence')
     expect(pendingDetail).not.toContain('evidenceSummary')
     expect(source).not.toContain('function renderEvidence(candidate)')
   })
 
-  it('renders active-readiness structure in pending rows and detail rail', async () => {
+  it('renders structured readiness review sections in pending rows and detail rail', async () => {
     const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
 
-    expect(source).toContain('renderActiveReadiness')
-    expect(source).toContain('activeReadiness')
-    expect(source).toContain('Suggested shape')
+    expect(source).toContain('renderReadinessReview')
+    expect(source).toContain('renderEpisodeEvidence')
+    expect(source).toContain('renderProposedSemanticMemory')
+    expect(source).toContain('Target shape')
+    expect(source).toContain('Episode Evidence')
+    expect(source).toContain('Proposed Semantic Memory')
     expect(source).toContain('Rewrite hint')
   })
 

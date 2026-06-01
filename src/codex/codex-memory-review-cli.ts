@@ -29,10 +29,17 @@ export async function formatCodexMemoryReview(input: { cwd: string; limit?: numb
       `  scope: ${item.scope}`,
       `  domain: ${item.domain}`,
       `  candidate kind: ${item.candidateKind}`,
-      `  active readiness: ${item.activeReadiness.status}`,
-      `  suggested shape: ${item.activeReadiness.suggestedShape}`,
-      `  readiness reasons: ${item.activeReadiness.reasons.join(', ') || 'none'}`,
-      `  rewrite hint: ${item.activeReadiness.rewriteHint}`,
+      `  readiness: ${item.readiness.status}`,
+      `  target shape: ${item.readiness.targetShape}`,
+      `  readiness reasons: ${formatReadinessReasons(item.readiness.reasons)}`,
+      `  rewrite hint: ${item.readiness.rewriteHint}`,
+      `  episode evidence: ${item.episodeEvidence.whatHappened}`,
+      `  episode importance: ${item.episodeEvidence.whyImportant}`,
+      `  proposed memory: ${item.proposedSemanticMemory.type}/${item.proposedSemanticMemory.scope}`,
+      `  use when: ${item.proposedSemanticMemory.useWhen.join('; ')}`,
+      `  do not use when: ${item.proposedSemanticMemory.doNotUseWhen.join('; ')}`,
+      `  evidence strength: ${item.proposedSemanticMemory.evidenceStrength}`,
+      `  future usefulness: ${item.proposedSemanticMemory.futureUsefulness}`,
       `  content: ${item.content}`,
       `  evidence count: ${item.evidenceCount}`,
       `  risk: ${item.risk}`,
@@ -42,6 +49,13 @@ export async function formatCodexMemoryReview(input: { cwd: string; limit?: numb
     )
   }
   return `${lines.join('\n')}\n`
+}
+
+function formatReadinessReasons(reasons: Array<{ code: string; text: string }>): string {
+  if (reasons.length === 0) {
+    return 'reviewable_candidate_shape: Candidate has no blocking active-memory rewrite signals.'
+  }
+  return reasons.map((reason) => `${reason.code}: ${reason.text}`).join('; ')
 }
 
 export async function runCodexMemoryApprove(input: {
