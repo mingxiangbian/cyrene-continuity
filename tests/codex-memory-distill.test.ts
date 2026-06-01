@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runCodexMemoryDistill } from '../src/codex/memory-distill.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import type { CyreneMemory, DistillationInput, PendingMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
 
@@ -71,6 +71,26 @@ function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
   }
 }
 
+function createDistillationInput(overrides: Partial<DistillationInput> = {}): DistillationInput {
+  return {
+    id: 'distillation-input-1',
+    sourceDraftIds: ['draft-1'],
+    sourceEpisodeIds: ['episode-1'],
+    sourceSemanticMemoryIds: ['semantic-source-1'],
+    admissionDecisionIds: ['admission-1'],
+    normalizedKey: 'review-hash-validation',
+    candidateKind: 'workflow_rule',
+    scope: 'project',
+    domain: 'procedural',
+    sourceKinds: ['review_summary'],
+    rawContents: ['Preserve review-hash validation for ambiguous memory promotion.'],
+    evidenceRefs: ['review:task-3'],
+    sourceOfTruth: 'AGENTS.md memory review model',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    ...overrides
+  }
+}
+
 async function writeJsonLines(filePath: string, values: unknown[]): Promise<string> {
   const content = values.map((item) => JSON.stringify(item)).join('\n') + '\n'
   await writeFile(filePath, content, 'utf8')
@@ -78,6 +98,99 @@ async function writeJsonLines(filePath: string, values: unknown[]): Promise<stri
 }
 
 describe('Codex memory distillation dry run', () => {
+  it('includes v2 distillation inputs as structured semantic preview candidates', async () => {
+    const memoryRoot = await createTempDir('cyrene-distill-v2-inputs-')
+    const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
+    const indexPath = join(memoryRoot, 'index.jsonl')
+    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    await mkdir(memoryRoot, { recursive: true })
+    const distillationInputsBefore = await writeJsonLines(distillationInputsPath, [
+      createDistillationInput({
+        rawContents: [
+          'Preserve review-hash validation.',
+          'Preserve review-hash validation for ambiguous memory promotion.'
+        ]
+      }),
+      createDistillationInput({
+        id: 'distillation-input-2',
+        sourceDraftIds: [],
+        sourceEpisodeIds: ['episode-2'],
+        sourceSemanticMemoryIds: ['semantic-source-2'],
+        admissionDecisionIds: ['admission-2'],
+        rawContents: ['Review hash checks still gate high-risk memory changes.'],
+        evidenceRefs: ['review:task-3-b'],
+        createdAt: '2026-06-01T01:00:00.000Z'
+      })
+    ])
+    await writeFile(indexPath, '', 'utf8')
+    await writeFile(pendingPath, '', 'utf8')
+    const indexBefore = await readFile(indexPath, 'utf8')
+    const pendingBefore = await readFile(pendingPath, 'utf8')
+
+    const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
+
+    expect(result.summary).toEqual({
+      pendingRead: 0,
+      activeRead: 0,
+      distillationInputsRead: 2,
+      duplicateClusters: 0,
+      candidates: 1
+    })
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]).toMatchObject({
+      id: 'distill-review-hash-validation',
+      normalizedKey: 'review-hash-validation',
+      content: 'Preserve review-hash validation for ambiguous memory promotion.',
+      sourceIds: ['draft-1', 'distillation-input-2'],
+      rawContents: [
+        'Preserve review-hash validation.',
+        'Preserve review-hash validation for ambiguous memory promotion.',
+        'Review hash checks still gate high-risk memory changes.'
+      ],
+      evidenceRefs: ['review:task-3', 'review:task-3-b'],
+      sourceAdmissionDecisionIds: ['admission-1', 'admission-2'],
+      sourceSemanticMemoryIds: ['semantic-source-1', 'semantic-source-2'],
+      recommendedAction: 'needs_review',
+      risk: 'low',
+      sourceOfTruth: 'AGENTS.md memory review model',
+      semanticMemory: {
+        id: 'semantic-distill-review-hash-validation',
+        status: 'candidate',
+        module: 'procedural',
+        kind: 'workflow_rule',
+        reviewPolicy: 'pending_review',
+        sourceOfTruth: 'AGENTS.md memory review model',
+        evidence: [
+          {
+            id: 'evidence-distill-review-hash-validation-0',
+            sourceKind: 'review_summary',
+            sourceRef: 'review:task-3',
+            whatHappened: 'Preserve review-hash validation for ambiguous memory promotion.'
+          },
+          {
+            id: 'evidence-distill-review-hash-validation-1',
+            sourceKind: 'review_summary',
+            sourceRef: 'review:task-3-b',
+            whatHappened: 'Preserve review-hash validation for ambiguous memory promotion.'
+          }
+        ],
+        reviewState: {
+          normalizedKey: 'review-hash-validation',
+          sourceEpisodeIds: ['episode-1', 'episode-2'],
+          sourceDraftIds: ['distill-review-hash-validation']
+        },
+        routing: {
+          module: 'procedural',
+          updatePolicy: 'pending_review',
+          risk: 'low'
+        }
+      }
+    })
+    await expect(readFile(distillationInputsPath, 'utf8')).resolves.toBe(distillationInputsBefore)
+    await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
+  })
+
   it('clusters duplicate pending candidates into an auditable dry-run candidate without mutating stores', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-memory-')
     const pendingPath = join(memoryRoot, 'pending.jsonl')
@@ -123,6 +236,28 @@ describe('Codex memory distillation dry run', () => {
     await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
     await expect(readFile(tombstonesPath, 'utf8')).resolves.toBe(tombstonesBefore)
     await expect(readFile(eventsPath, 'utf8')).resolves.toBe(eventsBefore)
+  })
+
+  it('keeps duplicate pending cluster behavior while reporting zero v2 distillation inputs', async () => {
+    const memoryRoot = await createTempDir('cyrene-distill-legacy-summary-')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [createPending(), createPending({ id: 'p2' })])
+    await writeFile(join(memoryRoot, 'index.jsonl'), '', 'utf8')
+
+    const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
+
+    expect(result.summary).toEqual({
+      pendingRead: 2,
+      activeRead: 0,
+      distillationInputsRead: 0,
+      duplicateClusters: 1,
+      candidates: 1
+    })
+    expect(result.candidates[0]).toMatchObject({
+      id: 'distill-release-typecheck',
+      recommendedAction: 'merge_pending',
+      risk: 'low'
+    })
   })
 
   it('marks duplicate pending candidates as needs_review when active memory overlaps', async () => {
