@@ -40,7 +40,9 @@ v1.3 因此不是“重新实现 v2”，也不是继续扩展采集范围。它
   review card 语义拆分。
 - P1 补完影响 pending quality 的 v2 carryover：distillation 读取 v2 inputs、router/update policy
   进入主流程、active structured approval gate。
-- P2 只写入最小 Activation/Reflection carryover：记录 retrieval feedback 和生成 reviewable
+- P2 明确自动化分级和 UI 完整性：自动化哪些步骤、low-risk strict auto-promote receipt 怎么审计、
+  UI 必须显示哪些 semantic 字段。
+- P3 只写入最小 Activation/Reflection carryover：记录 retrieval feedback 和生成 reviewable
   reflection candidate，不允许直接修改 active memory。
 - 不扩大 harvester，不接 embedding，不做完整 Principle/Belief/Identity 层，不让 Dream 或
   Reflection 自动 active。
@@ -377,23 +379,55 @@ supersedes
 - UI active detail 能显示这些字段。
 - migration 生成的 active memory 如果字段是 conservative synthesis，应标记来源，避免误认为用户确认。
 
-### P1-4 Strict Low-Risk Automation Receipts
+## P2: Automation Classification And UI Completeness
 
-v1.3 可以设计但必须保守启用：
+### P2-1 自动化分级策略
 
-允许自动：
+v1.3 不做“全自动 active memory”，但要把哪些步骤可以自动、哪些必须人工 review 写清楚。
+
+完全自动：
+
 
 ```txt
 episode recording
 candidate draft generation
 admission scoring
-source duplicate rejection/defer
+episode-only rejection
+source-of-truth duplicate rejection/defer
 task-state routing
+auto defer/drop for low-value non-memory
 distillation dry-run
 retrieval explain
 ```
 
-严格自动 active 只允许：
+严格自动只允许进入 low-risk project/procedural/system active path；任何不满足条件的 candidate 必须降级为
+`pending_review`、`manual_only`、`defer` 或 `drop`。
+
+必须人工 review：
+
+```txt
+global_policy
+preference
+relationship_affective
+principle_candidate
+source-of-truth interpretation changes
+conflicting memory
+project-to-global promotion
+assistant_observed-only durable claim
+raw affective / relationship observation
+```
+
+验收：
+
+- auto-drop/auto-defer 能减少 pending review 主队列噪音。
+- manual-only 类型不会进入 strict auto-promote path。
+- 每个自动 decision 都有 reason，不能只显示 `none`。
+
+### P2-2 low-risk strict auto-promote receipt
+
+strict auto-promote 是 v1.3 中最高风险的自动化，只允许低风险、本项目范围、强证据 candidate 通过。
+
+允许条件：
 
 ```txt
 scope = project
@@ -413,13 +447,45 @@ MemoryEvent receipt written
 
 验收：
 
-- strict auto-promote 写 receipt。
-- receipt 包含 named policy、gate result、daily cap usage、source ids、candidate id。
+- strict auto-promote 必须写 `MemoryEvent` receipt。
+- receipt 包含 named policy、gate result、daily cap usage、source ids、candidate id、semantic memory id。
+- receipt 可以从 CLI/MCP/UI diagnostic 中查到。
 - manual-only module 永远不走 strict auto-promote。
 
-## P2: v2 Feedback Loop Carryover
+### P2-3 UI 显示 module/updatePolicy/sourceOfTruth/evidence
 
-### P2-1 ActivationEvent Minimal Runtime Hook
+v1.3 UI 不只显示 pending review 文案，还要显示 reviewer 判断所需的 semantic 字段。
+
+Pending review card、active detail、distillation preview 至少显示：
+
+```txt
+module
+updatePolicy / reviewPolicy
+sourceOfTruth
+evidence / episodeEvidence
+classification
+risk
+recommendedAction
+useWhen
+doNotUseWhen
+```
+
+行为：
+
+- pending review card 显示这些字段，用于 approve/edit/reject/defer 判断。
+- active detail 显示这些字段，用于判断 active memory 的使用边界和来源。
+- distillation preview 显示这些字段，用于判断 distilled candidate 是否可进入 review。
+- 缺字段时显示 `missing` 和 rewrite requirement，不用空白或 `none` 掩盖。
+
+验收：
+
+- UI 中每条 reviewable candidate 都能看到 `module`、`updatePolicy`、`sourceOfTruth`、`evidence`。
+- active memory detail 能显示同一组字段。
+- distillation dry-run preview 能显示 candidate 的 module/policy/source/evidence。
+
+## P3: v2 Feedback Loop Carryover
+
+### P3-1 ActivationEvent Minimal Runtime Hook
 
 v1.3 不做完整 reflection system，但应补最小 activation audit：
 
@@ -434,7 +500,7 @@ v1.3 不做完整 reflection system，但应补最小 activation audit：
 - contradicted/stale 事件能关联 source/evidence ref。
 - 写 event 失败不能中断用户请求；只记录 warning/diagnostic。
 
-### P2-2 ReflectionCandidate Review-First
+### P3-2 ReflectionCandidate Review-First
 
 v1.3 的 reflection 只做候选生成：
 
@@ -556,11 +622,13 @@ Required test objectives:
    - readiness, priority, recommendedAction, updatePolicy are separate
    - no ready card has empty reasons
    - source boundary and use boundaries are visible
+   - module/updatePolicy/sourceOfTruth/evidence are visible in pending review cards
 
 4. Distillation v2 input consumption
    - distill dry-run reads candidate_drafts, admission_decisions, distillation_inputs, episodes, semantic_memories
    - summary reports counts per input source
    - output previews SemanticMemory(status='candidate')
+   - preview shows module/updatePolicy/sourceOfTruth/evidence
    - dry-run never writes active
 
 5. Router/policy main path
@@ -571,7 +639,7 @@ Required test objectives:
 6. Structured approval gate
    - missing useWhen/doNotUseWhen/sourceOfTruth/evidence blocks approval
    - edit keeps candidate pending and refreshes reviewHash
-   - active detail displays structured fields
+   - active detail displays module/updatePolicy/sourceOfTruth/evidence and use boundaries
 
 7. Activation/reflection carryover
    - retrieval can write ActivationEvent
@@ -604,13 +672,15 @@ PR2: Review card semantic fields and queue separation
 PR3: Distillation reads v2 inputs
 PR4: Router / ReviewPolicy main path
 PR5: Structured active approval gate
-PR6: Minimal ActivationEvent / ReflectionCandidate carryover
-PR7: Integration tests, plugin build, validation
+PR6: Automation classification, strict auto-promote receipts, UI field completeness
+PR7: Minimal ActivationEvent / ReflectionCandidate carryover
+PR8: Integration tests, plugin build, validation
 ```
 
 PR1-PR3 can proceed in parallel only after shared classification/action vocabulary is agreed.
 PR4 and PR5 depend on `SemanticMemory` field quality.
 PR6 must not start before manual-only policy regressions exist.
+PR7 must not mutate active memory directly.
 
 ## Acceptance Summary
 
