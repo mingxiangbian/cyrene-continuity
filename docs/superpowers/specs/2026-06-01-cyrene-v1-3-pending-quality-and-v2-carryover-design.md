@@ -44,6 +44,8 @@ v1.3 因此不是“重新实现 v2”，也不是继续扩展采集范围。它
   UI 必须显示哪些 semantic 字段。
 - P3 只写入最小 Activation/Reflection carryover：记录 retrieval feedback 和生成 reviewable
   reflection candidate，不允许直接修改 active memory。
+- implementation plan 应按 multi-agent track 执行：coordinator 先冻结 shared vocabulary 和 quality
+  contract，再让独立 subagent 并行处理可分离模块；每个 subagent 必须交付 `Memory Delta Report`。
 - 不扩大 harvester，不接 embedding，不做完整 Principle/Belief/Identity 层，不让 Dream 或
   Reflection 自动 active。
 
@@ -660,6 +662,79 @@ For documentation-only changes:
 
 ```bash
 git diff --check
+```
+
+## Multi-Agent Execution Protocol
+
+v1.3 的 implementation plan 应复用 memory-quality campaign 中的 multi-agent 思想，但要避免多个 agent
+各自发明字段或语义。默认执行模型是：
+
+```txt
+Coordinator
+  -> freeze shared vocabulary, fixture matrix, and acceptance gates
+  -> dispatch independent subagent tracks
+  -> review each Memory Delta Report
+  -> merge shared contract changes before dependent agents continue
+  -> run integration verification
+```
+
+### Coordinator Responsibilities
+
+- 维护唯一的 classification / action / module / updatePolicy 词表。
+- 维护 `Memory Quality Contract`、fixture matrix 和 review rubric。
+- 审查每个 subagent 的 `Memory Delta Report`，不能只接受“没有 memory changes”。
+- 处理 cross-agent contract drift：任何 agent 如果要新增字段、policy、action 或 review meaning，必须先回到
+  coordinator 合并 shared contract。
+- 在 integration 阶段检查 pending pollution、silent drop、manual-only bypass、receipt 缺失和 UI 字段缺失。
+
+### Subagent Track Mapping
+
+```txt
+Agent A: Source-of-truth duplicate gate + episode/task/memory classification
+  owns PR1 behavior and fixtures
+
+Agent B: Review surface and UI field completeness
+  owns PR2 plus P2-3 visible fields
+
+Agent C: Distillation v2 input consumption
+  owns PR3 and distilled SemanticMemory preview
+
+Agent D: Router / ReviewPolicy main path
+  owns PR4 and manual-only regressions
+
+Agent E: Structured active approval + strict receipt path
+  owns PR5 and P2-2
+
+Agent F: ActivationEvent / ReflectionCandidate carryover
+  owns PR7 and must not mutate active memory directly
+
+Coordinator / Integration Agent:
+  owns PR6 automation classification consistency and PR8 verification
+```
+
+### Required Subagent Handoff
+
+Every subagent handoff must include:
+
+```txt
+Memory Delta Report
+Fixture coverage
+Changed contract fields, if any
+Generated candidates / distillation inputs / reflection candidates
+Episode-only or task-state signals
+Why pending / active stayed clean
+Why durable signals were not dropped
+Open integration risks
+```
+
+If a subagent produces no memory candidate, it must still explain:
+
+```txt
+Signals reviewed
+Decision
+Why no durable memory candidate
+Why no durable signal was dropped
+Why pending / active stayed clean
 ```
 
 ## Implementation Tracks
