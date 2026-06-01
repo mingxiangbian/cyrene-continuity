@@ -10473,6 +10473,7 @@ var SEMANTIC_MEMORIES_FILE = "semantic_memories.jsonl";
 var DISTILLATION_INPUTS_FILE = "distillation_inputs.jsonl";
 var ROUTING_DECISIONS_FILE = "routing_decisions.jsonl";
 var REVIEW_DECISIONS_FILE = "review_decisions.jsonl";
+var ACTIVATION_EVENTS_FILE = "activation_events.jsonl";
 var EVENTS_FILE = "events.jsonl";
 var TOMBSTONES_FILE = "tombstones.jsonl";
 var MAX_PENDING_EVIDENCE = 10;
@@ -10622,6 +10623,10 @@ async function appendRoutingDecisionFromRoot(memoryRoot, decision2) {
 async function appendReviewDecisionFromRoot(memoryRoot, decision2) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, REVIEW_DECISIONS_FILE), decision2);
+}
+async function appendActivationEventFromRoot(memoryRoot, event) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await appendJsonLine(join4(root, ACTIVATION_EVENTS_FILE), event);
 }
 async function appendMemoryEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -16709,6 +16714,26 @@ function addDays2(iso, days) {
   return date3.toISOString();
 }
 
+// src/codex/memory-feedback.ts
+import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
+async function appendActivationEventsFailOpen(input) {
+  try {
+    const memoryIds = [...new Set(input.memoryIds)].sort();
+    const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+    const queryHash = createHash6("sha256").update(input.query).digest("hex").slice(0, 16);
+    await Promise.all(memoryIds.map((memoryId) => appendActivationEventFromRoot(input.memoryRoot, {
+      id: randomUUID8(),
+      memoryId,
+      projectId: input.projectId,
+      queryHash,
+      event: input.event ?? "retrieved",
+      ...input.evidenceRef === void 0 ? {} : { evidenceRef: input.evidenceRef },
+      createdAt
+    })));
+  } catch {
+  }
+}
+
 // src/codex/continuity-context.ts
 async function getCodexContinuityContext(input) {
   const project = await identifyCodexProject(input.cwd);
@@ -16741,6 +16766,23 @@ async function getCodexContinuityContext(input) {
     retrievalPlan,
     fallback: legacyRetrievalInput
   });
+  const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot);
+  await Promise.all([
+    appendActivationEventsFailOpen({
+      memoryRoot: globalMemoryRoot,
+      memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
+      projectId: project.projectId,
+      query: input.userMessage,
+      event: "retrieved"
+    }),
+    appendActivationEventsFailOpen({
+      memoryRoot: projectMemoryRoot,
+      memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
+      projectId: project.projectId,
+      query: input.userMessage,
+      event: "retrieved"
+    })
+  ]);
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
   const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory);
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join("\n\n");
@@ -17041,6 +17083,36 @@ async function readFallbackPendingHypotheses(input, projectId) {
     6,
     400
   );
+}
+async function readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot) {
+  try {
+    return new Set((await readActiveMemoriesFromRoot(globalMemoryRoot)).map(canonicalGlobalMemorySignature));
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function isCanonicalGlobalRoutedMemory(item, canonicalGlobalMemorySignatures) {
+  if ("homeProjectId" in item) {
+    return item.homeProjectId === null;
+  }
+  return canonicalGlobalMemorySignatures.has(canonicalGlobalMemorySignature(item.memory));
+}
+function canonicalGlobalActivationMemoryIds(items, canonicalGlobalMemorySignatures) {
+  const nonCanonicalFallbackIds = new Set(
+    items.filter((item) => !("homeProjectId" in item)).filter((item) => !canonicalGlobalMemorySignatures.has(canonicalGlobalMemorySignature(item.memory))).map((item) => item.memory.id)
+  );
+  return items.filter((item) => isCanonicalGlobalRoutedMemory(item, canonicalGlobalMemorySignatures) && !(!("homeProjectId" in item) && nonCanonicalFallbackIds.has(item.memory.id))).map((item) => item.memory.id);
+}
+function canonicalGlobalMemorySignature(memory) {
+  return JSON.stringify([
+    memory.id,
+    memory.normalizedKey,
+    memory.content,
+    memory.domain,
+    memory.type,
+    memory.scope,
+    memory.updatedAt
+  ]);
 }
 function scorePendingMemory(memory, query) {
   const tokens = tokenize4(query);
@@ -17380,7 +17452,7 @@ function uniqueChecks(checks) {
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID14 } from "node:crypto";
+import { randomUUID as randomUUID15 } from "node:crypto";
 import { lstat as lstat12, open as open3, readFile as readFile14, realpath as realpath6 } from "node:fs/promises";
 import { isAbsolute as isAbsolute5, join as join20, relative as relative5, resolve as resolve5 } from "node:path";
 
@@ -17499,7 +17571,7 @@ function mergeAbortSignals(timeoutSignal, inputSignal) {
 }
 
 // src/codex/admission-gate.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
+import { randomUUID as randomUUID9 } from "node:crypto";
 var ONE_TIME_ACTION_PATTERN = /(?:使用|ran|run|checked|检查|修复|完成|准备|reviewed|looked at).*?(?:工具|tool|command|命令|问题|issue|review)/i;
 var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i;
 var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
@@ -17674,7 +17746,7 @@ function actionFor(draft, reasons, score) {
 }
 function decision(draft, action, reasons, scores, now, extras = {}) {
   return {
-    id: randomUUID8(),
+    id: randomUUID9(),
     draftId: draft.id,
     action,
     admissionScore: admissionScoreFor(scores),
@@ -17697,10 +17769,10 @@ function clamp(value) {
 }
 
 // src/codex/candidate-drafts.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 
 // src/codex/memory-propose.ts
-import { createHash as createHash6, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID10 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -17952,7 +18024,7 @@ async function proposeCodexMemoryCandidate(input) {
       if (input.recordRejectedCandidate !== false) {
         await appendTombstoneFromRoot(lockedMemoryRoot, decision2.tombstone);
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID9(),
+          id: randomUUID10(),
           action: "reject",
           at: now,
           reason: decision2.reason,
@@ -18003,7 +18075,7 @@ async function proposeCodexMemoryCandidate(input) {
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID9(),
+        id: randomUUID10(),
         action: "promote",
         at: now,
         reason: autoPromotion.reason,
@@ -18053,7 +18125,7 @@ async function proposeCodexMemoryCandidate(input) {
     }
     if (budgetResult.action === "evict_existing") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID9(),
+        id: randomUUID10(),
         action: "audit",
         at: now,
         reason: budgetResult.reason,
@@ -18078,7 +18150,7 @@ async function proposeCodexMemoryCandidate(input) {
       reason = activeReadinessReason;
     }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID9(),
+      id: randomUUID10(),
       action: "pending",
       at: now,
       reason,
@@ -18150,7 +18222,7 @@ function toPendingMemory(input, now) {
     type: input.type
   });
   return {
-    id: randomUUID9(),
+    id: randomUUID10(),
     domain: input.domain,
     type: input.type,
     strength: input.strength ?? "soft",
@@ -18177,7 +18249,7 @@ function toPendingMemory(input, now) {
 }
 function normalizeKey(value) {
   const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  return slug.length > 0 ? slug : createHash6("sha256").update(value).digest("hex").slice(0, 16);
+  return slug.length > 0 ? slug : createHash7("sha256").update(value).digest("hex").slice(0, 16);
 }
 function addDays3(iso, days) {
   const date3 = new Date(iso);
@@ -18196,7 +18268,7 @@ function toCandidateDraft(input) {
   const scope = input.candidate.scope ?? "project";
   const sourceOfTruth = nonEmptyString(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
   return {
-    id: randomUUID10(),
+    id: randomUUID11(),
     content: input.candidate.content,
     candidateKind,
     scope,
@@ -18467,7 +18539,7 @@ function disabledAdmission(input) {
 }
 
 // src/codex/episode-memory.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 
 // src/codex/review-redaction.ts
 var RULES = [
@@ -18585,7 +18657,7 @@ function buildStopHookEpisode(input) {
   const sourceTraceIds = [sessionId, turnId].filter((value) => value !== void 0);
   const title = lastNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
   return {
-    id: input.id ?? randomUUID11(),
+    id: input.id ?? randomUUID12(),
     projectId: input.projectId,
     title: clean(title, ITEM_MAX_LENGTH),
     summary: clean(input.summary, SUMMARY_MAX_LENGTH),
@@ -18619,7 +18691,7 @@ function asString(value) {
 }
 
 // src/codex/global-memory-capture.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
 function candidateFromExplicitGlobalInstruction(input) {
@@ -18727,11 +18799,11 @@ function reviewActionForEvent(event) {
   return void 0;
 }
 function shortHash(value) {
-  return createHash7("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash8("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/hook-trace-store.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { appendFile as appendFile2, readFile as readFile12 } from "node:fs/promises";
 import { join as join17 } from "node:path";
 var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
@@ -18761,7 +18833,7 @@ async function appendCodexHookTrace(input) {
 }
 function createHookTraceRecord(input, cwd) {
   return {
-    id: randomUUID12(),
+    id: randomUUID13(),
     createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
     event: input.event,
     cwd: cleanString(cwd),
@@ -18880,7 +18952,7 @@ function isFileErrorCode10(error2, code) {
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile3 } from "node:child_process";
@@ -19556,7 +19628,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash8("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash9("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -19596,7 +19668,7 @@ function isRecord3(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash9, randomUUID as randomUUID13 } from "node:crypto";
+import { createHash as createHash10, randomUUID as randomUUID14 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile3 } from "node:fs/promises";
@@ -19695,7 +19767,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID13();
+  const summaryId = randomUUID14();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -19876,7 +19948,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash9("sha256").update(JSON.stringify({
+  return createHash10("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -20050,7 +20122,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (messages.length === 0) {
     return { action: "noop", reason: "No transcript messages found." };
   }
-  const stopEpisodeId = randomUUID14();
+  const stopEpisodeId = randomUUID15();
   const review = await runReviewSummaryOrSkip({
     payload,
     cwd,
@@ -20213,7 +20285,7 @@ async function recordStopHookFailureSummary(cwd, payload, error2) {
       return { action: "noop", reason: "Project memory is disabled for this project." };
     }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID14();
+    const summaryId = randomUUID15();
     const sessionId = asString3(payload.session_id);
     const turnId = asString3(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -20248,7 +20320,7 @@ async function recordModelConfigSkippedSummary(cwd, payload) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID14();
+  const summaryId = randomUUID15();
   const sessionId = asString3(payload.session_id);
   const turnId = asString3(payload.turn_id);
   const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -20694,9 +20766,9 @@ async function removeExistingSkillSymlink(path) {
 }
 
 // src/codex/active-memory-review.ts
-import { createHash as createHash10, randomUUID as randomUUID15 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID16 } from "node:crypto";
 function contentHashForActiveMemory(memory) {
-  return createHash10("sha256").update(JSON.stringify({
+  return createHash11("sha256").update(JSON.stringify({
     id: memory.id,
     content: memory.content,
     normalizedKey: memory.normalizedKey,
@@ -20711,7 +20783,7 @@ async function archiveCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID15(),
+      id: randomUUID16(),
       action: "archive",
       at: now,
       reason: input.reason,
@@ -20747,7 +20819,7 @@ async function tombstoneCodexActiveMemory(input) {
     await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID15(),
+      id: randomUUID16(),
       action: "tombstone",
       at: now,
       reason: input.reason,
@@ -20774,7 +20846,7 @@ async function tombstoneCodexActiveMemory(input) {
 async function proposeEditCodexActiveMemory(input) {
   return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, memory, now }) => {
     const candidate = {
-      id: randomUUID15(),
+      id: randomUUID16(),
       domain: memory.domain,
       type: memory.type,
       strength: memory.strength,
@@ -20800,7 +20872,7 @@ async function proposeEditCodexActiveMemory(input) {
     const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
     await writePendingMemoriesFromRoot(lockedMemoryRoot, [...lockedPending, candidate]);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID15(),
+      id: randomUUID16(),
       action: "pending",
       at: now,
       reason: input.reason,
@@ -20912,7 +20984,7 @@ async function supersedeCodexActiveMemory(input) {
     await writePendingMemoriesFromRoot(lockedMemoryRoot, lockedPending.filter((item) => item.id !== candidate.id));
     await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID15(),
+      id: randomUUID16(),
       action: "supersede",
       at: now,
       reason: input.reason,
@@ -20994,7 +21066,7 @@ async function refreshModelVisibleMemory(input) {
 }
 function tombstoneForActiveMemory(memory, input) {
   return {
-    id: `tombstone-${memory.id}-${createHash10("sha256").update(`${memory.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
+    id: `tombstone-${memory.id}-${createHash11("sha256").update(`${memory.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
     memoryId: memory.id,
     normalizedKey: memory.normalizedKey,
     domain: memory.domain,
@@ -21345,7 +21417,7 @@ async function readableMemoryRoot(memoryRoot) {
 }
 
 // src/codex/triage-apply.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
+import { randomUUID as randomUUID17 } from "node:crypto";
 function applySafeTriageDecisions(input) {
   const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
   const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
@@ -21439,7 +21511,7 @@ function tombstoneForAutoDroppedCandidate(candidate, now) {
 }
 function memoryEventForTriageDecision(action, candidate, now, reason, details) {
   return {
-    id: randomUUID16(),
+    id: randomUUID17(),
     action,
     at: now,
     reason,
@@ -24724,7 +24796,7 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
+import { randomUUID as randomUUID18 } from "node:crypto";
 import { lstat as lstat15, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
@@ -24732,7 +24804,7 @@ var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID17();
+  const proposalId = randomUUID18();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
     reportPath: join24(previewDir, DREAM_REPORT_FILE),
@@ -24845,7 +24917,7 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID17()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID18()}.tmp`;
   await writeFile9(tempPath, content, "utf8");
   await rename5(tempPath, filePath);
 }
@@ -24854,7 +24926,7 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID18 } from "node:crypto";
+import { randomUUID as randomUUID19 } from "node:crypto";
 import { lstat as lstat17, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
@@ -25178,7 +25250,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID18(),
+      id: randomUUID19(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -25203,7 +25275,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID18(),
+        id: randomUUID19(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -25329,7 +25401,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID18(),
+        id: randomUUID19(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -25464,7 +25536,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
   const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID18();
+  const token = randomUUID19();
   while (true) {
     try {
       await mkdir12(lockDir);
@@ -25575,7 +25647,7 @@ function isFileErrorCode14(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash11, randomUUID as randomUUID19 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID20 } from "node:crypto";
 import { lstat as lstat18, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -25594,7 +25666,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash11("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash12("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -25705,7 +25777,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID19(),
+      id: randomUUID20(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -25952,7 +26024,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID19()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID20()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -25962,7 +26034,7 @@ async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID19()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID20()}.tmp`;
   await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename6(tempPath, targetPath);
 }
@@ -26102,7 +26174,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash12, randomUUID as randomUUID20 } from "node:crypto";
+import { createHash as createHash13, randomUUID as randomUUID21 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -26119,7 +26191,7 @@ function reviewHashForSimilarHintMemory(memory) {
     updatedAt: memory.updatedAt,
     tags: memory.tags
   };
-  return createHash12("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash13("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -26217,7 +26289,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID20(),
+      id: randomUUID21(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
