@@ -398,7 +398,10 @@ function renderSemanticReviewCard(candidate, options = {}) {
   const targetShape = readiness.targetShape || readiness.suggestedShape || 'review'
   const evidence = Array.isArray(memory.evidence) ? memory.evidence : []
   const evidencePreview = evidence[0] || candidate.episodeEvidence || {}
-  const reviewPolicy = memory.reviewPolicy || memory.routing?.updatePolicy || 'pending_review'
+  const updatePolicy = memory.routing?.updatePolicy || memory.reviewPolicy || 'pending_review'
+  const routingReasons = Array.isArray(memory.routing?.reasons) ? memory.routing.reasons : []
+  const sourceOfTruth = memory.sourceOfTruth || candidate.normalizedKey || 'unknown'
+  const evidenceRef = evidencePreview.sourceRef || evidencePreview.evidenceRef || candidate.evidenceRef || sourceOfTruth
   const risk = candidate.risk || memory.routing?.risk || 'pending'
   return `
     <article class="memory-review-card selectable-row ${selected ? 'selected' : ''}" data-pending-id="${escapeHtml(candidate.id)}">
@@ -425,9 +428,10 @@ function renderSemanticReviewCard(candidate, options = {}) {
           ['Domain', memory.domain || candidate.domain || 'project']
         ])}
         ${reviewSection('Policy', [
-          ['Review policy', reviewPolicy],
+          ['Update policy', updatePolicy],
           ['Readiness', `${readinessStatus} · ${targetShape}`],
           ['Recommendation', candidate.recommendation || 'review'],
+          ['Routing reasons', formatValueList(routingReasons)],
           ['Review hash', shortHash(candidate.reviewHash || '')]
         ])}
         ${reviewSection('Use boundaries', [
@@ -435,6 +439,8 @@ function renderSemanticReviewCard(candidate, options = {}) {
           ['Do not use when', formatValueList(memory.doNotUseWhen || candidate.proposedSemanticMemory?.doNotUseWhen)]
         ])}
         ${reviewSection('Evidence', [
+          ['Source of truth', sourceOfTruth],
+          ['Evidence ref', evidenceRef],
           ['When', evidencePreview.when || candidate.episodeEvidence?.when || 'unknown'],
           ['What happened', evidencePreview.whatHappened || candidate.episodeEvidence?.whatHappened || 'No event summary available.'],
           ['Source', evidencePreview.sourceKind || evidencePreview.source || candidate.source || 'unknown']
@@ -457,6 +463,7 @@ function semanticMemoryForCandidate(candidate) {
     content: candidate.content || proposed.content || '',
     useWhen: proposed.useWhen || [],
     doNotUseWhen: proposed.doNotUseWhen || [],
+    sourceOfTruth: proposed.sourceOfTruth || candidate.normalizedKey,
     reviewPolicy: 'pending_review',
     routing: { risk: candidate.risk || 'low', updatePolicy: 'pending_review' },
     evidence: candidate.episodeEvidence ? [{

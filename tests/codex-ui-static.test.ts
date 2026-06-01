@@ -38,6 +38,10 @@ describe('Codex UI static assets', () => {
     expect(appSource).toContain('Use boundaries')
     expect(appSource).toContain('Evidence')
     expect(appSource).toContain('Review Action')
+    expect(appSource).toContain('Update policy')
+    expect(appSource).toContain('Source of truth')
+    expect(appSource).toContain('Evidence ref')
+    expect(appSource).toContain('Routing reasons')
   })
 
   it('bundles expected initial UI content', () => {

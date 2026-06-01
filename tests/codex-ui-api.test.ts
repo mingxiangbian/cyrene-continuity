@@ -155,11 +155,27 @@ describe('handleCodexUiApiRequest', () => {
     expect(result.body.ok).toBe(true)
     if (result.body.ok) {
       const data = result.body.data as {
-        pending: { pending: Array<{ id: string }> }
+        pending: {
+          pending: Array<{
+            id: string
+            semanticMemory?: {
+              module?: string
+              reviewPolicy?: string
+              sourceOfTruth?: string
+              evidence?: unknown[]
+            }
+          }>
+        }
         profile: { profile: string }
         signals: { signals: Array<{ kind: string; files?: string[] }> }
       }
       expect(data.pending.pending[0]).toMatchObject({ id: 'pending-1' })
+      expect(data.pending.pending[0]?.semanticMemory).toMatchObject({
+        module: expect.any(String),
+        reviewPolicy: expect.any(String),
+        sourceOfTruth: expect.any(String),
+        evidence: expect.any(Array)
+      })
       expect(data.profile.profile).toBe('Project profile text for UI.')
       expect(data.signals.signals).toContainEqual(expect.objectContaining({
         kind: 'project_manifest',
@@ -237,7 +253,7 @@ describe('handleCodexUiApiRequest', () => {
           id: string
           reviewHash: string
           readiness: { status: string; reasons: Array<{ code: string; text: string }> }
-          semanticMemory: { status: string; module: string; kind: string; content: string; useWhen: string[]; evidence: unknown[] }
+          semanticMemory: { status: string; module: string; kind: string; content: string; reviewPolicy: string; sourceOfTruth: string; useWhen: string[]; evidence: unknown[] }
           episodeEvidence: { when: string; whatHappened: string }
           proposedSemanticMemory: { type: string; useWhen: string[] }
         }>
@@ -251,6 +267,9 @@ describe('handleCodexUiApiRequest', () => {
         status: 'pending',
         module: 'procedural',
         kind: 'workflow_rule',
+        reviewPolicy: expect.any(String),
+        sourceOfTruth: expect.any(String),
+        evidence: expect.any(Array),
         content: 'Keep memory review pending-only in the UI.'
       })
       expect(data.pending[0].semanticMemory.useWhen.length).toBeGreaterThan(0)
