@@ -284,6 +284,65 @@ describe('Codex memory distillation dry run', () => {
     await expect(readFile(eventsPath, 'utf8')).resolves.toBe(eventsBefore)
   })
 
+  it('merges same-key pending duplicates and v2 distillation input into one candidate', async () => {
+    const memoryRoot = await createTempDir('cyrene-distill-same-key-merge-')
+    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
+    const indexPath = join(memoryRoot, 'index.jsonl')
+    await mkdir(memoryRoot, { recursive: true })
+    const pendingBefore = await writeJsonLines(pendingPath, [
+      createPending({
+        id: 'p-same-1',
+        normalizedKey: 'same-key',
+        candidateKind: 'workflow_rule',
+        domain: 'procedural',
+        type: 'procedural_rule'
+      }),
+      createPending({
+        id: 'p-same-2',
+        normalizedKey: 'same-key',
+        candidateKind: 'project_fact',
+        domain: 'project',
+        type: 'project_fact'
+      })
+    ])
+    const distillationInputsBefore = await writeJsonLines(distillationInputsPath, [
+      createDistillationInput({
+        id: 'distillation-input-same',
+        normalizedKey: 'same-key',
+        sourceDraftIds: ['draft-same'],
+        sourceOfTruth: 'AGENTS.md',
+        rawContents: ['Same-key v2 distillation preview keeps structured memory data.'],
+        evidenceRefs: ['AGENTS.md']
+      })
+    ])
+    await writeFile(indexPath, '', 'utf8')
+    const indexBefore = await readFile(indexPath, 'utf8')
+
+    const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
+
+    expect(result.candidates.filter((candidate) => candidate.normalizedKey === 'same-key')).toHaveLength(1)
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]).toMatchObject({
+      id: 'distill-same-key',
+      normalizedKey: 'same-key',
+      sourceIds: ['draft-same', 'p-same-1', 'p-same-2'],
+      sourceOfTruth: 'AGENTS.md',
+      semanticMemory: expect.objectContaining({
+        sourceOfTruth: 'AGENTS.md'
+      }),
+      risk: 'medium',
+      recommendedAction: 'needs_review',
+      reasons: expect.arrayContaining([
+        'mixed pending metadata for duplicate normalizedKey same-key',
+        'duplicate normalizedKey same-key has 2 pending candidates'
+      ])
+    })
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(distillationInputsPath, 'utf8')).resolves.toBe(distillationInputsBefore)
+    await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
+  })
+
   it('keeps duplicate pending cluster behavior while reporting zero v2 distillation inputs', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-legacy-summary-')
     await mkdir(memoryRoot, { recursive: true })

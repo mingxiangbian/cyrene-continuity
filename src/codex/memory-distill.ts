@@ -73,7 +73,7 @@ export async function runCodexMemoryDistill(input: {
   const distillationInputCandidates = Array.from(groupDistillationInputsByNormalizedKey(distillationInputs).entries())
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([normalizedKey, items]) => buildDistillationInputCandidate(normalizedKey, items, activeKeys.has(normalizedKey)))
-  const candidates = [...duplicateCandidates, ...distillationInputCandidates]
+  const candidates = mergeCandidatesByNormalizedKey([...duplicateCandidates, ...distillationInputCandidates])
 
   return {
     mode: 'dry_run',
@@ -210,6 +210,67 @@ function buildDistillationInputCandidate(
     sourceAdmissionDecisionIds,
     sourceSemanticMemoryIds
   }
+}
+
+function mergeCandidatesByNormalizedKey(candidates: DistilledMemoryCandidate[]): DistilledMemoryCandidate[] {
+  const byNormalizedKey = new Map<string, DistilledMemoryCandidate>()
+  for (const candidate of candidates) {
+    const existing = byNormalizedKey.get(candidate.normalizedKey)
+    byNormalizedKey.set(
+      candidate.normalizedKey,
+      existing === undefined ? candidate : mergeDistilledCandidates(existing, candidate)
+    )
+  }
+  return Array.from(byNormalizedKey.values()).sort((left, right) => left.normalizedKey.localeCompare(right.normalizedKey))
+}
+
+function mergeDistilledCandidates(
+  left: DistilledMemoryCandidate,
+  right: DistilledMemoryCandidate
+): DistilledMemoryCandidate {
+  const risk = highestRisk(left.risk, right.risk)
+  return {
+    ...left,
+    sourceIds: uniqueSorted([...left.sourceIds, ...right.sourceIds]),
+    evidence: [...left.evidence, ...right.evidence],
+    recommendedAction: risk === 'low' && left.recommendedAction === 'merge_pending' && right.recommendedAction === 'merge_pending'
+      ? 'merge_pending'
+      : 'needs_review',
+    risk,
+    reasons: uniqueInOrder([...left.reasons, ...right.reasons]),
+    sourceOfTruth: left.sourceOfTruth ?? right.sourceOfTruth,
+    semanticMemory: left.semanticMemory ?? right.semanticMemory,
+    rawContents: mergeOptionalStrings(left.rawContents, right.rawContents),
+    evidenceRefs: mergeOptionalStrings(left.evidenceRefs, right.evidenceRefs, 'sorted'),
+    sourceAdmissionDecisionIds: mergeOptionalStrings(
+      left.sourceAdmissionDecisionIds,
+      right.sourceAdmissionDecisionIds,
+      'sorted'
+    ),
+    sourceSemanticMemoryIds: mergeOptionalStrings(left.sourceSemanticMemoryIds, right.sourceSemanticMemoryIds, 'sorted')
+  }
+}
+
+function highestRisk(left: DistillationRisk, right: DistillationRisk): DistillationRisk {
+  return riskRank(left) >= riskRank(right) ? left : right
+}
+
+function riskRank(risk: DistillationRisk): number {
+  if (risk === 'high') return 2
+  if (risk === 'medium') return 1
+  return 0
+}
+
+function mergeOptionalStrings(
+  left: string[] | undefined,
+  right: string[] | undefined,
+  order: 'preserve' | 'sorted' = 'preserve'
+): string[] | undefined {
+  if (left === undefined && right === undefined) {
+    return undefined
+  }
+  const values = [...(left ?? []), ...(right ?? [])]
+  return order === 'sorted' ? uniqueSorted(values) : uniqueInOrder(values)
 }
 
 function isHighRiskDomain(item: PendingMemory): boolean {
