@@ -80,13 +80,19 @@ export async function runCodexReviewSummary(input: RunCodexReviewSummaryInput): 
       if (safeCandidate === undefined) {
         continue
       }
+      const sourceRef = reviewSummarySourceRef(summaryId)
+      const sourcedCandidate = {
+        ...safeCandidate,
+        sourceOfTruth: safeCandidate.sourceOfTruth ?? sourceRef,
+        evidence: safeCandidate.evidence.map((entry) => evidenceWithTraceRef(entry, sourceRef))
+      }
 
       const result = await runCodexAdmissionPipeline({
         cwd: input.cwd,
-        candidate: safeCandidate,
+        candidate: sourcedCandidate,
         sourceKind: 'review_summary',
         sourceEpisodeIds: input.sourceEpisodeIds,
-        evidenceRefs: [summaryId],
+        evidenceRefs: [sourceRef],
         now: input.now,
         recordRejectedCandidate: false
       })
@@ -306,6 +312,17 @@ function evidenceEntry(input: {
     sourceKind: input.sourceKind,
     evidenceGroupId: stableEvidenceGroupId(input)
   }
+}
+
+function evidenceWithTraceRef(entry: MemoryEvidence, sourceRef: string): MemoryEvidence {
+  return {
+    ...entry,
+    traceRefs: Array.from(new Set([...(entry.traceRefs ?? []), sourceRef]))
+  }
+}
+
+function reviewSummarySourceRef(summaryId: string): string {
+  return `review_summary:${summaryId}`
 }
 
 function redactTags(value: unknown, redactor: ReturnType<typeof createOutputRedactor>): string[] | undefined {

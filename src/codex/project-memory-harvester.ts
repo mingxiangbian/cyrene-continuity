@@ -196,6 +196,7 @@ function sanitizeProjectMemoryCandidate(
 
   const { domain, type } = domainTypeForCandidate(candidateKind, value)
   const source = sourceForSignals(selectedSignals)
+  const sourceOfTruth = sourceOfTruthForSignals(selectedSignals)
   const tags = uniqueStrings([
     'project_harvest',
     candidateKind,
@@ -210,6 +211,7 @@ function sanitizeProjectMemoryCandidate(
     content,
     candidateKind,
     source,
+    ...(sourceOfTruth === undefined ? {} : { sourceOfTruth }),
     evidence: evidenceFromSignals(selectedSignals, config, source),
     scores: {
       evidenceStrength: 0.75,
@@ -250,12 +252,32 @@ function evidenceFromSignals(
       `${signal.kind} from ${signal.source}:${files} ${signal.summary}${evidence}`,
       Math.min(config.memorySingleEvidenceMaxChars, EVIDENCE_MAX_LENGTH)
     )
+    const traceRefs = sourceRefsForSignal(signal)
     return {
       summary,
       sourceKind,
+      ...(traceRefs.length === 0 ? {} : { traceRefs }),
       evidenceGroupId: stableEvidenceGroupId({ sourceKind, summary })
     }
   })
+}
+
+function sourceOfTruthForSignals(signals: ProjectMemorySignal[]): string | undefined {
+  return sourceRefsForSignals(signals)[0]
+}
+
+function sourceRefsForSignals(signals: ProjectMemorySignal[]): string[] {
+  return uniqueStrings(signals.flatMap(sourceRefsForSignal))
+}
+
+function sourceRefsForSignal(signal: ProjectMemorySignal): string[] {
+  return uniqueStrings([
+    signal.sourceRef,
+    ...(signal.files ?? [])
+  ].flatMap((value) => {
+    const ref = value?.trim()
+    return ref === undefined || ref === '' ? [] : [ref]
+  }))
 }
 
 function sourceForSignals(signals: ProjectMemorySignal[]): MemorySource {

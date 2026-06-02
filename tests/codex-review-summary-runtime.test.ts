@@ -356,12 +356,21 @@ describe('Codex review summary runtime', () => {
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as {
-        evidence: Array<{ runId?: string; sessionId?: string; evidenceGroupId?: string; sourceKind?: string }>
+        sourceOfTruth?: string
+        evidence: Array<{
+          runId?: string
+          sessionId?: string
+          evidenceGroupId?: string
+          sourceKind?: string
+          traceRefs?: string[]
+        }>
       })
+    expect(pendingRecord.sourceOfTruth).toBe(`review_summary:${result.summaryId}`)
     expect(pendingRecord.evidence[0]).toMatchObject({
       runId: 's-evidence:t-evidence',
       sessionId: 's-evidence',
-      sourceKind: 'user_explicit'
+      sourceKind: 'user_explicit',
+      traceRefs: [`review_summary:${result.summaryId}`]
     })
     expect(pendingRecord.evidence[0]?.evidenceGroupId).toMatch(/^[a-f0-9]{64}$/)
   })

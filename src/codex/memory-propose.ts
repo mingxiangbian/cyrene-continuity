@@ -33,6 +33,7 @@ import {
 import { activateCandidate, validateMemoryCandidate } from '../memory/memory-validator.js'
 import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
 import type {
+  AdmissionAction,
   CandidateTaskState,
   MemoryCandidateKind,
   MemoryDomain,
@@ -64,6 +65,7 @@ export interface CodexMemoryCandidateInput {
   tags?: string[]
   userConfirmed?: boolean
   admittedBy?: 'admission_gate_v1'
+  admissionAction?: AdmissionAction
   admissionScore?: number
   admissionReasons?: string[]
   sourceEpisodeIds?: string[]
@@ -424,6 +426,7 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     lastSeenAt: now,
     expiresAt: addDays(now, 30),
     ...(input.admittedBy === undefined ? {} : { admittedBy: input.admittedBy }),
+    ...(input.admissionAction === undefined ? {} : { admissionAction: input.admissionAction }),
     ...(input.admissionScore === undefined ? {} : { admissionScore: input.admissionScore }),
     ...(input.admissionReasons === undefined ? {} : { admissionReasons: input.admissionReasons }),
     ...(input.sourceEpisodeIds === undefined ? {} : { sourceEpisodeIds: input.sourceEpisodeIds }),

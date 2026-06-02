@@ -15,6 +15,7 @@ import type {
   CyreneMemory,
   DistillationInput,
   EpisodeMemory,
+  MemoryEvidence,
   MemoryEvent,
   MemoryScores,
   MemoryTombstone,
@@ -402,18 +403,48 @@ export function mergePendingMemory(existing: PendingMemory, candidate: PendingMe
     lastSeenAt: latestIso(existing.lastSeenAt, candidate.lastSeenAt),
     expiresAt: latestIso(existing.expiresAt, candidate.expiresAt),
     promoteAfter: candidate.promoteAfter ?? existing.promoteAfter,
-    evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE),
+    evidence: mergePendingEvidence(existing.evidence, candidate.evidence),
     candidateKind: existing.candidateKind ?? candidate.candidateKind,
     candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
     ...(sourceOfTruth === undefined ? {} : { sourceOfTruth }),
     tags: Array.from(new Set([...existing.tags, ...candidate.tags])),
     admittedBy: existing.admittedBy ?? candidate.admittedBy,
+    admissionAction: existing.admissionAction ?? candidate.admissionAction,
     admissionScore: Math.max(existing.admissionScore ?? 0, candidate.admissionScore ?? 0) || undefined,
     admissionReasons: uniqueOptional([...(existing.admissionReasons ?? []), ...(candidate.admissionReasons ?? [])]),
     sourceEpisodeIds: uniqueOptional([...(existing.sourceEpisodeIds ?? []), ...(candidate.sourceEpisodeIds ?? [])]),
     sourceDraftIds: uniqueOptional([...(existing.sourceDraftIds ?? []), ...(candidate.sourceDraftIds ?? [])]),
     conflictsWith: uniqueOptional([...(existing.conflictsWith ?? []), ...(candidate.conflictsWith ?? [])])
   }
+}
+
+function mergePendingEvidence(existing: MemoryEvidence[], candidate: MemoryEvidence[]): MemoryEvidence[] {
+  const merged: MemoryEvidence[] = []
+  const seen = new Set<string>()
+  for (const entry of [...existing, ...candidate].reverse()) {
+    const key = evidenceIdentity(entry)
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    merged.push(entry)
+  }
+  return merged.reverse().slice(-MAX_PENDING_EVIDENCE)
+}
+
+function evidenceIdentity(entry: MemoryEvidence): string {
+  return JSON.stringify({
+    evidenceGroupId: entry.evidenceGroupId ?? null,
+    runId: entry.runId ?? null,
+    sessionId: entry.sessionId ?? null,
+    taskHash: entry.taskHash ?? null,
+    quoteHash: entry.quoteHash ?? null,
+    messageIds: entry.messageIds ?? [],
+    traceRefs: entry.traceRefs ?? [],
+    sourceKind: entry.sourceKind ?? null,
+    summary: entry.summary ?? null,
+    quote: entry.quote ?? null
+  })
 }
 
 function averageScores(

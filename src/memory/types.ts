@@ -254,6 +254,7 @@ export interface SemanticMemoryReviewState {
   lastSeenAt?: string
   promoteAfter?: string
   admittedBy?: 'admission_gate_v1'
+  admissionAction?: AdmissionAction
   admissionScore?: number
   admissionReasons?: string[]
   sourceEpisodeIds?: string[]
@@ -388,6 +389,7 @@ export interface PendingMemory {
   promoteAfter?: string
   expiresAt: string
   admittedBy?: 'admission_gate_v1'
+  admissionAction?: AdmissionAction
   admissionScore?: number
   admissionReasons?: string[]
   sourceEpisodeIds?: string[]

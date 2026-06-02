@@ -10271,6 +10271,7 @@ function pendingMemoryToSemanticMemory(memory) {
       lastSeenAt: memory.lastSeenAt,
       ...memory.promoteAfter === void 0 ? {} : { promoteAfter: memory.promoteAfter },
       ...memory.admittedBy === void 0 ? {} : { admittedBy: memory.admittedBy },
+      ...memory.admissionAction === void 0 ? {} : { admissionAction: memory.admissionAction },
       ...memory.admissionScore === void 0 ? {} : { admissionScore: memory.admissionScore },
       ...memory.admissionReasons === void 0 ? {} : { admissionReasons: memory.admissionReasons },
       ...memory.sourceEpisodeIds === void 0 ? {} : { sourceEpisodeIds: memory.sourceEpisodeIds },
@@ -10345,6 +10346,7 @@ function semanticMemoryToPendingMemory(memory) {
     ...reviewState.promoteAfter === void 0 ? {} : { promoteAfter: reviewState.promoteAfter },
     expiresAt: memory.expiresAt ?? addDays(lastSeenAt, 30),
     ...reviewState.admittedBy === void 0 ? {} : { admittedBy: reviewState.admittedBy },
+    ...reviewState.admissionAction === void 0 ? {} : { admissionAction: reviewState.admissionAction },
     ...reviewState.admissionScore === void 0 ? {} : { admissionScore: reviewState.admissionScore },
     ...reviewState.admissionReasons === void 0 ? {} : { admissionReasons: reviewState.admissionReasons },
     ...reviewState.sourceEpisodeIds === void 0 ? {} : { sourceEpisodeIds: reviewState.sourceEpisodeIds },
@@ -10699,18 +10701,46 @@ function mergePendingMemory(existing, candidate) {
     lastSeenAt: latestIso(existing.lastSeenAt, candidate.lastSeenAt),
     expiresAt: latestIso(existing.expiresAt, candidate.expiresAt),
     promoteAfter: candidate.promoteAfter ?? existing.promoteAfter,
-    evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE),
+    evidence: mergePendingEvidence(existing.evidence, candidate.evidence),
     candidateKind: existing.candidateKind ?? candidate.candidateKind,
     candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
     ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
     tags: Array.from(/* @__PURE__ */ new Set([...existing.tags, ...candidate.tags])),
     admittedBy: existing.admittedBy ?? candidate.admittedBy,
+    admissionAction: existing.admissionAction ?? candidate.admissionAction,
     admissionScore: Math.max(existing.admissionScore ?? 0, candidate.admissionScore ?? 0) || void 0,
     admissionReasons: uniqueOptional([...existing.admissionReasons ?? [], ...candidate.admissionReasons ?? []]),
     sourceEpisodeIds: uniqueOptional([...existing.sourceEpisodeIds ?? [], ...candidate.sourceEpisodeIds ?? []]),
     sourceDraftIds: uniqueOptional([...existing.sourceDraftIds ?? [], ...candidate.sourceDraftIds ?? []]),
     conflictsWith: uniqueOptional([...existing.conflictsWith ?? [], ...candidate.conflictsWith ?? []])
   };
+}
+function mergePendingEvidence(existing, candidate) {
+  const merged = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of [...existing, ...candidate].reverse()) {
+    const key = evidenceIdentity(entry);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(entry);
+  }
+  return merged.reverse().slice(-MAX_PENDING_EVIDENCE);
+}
+function evidenceIdentity(entry) {
+  return JSON.stringify({
+    evidenceGroupId: entry.evidenceGroupId ?? null,
+    runId: entry.runId ?? null,
+    sessionId: entry.sessionId ?? null,
+    taskHash: entry.taskHash ?? null,
+    quoteHash: entry.quoteHash ?? null,
+    messageIds: entry.messageIds ?? [],
+    traceRefs: entry.traceRefs ?? [],
+    sourceKind: entry.sourceKind ?? null,
+    summary: entry.summary ?? null,
+    quote: entry.quote ?? null
+  });
 }
 function averageScores(left, leftWeight, right, rightWeight) {
   const total = leftWeight + rightWeight;
@@ -15931,18 +15961,21 @@ function evidenceTraceForPendingMemory(candidate) {
   const normalizedKey = nonEmptyString(candidate.normalizedKey);
   for (const entry of candidate.evidence) {
     const refs = [
-      entry.evidenceGroupId,
+      ...entry.traceRefs ?? [],
+      ...entry.messageIds ?? [],
       entry.runId,
       entry.sessionId,
       entry.taskHash,
       entry.quoteHash,
-      ...entry.traceRefs ?? [],
-      ...entry.messageIds ?? []
+      entry.evidenceGroupId
     ];
-    const trace = refs.map(nonEmptyString).find((ref) => ref !== void 0 && ref !== normalizedKey);
+    const trace = refs.map(nonEmptyString).find((ref) => ref !== void 0 && ref !== normalizedKey && !isBareHashRef(ref));
     if (trace !== void 0) return trace;
   }
   return void 0;
+}
+function isBareHashRef(value) {
+  return /^[a-f0-9]{32,}$/i.test(value);
 }
 function hasStructuredSourceBoundary(candidate, semanticMemory) {
   if (nonEmptyString(semanticMemory.sourceOfTruth) === void 0) return false;
@@ -18371,6 +18404,7 @@ function toPendingMemory(input, now) {
     lastSeenAt: now,
     expiresAt: addDays3(now, 30),
     ...input.admittedBy === void 0 ? {} : { admittedBy: input.admittedBy },
+    ...input.admissionAction === void 0 ? {} : { admissionAction: input.admissionAction },
     ...input.admissionScore === void 0 ? {} : { admissionScore: input.admissionScore },
     ...input.admissionReasons === void 0 ? {} : { admissionReasons: input.admissionReasons },
     ...input.sourceEpisodeIds === void 0 ? {} : { sourceEpisodeIds: input.sourceEpisodeIds },
@@ -18426,12 +18460,7 @@ function sourceOfTruthFromEvidence(evidence) {
   return evidence.map(sourceBoundaryRef).find((value) => value !== void 0);
 }
 function sourceBoundaryRef(entry) {
-  return [
-    entry.traceRefs?.[0],
-    entry.evidenceGroupId,
-    entry.runId,
-    entry.taskHash
-  ].map(nonEmptyString3).find((value) => value !== void 0);
+  return (entry.traceRefs ?? []).map(nonEmptyString3).find((value) => value !== void 0);
 }
 function evidenceRef2(entry) {
   return [
@@ -18629,7 +18658,9 @@ async function runCodexAdmissionPipeline(input) {
     cwd: input.cwd,
     candidate: {
       ...input.candidate,
+      ...draft.sourceOfTruth === void 0 ? {} : { sourceOfTruth: draft.sourceOfTruth },
       admittedBy: "admission_gate_v1",
+      admissionAction: admission.action,
       admissionScore: admission.admissionScore,
       admissionReasons: admission.reasons,
       sourceEpisodeIds: input.sourceEpisodeIds,
@@ -19458,9 +19489,13 @@ function toReviewSummarySignal(record2) {
   return {
     kind: "review_summary",
     source: "review_summary",
+    sourceRef: reviewSummarySourceRef(record2),
     summary: clean2(`review summary ${record2.status}: ${record2.summary}`, SUMMARY_MAX_LENGTH3),
     evidence: clean2(details.join("; "), EVIDENCE_MAX_LENGTH)
   };
+}
+function reviewSummarySourceRef(record2) {
+  return `review_summary:${record2.id ?? record2.runId ?? record2.createdAt}`;
 }
 function parseGitStatusFiles(output) {
   const files = [];
@@ -19653,6 +19688,7 @@ function sanitizeProjectMemoryCandidate(value, signals, config2) {
   }
   const { domain, type } = domainTypeForCandidate(candidateKind, value);
   const source = sourceForSignals(selectedSignals);
+  const sourceOfTruth = sourceOfTruthForSignals(selectedSignals);
   const tags = uniqueStrings2([
     "project_harvest",
     candidateKind,
@@ -19666,6 +19702,7 @@ function sanitizeProjectMemoryCandidate(value, signals, config2) {
     content,
     candidateKind,
     source,
+    ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
     evidence: evidenceFromSignals(selectedSignals, config2, source),
     scores: {
       evidenceStrength: 0.75,
@@ -19695,12 +19732,29 @@ function evidenceFromSignals(signals, config2, fallbackSource) {
       `${signal.kind} from ${signal.source}:${files} ${signal.summary}${evidence}`,
       Math.min(config2.memorySingleEvidenceMaxChars, EVIDENCE_MAX_LENGTH2)
     );
+    const traceRefs = sourceRefsForSignal(signal);
     return {
       summary,
       sourceKind,
+      ...traceRefs.length === 0 ? {} : { traceRefs },
       evidenceGroupId: stableEvidenceGroupId({ sourceKind, summary })
     };
   });
+}
+function sourceOfTruthForSignals(signals) {
+  return sourceRefsForSignals(signals)[0];
+}
+function sourceRefsForSignals(signals) {
+  return uniqueStrings2(signals.flatMap(sourceRefsForSignal));
+}
+function sourceRefsForSignal(signal) {
+  return uniqueStrings2([
+    signal.sourceRef,
+    ...signal.files ?? []
+  ].flatMap((value) => {
+    const ref = value?.trim();
+    return ref === void 0 || ref === "" ? [] : [ref];
+  }));
 }
 function sourceForSignals(signals) {
   if (signals.some((signal) => signal.source === "file" || signal.source === "git" || signal.source === "review_summary")) {
@@ -19959,12 +20013,18 @@ async function runCodexReviewSummary(input) {
       if (safeCandidate === void 0) {
         continue;
       }
+      const sourceRef = reviewSummarySourceRef2(summaryId);
+      const sourcedCandidate = {
+        ...safeCandidate,
+        sourceOfTruth: safeCandidate.sourceOfTruth ?? sourceRef,
+        evidence: safeCandidate.evidence.map((entry) => evidenceWithTraceRef(entry, sourceRef))
+      };
       const result2 = await runCodexAdmissionPipeline({
         cwd: input.cwd,
-        candidate: safeCandidate,
+        candidate: sourcedCandidate,
         sourceKind: "review_summary",
         sourceEpisodeIds: input.sourceEpisodeIds,
-        evidenceRefs: [summaryId],
+        evidenceRefs: [sourceRef],
         now: input.now,
         recordRejectedCandidate: false
       });
@@ -20134,6 +20194,15 @@ function evidenceEntry(input) {
     sourceKind: input.sourceKind,
     evidenceGroupId: stableEvidenceGroupId2(input)
   };
+}
+function evidenceWithTraceRef(entry, sourceRef) {
+  return {
+    ...entry,
+    traceRefs: Array.from(/* @__PURE__ */ new Set([...entry.traceRefs ?? [], sourceRef]))
+  };
+}
+function reviewSummarySourceRef2(summaryId) {
+  return `review_summary:${summaryId}`;
 }
 function redactTags(value, redactor) {
   if (!Array.isArray(value)) {

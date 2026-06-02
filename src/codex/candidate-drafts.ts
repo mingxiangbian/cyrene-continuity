@@ -74,12 +74,7 @@ function sourceOfTruthFromEvidence(evidence: MemoryEvidence[]): string | undefin
 }
 
 function sourceBoundaryRef(entry: MemoryEvidence): string | undefined {
-  return [
-    entry.traceRefs?.[0],
-    entry.evidenceGroupId,
-    entry.runId,
-    entry.taskHash
-  ]
+  return (entry.traceRefs ?? [])
     .map(nonEmptyString)
     .find((value): value is string => value !== undefined)
 }

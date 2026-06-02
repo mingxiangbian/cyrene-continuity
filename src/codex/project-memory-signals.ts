@@ -37,6 +37,7 @@ export interface ProjectMemorySignal {
   summary: string
   source: 'git' | 'file' | 'tool_trace' | 'review_summary'
   files?: string[]
+  sourceRef?: string
   evidence?: string
 }
 
@@ -429,9 +430,14 @@ function toReviewSummarySignal(record: ReviewSummaryRecord): ProjectMemorySignal
   return {
     kind: 'review_summary',
     source: 'review_summary',
+    sourceRef: reviewSummarySourceRef(record),
     summary: clean(`review summary ${record.status}: ${record.summary}`, SUMMARY_MAX_LENGTH),
     evidence: clean(details.join('; '), EVIDENCE_MAX_LENGTH)
   }
+}
+
+function reviewSummarySourceRef(record: ReviewSummaryRecord): string {
+  return `review_summary:${record.id ?? record.runId ?? record.createdAt}`
 }
 
 function parseGitStatusFiles(output: string): string[] {

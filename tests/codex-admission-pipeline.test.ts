@@ -187,6 +187,7 @@ describe('runCodexAdmissionPipeline', () => {
     expect(result.action).toBe('pending')
     const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
     expect(pending).toContain('"admittedBy":"admission_gate_v1"')
+    expect(pending).toContain('"admissionAction":"admit_to_pending"')
     expect(pending).toContain('"sourceEpisodeIds":["episode-1"]')
     expect(pending).toContain('"sourceDraftIds"')
   })

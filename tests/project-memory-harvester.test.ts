@@ -275,8 +275,9 @@ describe('runCodexProjectMemoryHarvest', () => {
       type: string
       candidateKind?: string
       candidate_kind?: string
+      sourceOfTruth?: string
       source: string
-      evidence: Array<{ sourceKind?: string; summary?: string }>
+      evidence: Array<{ sourceKind?: string; summary?: string; traceRefs?: string[]; evidenceGroupId?: string }>
       tags: string[]
     })
     expect(record).toMatchObject({
@@ -288,10 +289,13 @@ describe('runCodexProjectMemoryHarvest', () => {
       tags: expect.arrayContaining(['project_harvest', 'project_decision'])
     })
     expect(record.candidate_kind).toBeUndefined()
+    expect(record.sourceOfTruth).toBe('AGENTS.md')
     expect(record.evidence[0]).toEqual(expect.objectContaining({
       sourceKind: 'file',
-      summary: expect.stringContaining('repository_policy')
+      summary: expect.stringContaining('repository_policy'),
+      traceRefs: ['AGENTS.md']
     }))
+    expect(record.evidence[0]?.evidenceGroupId).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('routes numeric project harvest snapshots to admission without pending write', async () => {

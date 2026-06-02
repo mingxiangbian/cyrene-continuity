@@ -518,18 +518,24 @@ function evidenceTraceForPendingMemory(candidate: PendingMemory): string | undef
   const normalizedKey = nonEmptyString(candidate.normalizedKey)
   for (const entry of candidate.evidence) {
     const refs = [
-      entry.evidenceGroupId,
+      ...(entry.traceRefs ?? []),
+      ...(entry.messageIds ?? []),
       entry.runId,
       entry.sessionId,
       entry.taskHash,
       entry.quoteHash,
-      ...(entry.traceRefs ?? []),
-      ...(entry.messageIds ?? [])
+      entry.evidenceGroupId
     ]
-    const trace = refs.map(nonEmptyString).find((ref) => ref !== undefined && ref !== normalizedKey)
+    const trace = refs
+      .map(nonEmptyString)
+      .find((ref) => ref !== undefined && ref !== normalizedKey && !isBareHashRef(ref))
     if (trace !== undefined) return trace
   }
   return undefined
+}
+
+function isBareHashRef(value: string): boolean {
+  return /^[a-f0-9]{32,}$/i.test(value)
 }
 
 function hasStructuredSourceBoundary(candidate: PendingMemory, semanticMemory: SemanticMemory): boolean {

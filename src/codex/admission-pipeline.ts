@@ -99,7 +99,9 @@ export async function runCodexAdmissionPipeline(
     cwd: input.cwd,
     candidate: {
       ...input.candidate,
+      ...(draft.sourceOfTruth === undefined ? {} : { sourceOfTruth: draft.sourceOfTruth }),
       admittedBy: 'admission_gate_v1',
+      admissionAction: admission.action,
       admissionScore: admission.admissionScore,
       admissionReasons: admission.reasons,
       sourceEpisodeIds: input.sourceEpisodeIds,

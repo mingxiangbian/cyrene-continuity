@@ -98,6 +98,32 @@ describe('Candidate draft store', () => {
     expect(candidateDraft.sourceOfTruth).toBeUndefined()
   })
 
+  it('does not infer source-of-truth boundaries from hash-only evidence groups', () => {
+    const candidateDraft = toCandidateDraft({
+      projectId: 'project-1',
+      sourceKind: 'review_summary',
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'Pending review hash conflicts should be diagnosed from pending.jsonl.',
+        evidence: [
+          {
+            sourceKind: 'file',
+            evidenceGroupId: 'acf8f8be4fb2e829a8188ed9dd3a6b8449daf93638b3c96a148136ae144da527',
+            summary: 'Review summary recorded a pending hash conflict.'
+          }
+        ]
+      },
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(candidateDraft.sourceOfTruth).toBeUndefined()
+    expect(candidateDraft.evidenceRefs).toEqual([
+      'acf8f8be4fb2e829a8188ed9dd3a6b8449daf93638b3c96a148136ae144da527'
+    ])
+  })
+
   it('can infer source-of-truth boundaries from explicit evidence trace refs', () => {
     const candidateDraft = toCandidateDraft({
       projectId: 'project-1',

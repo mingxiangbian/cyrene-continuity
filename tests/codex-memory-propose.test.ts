@@ -329,6 +329,50 @@ describe('Codex memory propose', () => {
     expect(pending).toContain('"memory"')
   })
 
+  it('deduplicates repeated evidence when merging duplicate pending candidates', async () => {
+    const home = await createTempDir('cyrene-codex-propose-dedupe-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-propose-dedupe-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(budgetPending('dedupe-pending-evidence', {
+      content: 'Pending evidence for the same review summary should stay unique.',
+      normalizedKey: 'dedupe-pending-evidence',
+      source: 'file',
+      sourceOfTruth: 'review_summary:summary-1',
+      evidence: [{
+        evidenceGroupId: 'evidence-group-1',
+        sourceKind: 'file',
+        traceRefs: ['review_summary:summary-1'],
+        summary: 'Review summary recorded the same pending evidence.'
+      }]
+    }))}\n`)
+
+    await proposeCodexMemoryCandidate({
+      cwd,
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        content: 'Pending evidence for the same review summary should stay unique.',
+        normalizedKey: 'dedupe-pending-evidence',
+        source: 'file',
+        sourceOfTruth: 'review_summary:summary-1',
+        evidence: [{
+          evidenceGroupId: 'evidence-group-1',
+          sourceKind: 'file',
+          traceRefs: ['review_summary:summary-1'],
+          summary: 'Review summary recorded the same pending evidence.'
+        }]
+      }
+    })
+
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    expect(pending[0]?.seenCount).toBe(2)
+    expect(pending[0]?.evidence).toHaveLength(1)
+    expect(pending[0]?.evidence[0]?.evidenceGroupId).toBe('evidence-group-1')
+  })
+
   it('auto-promotes repeated strict low-risk project candidates after merge', async () => {
     const home = await createTempDir('cyrene-propose-auto-promote-home-')
     vi.stubEnv('HOME', home)
