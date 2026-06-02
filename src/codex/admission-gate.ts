@@ -28,7 +28,20 @@ const PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|å¿…é¡
 
 export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInput): AdmissionDecision {
   const now = input.now ?? new Date().toISOString()
+  const reasons = reasonsForDraft(input.draft)
+  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons))
+  const admissionScore = admissionScoreFor(scores)
+  if (reasons.includes('task_state')) {
+    return decision(input.draft, 'task_state', reasons, scores, now)
+  }
+
   const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey)
+  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
+    return decision(input.draft, 'reference_only', ['source_of_truth_duplicate', ...reasons], scores, now, {
+      ...(duplicateActive === undefined ? {} : { targetMemoryId: duplicateActive.id })
+    })
+  }
+
   if (duplicateActive !== undefined) {
     return decision(
       input.draft,
@@ -47,16 +60,6 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
     return decision(input.draft, 'auto_drop', ['conflicts_with_tombstone'], scoresFor(input.draft, { redundancy: 1 }), now, {
       targetMemoryId: tombstone.memoryId ?? tombstone.id
     })
-  }
-
-  const reasons = reasonsForDraft(input.draft)
-  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons))
-  const admissionScore = admissionScoreFor(scores)
-  if (reasons.includes('task_state')) {
-    return decision(input.draft, 'task_state', reasons, scores, now)
-  }
-  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
-    return decision(input.draft, 'reference_only', ['source_of_truth_duplicate', ...reasons], scores, now)
   }
 
   const duplicatePending = findByNormalizedKey(input.pending, input.draft.normalizedKey)

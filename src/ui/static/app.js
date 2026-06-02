@@ -401,7 +401,7 @@ function renderSemanticReviewCard(candidate, options = {}) {
   const updatePolicy = memory.routing?.updatePolicy || memory.reviewPolicy || 'pending_review'
   const reviewPolicy = memory.reviewPolicy || updatePolicy
   const routingReasons = Array.isArray(memory.routing?.reasons) ? memory.routing.reasons : []
-  const sourceOfTruth = memory.sourceOfTruth || candidate.normalizedKey || 'unknown'
+  const sourceOfTruth = firstPresent(memory.sourceOfTruth, candidate.sourceOfTruth, candidate.proposedSemanticMemory?.sourceOfTruth)
   const evidenceRef = evidencePreview.sourceRef || evidencePreview.evidenceRef || candidate.evidenceRef || sourceOfTruth
   const risk = candidate.risk || memory.routing?.risk || 'pending'
   return `
@@ -465,7 +465,7 @@ function semanticMemoryForCandidate(candidate) {
     content: candidate.content || proposed.content || '',
     useWhen: proposed.useWhen || [],
     doNotUseWhen: proposed.doNotUseWhen || [],
-    sourceOfTruth: proposed.sourceOfTruth || candidate.normalizedKey,
+    sourceOfTruth: proposed.sourceOfTruth || candidate.sourceOfTruth || '',
     reviewPolicy: 'pending_review',
     routing: { risk: candidate.risk || 'low', updatePolicy: 'pending_review' },
     evidence: candidate.episodeEvidence ? [{
@@ -1285,8 +1285,7 @@ function sourceOfTruthForWorkflow(candidate) {
     candidate.semanticMemory?.sourceOfTruth,
     candidate.proposedSemanticMemory?.sourceOfTruth,
     candidate.sourceOfTruth,
-    memory.sourceOfTruth,
-    candidate.normalizedKey
+    memory.sourceOfTruth
   )
 }
 

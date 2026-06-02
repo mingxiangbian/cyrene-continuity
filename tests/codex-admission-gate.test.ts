@@ -252,6 +252,49 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.targetMemoryId).toBe('active-1')
   })
 
+  it('routes task state before active duplicate handling', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'This branch review is currently in progress.',
+        candidateKind: 'project_fact',
+        normalizedKey: 'duplicate-key',
+        taskState: {
+          kind: 'implementation_progress',
+          summary: 'Branch review is in progress.'
+        }
+      }),
+      pending: [],
+      active: [active('duplicate-key')],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('task_state')
+    expect(decision.reasons).toContain('task_state')
+    expect(decision.reasons).not.toContain('duplicate_active')
+  })
+
+  it('keeps active source-of-truth duplicate raw excerpts reference-only', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'duplicate-key',
+        sourceOfTruth: 'AGENTS.md'
+      }),
+      pending: [],
+      active: [active('duplicate-key')],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('reference_only')
+    expect(decision.reasons).toContain('source_of_truth_duplicate')
+    expect(decision.reasons).toContain('raw_file_rule_excerpt')
+    expect(decision.reasons).not.toContain('duplicate_active')
+    expect(decision.targetMemoryId).toBe('active-1')
+  })
+
   it('rejects source-of-truth duplicate active memory with exact reasons', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({ normalizedKey: 'duplicate-key', sourceOfTruth: 'AGENTS.md' }),

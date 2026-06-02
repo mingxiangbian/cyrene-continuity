@@ -104,10 +104,11 @@ describe('Codex UI source assets', () => {
       proposedSemanticMemory: { sourceOfTruth: 'proposed-source' },
       normalizedKey: 'normalized-key'
     })).toBe('proposed-source')
-    expect(helpers.sourceOfTruthForWorkflow(legacyCandidate)).toBe('legacy-normalized-key')
+    expect(helpers.sourceOfTruthForWorkflow(legacyCandidate)).toBeUndefined()
     expect(detail).toContain('<h3>Use Boundaries</h3>')
     expect(detail).not.toContain('<h3>Use boundaries</h3>')
-    expect(detail).toMatch(/<strong>Source of truth<\/strong>\s*<span>legacy-normalized-key<\/span>/)
+    expect(detail).toMatch(/<strong>Source of truth<\/strong>\s*<span>missing<\/span>/)
+    expect(detail).not.toMatch(/<strong>Source of truth<\/strong>\s*<span>legacy-normalized-key<\/span>/)
     expect(detail).toMatch(/<strong>Evidence ref<\/strong>\s*<span>missing<\/span>/)
     expect(detail).toMatch(/<strong>What happened<\/strong>\s*<span>missing<\/span>/)
     expect(detail).toMatch(/<strong>Routing reasons<\/strong>\s*<span>missing<\/span>/)

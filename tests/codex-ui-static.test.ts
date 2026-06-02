@@ -86,7 +86,7 @@ describe('Codex UI static assets', () => {
     expect(proposedMemorySection).toContain("['Source of truth', sourceOfTruthForWorkflow(candidate)]")
     expect(sourceOfTruthHelper).toContain('semanticMemoryForCandidate(candidate)')
     expect(sourceOfTruthHelper).toContain('memory.sourceOfTruth')
-    expect(sourceOfTruthHelper).toContain('candidate.normalizedKey')
+    expect(sourceOfTruthHelper).not.toContain('candidate.normalizedKey')
     expect(workflowSection).toContain('renderWorkflowItem(label, value)')
     expect(workflowItem).toContain('formatWorkflowValue(value)')
     expect(episodeEvidenceSection).toContain("['Evidence ref', evidence.evidenceRef]")

@@ -17705,7 +17705,18 @@ var VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|
 var PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i;
 function evaluateCandidateAdmission(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const reasons = reasonsForDraft(input.draft);
+  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons));
+  const admissionScore = admissionScoreFor(scores);
+  if (reasons.includes("task_state")) {
+    return decision(input.draft, "task_state", reasons, scores, now);
+  }
   const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey);
+  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
+    return decision(input.draft, "reference_only", ["source_of_truth_duplicate", ...reasons], scores, now, {
+      ...duplicateActive === void 0 ? {} : { targetMemoryId: duplicateActive.id }
+    });
+  }
   if (duplicateActive !== void 0) {
     return decision(
       input.draft,
@@ -17723,15 +17734,6 @@ function evaluateCandidateAdmission(input) {
     return decision(input.draft, "auto_drop", ["conflicts_with_tombstone"], scoresFor(input.draft, { redundancy: 1 }), now, {
       targetMemoryId: tombstone.memoryId ?? tombstone.id
     });
-  }
-  const reasons = reasonsForDraft(input.draft);
-  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons));
-  const admissionScore = admissionScoreFor(scores);
-  if (reasons.includes("task_state")) {
-    return decision(input.draft, "task_state", reasons, scores, now);
-  }
-  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
-    return decision(input.draft, "reference_only", ["source_of_truth_duplicate", ...reasons], scores, now);
   }
   const duplicatePending = findByNormalizedKey(input.pending, input.draft.normalizedKey);
   if (duplicatePending !== void 0) {
@@ -23689,7 +23691,7 @@ function renderSemanticReviewCard(candidate, options = {}) {
   const updatePolicy = memory.routing?.updatePolicy || memory.reviewPolicy || 'pending_review'
   const reviewPolicy = memory.reviewPolicy || updatePolicy
   const routingReasons = Array.isArray(memory.routing?.reasons) ? memory.routing.reasons : []
-  const sourceOfTruth = memory.sourceOfTruth || candidate.normalizedKey || 'unknown'
+  const sourceOfTruth = firstPresent(memory.sourceOfTruth, candidate.sourceOfTruth, candidate.proposedSemanticMemory?.sourceOfTruth)
   const evidenceRef = evidencePreview.sourceRef || evidencePreview.evidenceRef || candidate.evidenceRef || sourceOfTruth
   const risk = candidate.risk || memory.routing?.risk || 'pending'
   return \`
@@ -23753,7 +23755,7 @@ function semanticMemoryForCandidate(candidate) {
     content: candidate.content || proposed.content || '',
     useWhen: proposed.useWhen || [],
     doNotUseWhen: proposed.doNotUseWhen || [],
-    sourceOfTruth: proposed.sourceOfTruth || candidate.normalizedKey,
+    sourceOfTruth: proposed.sourceOfTruth || candidate.sourceOfTruth || '',
     reviewPolicy: 'pending_review',
     routing: { risk: candidate.risk || 'low', updatePolicy: 'pending_review' },
     evidence: candidate.episodeEvidence ? [{
@@ -24573,8 +24575,7 @@ function sourceOfTruthForWorkflow(candidate) {
     candidate.semanticMemory?.sourceOfTruth,
     candidate.proposedSemanticMemory?.sourceOfTruth,
     candidate.sourceOfTruth,
-    memory.sourceOfTruth,
-    candidate.normalizedKey
+    memory.sourceOfTruth
   )
 }
 
