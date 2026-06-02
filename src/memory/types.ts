@@ -91,6 +91,18 @@ export type ReflectionAction = typeof REFLECTION_ACTIONS[number]
 export const MEMORY_CONFLICT_RESOLUTIONS = ['supersede', 'keep_both', 'reject_new'] as const
 export type MemoryConflictResolution = typeof MEMORY_CONFLICT_RESOLUTIONS[number]
 
+export const SEMANTIC_REWRITE_RECEIPT_ACTIONS = [
+  'shape_on_create',
+  'replace_content',
+  'enrich_boundaries',
+  'skip',
+  'fail'
+] as const
+export type SemanticRewriteReceiptAction = typeof SEMANTIC_REWRITE_RECEIPT_ACTIONS[number]
+
+export const SEMANTIC_REWRITE_METHODS = ['deterministic', 'llm', 'deterministic_fallback'] as const
+export type SemanticRewriteMethod = typeof SEMANTIC_REWRITE_METHODS[number]
+
 export interface MemoryScores {
   evidenceStrength: number
   stability: number
@@ -335,6 +347,23 @@ export interface ReflectionCandidate {
   proposedAction: ReflectionAction
   candidate: SemanticMemory
   reasons: string[]
+  createdAt: string
+}
+
+export interface SemanticRewriteReceipt {
+  id: string
+  pendingMemoryId: string
+  preparedSemanticMemoryId?: string
+  action: SemanticRewriteReceiptAction
+  method: SemanticRewriteMethod
+  oldReviewHash?: string
+  newReviewHash?: string
+  originalContentHash: string
+  rewrittenContentHash?: string
+  changedFields: string[]
+  eligibilityReasons: string[]
+  validatorReasons: string[]
+  sourceOfTruth?: string
   createdAt: string
 }
 

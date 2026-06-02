@@ -23,7 +23,8 @@ import type {
   ReflectionCandidate,
   ReviewDecision,
   RoutingDecision,
-  SemanticMemory
+  SemanticMemory,
+  SemanticRewriteReceipt
 } from './types.js'
 
 const INDEX_FILE = 'index.jsonl'
@@ -37,6 +38,7 @@ const ROUTING_DECISIONS_FILE = 'routing_decisions.jsonl'
 const REVIEW_DECISIONS_FILE = 'review_decisions.jsonl'
 const ACTIVATION_EVENTS_FILE = 'activation_events.jsonl'
 const REFLECTION_CANDIDATES_FILE = 'reflection_candidates.jsonl'
+const SEMANTIC_REWRITE_RECEIPTS_FILE = 'semantic_rewrite_receipts.jsonl'
 const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
@@ -282,6 +284,22 @@ export async function readDistillationInputsFromRoot(memoryRoot: string): Promis
     return []
   }
   return readJsonLines<DistillationInput>(join(memoryRoot, DISTILLATION_INPUTS_FILE))
+}
+
+export async function appendSemanticRewriteReceiptFromRoot(
+  memoryRoot: string,
+  receipt: SemanticRewriteReceipt
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await appendJsonLine(join(root, SEMANTIC_REWRITE_RECEIPTS_FILE), receipt)
+}
+
+export async function readSemanticRewriteReceiptsFromRoot(memoryRoot: string): Promise<SemanticRewriteReceipt[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<SemanticRewriteReceipt>(join(memoryRoot, SEMANTIC_REWRITE_RECEIPTS_FILE))
 }
 
 export async function appendRoutingDecisionFromRoot(
