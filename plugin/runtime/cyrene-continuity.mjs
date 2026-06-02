@@ -22510,6 +22510,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
+import { randomUUID as randomUUID19 } from "node:crypto";
 import { readFile as readFile16 } from "node:fs/promises";
 import { join as join23 } from "node:path";
 
@@ -23188,23 +23189,14 @@ async function handleBatchPendingReject(input, selection) {
   const candidates = parseBatchRejectCandidates(body.candidates);
   if ("error" in candidates) return candidates.error;
   const reason = typeof body.reason === "string" && body.reason.trim() !== "" ? body.reason.trim() : void 0;
-  const results = [];
-  for (const candidate of candidates.value) {
-    const result2 = await rejectCodexPendingMemory({
-      cwd: input.cwd,
-      projectId: selection.projectId,
-      id: candidate.id,
-      reviewHash: candidate.reviewHash,
-      reason,
-      now: input.now
-    });
-    results.push({
-      id: candidate.id,
-      action: result2.result.action,
-      reviewHash: candidate.reviewHash,
-      reason: "reason" in result2.result ? result2.result.reason : void 0
-    });
-  }
+  const resolvedSelection = await resolveSelection(input.cwd, selection);
+  const results = await rejectPendingCandidatesFromRoot({
+    cwd: input.cwd,
+    memoryRoot: resolvedSelection.memoryRoot,
+    candidates: candidates.value,
+    reason,
+    now: input.now
+  });
   const rejectedCount = results.filter((result2) => result2.action === "reject").length;
   const failedCount = results.length - rejectedCount;
   return ok({
@@ -23217,6 +23209,88 @@ async function handleBatchPendingReject(input, selection) {
     },
     results
   });
+}
+async function rejectPendingCandidatesFromRoot(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  await assertMemoryMaintenanceTargetsSafeFromRoot(input.memoryRoot);
+  return withMemoryMaintenanceLockFromRoot(input.memoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+    let pending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
+    const rejected = [];
+    const results = [];
+    for (const request of input.candidates) {
+      const candidate = pending.find((item) => item.id === request.id);
+      if (candidate === void 0) {
+        results.push({
+          id: request.id,
+          action: "not_found",
+          reviewHash: request.reviewHash,
+          reason: "Pending memory candidate not found"
+        });
+        continue;
+      }
+      const latestReviewHash = reviewHashForPendingMemory(candidate);
+      if (latestReviewHash !== request.reviewHash) {
+        results.push({
+          id: request.id,
+          action: "conflict",
+          reviewHash: request.reviewHash,
+          reason: "Pending memory candidate changed since review"
+        });
+        continue;
+      }
+      pending = pending.filter((item) => item.id !== candidate.id);
+      rejected.push(candidate);
+      results.push({
+        id: request.id,
+        action: "reject",
+        reviewHash: request.reviewHash
+      });
+    }
+    if (rejected.length > 0) {
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, pending);
+      for (const candidate of rejected) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForBatchRejectedCandidate(candidate, now));
+        await appendMemoryEventFromRoot(lockedMemoryRoot, {
+          id: randomUUID19(),
+          action: "reject",
+          at: now,
+          reason: input.reason ?? "Rejected by Codex pending memory review",
+          candidateId: candidate.id,
+          details: batchRejectReviewEventDetails(candidate)
+        });
+      }
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    }
+    return results;
+  });
+}
+function batchRejectReviewEventDetails(candidate) {
+  const reviewPatternId = batchRejectTransientReviewPatternId(candidate);
+  return {
+    reviewAction: "reject",
+    ...reviewPatternId === void 0 ? {} : { reviewPatternId },
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    normalizedKey: candidate.normalizedKey
+  };
+}
+function batchRejectTransientReviewPatternId(candidate) {
+  const text = `${candidate.content} ${candidate.normalizedKey}`.toLowerCase();
+  return /(ran npm test|git status|current branch|today|temporary|one-off)/.test(text) ? "reject-transient-test-status" : void 0;
+}
+function tombstoneForBatchRejectedCandidate(candidate, now) {
+  return {
+    id: `tombstone-${candidate.id}`,
+    memoryId: candidate.id,
+    normalizedKey: candidate.normalizedKey,
+    domain: candidate.domain,
+    type: candidate.type,
+    strength: candidate.strength,
+    scope: candidate.scope,
+    reason: "rejected",
+    createdAt: now,
+    evidence: candidate.evidence
+  };
 }
 function parseBatchRejectCandidates(value) {
   const candidates = [];
@@ -26273,7 +26347,7 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID19 } from "node:crypto";
+import { randomUUID as randomUUID20 } from "node:crypto";
 import { lstat as lstat15, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
@@ -26281,7 +26355,7 @@ var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID19();
+  const proposalId = randomUUID20();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
     reportPath: join24(previewDir, DREAM_REPORT_FILE),
@@ -26394,7 +26468,7 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID19()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID20()}.tmp`;
   await writeFile9(tempPath, content, "utf8");
   await rename5(tempPath, filePath);
 }
@@ -26403,7 +26477,7 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID20 } from "node:crypto";
+import { randomUUID as randomUUID21 } from "node:crypto";
 import { lstat as lstat17, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
@@ -26727,7 +26801,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID20(),
+      id: randomUUID21(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -26752,7 +26826,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID20(),
+        id: randomUUID21(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -26878,7 +26952,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID20(),
+        id: randomUUID21(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -27013,7 +27087,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
   const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID20();
+  const token = randomUUID21();
   while (true) {
     try {
       await mkdir12(lockDir);
@@ -27124,7 +27198,7 @@ function isFileErrorCode14(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash13, randomUUID as randomUUID21 } from "node:crypto";
+import { createHash as createHash13, randomUUID as randomUUID22 } from "node:crypto";
 import { lstat as lstat18, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -27254,7 +27328,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID21(),
+      id: randomUUID22(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -27501,7 +27575,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID21()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID22()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -27511,7 +27585,7 @@ async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID21()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID22()}.tmp`;
   await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename6(tempPath, targetPath);
 }
@@ -27651,7 +27725,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash14, randomUUID as randomUUID22 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID23 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -27766,7 +27840,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID22(),
+      id: randomUUID23(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",

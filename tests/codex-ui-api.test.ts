@@ -423,6 +423,53 @@ describe('handleCodexUiApiRequest', () => {
     expect(pendingAfter).toContain('pending-b')
   })
 
+  it('batch rejects only the selected project root when a global pending id collides', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const globalRoot = codexGlobalMemoryRoot()
+    const projectPending = createPending({
+      id: 'shared-pending-id',
+      normalizedKey: 'project-shared-pending-id',
+      content: 'Project-scoped candidate should be rejected.'
+    })
+    const globalPending = createPending({
+      id: 'shared-pending-id',
+      normalizedKey: 'global-shared-pending-id',
+      content: 'Global-scoped candidate must remain pending.',
+      scope: 'global'
+    })
+    await mkdir(globalRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(projectPending)}\n`)
+    await writeFile(join(globalRoot, 'pending.jsonl'), `${JSON.stringify(globalPending)}\n`)
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/pending/reject-batch',
+      searchParams: new URLSearchParams('scope=project'),
+      body: {
+        candidates: [{ id: projectPending.id, reviewHash: reviewHashForPendingMemory(projectPending) }]
+      },
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: {
+          action: 'reject_batch',
+          rejectedCount: 1,
+          failedCount: 0
+        },
+        results: [{ id: 'shared-pending-id', action: 'reject' }]
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readFile(join(globalRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('Global-scoped candidate must remain pending.')
+  })
+
   it('rejects all-scope batch pending reject because the route mutates one memory root', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)

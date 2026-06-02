@@ -418,7 +418,7 @@ describe('Codex review summary runtime', () => {
     expect(summaryRecord.candidateIds).toEqual([])
   })
 
-  it('redacts model output before writing summaries and candidates', async () => {
+  it('redacts model output before writing summaries and accepted candidates', async () => {
     const home = await createTempDir('cyrene-review-runtime-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-review-runtime-project-')
@@ -448,20 +448,13 @@ describe('Codex review summary runtime', () => {
       now: '2026-05-26T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('pending')
+    expect(result.action).toBe('summary')
     const summaries = await readReviewSummaries(cwd)
     expect(summaries).not.toContain('sk-abc')
     expect(summaries).toContain('[REDACTED_SECRET]')
-    if (result.action === 'pending') {
-      const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
-      expect(pending).not.toContain('sk-abc')
-      expect(pending).not.toContain('evil-sk')
-      expect(pending).toContain('[REDACTED_SECRET]')
-      const [pendingRecord] = pending.trim().split('\n').map((line) => JSON.parse(line) as {
-        evidence: Array<{ runId: string }>
-      })
-      expect(pendingRecord.evidence[0]?.runId).toBe('s1:t1')
-    }
+    if (result.action !== 'summary') throw new Error(`Expected summary, got ${result.action}`)
+    expect(result.candidateIds).toEqual([])
+    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('redacts failed summary reason when the model leaks provider details', async () => {

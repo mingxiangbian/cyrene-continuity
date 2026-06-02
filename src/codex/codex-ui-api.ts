@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createDefaultConfig } from '../config.js'
@@ -20,8 +21,8 @@ import {
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
-import { isMemoryCandidateKind } from '../memory/candidate-kind.js'
-import type { CyreneMemory, MemoryCandidateKind, MemoryScores } from '../memory/types.js'
+import { deriveMemoryCandidateKind, isMemoryCandidateKind } from '../memory/candidate-kind.js'
+import type { CyreneMemory, MemoryCandidateKind, MemoryScores, MemoryTombstone, PendingMemory } from '../memory/types.js'
 import { codexMemoryDbPath, syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { readCodexMemoryStatus } from './codex-memory-status.js'
 import { getCodexContinuityContext, type CodexContinuityContext } from './continuity-context.js'
@@ -47,6 +48,7 @@ import {
   editCodexPendingMemory,
   promoteCodexPendingMemory,
   rejectCodexPendingMemory,
+  reviewHashForPendingMemory,
   summarizePendingMemory,
   type CodexPendingMemoryDeferResult,
   type CodexPendingMemoryEditResult,
@@ -373,24 +375,14 @@ async function handleBatchPendingReject(
   const candidates = parseBatchRejectCandidates(body.candidates)
   if ('error' in candidates) return candidates.error
   const reason = typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason.trim() : undefined
-  const results = []
-
-  for (const candidate of candidates.value) {
-    const result = await rejectCodexPendingMemory({
-      cwd: input.cwd,
-      projectId: selection.projectId,
-      id: candidate.id,
-      reviewHash: candidate.reviewHash,
-      reason,
-      now: input.now
-    })
-    results.push({
-      id: candidate.id,
-      action: result.result.action,
-      reviewHash: candidate.reviewHash,
-      reason: 'reason' in result.result ? result.result.reason : undefined
-    })
-  }
+  const resolvedSelection = await resolveSelection(input.cwd, selection)
+  const results = await rejectPendingCandidatesFromRoot({
+    cwd: input.cwd,
+    memoryRoot: resolvedSelection.memoryRoot,
+    candidates: candidates.value,
+    reason,
+    now: input.now
+  })
 
   const rejectedCount = results.filter((result) => result.action === 'reject').length
   const failedCount = results.length - rejectedCount
@@ -404,6 +396,105 @@ async function handleBatchPendingReject(
     },
     results
   })
+}
+
+async function rejectPendingCandidatesFromRoot(input: {
+  cwd: string
+  memoryRoot: string
+  candidates: Array<{ id: string; reviewHash: string }>
+  reason?: string
+  now?: string
+}): Promise<Array<{ id: string; action: 'reject' | 'conflict' | 'not_found'; reviewHash: string; reason?: string }>> {
+  const now = input.now ?? new Date().toISOString()
+  await assertMemoryMaintenanceTargetsSafeFromRoot(input.memoryRoot)
+  return withMemoryMaintenanceLockFromRoot(input.memoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot)
+    let pending = await readPendingMemoriesFromRoot(lockedMemoryRoot)
+    const rejected: PendingMemory[] = []
+    const results: Array<{ id: string; action: 'reject' | 'conflict' | 'not_found'; reviewHash: string; reason?: string }> = []
+
+    for (const request of input.candidates) {
+      const candidate = pending.find((item) => item.id === request.id)
+      if (candidate === undefined) {
+        results.push({
+          id: request.id,
+          action: 'not_found',
+          reviewHash: request.reviewHash,
+          reason: 'Pending memory candidate not found'
+        })
+        continue
+      }
+
+      const latestReviewHash = reviewHashForPendingMemory(candidate)
+      if (latestReviewHash !== request.reviewHash) {
+        results.push({
+          id: request.id,
+          action: 'conflict',
+          reviewHash: request.reviewHash,
+          reason: 'Pending memory candidate changed since review'
+        })
+        continue
+      }
+
+      pending = pending.filter((item) => item.id !== candidate.id)
+      rejected.push(candidate)
+      results.push({
+        id: request.id,
+        action: 'reject',
+        reviewHash: request.reviewHash
+      })
+    }
+
+    if (rejected.length > 0) {
+      await writePendingMemoriesFromRoot(lockedMemoryRoot, pending)
+      for (const candidate of rejected) {
+        await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForBatchRejectedCandidate(candidate, now))
+        await appendMemoryEventFromRoot(lockedMemoryRoot, {
+          id: randomUUID(),
+          action: 'reject',
+          at: now,
+          reason: input.reason ?? 'Rejected by Codex pending memory review',
+          candidateId: candidate.id,
+          details: batchRejectReviewEventDetails(candidate)
+        })
+      }
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+    }
+
+    return results
+  })
+}
+
+function batchRejectReviewEventDetails(candidate: PendingMemory): Record<string, unknown> {
+  const reviewPatternId = batchRejectTransientReviewPatternId(candidate)
+  return {
+    reviewAction: 'reject',
+    ...(reviewPatternId === undefined ? {} : { reviewPatternId }),
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    normalizedKey: candidate.normalizedKey
+  }
+}
+
+function batchRejectTransientReviewPatternId(candidate: PendingMemory): string | undefined {
+  const text = `${candidate.content} ${candidate.normalizedKey}`.toLowerCase()
+  return /(ran npm test|git status|current branch|today|temporary|one-off)/.test(text)
+    ? 'reject-transient-test-status'
+    : undefined
+}
+
+function tombstoneForBatchRejectedCandidate(candidate: PendingMemory, now: string): MemoryTombstone {
+  return {
+    id: `tombstone-${candidate.id}`,
+    memoryId: candidate.id,
+    normalizedKey: candidate.normalizedKey,
+    domain: candidate.domain,
+    type: candidate.type,
+    strength: candidate.strength,
+    scope: candidate.scope,
+    reason: 'rejected',
+    createdAt: now,
+    evidence: candidate.evidence
+  }
 }
 
 function parseBatchRejectCandidates(
