@@ -78,6 +78,7 @@ export interface MemoryQualityRubricSection {
     | 'routing'
     | 'evidence'
     | 'use_boundaries'
+    | 'semantic_prepare'
     | 'reviewability'
     | 'activation_safety'
     | 'reflection_safety'
@@ -280,6 +281,14 @@ export const MEMORY_QUALITY_RUBRIC: MemoryQualityRubricSection[] = [
     title: 'Use Boundaries',
     checks: [
       'Reviewable memory has useWhen and doNotUseWhen boundaries or a documented reason why the field is not yet available.'
+    ]
+  },
+  {
+    id: 'semantic_prepare',
+    title: 'Semantic Prepare',
+    checks: [
+      'Candidates with needs_rewrite status are handled by explicit prepare or review actions before active promotion.',
+      'Semantic prepare replaces content only for rewrite-eligible pending candidates, enriches boundaries without changing content, and leaves active memory unchanged.'
     ]
   },
   {

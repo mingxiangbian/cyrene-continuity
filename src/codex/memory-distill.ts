@@ -22,6 +22,7 @@ import type {
 import { codexProjectMemoryRoot } from './codex-memory-root.js'
 import { routeCandidateDraft, semanticCandidateFromDraft } from './memory-router.js'
 import { identifyCodexProject } from './project-id.js'
+import { shapePendingCandidateContent } from './semantic-content-builder.js'
 
 export type DistillationRisk = 'low' | 'medium' | 'high'
 export type DistillationRecommendedAction = 'merge_pending' | 'needs_review'
@@ -234,10 +235,21 @@ function buildDistillationInputCandidate(
   const content = chooseRepresentativeRawContent(sourceItems)
   const sourceOfTruth = firstDefined(sourceItems.map((item) => item.sourceOfTruth))
   const candidateId = `distill-${normalizedKey}`
+  const representative = sourceItems[0]
+  const shaped = shapePendingCandidateContent({
+    content,
+    candidateKind: representative?.candidateKind,
+    scope: representative?.scope,
+    domain: representative?.domain,
+    normalizedKey,
+    sourceOfTruth,
+    evidenceRefs,
+    tags: []
+  })
   const draft = candidateDraftFromDistillationInputs({
     id: candidateId,
     normalizedKey,
-    content,
+    content: shaped.content,
     sourceItems,
     sourceOfTruth
   })
@@ -258,14 +270,19 @@ function buildDistillationInputCandidate(
   return {
     id: candidateId,
     normalizedKey,
-    content,
+    content: shaped.content,
     sourceIds,
     evidence: sourceItems.flatMap((item) => item.evidenceRefs.map((summary) => ({ summary }))),
     recommendedAction: 'needs_review',
     risk,
     reasons: buildDistillationInputReasons(normalizedKey, sourceItems, hasActiveOverlap, highRiskDomains, hasMixedMetadata),
     ...(sourceOfTruth === undefined ? {} : { sourceOfTruth }),
-    semanticMemory,
+    semanticMemory: {
+      ...semanticMemory,
+      content: shaped.content,
+      useWhen: shaped.useWhen,
+      doNotUseWhen: shaped.doNotUseWhen
+    },
     rawContents,
     evidenceRefs,
     sourceAdmissionDecisionIds,

@@ -420,6 +420,41 @@ describe('Codex memory distillation dry run', () => {
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
   })
 
+  it('shapes distillation input previews without materializing pending memory', async () => {
+    const memoryRoot = await createTempDir('cyrene-distill-shaped-preview-')
+    const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
+    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(distillationInputsPath, [
+      createDistillationInput({
+        normalizedKey: 'pending-review-hash-canonical-records',
+        candidateKind: 'known_pitfall',
+        rawContents: ['pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 pending.jsonl 直接读取 pending review，而非依赖缓存推导。'],
+        evidenceRefs: ['pending.jsonl', 'semantic projection']
+      })
+    ])
+    const pendingBefore = await writeJsonLines(pendingPath, [
+      createPending({
+        id: 'existing-pending',
+        normalizedKey: 'existing-pending',
+        content: 'Existing pending memory must not be changed by distillation dry-run.'
+      })
+    ])
+
+    const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
+
+    expect(result.summary.inputsRead.distillationInputs).toBeGreaterThan(0)
+    expect(result.summary.pendingRead).toBe(1)
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]?.semanticMemory?.content ?? result.candidates[0]?.content).toContain(
+      'canonical pending.jsonl records'
+    )
+    expect(result.candidates[0]?.semanticMemory?.useWhen).toContain(
+      'Diagnosing review-hash conflicts for pending memory candidates.'
+    )
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
+  })
+
   it('does not duplicate draft previews already covered by v2 distillation input source drafts', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-covered-draft-')
     await mkdir(memoryRoot, { recursive: true })

@@ -84,11 +84,15 @@ describe('memory quality contract fixtures', () => {
       'routing',
       'evidence',
       'use_boundaries',
+      'semantic_prepare',
       'reviewability',
       'activation_safety',
       'reflection_safety'
     ])
     expect(MEMORY_QUALITY_RUBRIC.every((section) => section.checks.length > 0)).toBe(true)
+    expect(MEMORY_QUALITY_RUBRIC.find((section) => section.id === 'semantic_prepare')?.checks.join(' ')).toContain(
+      'needs_rewrite'
+    )
 
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Captured durable signals')
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Why no durable signal was dropped')
