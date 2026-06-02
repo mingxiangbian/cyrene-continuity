@@ -219,6 +219,16 @@ describe('Codex review summary runtime', () => {
     expect(pending).toContain('以后所有项目都默认先运行 git diff --check。')
     expect(pending).toContain('"source":"user_explicit"')
     expect(pending).toContain('"scope":"global"')
+    const [pendingRecord] = pending
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as {
+        sourceOfTruth?: string
+        evidence: Array<{ traceRefs?: string[]; evidenceGroupId?: string }>
+      })
+    expect(pendingRecord.sourceOfTruth).toBe('user_prompt:2026-05-30T00:00:00.000Z')
+    expect(pendingRecord.evidence[0]?.traceRefs).toEqual(['user_prompt:2026-05-30T00:00:00.000Z'])
+    expect(pendingRecord.evidence[0]?.evidenceGroupId).toMatch(/^[a-f0-9]{16}$/)
     const [draft] = (await readFile(join(codexGlobalMemoryRoot(), 'candidate_drafts.jsonl'), 'utf8'))
       .trim()
       .split('\n')

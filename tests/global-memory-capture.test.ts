@@ -16,10 +16,25 @@ describe('global memory capture', () => {
       type: 'procedural_rule'
     })
     expect(candidate?.content).toContain('所有项目')
+    expect(candidate?.sourceOfTruth).toBe('user_prompt:2026-05-30T00:00:00.000Z')
+    expect(candidate?.evidence[0]?.traceRefs).toEqual(['user_prompt:2026-05-30T00:00:00.000Z'])
+    expect(candidate?.evidence[0]?.evidenceGroupId).not.toBe(candidate?.sourceOfTruth)
   })
 
   it('does not create candidate from ordinary conversation', () => {
     expect(candidateFromExplicitGlobalInstruction({ text: '这个项目先跑测试。', now: '2026-05-30T00:00:00.000Z' })).toBeUndefined()
+  })
+
+  it('does not create global memory from automation prompts', () => {
+    expect(candidateFromExplicitGlobalInstruction({
+      text: [
+        'Automation: Cyrene Memory Dream Deep',
+        'Automation ID: cyrene-memory-dream-deep',
+        'Run the Cyrene Continuity memory Dream Deep pass for global and project roots.',
+        'Do not modify source files.'
+      ].join('\n'),
+      now: '2026-06-02T00:00:00.000Z'
+    })).toBeUndefined()
   })
 
   it('does not turn personal preference wording into global procedural memory', () => {

@@ -18895,14 +18895,19 @@ function asString(value) {
 import { createHash as createHash8 } from "node:crypto";
 var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
+var AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i;
 function candidateFromExplicitGlobalInstruction(input) {
   const text = input.text.trim();
+  if (AUTOMATION_PROMPT_PATTERN.test(text)) {
+    return void 0;
+  }
   if (!GLOBAL_INSTRUCTION_PATTERN.test(text)) {
     return void 0;
   }
   if (PERSONAL_PREFERENCE_PATTERN.test(text)) {
     return void 0;
   }
+  const sourceRef = `user_prompt:${input.now}`;
   return {
     domain: "procedural",
     type: "procedural_rule",
@@ -18912,10 +18917,12 @@ function candidateFromExplicitGlobalInstruction(input) {
     candidateKind: "user_instruction",
     content: text,
     normalizedKey: `global-instruction-${shortHash(text)}`,
+    sourceOfTruth: sourceRef,
     evidence: [
       {
         summary: "Explicit global instruction from user prompt.",
         sourceKind: "user_explicit",
+        traceRefs: [sourceRef],
         evidenceGroupId: shortHash(`global:${text}`)
       }
     ],
