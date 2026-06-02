@@ -105,6 +105,7 @@ export function activateCandidate(candidate: PendingMemory, now: string): Cyrene
     status: 'active',
     content: candidate.content,
     normalizedKey: candidate.normalizedKey,
+    ...(candidate.sourceOfTruth === undefined ? {} : { sourceOfTruth: candidate.sourceOfTruth }),
     evidence: candidate.evidence,
     source: candidate.source,
     scores: candidate.scores,

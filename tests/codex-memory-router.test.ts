@@ -84,6 +84,64 @@ describe('Codex memory router', () => {
     expect(route.reasons).toContain('high sensitivity or protected domain requires manual review')
   })
 
+  it('routes task-state admissions to the task_state module with defer policy', () => {
+    const taskRoute = routeCandidateDraft({
+      draft: draft({
+        taskState: {
+          kind: 'implementation_progress',
+          summary: 'Task 2 implementation is in progress.'
+        }
+      }),
+      admission: admission({
+        action: 'task_state' as AdmissionDecision['action'],
+        reasons: ['task_state', 'temporary_status']
+      })
+    })
+
+    expect(taskRoute.module).toBe('task_state')
+    expect(taskRoute.updatePolicy).toBe('defer')
+    expect(taskRoute.reasons).toContain('task state is deferred outside active memory review')
+  })
+
+  it('routes source-of-truth duplicates to drop as reference-only', () => {
+    const route = routeCandidateDraft({
+      draft: draft({ sourceOfTruth: 'AGENTS.md' }),
+      admission: admission({
+        action: 'reference_only' as AdmissionDecision['action'],
+        reasons: ['source_of_truth_duplicate', 'raw_file_rule_excerpt']
+      })
+    })
+
+    expect(route.updatePolicy).toBe('drop')
+    expect(route.reasons).toContain('source-of-truth duplicate is reference-only')
+  })
+
+  it('permits strict auto-promotion only for low-risk trusted source candidates', () => {
+    const route = routeCandidateDraft({
+      draft: draft({ sourceKind: 'file' }),
+      admission: admission({ action: 'admit_to_pending' })
+    })
+
+    expect(route.module).toBe('procedural')
+    expect(route.updatePolicy).toBe('strict_auto_promote')
+    expect(route.reasons).toContain('trusted low-risk project/procedural memory may enter v5 auto-promotion gate')
+  })
+
+  it('does not route high-sensitivity procedural candidates into strict auto-promotion', () => {
+    const route = routeCandidateDraft({
+      draft: draft({ sourceKind: 'file' }),
+      admission: admission({
+        action: 'admit_to_pending',
+        scores: scores({ sensitivity: 0.7 })
+      })
+    })
+
+    expect(route.module).toBe('procedural')
+    expect(route.risk).toBe('high')
+    expect(route.updatePolicy).toBe('manual_only')
+    expect(route.updatePolicy).not.toBe('strict_auto_promote')
+  })
+
   it('creates a semantic candidate with source-of-truth evidence and usage rules', () => {
     const sourceDraft = draft({ sourceOfTruth: 'AGENTS.md' })
     const route = routeCandidateDraft({ draft: sourceDraft, admission: admission() })

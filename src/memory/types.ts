@@ -58,7 +58,8 @@ export const MEMORY_MODULES = [
   'preference',
   'global_policy',
   'relationship_affective',
-  'principle_candidate'
+  'principle_candidate',
+  'task_state'
 ] as const
 export type MemoryModule = typeof MEMORY_MODULES[number]
 
@@ -164,6 +165,8 @@ export const ADMISSION_ACTIONS = [
   'admit_to_pending',
   'admit_to_distillation',
   'episode_only',
+  'task_state',
+  'reference_only',
   'auto_drop',
   'auto_defer',
   'merge_with_existing',
@@ -238,6 +241,7 @@ export interface RoutedMemoryTarget {
 
 export interface SemanticMemoryReviewState {
   normalizedKey?: string
+  sourceOfTruth?: string
   type?: MemoryType
   strength?: MemoryStrength
   source?: MemorySource
@@ -342,6 +346,7 @@ export interface CyreneMemory {
   status: 'active'
   content: string
   normalizedKey: string
+  sourceOfTruth?: string
   evidence: MemoryEvidence[]
   source: MemorySource
   portability?: MemoryPortability
@@ -372,6 +377,7 @@ export interface PendingMemory {
   status: 'pending'
   content: string
   normalizedKey: string
+  sourceOfTruth?: string
   evidence: MemoryEvidence[]
   source: MemorySource
   portability?: MemoryPortability

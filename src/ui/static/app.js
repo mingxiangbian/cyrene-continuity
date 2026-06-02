@@ -485,7 +485,7 @@ function reviewSection(title, rows) {
         ${rows.map(([label, value]) => `
           <div>
             <dt>${escapeHtml(label)}</dt>
-            <dd>${escapeHtml(value || 'none')}</dd>
+            <dd>${escapeHtml(value || 'missing')}</dd>
           </div>
         `).join('')}
       </dl>
@@ -1104,17 +1104,12 @@ function renderPendingDetail(candidate) {
   if (state.pendingAction) return renderConfirmForm(candidate, state.pendingAction)
   return `
     <div class="rail-stack">
-      ${renderSemanticReviewCard(candidate, { compact: false })}
-      <div class="soft-panel">
-        <h3>Review Action</h3>
-        <p>${escapeHtml(WRITE_ACTION_COPY)}</p>
-        <div class="detail-actions">
-          ${['approve', 'reject', 'defer', 'edit'].map((action) => `
-            <button class="soft-button compact" type="button" data-action="${action}">${escapeHtml(actionLabel(action))}</button>
-          `).join('')}
-        </div>
-        ${state.actionError ? `<p class="notice error">${escapeHtml(state.actionError)}</p>` : ''}
-      </div>
+      ${renderProposedSemanticMemorySection(candidate)}
+      ${renderEpisodeEvidenceSection(candidate)}
+      ${renderAdmissionRoutingSection(candidate)}
+      ${renderUpdatePolicySection(candidate)}
+      ${renderUseBoundariesSection(candidate)}
+      ${renderReviewActionSection(candidate)}
     </div>
   `
 }
@@ -1165,74 +1160,163 @@ function formatReadinessReason(reason) {
   return reason.text || reason.code || 'Review reason present.'
 }
 
-function renderEpisodeEvidence(evidence) {
-  if (!evidence) return ''
+function renderProposedSemanticMemorySection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const proposed = candidate.proposedSemanticMemory || {}
+  return renderWorkflowSection('Proposed Semantic Memory', [
+    ['Content', firstPresent(memory.content, proposed.content, candidate.content)],
+    ['Kind', firstPresent(memory.kind, proposed.type, candidate.candidateKind, candidate.type)],
+    ['Module', memory.module],
+    ['Scope', firstPresent(memory.scope, proposed.scope, candidate.scope)],
+    ['Domain', firstPresent(memory.domain, candidate.domain)],
+    ['Source of truth', sourceOfTruthForWorkflow(candidate)]
+  ])
+}
+
+function renderEpisodeEvidenceSection(candidate) {
+  const evidence = workflowEvidenceForCandidate(candidate)
+  return renderWorkflowSection('Episode Evidence', [
+    ['Evidence ref', evidence.evidenceRef],
+    ['When', evidence.when],
+    ['What happened', evidence.whatHappened],
+    ['Why important', evidence.whyImportant],
+    ['Result', evidence.result],
+    ['Source', evidence.source]
+  ])
+}
+
+function renderAdmissionRoutingSection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const routing = memory.routing || candidate.routing || {}
+  const reviewState = memory.reviewState || candidate.reviewState || {}
+  return renderWorkflowSection('Admission / Routing Decision', [
+    ['Admission action', firstPresent(candidate.admissionAction, candidate.action, reviewState.admissionAction)],
+    ['Admitted by', reviewState.admittedBy],
+    ['Admission score', reviewState.admissionScore],
+    ['Admission reasons', reviewState.admissionReasons],
+    ['Module', firstPresent(routing.module, memory.module)],
+    ['Risk', firstPresent(routing.risk, candidate.risk)],
+    ['Routing reasons', routing.reasons],
+    ['Tags', firstArrayWithValues(reviewState.tags, candidate.tags)]
+  ])
+}
+
+function renderUpdatePolicySection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const routing = memory.routing || candidate.routing || {}
+  const reviewState = memory.reviewState || candidate.reviewState || {}
+  const readiness = candidate.readiness || candidate.activeReadiness || {}
+  const readinessStatus = readiness.status || (readiness.ready === false ? 'needs_rewrite' : readiness.ready === true ? 'ready' : '')
+  const targetShape = readiness.targetShape || readiness.suggestedShape
+  return renderWorkflowSection('Update Policy', [
+    ['Update policy', firstPresent(routing.updatePolicy, memory.reviewPolicy, candidate.updatePolicy)],
+    ['Review policy', firstPresent(memory.reviewPolicy, routing.updatePolicy, candidate.reviewPolicy)],
+    ['Readiness', readinessStatus],
+    ['Target shape', targetShape],
+    ['Recommendation', candidate.recommendation],
+    ['Review hash', candidate.reviewHash ? shortHash(candidate.reviewHash) : ''],
+    ['Promote after', reviewState.promoteAfter],
+    ['Expires at', firstPresent(memory.expiresAt, candidate.expiresAt)]
+  ])
+}
+
+function renderUseBoundariesSection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const proposed = candidate.proposedSemanticMemory || {}
+  return renderWorkflowSection('Use Boundaries', [
+    ['Use when', firstArrayWithValues(memory.useWhen, proposed.useWhen)],
+    ['Do not use when', firstArrayWithValues(memory.doNotUseWhen, proposed.doNotUseWhen)],
+    ['Evidence strength', proposed.evidenceStrength],
+    ['Future usefulness', proposed.futureUsefulness],
+    ['Expiry', firstPresent(proposed.expiry, memory.expiresAt, candidate.expiresAt)]
+  ])
+}
+
+function renderReviewActionSection(candidate) {
   return `
-    <h3>Episode Evidence</h3>
-    <div class="soft-inset rail-item">
-      <strong>When</strong>
-      <span>${escapeHtml(evidence.when || 'unknown')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>What happened</strong>
-      <span>${escapeHtml(evidence.whatHappened || 'No event summary available.')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Why important</strong>
-      <span>${escapeHtml(evidence.whyImportant || 'No importance summary available.')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Result</strong>
-      <span>${escapeHtml(evidence.result || 'No result summary available.')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Source</strong>
-      <span>${escapeHtml(evidence.source || 'unknown')}</span>
+    <div class="soft-panel">
+      <h3>Review Action</h3>
+      <p>${escapeHtml(WRITE_ACTION_COPY)}</p>
+      <div class="detail-actions">
+        ${['approve', 'reject', 'defer', 'edit'].map((action) => `
+          <button class="soft-button compact" type="button" data-action="${action}">${escapeHtml(actionLabel(action))}</button>
+        `).join('')}
+      </div>
+      ${state.actionError ? `<p class="notice error">${escapeHtml(state.actionError)}</p>` : ''}
     </div>
   `
 }
 
-function renderProposedSemanticMemory(memory) {
-  if (!memory) return ''
+function renderWorkflowSection(title, rows) {
   return `
-    <h3>Proposed Semantic Memory</h3>
-    <div class="soft-inset rail-item">
-      <strong>Type</strong>
-      <span>${escapeHtml(memory.type || 'memory')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Scope</strong>
-      <span>${escapeHtml(memory.scope || 'project')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Content</strong>
-      <span>${escapeHtml(memory.content || '')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Use when</strong>
-      <span>${escapeHtml(formatValueList(memory.useWhen))}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Do not use when</strong>
-      <span>${escapeHtml(formatValueList(memory.doNotUseWhen))}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Evidence strength</strong>
-      <span>${escapeHtml(memory.evidenceStrength || 'unknown')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Future usefulness</strong>
-      <span>${escapeHtml(memory.futureUsefulness || 'unknown')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Expiry</strong>
-      <span>${escapeHtml(memory.expiry || 'none')}</span>
+    <div class="soft-panel">
+      <h3>${escapeHtml(title)}</h3>
+      ${rows.map(([label, value]) => renderWorkflowItem(label, value)).join('')}
     </div>
   `
+}
+
+function renderWorkflowItem(label, value) {
+  return `
+    <div class="soft-inset rail-item">
+      <strong>${escapeHtml(label)}</strong>
+      <span>${escapeHtml(formatWorkflowValue(value))}</span>
+    </div>
+  `
+}
+
+function workflowEvidenceForCandidate(candidate) {
+  const memory = candidate.semanticMemory || {}
+  const structuredEvidence = Array.isArray(memory.evidence) ? memory.evidence[0] : null
+  const episodeEvidence = candidate.episodeEvidence || {}
+  return {
+    evidenceRef: firstPresent(structuredEvidence?.sourceRef, structuredEvidence?.evidenceRef, candidate.evidenceRef) || firstArrayWithValues(candidate.evidenceRefs),
+    when: firstPresent(structuredEvidence?.when, episodeEvidence.when),
+    whatHappened: firstPresent(structuredEvidence?.whatHappened, episodeEvidence.whatHappened),
+    whyImportant: firstPresent(structuredEvidence?.whyImportant, episodeEvidence.whyImportant),
+    result: firstPresent(structuredEvidence?.result, episodeEvidence.result),
+    source: firstPresent(structuredEvidence?.sourceKind, structuredEvidence?.source, episodeEvidence.source, candidate.source)
+  }
+}
+
+function sourceOfTruthForWorkflow(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  return firstPresent(
+    candidate.semanticMemory?.sourceOfTruth,
+    candidate.proposedSemanticMemory?.sourceOfTruth,
+    candidate.sourceOfTruth,
+    memory.sourceOfTruth,
+    candidate.normalizedKey
+  )
+}
+
+function firstPresent(...values) {
+  return values.find((value) => {
+    if (value === undefined || value === null) return false
+    return String(value).trim() !== ''
+  })
+}
+
+function firstArrayWithValues(...values) {
+  return values.find((value) => Array.isArray(value) && value.some((item) => String(item || '').trim() !== '')) || []
+}
+
+function formatWorkflowValue(value) {
+  if (Array.isArray(value)) return formatWorkflowList(value)
+  if (value === undefined || value === null) return 'missing'
+  const textValue = String(value).trim()
+  return textValue === '' ? 'missing' : textValue
+}
+
+function formatWorkflowList(value) {
+  const items = Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+  return items.length > 0 ? items.join(' · ') : 'missing'
 }
 
 function formatValueList(value) {
-  if (!Array.isArray(value) || value.length === 0) return 'none'
+  if (!Array.isArray(value) || value.length === 0) return 'missing'
   return value.join(' · ')
 }
 

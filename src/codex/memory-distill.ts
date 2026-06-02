@@ -1,7 +1,13 @@
 import {
+  readAdmissionDecisionsFromRoot,
   readActiveMemoriesFromRoot,
+  readCandidateDraftsFromRoot,
   readDistillationInputsFromRoot,
-  readPendingMemoriesFromRoot
+  readEpisodeMemoriesFromRoot,
+  readMemoryEventsFromRoot,
+  readPendingMemoriesFromRoot,
+  readReviewDecisionsFromRoot,
+  readSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
 import type {
   AdmissionDecision,
@@ -10,7 +16,8 @@ import type {
   DistillationInput,
   MemoryEvidence,
   PendingMemory,
-  SemanticMemory
+  SemanticMemory,
+  StructuredEvidence
 } from '../memory/types.js'
 import { codexProjectMemoryRoot } from './codex-memory-root.js'
 import { routeCandidateDraft, semanticCandidateFromDraft } from './memory-router.js'
@@ -33,6 +40,7 @@ export interface DistilledMemoryCandidate {
   rawContents?: string[]
   evidenceRefs?: string[]
   sourceAdmissionDecisionIds?: string[]
+  sourceEpisodeIds?: string[]
   sourceSemanticMemoryIds?: string[]
 }
 
@@ -46,6 +54,19 @@ export interface CodexMemoryDistillResult {
     distillationInputsRead: number
     duplicateClusters: number
     candidates: number
+    inputsRead: {
+      drafts: number
+      admissions: number
+      distillationInputs: number
+      episodes: number
+      semanticMemories: number
+      pendingMemories: number
+      activeMemories: number
+      legacyPending: number
+      legacyActive: number
+      memoryEvents: number
+      reviewDecisions: number
+    }
   }
 }
 
@@ -59,10 +80,26 @@ export async function runCodexMemoryDistill(input: {
   }
 
   const memoryRoot = await resolveMemoryRoot(input)
-  const [pending, active, distillationInputs] = await Promise.all([
+  const [
+    pending,
+    active,
+    distillationInputs,
+    drafts,
+    admissions,
+    episodes,
+    semanticMemories,
+    memoryEvents,
+    reviewDecisions
+  ] = await Promise.all([
     readPendingMemoriesFromRoot(memoryRoot),
     readActiveMemoriesFromRoot(memoryRoot),
-    readDistillationInputsFromRoot(memoryRoot)
+    readDistillationInputsFromRoot(memoryRoot),
+    readCandidateDraftsFromRoot(memoryRoot),
+    readAdmissionDecisionsFromRoot(memoryRoot),
+    readEpisodeMemoriesFromRoot(memoryRoot),
+    readSemanticMemoriesFromRoot(memoryRoot),
+    readMemoryEventsFromRoot(memoryRoot),
+    readReviewDecisionsFromRoot(memoryRoot)
   ])
   const activeKeys = new Set(active.map((memory) => memory.normalizedKey))
   const groups = groupPendingByNormalizedKey(pending)
@@ -73,7 +110,17 @@ export async function runCodexMemoryDistill(input: {
   const distillationInputCandidates = Array.from(groupDistillationInputsByNormalizedKey(distillationInputs).entries())
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([normalizedKey, items]) => buildDistillationInputCandidate(normalizedKey, items, activeKeys.has(normalizedKey)))
-  const candidates = mergeCandidatesByNormalizedKey([...duplicateCandidates, ...distillationInputCandidates])
+  const orphanAdmissionCandidates = buildOrphanAdmissionCandidates({
+    drafts,
+    admissions,
+    distillationInputs,
+    activeKeys
+  })
+  const candidates = mergeCandidatesByNormalizedKey([
+    ...duplicateCandidates,
+    ...distillationInputCandidates,
+    ...orphanAdmissionCandidates
+  ])
 
   return {
     mode: 'dry_run',
@@ -84,7 +131,20 @@ export async function runCodexMemoryDistill(input: {
       activeRead: active.length,
       distillationInputsRead: distillationInputs.length,
       duplicateClusters: duplicateCandidates.length,
-      candidates: candidates.length
+      candidates: candidates.length,
+      inputsRead: {
+        drafts: drafts.length,
+        admissions: admissions.length,
+        distillationInputs: distillationInputs.length,
+        episodes: episodes.length,
+        semanticMemories: semanticMemories.length,
+        pendingMemories: pending.length,
+        activeMemories: active.length,
+        legacyPending: pending.length,
+        legacyActive: active.length,
+        memoryEvents: memoryEvents.length,
+        reviewDecisions: reviewDecisions.length
+      }
     }
   }
 }
@@ -162,6 +222,7 @@ function buildDistillationInputCandidate(
   const rawContents = sourceItems.flatMap((item) => item.rawContents)
   const evidenceRefs = uniqueSorted(sourceItems.flatMap((item) => item.evidenceRefs))
   const sourceAdmissionDecisionIds = uniqueSorted(sourceItems.flatMap((item) => item.admissionDecisionIds))
+  const sourceEpisodeIds = uniqueSorted(sourceItems.flatMap((item) => item.sourceEpisodeIds))
   const sourceSemanticMemoryIds = uniqueSorted(sourceItems.flatMap((item) => item.sourceSemanticMemoryIds))
   const highRiskDomains = Array.from(new Set(sourceItems.filter(isHighRiskDistillationDomain).map((item) => item.domain))).sort()
   const hasMixedMetadata = hasMixedDistillationMetadata(sourceItems)
@@ -208,7 +269,71 @@ function buildDistillationInputCandidate(
     rawContents,
     evidenceRefs,
     sourceAdmissionDecisionIds,
+    sourceEpisodeIds,
     sourceSemanticMemoryIds
+  }
+}
+
+function buildOrphanAdmissionCandidates(input: {
+  drafts: CandidateDraft[]
+  admissions: AdmissionDecision[]
+  distillationInputs: DistillationInput[]
+  activeKeys: Set<string>
+}): DistilledMemoryCandidate[] {
+  const draftsById = new Map(input.drafts.map((draft) => [draft.id, draft]))
+  const draftIdsCoveredByInputs = new Set(input.distillationInputs.flatMap((item) => item.sourceDraftIds))
+  return input.admissions
+    .filter((admission) => admission.action === 'admit_to_distillation')
+    .filter((admission) => !draftIdsCoveredByInputs.has(admission.draftId))
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .flatMap((admission) => {
+      const draft = draftsById.get(admission.draftId)
+      if (draft === undefined) {
+        return []
+      }
+      const normalizedKey = normalizedKeyForDraft(draft)
+      return [buildOrphanAdmissionCandidate(draft, admission, input.activeKeys.has(normalizedKey))]
+    })
+}
+
+function buildOrphanAdmissionCandidate(
+  draft: CandidateDraft,
+  admission: AdmissionDecision,
+  hasActiveOverlap: boolean
+): DistilledMemoryCandidate {
+  const normalizedKey = normalizedKeyForDraft(draft)
+  const route = routeCandidateDraft({ draft, admission })
+  const semanticRoute = hasActiveOverlap
+    ? {
+        ...route,
+        risk: 'high' as const,
+        updatePolicy: 'manual_only' as const,
+        reasons: uniqueInOrder([`active memory already has normalizedKey ${normalizedKey}`, ...route.reasons])
+      }
+    : route
+  const risk = hasActiveOverlap ? 'high' : semanticRoute.risk
+  const semanticMemory = semanticCandidateFromDraft({
+    draft,
+    admission,
+    route: semanticRoute,
+    now: admission.createdAt
+  })
+
+  return {
+    id: `distill-${normalizedKey}`,
+    normalizedKey,
+    content: draft.content,
+    sourceIds: [draft.id],
+    evidence: evidenceForDraft(draft),
+    recommendedAction: 'needs_review',
+    risk,
+    reasons: buildOrphanAdmissionReasons(normalizedKey, draft, admission, hasActiveOverlap),
+    ...(draft.sourceOfTruth === undefined ? {} : { sourceOfTruth: draft.sourceOfTruth }),
+    semanticMemory,
+    rawContents: [draft.content],
+    evidenceRefs: uniqueSorted(draft.evidenceRefs),
+    sourceAdmissionDecisionIds: [admission.id],
+    sourceEpisodeIds: uniqueSorted(draft.sourceEpisodeIds)
   }
 }
 
@@ -229,26 +354,137 @@ function mergeDistilledCandidates(
   right: DistilledMemoryCandidate
 ): DistilledMemoryCandidate {
   const risk = highestRisk(left.risk, right.risk)
+  const sourceIds = uniqueSorted([...left.sourceIds, ...right.sourceIds])
+  const evidence = [...left.evidence, ...right.evidence]
+  const reasons = uniqueInOrder([...left.reasons, ...right.reasons])
+  const sourceOfTruth = left.sourceOfTruth ?? right.sourceOfTruth
+  const evidenceRefs = mergeOptionalStrings(left.evidenceRefs, right.evidenceRefs, 'sorted')
+  const sourceAdmissionDecisionIds = mergeOptionalStrings(
+    left.sourceAdmissionDecisionIds,
+    right.sourceAdmissionDecisionIds,
+    'sorted'
+  )
+  const sourceEpisodeIds = mergeOptionalStrings(left.sourceEpisodeIds, right.sourceEpisodeIds, 'sorted')
+  const sourceSemanticMemoryIds = mergeOptionalStrings(
+    left.sourceSemanticMemoryIds,
+    right.sourceSemanticMemoryIds,
+    'sorted'
+  )
   return {
     ...left,
-    sourceIds: uniqueSorted([...left.sourceIds, ...right.sourceIds]),
-    evidence: [...left.evidence, ...right.evidence],
+    sourceIds,
+    evidence,
     recommendedAction: risk === 'low' && left.recommendedAction === 'merge_pending' && right.recommendedAction === 'merge_pending'
       ? 'merge_pending'
       : 'needs_review',
     risk,
-    reasons: uniqueInOrder([...left.reasons, ...right.reasons]),
-    sourceOfTruth: left.sourceOfTruth ?? right.sourceOfTruth,
-    semanticMemory: left.semanticMemory ?? right.semanticMemory,
+    reasons,
+    sourceOfTruth,
+    semanticMemory: mergeSemanticMemoryPreviews(left.semanticMemory, right.semanticMemory, {
+      risk,
+      reasons,
+      sourceOfTruth,
+      sourceEpisodeIds
+    }),
     rawContents: mergeOptionalStrings(left.rawContents, right.rawContents),
-    evidenceRefs: mergeOptionalStrings(left.evidenceRefs, right.evidenceRefs, 'sorted'),
-    sourceAdmissionDecisionIds: mergeOptionalStrings(
-      left.sourceAdmissionDecisionIds,
-      right.sourceAdmissionDecisionIds,
-      'sorted'
-    ),
-    sourceSemanticMemoryIds: mergeOptionalStrings(left.sourceSemanticMemoryIds, right.sourceSemanticMemoryIds, 'sorted')
+    evidenceRefs,
+    sourceAdmissionDecisionIds,
+    sourceEpisodeIds,
+    sourceSemanticMemoryIds
   }
+}
+
+function mergeSemanticMemoryPreviews(
+  left: SemanticMemory | undefined,
+  right: SemanticMemory | undefined,
+  merged: {
+    risk: DistillationRisk
+    reasons: string[]
+    sourceOfTruth?: string
+    sourceEpisodeIds?: string[]
+  }
+): SemanticMemory | undefined {
+  if (left === undefined) return right
+  if (right === undefined) return left
+
+  const routing = mergeSemanticRouting(left.routing, right.routing, merged.risk, merged.reasons)
+  const reviewPolicy = routing?.updatePolicy ?? strongestReviewPolicy(left.reviewPolicy, right.reviewPolicy, merged.risk)
+  const reviewState = {
+    ...(left.reviewState ?? {}),
+    ...(right.reviewState ?? {}),
+    ...(merged.sourceOfTruth === undefined ? {} : { sourceOfTruth: merged.sourceOfTruth }),
+    admissionReasons: uniqueInOrder([
+      ...(left.reviewState?.admissionReasons ?? []),
+      ...(right.reviewState?.admissionReasons ?? [])
+    ]),
+    sourceDraftIds: uniqueSorted([
+      ...(left.reviewState?.sourceDraftIds ?? []),
+      ...(right.reviewState?.sourceDraftIds ?? [])
+    ]),
+    sourceEpisodeIds: uniqueSorted([
+      ...(left.reviewState?.sourceEpisodeIds ?? []),
+      ...(right.reviewState?.sourceEpisodeIds ?? []),
+      ...(merged.sourceEpisodeIds ?? [])
+    ])
+  }
+  return {
+    ...left,
+    ...(merged.sourceOfTruth === undefined ? {} : { sourceOfTruth: merged.sourceOfTruth }),
+    evidence: mergeStructuredEvidence(left.evidence, right.evidence),
+    ...(routing === undefined ? {} : { routing }),
+    reviewPolicy,
+    reviewState,
+    supersedes: uniqueSorted([...left.supersedes, ...right.supersedes]),
+    updatedAt: maxIsoTimestamp(left.updatedAt, right.updatedAt)
+  }
+}
+
+function mergeSemanticRouting(
+  left: SemanticMemory['routing'],
+  right: SemanticMemory['routing'],
+  risk: DistillationRisk,
+  reasons: string[]
+): SemanticMemory['routing'] {
+  const base = left ?? right
+  if (base === undefined) return undefined
+  const updatePolicy = risk === 'high'
+    ? 'manual_only'
+    : risk === 'medium' && base.updatePolicy === 'strict_auto_promote'
+      ? 'pending_review'
+      : base.updatePolicy
+  return {
+    ...base,
+    risk,
+    updatePolicy,
+    reasons: uniqueInOrder([...(left?.reasons ?? []), ...(right?.reasons ?? []), ...reasons])
+  }
+}
+
+function strongestReviewPolicy(
+  left: SemanticMemory['reviewPolicy'],
+  right: SemanticMemory['reviewPolicy'],
+  risk: DistillationRisk
+): SemanticMemory['reviewPolicy'] {
+  if (risk === 'high' || left === 'manual_only' || right === 'manual_only') return 'manual_only'
+  if (risk === 'medium' && (left === 'strict_auto_promote' || right === 'strict_auto_promote')) return 'pending_review'
+  if (left === 'pending_review' || right === 'pending_review') return 'pending_review'
+  return left
+}
+
+function mergeStructuredEvidence(left: StructuredEvidence[], right: StructuredEvidence[]): StructuredEvidence[] {
+  const seen = new Set<string>()
+  const merged: StructuredEvidence[] = []
+  for (const item of [...left, ...right]) {
+    const key = [item.id, item.sourceKind, item.sourceRef, item.whatHappened].join('\u0000')
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(item)
+  }
+  return merged
+}
+
+function maxIsoTimestamp(left: string, right: string): string {
+  return left >= right ? left : right
 }
 
 function highestRisk(left: DistillationRisk, right: DistillationRisk): DistillationRisk {
@@ -326,8 +562,17 @@ function normalizedKeyForDistillationInput(input: DistillationInput): string {
   return input.normalizedKey ?? input.id
 }
 
+function normalizedKeyForDraft(draft: CandidateDraft): string {
+  return draft.normalizedKey ?? draft.id
+}
+
 function sourceIdsForDistillationInput(input: DistillationInput): string[] {
   return input.sourceDraftIds.length > 0 ? input.sourceDraftIds : [input.id]
+}
+
+function evidenceForDraft(draft: CandidateDraft): MemoryEvidence[] {
+  const refs = draft.evidenceRefs.length > 0 ? draft.evidenceRefs : [draft.sourceOfTruth ?? draft.id]
+  return refs.map((summary) => ({ summary }))
 }
 
 function chooseRepresentativeRawContent(items: DistillationInput[]): string {
@@ -432,5 +677,18 @@ function buildDistillationInputReasons(
     ...highRiskDomains.map((domain) => `high-risk distillation input domain ${domain}`),
     ...(hasMixedMetadata ? [`mixed distillation input metadata for normalizedKey ${normalizedKey}`] : []),
     `normalizedKey ${normalizedKey} has ${items.length} v2 distillation input${items.length === 1 ? '' : 's'}`
+  ]
+}
+
+function buildOrphanAdmissionReasons(
+  normalizedKey: string,
+  draft: CandidateDraft,
+  admission: AdmissionDecision,
+  hasActiveOverlap: boolean
+): string[] {
+  return [
+    ...(hasActiveOverlap ? [`active memory already has normalizedKey ${normalizedKey}`] : []),
+    `draft ${draft.id} admitted to distillation by ${admission.id}`,
+    `no v2 distillation input covers draft ${draft.id}`
   ]
 }

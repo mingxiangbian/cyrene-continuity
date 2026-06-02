@@ -337,7 +337,7 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
     type: candidate.type,
     tags: candidate.tags
   })
-  const structuredGate = evaluateStructuredReadinessGate(candidate, semanticMemory)
+  const structuredGate = evaluateStructuredReadinessGate(candidate, semanticMemory, activeReadiness)
   const recommendation = deriveRecommendation(candidate, now, activeReadiness, structuredGate)
   const risk = deriveRisk(candidate)
   return {
@@ -464,6 +464,7 @@ function deriveReadinessReasons(
 function pendingReviewSemanticMemory(candidate: PendingMemory): SemanticMemory {
   const semanticMemory = pendingMemoryToSemanticMemory(candidate)
   const sourceOfTruth = sourceOfTruthForPendingMemory(candidate)
+  const explicitSourceOfTruth = explicitSourceOfTruthForPendingMemory(candidate)
   return {
     ...semanticMemory,
     sourceOfTruth,
@@ -471,30 +472,100 @@ function pendingReviewSemanticMemory(candidate: PendingMemory): SemanticMemory {
       ? []
       : semanticMemory.evidence.map((entry) => ({
           ...entry,
-          sourceRef: sourceOfTruth
+          sourceRef: explicitSourceOfTruth ?? entry.sourceRef
         }))
   }
 }
 
 function sourceOfTruthForPendingMemory(candidate: PendingMemory): string {
-  return (candidate.normalizedKey ?? '').trim()
+  return explicitSourceOfTruthForPendingMemory(candidate) ?? evidenceTraceForPendingMemory(candidate) ?? ''
 }
 
 function evaluateStructuredReadinessGate(
   candidate: PendingMemory,
-  semanticMemory: SemanticMemory
+  semanticMemory: SemanticMemory,
+  activeReadiness?: ActiveMemoryReadinessResult
 ): CodexStructuredReadinessGate {
   const reasons: CodexPendingReadinessReason[] = []
-  if (candidate.evidence.length === 0 || semanticMemory.evidence.length === 0) {
+  if (
+    candidate.evidence.length === 0 ||
+    semanticMemory.evidence.length === 0 ||
+    semanticMemory.evidence.some((entry) => !hasStructuredEvidenceBoundary(entry))
+  ) {
     reasons.push(readinessReason('missing_structured_evidence', 'Candidate needs structured evidence before promotion review.'))
   }
-  if (sourceOfTruthForPendingMemory(candidate) === '' || semanticMemory.sourceOfTruth === undefined || semanticMemory.sourceOfTruth.trim() === '') {
+  if (!hasStructuredSourceBoundary(candidate, semanticMemory)) {
     reasons.push(readinessReason('missing_source_of_truth', 'Candidate needs a source of truth before promotion review.'))
+  }
+  if (semanticMemory.useWhen.every((item) => item.trim() === '') || semanticMemory.doNotUseWhen.every((item) => item.trim() === '')) {
+    reasons.push(readinessReason('missing_use_boundaries', 'Candidate needs use and non-use boundaries before promotion review.'))
+  }
+  const readiness = activeReadiness ?? activeReadinessForPending(candidate)
+  if (readiness.reasons.includes('raw_file_rule_excerpt')) {
+    reasons.push(readinessReason('raw_file_rule_excerpt', blockingReasonText('raw_file_rule_excerpt')))
   }
   return {
     ready: reasons.length === 0,
-    reasons
+    reasons: uniqueReadinessReasons(reasons)
   }
+}
+
+function explicitSourceOfTruthForPendingMemory(candidate: PendingMemory): string | undefined {
+  return nonEmptyString(candidate.sourceOfTruth)
+}
+
+function evidenceTraceForPendingMemory(candidate: PendingMemory): string | undefined {
+  const normalizedKey = nonEmptyString(candidate.normalizedKey)
+  for (const entry of candidate.evidence) {
+    const refs = [
+      entry.evidenceGroupId,
+      entry.runId,
+      entry.sessionId,
+      entry.taskHash,
+      entry.quoteHash,
+      ...(entry.traceRefs ?? []),
+      ...(entry.messageIds ?? [])
+    ]
+    const trace = refs.map(nonEmptyString).find((ref) => ref !== undefined && ref !== normalizedKey)
+    if (trace !== undefined) return trace
+  }
+  return undefined
+}
+
+function hasStructuredSourceBoundary(candidate: PendingMemory, semanticMemory: SemanticMemory): boolean {
+  if (nonEmptyString(semanticMemory.sourceOfTruth) === undefined) return false
+  return explicitSourceOfTruthForPendingMemory(candidate) !== undefined || evidenceTraceForPendingMemory(candidate) !== undefined
+}
+
+function hasStructuredEvidenceBoundary(entry: SemanticMemory['evidence'][number]): boolean {
+  return nonEmptyString(entry.sourceKind) !== undefined &&
+    nonEmptyString(entry.sourceRef) !== undefined &&
+    nonEmptyString(entry.whatHappened) !== undefined
+}
+
+function activeReadinessForPending(candidate: PendingMemory): ActiveMemoryReadinessResult {
+  return evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  })
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+function uniqueReadinessReasons(reasons: CodexPendingReadinessReason[]): CodexPendingReadinessReason[] {
+  const seen = new Set<string>()
+  return reasons.filter((reason) => {
+    if (seen.has(reason.code)) return false
+    seen.add(reason.code)
+    return true
+  })
 }
 
 function structuredPromotionReadiness(gate: CodexStructuredReadinessGate): CodexPendingPromotionReadiness {
@@ -708,7 +779,8 @@ export async function promoteCodexPendingMemory(input: {
     }
   }
 
-  const structuredGate = evaluateStructuredReadinessGate(candidate, pendingReviewSemanticMemory(candidate))
+  const activeReadiness = activeReadinessForPending(candidate)
+  const structuredGate = evaluateStructuredReadinessGate(candidate, pendingReviewSemanticMemory(candidate), activeReadiness)
   if (!structuredGate.ready) {
     return {
       project,
@@ -783,7 +855,8 @@ export async function promoteCodexPendingMemory(input: {
       }
     }
 
-    const lockedStructuredGate = evaluateStructuredReadinessGate(lockedCandidate, pendingReviewSemanticMemory(lockedCandidate))
+    const lockedActiveReadiness = activeReadinessForPending(lockedCandidate)
+    const lockedStructuredGate = evaluateStructuredReadinessGate(lockedCandidate, pendingReviewSemanticMemory(lockedCandidate), lockedActiveReadiness)
     if (!lockedStructuredGate.ready) {
       return {
         project,
@@ -822,14 +895,7 @@ export async function promoteCodexPendingMemory(input: {
       }
     }
 
-    const activeReadiness = evaluateActiveMemoryReadiness({
-      content: lockedCandidate.content,
-      candidateKind: deriveMemoryCandidateKind(lockedCandidate),
-      domain: lockedCandidate.domain,
-      type: lockedCandidate.type,
-      tags: lockedCandidate.tags
-    })
-    if (!activeReadiness.ready) {
+    if (!lockedActiveReadiness.ready) {
       return {
         project,
         memoryRoot: lockedMemoryRoot,
@@ -837,7 +903,7 @@ export async function promoteCodexPendingMemory(input: {
           action: 'needs_rewrite',
           candidateId: lockedCandidate.id,
           reason: 'Pending memory must be rewritten before it can become active memory.',
-          readiness: activeReadiness,
+          readiness: lockedActiveReadiness,
           reviewHash: lockedReviewHash
         }
       }

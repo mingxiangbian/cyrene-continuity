@@ -33,6 +33,7 @@ import {
 import { activateCandidate, validateMemoryCandidate } from '../memory/memory-validator.js'
 import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
 import type {
+  CandidateTaskState,
   MemoryCandidateKind,
   MemoryDomain,
   MemoryEvidence,
@@ -54,6 +55,7 @@ export interface CodexMemoryCandidateInput {
   content: string
   normalizedKey?: string
   sourceOfTruth?: string
+  taskState?: CandidateTaskState
   candidateKind?: MemoryCandidateKind
   candidate_kind?: MemoryCandidateKind
   source?: MemorySource
@@ -164,9 +166,10 @@ export async function proposeCodexMemoryCandidate(input: {
 
     const pendingCandidate = decision.action === 'pending' ? decision.candidate : candidate
     const existingPending = lockedPending.find((item) => item.normalizedKey === pendingCandidate.normalizedKey)
-    const mergedCandidate = existingPending === undefined
+    const mergedCandidateBase = existingPending === undefined
       ? pendingCandidate
       : mergePendingMemory(existingPending, pendingCandidate)
+    const mergedCandidate = withMergedSourceBoundary(mergedCandidateBase, pendingCandidate)
     const pendingWithoutMerged = lockedPending.filter((item) => item.normalizedKey !== mergedCandidate.normalizedKey)
     const config = createDefaultConfig(input.cwd)
     const promotionScope = mergedCandidate.scope === 'global' ? 'global' : 'project'
@@ -221,6 +224,8 @@ export async function proposeCodexMemoryCandidate(input: {
         details: {
           decision: 'auto_promote',
           policyId: autoPromotion.policyId,
+          semanticMemoryId: promoted.id,
+          sourceIds: sourceIdsForAutoPromotion(mergedCandidate),
           thresholds: autoPromotionThresholds(promotionScope),
           evidenceCount: mergedCandidate.evidence.length,
           distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
@@ -355,6 +360,28 @@ function autoPromotionThresholds(scope: 'project' | 'global'): Record<string, nu
       }
 }
 
+function withMergedSourceBoundary(mergedCandidate: PendingMemory, incomingCandidate: PendingMemory): PendingMemory {
+  const sourceOfTruth = nonEmptyString(mergedCandidate.sourceOfTruth) ?? nonEmptyString(incomingCandidate.sourceOfTruth)
+  return sourceOfTruth === undefined ? mergedCandidate : { ...mergedCandidate, sourceOfTruth }
+}
+
+function sourceIdsForAutoPromotion(candidate: PendingMemory): string[] {
+  return uniqueInOrder([
+    ...(candidate.sourceDraftIds ?? []),
+    ...(candidate.sourceEpisodeIds ?? [])
+  ])
+}
+
+function uniqueInOrder(values: string[]): string[] {
+  return Array.from(new Set(values))
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
 async function markDreamDueFailOpen(memoryRoot: string, now: string): Promise<void> {
   try {
     await markCodexMemoryDreamDue(memoryRoot, now)
@@ -388,6 +415,7 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     status: 'pending',
     content: input.content,
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
+    ...(input.sourceOfTruth === undefined ? {} : { sourceOfTruth: input.sourceOfTruth }),
     evidence: input.evidence,
     source: input.source ?? 'assistant_observed',
     scores: { ...DEFAULT_SCORES, ...input.scores },

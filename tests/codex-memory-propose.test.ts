@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { proposeCodexMemoryCandidate } from '../src/codex/memory-propose.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
-import type { MemoryEvent, PendingMemory } from '../src/memory/types.js'
+import { activeMemoryToSemanticMemory, pendingMemoryToSemanticMemory } from '../src/memory/semantic-memory-adapter.js'
+import type { CyreneMemory, MemoryEvent, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -42,6 +43,10 @@ function budgetPending(id: string, overrides: Partial<PendingMemory> = {}): Pend
     tags: [],
     ...overrides
   }
+}
+
+function parseJsonLines<T>(value: string): T[] {
+  return value.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as T)
 }
 
 describe('Codex memory propose', () => {
@@ -174,6 +179,32 @@ describe('Codex memory propose', () => {
     expect(result.result.review.reviewHash).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it('preserves explicit source-of-truth boundaries on pending memory projections', async () => {
+    const home = await createTempDir('cyrene-codex-propose-source-pending-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-codex-propose-source-pending-project-')
+
+    const result = await proposeCodexMemoryCandidate({
+      cwd,
+      allowAutoPromote: false,
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'Repository workflow rules should remain grounded in AGENTS.md.',
+        normalizedKey: 'repo-workflow-source-boundary',
+        sourceOfTruth: 'AGENTS.md',
+        source: 'file',
+        evidence: [{ summary: 'AGENTS.md documents repository workflow rules.', sourceKind: 'file' }]
+      }
+    })
+
+    expect(result.result.action).toBe('pending')
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8'))
+    expect(pending[0]?.sourceOfTruth).toBe('AGENTS.md')
+    expect(pendingMemoryToSemanticMemory(pending[0] as PendingMemory).sourceOfTruth).toBe('AGENTS.md')
+  })
+
   it('rejects candidates without evidence', async () => {
     const home = await createTempDir('cyrene-codex-propose-home-')
     vi.stubEnv('HOME', home)
@@ -255,6 +286,19 @@ describe('Codex memory propose', () => {
     const home = await createTempDir('cyrene-codex-propose-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-codex-propose-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(budgetPending('codex-pending-only-proposals', {
+      domain: 'procedural',
+      type: 'procedural_rule',
+      content: 'Use pending-only memory proposals for Codex.',
+      source: 'user_explicit',
+      evidence: [{ runId: 'run-1', summary: 'First observation.' }],
+      scores: { evidenceStrength: 0.75, stability: 0.7, usefulness: 0.7, safety: 0.9, sensitivity: 0.1 },
+      tags: ['codex'],
+      candidateKind: 'workflow_rule'
+    }))}\n`)
     const candidate = {
       domain: 'procedural' as const,
       type: 'procedural_rule' as const,
@@ -265,15 +309,20 @@ describe('Codex memory propose', () => {
       tags: ['codex']
     }
 
-    await proposeCodexMemoryCandidate({ cwd, candidate })
     await proposeCodexMemoryCandidate({
       cwd,
-      candidate: { ...candidate, evidence: [{ runId: 'run-2', summary: 'Second observation.' }], tags: ['memory'] }
+      candidate: {
+        ...candidate,
+        sourceOfTruth: 'AGENTS.md',
+        evidence: [{ runId: 'run-2', summary: 'Second observation.' }],
+        tags: ['memory']
+      }
     })
 
-    const identity = await identifyCodexProject(cwd)
-    const pending = await readFile(join(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingRecords = parseJsonLines<PendingMemory>(pending)
     expect(pending).toContain('"seenCount":2')
+    expect(pendingRecords[0]?.sourceOfTruth).toBe('AGENTS.md')
     expect(pending).toContain('First observation.')
     expect(pending).toContain('Second observation.')
     expect(pending).toContain('"codex"')
@@ -294,6 +343,8 @@ describe('Codex memory propose', () => {
       normalizedKey: 'project-sqlite-fts-retrieval',
       evidence: [{ summary: 'README documents SQLite FTS.', evidenceGroupId: 'file-1', sourceKind: 'file' as const }],
       scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.8, safety: 0.95, sensitivity: 0.05 },
+      sourceDraftIds: ['draft-1'],
+      sourceEpisodeIds: ['episode-1'],
       tags: ['project_harvest']
     }
 
@@ -304,7 +355,9 @@ describe('Codex memory propose', () => {
       cwd,
       candidate: {
         ...candidate,
-        evidence: [{ summary: 'Tool trace rebuilt memory.db.', evidenceGroupId: 'tool-1', sourceKind: 'tool_trace' as const }]
+        evidence: [{ summary: 'Tool trace rebuilt memory.db.', evidenceGroupId: 'tool-1', sourceKind: 'tool_trace' as const }],
+        sourceDraftIds: ['draft-2'],
+        sourceEpisodeIds: ['episode-2']
       },
       now: '2026-05-30T01:00:00.000Z'
     })
@@ -321,6 +374,8 @@ describe('Codex memory propose', () => {
     expect(promoteEvent?.details).toMatchObject({
       decision: 'auto_promote',
       policyId: 'low_risk_project_memory_v1',
+      semanticMemoryId: second.result.action === 'auto_promote' ? second.result.memoryId : expect.any(String),
+      sourceIds: ['draft-1', 'draft-2', 'episode-1', 'episode-2'],
       evidenceCount: 2,
       distinctEvidenceCount: 2,
       scoreSnapshot: candidate.scores,
@@ -336,6 +391,40 @@ describe('Codex memory propose', () => {
         results: [expect.objectContaining({ name: 'auto_promotion_policy_eval', passed: true })]
       }
     })
+  })
+
+  it('preserves explicit source-of-truth boundaries when pending memory auto-promotes', async () => {
+    const home = await createTempDir('cyrene-propose-auto-promote-source-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-propose-auto-promote-source-project-')
+    const candidate = {
+      domain: 'project' as const,
+      type: 'project_fact' as const,
+      scope: 'project' as const,
+      source: 'file' as const,
+      sourceOfTruth: 'AGENTS.md',
+      candidateKind: 'project_fact' as const,
+      content: 'Project uses SQLite FTS for memory retrieval.',
+      normalizedKey: 'project-sqlite-fts-retrieval-source-boundary',
+      evidence: [{ summary: 'AGENTS.md documents SQLite FTS.', evidenceGroupId: 'file-1', sourceKind: 'file' as const }],
+      scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.8, safety: 0.95, sensitivity: 0.05 },
+      tags: ['project_harvest']
+    }
+
+    await proposeCodexMemoryCandidate({ cwd, candidate, now: '2026-05-30T00:00:00.000Z' })
+    const promoted = await proposeCodexMemoryCandidate({
+      cwd,
+      candidate: {
+        ...candidate,
+        evidence: [{ summary: 'Tool trace rebuilt memory.db.', evidenceGroupId: 'tool-1', sourceKind: 'tool_trace' as const }]
+      },
+      now: '2026-05-30T01:00:00.000Z'
+    })
+
+    expect(promoted.result.action).toBe('auto_promote')
+    const active = parseJsonLines<CyreneMemory>(await readFile(join(promoted.memoryRoot, 'index.jsonl'), 'utf8'))
+    expect(active[0]?.sourceOfTruth).toBe('AGENTS.md')
+    expect(activeMemoryToSemanticMemory(active[0] as CyreneMemory).sourceOfTruth).toBe('AGENTS.md')
   })
 
   it('does not auto-promote repeated implementation notes before rewrite', async () => {

@@ -6,6 +6,7 @@ import {
   appendCandidateDraftFromRoot,
   readCandidateDraftsFromRoot
 } from '../src/memory/memory-store.js'
+import { toCandidateDraft } from '../src/codex/candidate-drafts.js'
 import type { CandidateDraft } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -55,5 +56,62 @@ describe('Candidate draft store', () => {
     const root = await createTempDir('cyrene-draft-empty-root-')
 
     await expect(readCandidateDraftsFromRoot(root)).resolves.toEqual([])
+  })
+
+  it('preserves explicit source-of-truth boundaries on candidate drafts', () => {
+    const candidateDraft = toCandidateDraft({
+      projectId: 'project-1',
+      sourceKind: 'file',
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'Repository workflow rules should remain grounded in AGENTS.md.',
+        sourceOfTruth: 'AGENTS.md',
+        evidence: [{ summary: 'AGENTS.md documents repository workflow rules.', sourceKind: 'file' }]
+      },
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(candidateDraft.sourceOfTruth).toBe('AGENTS.md')
+  })
+
+  it('does not infer source-of-truth boundaries from evidence summary or quote text', () => {
+    const candidateDraft = toCandidateDraft({
+      projectId: 'project-1',
+      sourceKind: 'file',
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'Repository workflow rules should remain grounded in source files.',
+        evidence: [
+          {
+            summary: 'AGENTS.md documents repository workflow rules.',
+            quote: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task。'
+          }
+        ]
+      },
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(candidateDraft.sourceOfTruth).toBeUndefined()
+  })
+
+  it('can infer source-of-truth boundaries from explicit evidence trace refs', () => {
+    const candidateDraft = toCandidateDraft({
+      projectId: 'project-1',
+      sourceKind: 'file',
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'Repository workflow rules should remain grounded in source files.',
+        evidence: [{ traceRefs: ['AGENTS.md'], summary: 'Source trace for repository workflow rules.' }]
+      },
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(candidateDraft.sourceOfTruth).toBe('AGENTS.md')
   })
 })

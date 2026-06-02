@@ -93,7 +93,7 @@ function createPending(overrides: Partial<PendingMemory> = {}): PendingMemory {
     status: 'pending',
     content: 'Keep memory review pending-only in the UI.',
     normalizedKey: 'ui-pending-only-review',
-    evidence: [{ summary: 'Seeded pending memory.' }],
+    evidence: [{ runId: 'ui-seed-run', summary: 'Seeded pending memory.', sourceKind: 'user_explicit' }],
     source: 'user_explicit',
     scores: {
       evidenceStrength: 0.9,
@@ -929,6 +929,47 @@ describe('handleCodexUiApiRequest', () => {
       ok: false,
       error: { code: 'review_hash_mismatch' }
     })
+  })
+
+  it('surfaces needs_rewrite when approval lacks explicit source boundary or evidence trace', async () => {
+    const home = await createTempDir('cyrene-ui-needs-rewrite-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, pending, memoryRoot } = await seedProject()
+    const weakPending = createPending({
+      id: pending.id,
+      evidence: [{ summary: 'A summary without a source trace.', sourceKind: 'file' }],
+      sourceOfTruth: undefined
+    })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(weakPending)}\n`)
+    const hash = await pendingHash(cwd)
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: `/api/memory/${weakPending.id}/approve`,
+      body: { reviewHash: hash }
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error).toMatchObject({
+        code: 'needs_rewrite',
+        details: {
+          result: {
+            action: 'needs_rewrite',
+            candidateId: weakPending.id,
+            readiness: expect.objectContaining({
+              status: 'needs_rewrite',
+              reasons: expect.arrayContaining(['missing_source_of_truth'])
+            }),
+            reviewHash: hash
+          }
+        }
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Memory review Web UI route button facts should be grouped for the UI.')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(weakPending.content)
   })
 
   it('allows reject and defer without reasons through the Web UI write routes', async () => {

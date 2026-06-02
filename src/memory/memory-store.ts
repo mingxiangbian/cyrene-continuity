@@ -109,12 +109,16 @@ export async function readPendingMemoriesFromRoot(memoryRoot: string): Promise<P
   if (!readable) {
     return []
   }
+  const legacyPending = (await readJsonLines<PendingMemory>(join(memoryRoot, PENDING_FILE))).filter((memory) => memory.status === 'pending')
+  if (legacyPending.length > 0) {
+    return legacyPending
+  }
   if (await semanticMemoryStoreExists(memoryRoot)) {
     return (await readSemanticMemoriesFromRoot(memoryRoot))
       .filter((memory) => memory.status === 'pending')
       .map(semanticMemoryToPendingMemory)
   }
-  return (await readJsonLines<PendingMemory>(join(memoryRoot, PENDING_FILE))).filter((memory) => memory.status === 'pending')
+  return []
 }
 
 export async function writePendingMemories(cwd: string, memories: PendingMemory[]): Promise<void> {
@@ -389,6 +393,7 @@ export async function appendTombstoneFromRoot(memoryRoot: string, tombstone: Mem
 
 export function mergePendingMemory(existing: PendingMemory, candidate: PendingMemory): PendingMemory {
   const seenCount = existing.seenCount + candidate.seenCount
+  const sourceOfTruth = existing.sourceOfTruth ?? candidate.sourceOfTruth
   return {
     ...existing,
     content: existing.content,
@@ -400,6 +405,7 @@ export function mergePendingMemory(existing: PendingMemory, candidate: PendingMe
     evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE),
     candidateKind: existing.candidateKind ?? candidate.candidateKind,
     candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
+    ...(sourceOfTruth === undefined ? {} : { sourceOfTruth }),
     tags: Array.from(new Set([...existing.tags, ...candidate.tags])),
     admittedBy: existing.admittedBy ?? candidate.admittedBy,
     admissionScore: Math.max(existing.admissionScore ?? 0, candidate.admissionScore ?? 0) || undefined,

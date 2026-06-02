@@ -10216,12 +10216,13 @@ function activeMemoryToSemanticMemory(memory) {
     content: memory.content,
     useWhen: useWhenForKind(kind),
     doNotUseWhen: doNotUseWhenForKind(kind),
-    sourceOfTruth: memory.normalizedKey,
+    sourceOfTruth: memory.sourceOfTruth ?? memory.normalizedKey,
     evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.createdAt, memory.content, kind),
     routing: routingForMemory(module, scores, "active"),
     reviewPolicy: reviewPolicyForMemory(module, scores, "active"),
     reviewState: {
       normalizedKey: memory.normalizedKey,
+      ...memory.sourceOfTruth === void 0 ? {} : { sourceOfTruth: memory.sourceOfTruth },
       type: memory.type,
       strength: memory.strength,
       source: memory.source,
@@ -10252,12 +10253,13 @@ function pendingMemoryToSemanticMemory(memory) {
     content: memory.content,
     useWhen: useWhenForKind(kind),
     doNotUseWhen: doNotUseWhenForKind(kind),
-    sourceOfTruth: memory.normalizedKey,
+    sourceOfTruth: memory.sourceOfTruth ?? memory.normalizedKey,
     evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.lastSeenAt, memory.content, kind),
     routing: routingForMemory(module, scores, "pending"),
     reviewPolicy: reviewPolicyForMemory(module, scores, "pending"),
     reviewState: {
       normalizedKey: memory.normalizedKey,
+      ...memory.sourceOfTruth === void 0 ? {} : { sourceOfTruth: memory.sourceOfTruth },
       type: memory.type,
       strength: memory.strength,
       source: memory.source,
@@ -10289,6 +10291,7 @@ function semanticMemoryToActiveMemory(memory) {
   const type = reviewState.type ?? typeForSemanticMemory(memory);
   const scores = reviewState.scores ?? scoresForSemanticMemory(memory);
   const source = memorySource(reviewState.source ?? firstEvidenceSource(memory.evidence));
+  const sourceOfTruth = reviewState.sourceOfTruth ?? memory.sourceOfTruth;
   return {
     id: memory.id,
     domain: memory.domain,
@@ -10298,6 +10301,7 @@ function semanticMemoryToActiveMemory(memory) {
     status: "active",
     content: memory.content,
     normalizedKey: reviewState.normalizedKey ?? memory.sourceOfTruth ?? normalizedKeyForContent(memory.domain, type, memory.content),
+    ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
     evidence: memoryEvidenceForSemantic(memory),
     source,
     ...reviewState.portability === void 0 ? {} : { portability: reviewState.portability },
@@ -10320,6 +10324,7 @@ function semanticMemoryToPendingMemory(memory) {
   const updatedAt = memory.updatedAt || memory.createdAt;
   const firstSeenAt = reviewState.firstSeenAt ?? memory.createdAt;
   const lastSeenAt = reviewState.lastSeenAt ?? updatedAt;
+  const sourceOfTruth = reviewState.sourceOfTruth ?? memory.sourceOfTruth;
   return {
     id: memory.id,
     domain: memory.domain,
@@ -10329,6 +10334,7 @@ function semanticMemoryToPendingMemory(memory) {
     status: "pending",
     content: memory.content,
     normalizedKey: reviewState.normalizedKey ?? memory.sourceOfTruth ?? normalizedKeyForContent(memory.domain, type, memory.content),
+    ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
     evidence: memoryEvidenceForSemantic(memory),
     source,
     ...reviewState.portability === void 0 ? {} : { portability: reviewState.portability },
@@ -10526,10 +10532,14 @@ async function readPendingMemoriesFromRoot(memoryRoot) {
   if (!readable) {
     return [];
   }
+  const legacyPending = (await readJsonLines(join4(memoryRoot, PENDING_FILE))).filter((memory) => memory.status === "pending");
+  if (legacyPending.length > 0) {
+    return legacyPending;
+  }
   if (await semanticMemoryStoreExists(memoryRoot)) {
     return (await readSemanticMemoriesFromRoot(memoryRoot)).filter((memory) => memory.status === "pending").map(semanticMemoryToPendingMemory);
   }
-  return (await readJsonLines(join4(memoryRoot, PENDING_FILE))).filter((memory) => memory.status === "pending");
+  return [];
 }
 async function writePendingMemoriesFromRoot(memoryRoot, memories) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -10543,13 +10553,34 @@ async function appendEpisodeMemoryFromRoot(memoryRoot, episode) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, EPISODES_FILE), episode);
 }
+async function readEpisodeMemoriesFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, EPISODES_FILE));
+}
 async function appendCandidateDraftFromRoot(memoryRoot, draft) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, CANDIDATE_DRAFTS_FILE), draft);
 }
+async function readCandidateDraftsFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, CANDIDATE_DRAFTS_FILE));
+}
 async function appendAdmissionDecisionFromRoot(memoryRoot, decision2) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, ADMISSION_DECISIONS_FILE), decision2);
+}
+async function readAdmissionDecisionsFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, ADMISSION_DECISIONS_FILE));
 }
 async function readSemanticMemoriesFromRoot(memoryRoot) {
   const readable = await isReadableMemoryRoot(memoryRoot);
@@ -10624,6 +10655,13 @@ async function appendReviewDecisionFromRoot(memoryRoot, decision2) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, REVIEW_DECISIONS_FILE), decision2);
 }
+async function readReviewDecisionsFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, REVIEW_DECISIONS_FILE));
+}
 async function appendActivationEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, ACTIVATION_EVENTS_FILE), event);
@@ -10652,6 +10690,7 @@ async function appendTombstoneFromRoot(memoryRoot, tombstone) {
 }
 function mergePendingMemory(existing, candidate) {
   const seenCount = existing.seenCount + candidate.seenCount;
+  const sourceOfTruth = existing.sourceOfTruth ?? candidate.sourceOfTruth;
   return {
     ...existing,
     content: existing.content,
@@ -10663,6 +10702,7 @@ function mergePendingMemory(existing, candidate) {
     evidence: [...existing.evidence, ...candidate.evidence].slice(-MAX_PENDING_EVIDENCE),
     candidateKind: existing.candidateKind ?? candidate.candidateKind,
     candidate_kind: existing.candidate_kind ?? candidate.candidate_kind,
+    ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
     tags: Array.from(/* @__PURE__ */ new Set([...existing.tags, ...candidate.tags])),
     admittedBy: existing.admittedBy ?? candidate.admittedBy,
     admissionScore: Math.max(existing.admissionScore ?? 0, candidate.admissionScore ?? 0) || void 0,
@@ -14176,6 +14216,7 @@ function activateCandidate(candidate, now) {
     status: "active",
     content: candidate.content,
     normalizedKey: candidate.normalizedKey,
+    ...candidate.sourceOfTruth === void 0 ? {} : { sourceOfTruth: candidate.sourceOfTruth },
     evidence: candidate.evidence,
     source: candidate.source,
     scores: candidate.scores,
@@ -15753,7 +15794,7 @@ function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).to
     type: candidate.type,
     tags: candidate.tags
   });
-  const structuredGate = evaluateStructuredReadinessGate(candidate, semanticMemory);
+  const structuredGate = evaluateStructuredReadinessGate(candidate, semanticMemory, activeReadiness);
   const recommendation = deriveRecommendation(candidate, now, activeReadiness, structuredGate);
   const risk = deriveRisk(candidate);
   return {
@@ -15850,30 +15891,87 @@ function deriveReadinessReasons(candidate, candidateKind, activeReadiness, struc
 function pendingReviewSemanticMemory(candidate) {
   const semanticMemory = pendingMemoryToSemanticMemory(candidate);
   const sourceOfTruth = sourceOfTruthForPendingMemory(candidate);
+  const explicitSourceOfTruth = explicitSourceOfTruthForPendingMemory(candidate);
   return {
     ...semanticMemory,
     sourceOfTruth,
     evidence: candidate.evidence.length === 0 ? [] : semanticMemory.evidence.map((entry) => ({
       ...entry,
-      sourceRef: sourceOfTruth
+      sourceRef: explicitSourceOfTruth ?? entry.sourceRef
     }))
   };
 }
 function sourceOfTruthForPendingMemory(candidate) {
-  return (candidate.normalizedKey ?? "").trim();
+  return explicitSourceOfTruthForPendingMemory(candidate) ?? evidenceTraceForPendingMemory(candidate) ?? "";
 }
-function evaluateStructuredReadinessGate(candidate, semanticMemory) {
+function evaluateStructuredReadinessGate(candidate, semanticMemory, activeReadiness) {
   const reasons = [];
-  if (candidate.evidence.length === 0 || semanticMemory.evidence.length === 0) {
+  if (candidate.evidence.length === 0 || semanticMemory.evidence.length === 0 || semanticMemory.evidence.some((entry) => !hasStructuredEvidenceBoundary(entry))) {
     reasons.push(readinessReason("missing_structured_evidence", "Candidate needs structured evidence before promotion review."));
   }
-  if (sourceOfTruthForPendingMemory(candidate) === "" || semanticMemory.sourceOfTruth === void 0 || semanticMemory.sourceOfTruth.trim() === "") {
+  if (!hasStructuredSourceBoundary(candidate, semanticMemory)) {
     reasons.push(readinessReason("missing_source_of_truth", "Candidate needs a source of truth before promotion review."));
+  }
+  if (semanticMemory.useWhen.every((item) => item.trim() === "") || semanticMemory.doNotUseWhen.every((item) => item.trim() === "")) {
+    reasons.push(readinessReason("missing_use_boundaries", "Candidate needs use and non-use boundaries before promotion review."));
+  }
+  const readiness = activeReadiness ?? activeReadinessForPending(candidate);
+  if (readiness.reasons.includes("raw_file_rule_excerpt")) {
+    reasons.push(readinessReason("raw_file_rule_excerpt", blockingReasonText("raw_file_rule_excerpt")));
   }
   return {
     ready: reasons.length === 0,
-    reasons
+    reasons: uniqueReadinessReasons(reasons)
   };
+}
+function explicitSourceOfTruthForPendingMemory(candidate) {
+  return nonEmptyString(candidate.sourceOfTruth);
+}
+function evidenceTraceForPendingMemory(candidate) {
+  const normalizedKey = nonEmptyString(candidate.normalizedKey);
+  for (const entry of candidate.evidence) {
+    const refs = [
+      entry.evidenceGroupId,
+      entry.runId,
+      entry.sessionId,
+      entry.taskHash,
+      entry.quoteHash,
+      ...entry.traceRefs ?? [],
+      ...entry.messageIds ?? []
+    ];
+    const trace = refs.map(nonEmptyString).find((ref) => ref !== void 0 && ref !== normalizedKey);
+    if (trace !== void 0) return trace;
+  }
+  return void 0;
+}
+function hasStructuredSourceBoundary(candidate, semanticMemory) {
+  if (nonEmptyString(semanticMemory.sourceOfTruth) === void 0) return false;
+  return explicitSourceOfTruthForPendingMemory(candidate) !== void 0 || evidenceTraceForPendingMemory(candidate) !== void 0;
+}
+function hasStructuredEvidenceBoundary(entry) {
+  return nonEmptyString(entry.sourceKind) !== void 0 && nonEmptyString(entry.sourceRef) !== void 0 && nonEmptyString(entry.whatHappened) !== void 0;
+}
+function activeReadinessForPending(candidate) {
+  return evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  });
+}
+function nonEmptyString(value) {
+  if (value === void 0) return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function uniqueReadinessReasons(reasons) {
+  const seen = /* @__PURE__ */ new Set();
+  return reasons.filter((reason) => {
+    if (seen.has(reason.code)) return false;
+    seen.add(reason.code);
+    return true;
+  });
 }
 function structuredPromotionReadiness(gate2) {
   const reasonCodes = gate2.reasons.map((reason) => reason.code);
@@ -16039,7 +16137,8 @@ async function promoteCodexPendingMemory(input) {
       }
     };
   }
-  const structuredGate = evaluateStructuredReadinessGate(candidate, pendingReviewSemanticMemory(candidate));
+  const activeReadiness = activeReadinessForPending(candidate);
+  const structuredGate = evaluateStructuredReadinessGate(candidate, pendingReviewSemanticMemory(candidate), activeReadiness);
   if (!structuredGate.ready) {
     return {
       project,
@@ -16109,7 +16208,8 @@ async function promoteCodexPendingMemory(input) {
         }
       };
     }
-    const lockedStructuredGate = evaluateStructuredReadinessGate(lockedCandidate, pendingReviewSemanticMemory(lockedCandidate));
+    const lockedActiveReadiness = activeReadinessForPending(lockedCandidate);
+    const lockedStructuredGate = evaluateStructuredReadinessGate(lockedCandidate, pendingReviewSemanticMemory(lockedCandidate), lockedActiveReadiness);
     if (!lockedStructuredGate.ready) {
       return {
         project,
@@ -16146,14 +16246,7 @@ async function promoteCodexPendingMemory(input) {
         }
       };
     }
-    const activeReadiness = evaluateActiveMemoryReadiness({
-      content: lockedCandidate.content,
-      candidateKind: deriveMemoryCandidateKind(lockedCandidate),
-      domain: lockedCandidate.domain,
-      type: lockedCandidate.type,
-      tags: lockedCandidate.tags
-    });
-    if (!activeReadiness.ready) {
+    if (!lockedActiveReadiness.ready) {
       return {
         project,
         memoryRoot: lockedMemoryRoot,
@@ -16161,7 +16254,7 @@ async function promoteCodexPendingMemory(input) {
           action: "needs_rewrite",
           candidateId: lockedCandidate.id,
           reason: "Pending memory must be rewritten before it can become active memory.",
-          readiness: activeReadiness,
+          readiness: lockedActiveReadiness,
           reviewHash: lockedReviewHash
         }
       };
@@ -17602,7 +17695,10 @@ function evaluateCandidateAdmission(input) {
   const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons));
   const admissionScore = admissionScoreFor(scores);
   if (reasons.includes("task_state")) {
-    return decision(input.draft, "episode_only", reasons, scores, now);
+    return decision(input.draft, "task_state", reasons, scores, now);
+  }
+  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
+    return decision(input.draft, "reference_only", ["source_of_truth_duplicate", ...reasons], scores, now);
   }
   const duplicatePending = findByNormalizedKey(input.pending, input.draft.normalizedKey);
   if (duplicatePending !== void 0) {
@@ -17734,7 +17830,7 @@ function admissionScoreFor(scores) {
   );
 }
 function actionFor(draft, reasons, score) {
-  if (reasons.includes("task_state")) return "episode_only";
+  if (reasons.includes("task_state")) return "task_state";
   if (reasons.includes("explicit_user_instruction")) return "admit_to_pending";
   if (reasons.includes("needs_active_memory_rewrite")) return "admit_to_distillation";
   if (reasons.includes("valuable_workflow_rule") || reasons.includes("valuable_known_pitfall") || reasons.includes("valuable_rejected_approach") || reasons.includes("valuable_project_decision")) {
@@ -17746,6 +17842,18 @@ function actionFor(draft, reasons, score) {
   if (score < 0.5) return "episode_only";
   if (score < 0.65) return "admit_to_distillation";
   return draft.candidateKind === "project_fact" ? "admit_to_distillation" : "admit_to_pending";
+}
+function isSourceOfTruthReferenceOnly(draft, reasons) {
+  if (draft.sourceOfTruth === void 0 || draft.sourceOfTruth.trim() === "") {
+    return false;
+  }
+  if (!reasons.includes("raw_file_rule_excerpt")) {
+    return false;
+  }
+  return !hasOperationalInterpretationSignal(draft.content);
+}
+function hasOperationalInterpretationSignal(content) {
+  return /because|exception|applies when|mitigation|\buse\b|non-trivial|keep each|避免|例外|适用|边界|改写|使用|非琐碎|非平凡/i.test(content);
 }
 function decision(draft, action, reasons, scores, now, extras = {}) {
   return {
@@ -18042,7 +18150,8 @@ async function proposeCodexMemoryCandidate(input) {
     }
     const pendingCandidate = decision2.action === "pending" ? decision2.candidate : candidate;
     const existingPending = lockedPending.find((item) => item.normalizedKey === pendingCandidate.normalizedKey);
-    const mergedCandidate = existingPending === void 0 ? pendingCandidate : mergePendingMemory(existingPending, pendingCandidate);
+    const mergedCandidateBase = existingPending === void 0 ? pendingCandidate : mergePendingMemory(existingPending, pendingCandidate);
+    const mergedCandidate = withMergedSourceBoundary(mergedCandidateBase, pendingCandidate);
     const pendingWithoutMerged = lockedPending.filter((item) => item.normalizedKey !== mergedCandidate.normalizedKey);
     const config2 = createDefaultConfig(input.cwd);
     const promotionScope = mergedCandidate.scope === "global" ? "global" : "project";
@@ -18087,6 +18196,8 @@ async function proposeCodexMemoryCandidate(input) {
         details: {
           decision: "auto_promote",
           policyId: autoPromotion.policyId,
+          semanticMemoryId: promoted.id,
+          sourceIds: sourceIdsForAutoPromotion(mergedCandidate),
           thresholds: autoPromotionThresholds(promotionScope),
           evidenceCount: mergedCandidate.evidence.length,
           distinctEvidenceCount: autoPromotion.distinctEvidenceCount,
@@ -18205,6 +18316,24 @@ function autoPromotionThresholds(scope) {
     minDistinctEvidence: 2
   };
 }
+function withMergedSourceBoundary(mergedCandidate, incomingCandidate) {
+  const sourceOfTruth = nonEmptyString2(mergedCandidate.sourceOfTruth) ?? nonEmptyString2(incomingCandidate.sourceOfTruth);
+  return sourceOfTruth === void 0 ? mergedCandidate : { ...mergedCandidate, sourceOfTruth };
+}
+function sourceIdsForAutoPromotion(candidate) {
+  return uniqueInOrder2([
+    ...candidate.sourceDraftIds ?? [],
+    ...candidate.sourceEpisodeIds ?? []
+  ]);
+}
+function uniqueInOrder2(values) {
+  return Array.from(new Set(values));
+}
+function nonEmptyString2(value) {
+  if (value === void 0) return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
 async function markDreamDueFailOpen(memoryRoot, now) {
   try {
     await markCodexMemoryDreamDue(memoryRoot, now);
@@ -18233,6 +18362,7 @@ function toPendingMemory(input, now) {
     status: "pending",
     content: input.content,
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
+    ...input.sourceOfTruth === void 0 ? {} : { sourceOfTruth: input.sourceOfTruth },
     evidence: input.evidence,
     source: input.source ?? "assistant_observed",
     scores: { ...DEFAULT_SCORES2, ...input.scores },
@@ -18269,7 +18399,7 @@ function toCandidateDraft(input) {
     type: input.candidate.type
   });
   const scope = input.candidate.scope ?? "project";
-  const sourceOfTruth = nonEmptyString(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
+  const sourceOfTruth = nonEmptyString3(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
   return {
     id: randomUUID11(),
     content: input.candidate.content,
@@ -18281,6 +18411,7 @@ function toCandidateDraft(input) {
     evidenceRefs: input.evidenceRefs ?? evidenceRefs(input.candidate.evidence),
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input.candidate),
     ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
+    ...input.candidate.taskState === void 0 ? {} : { taskState: input.candidate.taskState },
     tags: input.candidate.tags ?? [],
     createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
   };
@@ -18292,7 +18423,15 @@ function evidenceRefs(evidence) {
   });
 }
 function sourceOfTruthFromEvidence(evidence) {
-  return evidence.map(evidenceRef2).find((value) => value !== void 0);
+  return evidence.map(sourceBoundaryRef).find((value) => value !== void 0);
+}
+function sourceBoundaryRef(entry) {
+  return [
+    entry.traceRefs?.[0],
+    entry.evidenceGroupId,
+    entry.runId,
+    entry.taskHash
+  ].map(nonEmptyString3).find((value) => value !== void 0);
 }
 function evidenceRef2(entry) {
   return [
@@ -18302,23 +18441,23 @@ function evidenceRef2(entry) {
     entry.taskHash,
     entry.summary,
     entry.quote
-  ].map(nonEmptyString).find((value) => value !== void 0);
+  ].map(nonEmptyString3).find((value) => value !== void 0);
 }
-function nonEmptyString(value) {
+function nonEmptyString3(value) {
   const trimmed = value?.trim();
   return trimmed === void 0 || trimmed === "" ? void 0 : trimmed;
 }
 
 // src/codex/memory-router.ts
 function routeCandidateDraft(input) {
-  const module = moduleForDraft(input.draft);
+  const module = moduleForDraft(input.draft, input.admission);
   const risk = riskForDraft(input.draft, input.admission);
-  const updatePolicy = updatePolicyForRoute(input.draft, risk);
+  const updatePolicy = updatePolicyForRoute(input.draft, input.admission, module, risk);
   return {
     module,
     updatePolicy,
     risk,
-    reasons: routingReasons(input.draft, module, risk)
+    reasons: routingReasons(input.draft, input.admission, module, risk, updatePolicy)
   };
 }
 function semanticCandidateFromDraft(input) {
@@ -18362,8 +18501,9 @@ function reviewDecisionForRoute(input) {
     createdAt: input.now
   };
 }
-function moduleForDraft(draft) {
-  if (draft.domain === "system") return "system";
+function moduleForDraft(draft, admission) {
+  if (admission.action === "task_state" || draft.taskState !== void 0) return "task_state";
+  if (draft.domain === "system") return draft.scope === "global" ? "global_policy" : "system";
   if (draft.domain === "personal") return "preference";
   if (draft.domain === "relationship" || draft.domain === "affective") return "relationship_affective";
   if (draft.candidateKind === "workflow_rule" || draft.domain === "procedural") return "procedural";
@@ -18376,13 +18516,26 @@ function riskForDraft(draft, admission) {
   if (admission.scores.sensitivity > 0.35 || admission.scores.evidenceStrength < 0.55) return "medium";
   return "low";
 }
-function updatePolicyForRoute(draft, risk) {
-  if (risk === "high" || draft.domain === "system") return "manual_only";
+function updatePolicyForRoute(draft, admission, module, risk) {
+  if (admission.action === "reference_only") return "drop";
+  if (admission.action === "task_state") return "defer";
+  if (admission.action === "auto_drop" || admission.action === "reject_duplicate") return "drop";
+  if (admission.action === "auto_defer" || admission.action === "episode_only") return "defer";
+  if (risk === "high" || isManualOnlyModule(module)) return "manual_only";
   if (draft.scope === "session") return "defer";
+  if (canEnterStrictAutoPromoteGate(draft, admission, module, risk)) return "strict_auto_promote";
   return "pending_review";
 }
-function routingReasons(draft, module, risk) {
+function routingReasons(draft, admission, module, risk, updatePolicy) {
   const reasons = [`candidate kind ${draft.candidateKind} maps to ${module} module`];
+  if (admission.action === "reference_only") {
+    reasons.push("source-of-truth duplicate is reference-only");
+    return reasons;
+  }
+  if (admission.action === "task_state") {
+    reasons.push("task state is deferred outside active memory review");
+    return reasons;
+  }
   if (risk === "high") {
     reasons.push("high sensitivity or protected domain requires manual review");
     return reasons;
@@ -18391,12 +18544,26 @@ function routingReasons(draft, module, risk) {
     reasons.push("session scoped memory is deferred");
     return reasons;
   }
-  if (draft.domain === "system") {
-    reasons.push("system memory requires manual review");
+  if (updatePolicy === "manual_only") {
+    reasons.push("protected memory module requires manual review");
+    return reasons;
+  }
+  if (updatePolicy === "strict_auto_promote") {
+    reasons.push("trusted low-risk project/procedural memory may enter v5 auto-promotion gate");
     return reasons;
   }
   reasons.push("project/procedural memory requires review before activation");
   return reasons;
+}
+function isManualOnlyModule(module) {
+  return module === "relationship_affective" || module === "global_policy" || module === "preference" || module === "principle_candidate";
+}
+function canEnterStrictAutoPromoteGate(draft, admission, module, risk) {
+  if (admission.action !== "admit_to_pending") return false;
+  if (risk !== "low") return false;
+  if (draft.sourceKind !== "file" && draft.sourceKind !== "tool_trace" && draft.sourceKind !== "user_explicit") return false;
+  if (module === "project_semantic" || module === "procedural") return true;
+  return module === "system" && draft.scope === "project";
 }
 function structuredEvidenceForDraft(draft, admission, now) {
   const refs = draft.evidenceRefs.length > 0 ? draft.evidenceRefs : [draft.sourceOfTruth ?? draft.id];
@@ -18470,7 +18637,7 @@ async function runCodexAdmissionPipeline(input) {
     },
     now: input.now,
     recordRejectedCandidate: input.recordRejectedCandidate,
-    allowAutoPromote: input.allowAutoPromote
+    allowAutoPromote: route.updatePolicy === "strict_auto_promote" && input.allowAutoPromote !== false
   });
   if (proposed.result.action !== "reject") {
     await appendRoutingAndReviewDecisions(memoryRoot, {
@@ -20279,7 +20446,7 @@ function pendingReason(input) {
 function visibleHookMessage(result2) {
   const summary = result2.action === "summary_failed" ? "failed" : result2.action === "noop" ? "none" : "ok";
   const candidateIds = "candidateIds" in result2 && Array.isArray(result2.candidateIds) ? result2.candidateIds : "candidateId" in result2 && typeof result2.candidateId === "string" ? [result2.candidateId] : [];
-  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder2(candidateIds).length}. Review: cyrene-continuity codex memory review`;
+  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder3(candidateIds).length}. Review: cyrene-continuity codex memory review`;
 }
 async function recordStopHookFailureSummary(cwd, payload, error2) {
   try {
@@ -20353,13 +20520,13 @@ async function confirmPendingCandidateIds(confirm, cwd, candidateIds) {
   try {
     const confirmed = await (confirm ?? filterExistingPendingCandidateIds)(cwd, candidateIds);
     const confirmedSet = new Set(confirmed);
-    return uniqueInOrder2(candidateIds).filter((id) => confirmedSet.has(id));
+    return uniqueInOrder3(candidateIds).filter((id) => confirmedSet.has(id));
   } catch {
     return [];
   }
 }
 async function filterExistingPendingCandidateIds(cwd, candidateIds) {
-  const ids = uniqueInOrder2(candidateIds);
+  const ids = uniqueInOrder3(candidateIds);
   if (ids.length === 0) {
     return [];
   }
@@ -20367,7 +20534,7 @@ async function filterExistingPendingCandidateIds(cwd, candidateIds) {
   const existing = new Set(pending.pending.map((candidate) => candidate.id));
   return ids.filter((id) => existing.has(id));
 }
-function uniqueInOrder2(values) {
+function uniqueInOrder3(values) {
   const seen = /* @__PURE__ */ new Set();
   return values.filter((value) => {
     if (seen.has(value)) {
@@ -20973,7 +21140,7 @@ async function supersedeCodexActiveMemory(input) {
     const candidateForActivation = decision2.action === "pending" ? decision2.candidate : confirmedCandidate;
     const promoted = {
       ...activateCandidate(candidateForActivation, now),
-      supersedes: uniqueInOrder3([...candidateForActivation.conflictsWith ?? [], memory.id])
+      supersedes: uniqueInOrder4([...candidateForActivation.conflictsWith ?? [], memory.id])
     };
     const tombstone = tombstoneForActiveMemory(memory, {
       reason: "superseded",
@@ -21051,7 +21218,7 @@ async function getProjectAndReadableActiveRoots(cwd) {
   return {
     project: { projectId: identity.projectId, displayName: identity.displayName },
     memoryRoot: projectMemoryRoot,
-    readableRoots: uniqueInOrder3([globalMemoryRoot, projectMemoryRoot])
+    readableRoots: uniqueInOrder4([globalMemoryRoot, projectMemoryRoot])
   };
 }
 async function findActiveMemoryRoot(roots, id) {
@@ -21102,7 +21269,7 @@ function addDays4(iso, days) {
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
 }
-function uniqueInOrder3(values) {
+function uniqueInOrder4(values) {
   const seen = /* @__PURE__ */ new Set();
   return values.filter((value) => {
     if (seen.has(value)) {
@@ -21626,16 +21793,42 @@ async function runCodexMemoryDistill(input) {
     throw new Error("Codex memory distill apply is not supported.");
   }
   const memoryRoot = await resolveMemoryRoot(input);
-  const [pending, active, distillationInputs] = await Promise.all([
+  const [
+    pending,
+    active,
+    distillationInputs,
+    drafts,
+    admissions,
+    episodes,
+    semanticMemories,
+    memoryEvents,
+    reviewDecisions
+  ] = await Promise.all([
     readPendingMemoriesFromRoot(memoryRoot),
     readActiveMemoriesFromRoot(memoryRoot),
-    readDistillationInputsFromRoot(memoryRoot)
+    readDistillationInputsFromRoot(memoryRoot),
+    readCandidateDraftsFromRoot(memoryRoot),
+    readAdmissionDecisionsFromRoot(memoryRoot),
+    readEpisodeMemoriesFromRoot(memoryRoot),
+    readSemanticMemoriesFromRoot(memoryRoot),
+    readMemoryEventsFromRoot(memoryRoot),
+    readReviewDecisionsFromRoot(memoryRoot)
   ]);
   const activeKeys = new Set(active.map((memory) => memory.normalizedKey));
   const groups = groupPendingByNormalizedKey(pending);
   const duplicateCandidates = Array.from(groups.entries()).filter(([, items]) => items.length > 1).sort(([left], [right]) => left.localeCompare(right)).map(([normalizedKey, items]) => buildDistilledCandidate(normalizedKey, items, activeKeys.has(normalizedKey)));
   const distillationInputCandidates = Array.from(groupDistillationInputsByNormalizedKey(distillationInputs).entries()).sort(([left], [right]) => left.localeCompare(right)).map(([normalizedKey, items]) => buildDistillationInputCandidate(normalizedKey, items, activeKeys.has(normalizedKey)));
-  const candidates = mergeCandidatesByNormalizedKey([...duplicateCandidates, ...distillationInputCandidates]);
+  const orphanAdmissionCandidates = buildOrphanAdmissionCandidates({
+    drafts,
+    admissions,
+    distillationInputs,
+    activeKeys
+  });
+  const candidates = mergeCandidatesByNormalizedKey([
+    ...duplicateCandidates,
+    ...distillationInputCandidates,
+    ...orphanAdmissionCandidates
+  ]);
   return {
     mode: "dry_run",
     memoryRoot,
@@ -21645,7 +21838,20 @@ async function runCodexMemoryDistill(input) {
       activeRead: active.length,
       distillationInputsRead: distillationInputs.length,
       duplicateClusters: duplicateCandidates.length,
-      candidates: candidates.length
+      candidates: candidates.length,
+      inputsRead: {
+        drafts: drafts.length,
+        admissions: admissions.length,
+        distillationInputs: distillationInputs.length,
+        episodes: episodes.length,
+        semanticMemories: semanticMemories.length,
+        pendingMemories: pending.length,
+        activeMemories: active.length,
+        legacyPending: pending.length,
+        legacyActive: active.length,
+        memoryEvents: memoryEvents.length,
+        reviewDecisions: reviewDecisions.length
+      }
     }
   };
 }
@@ -21700,10 +21906,11 @@ function groupDistillationInputsByNormalizedKey(inputs) {
 }
 function buildDistillationInputCandidate(normalizedKey, items, hasActiveOverlap) {
   const sourceItems = sortDistillationInputs(items);
-  const sourceIds = uniqueInOrder4(sourceItems.flatMap(sourceIdsForDistillationInput));
+  const sourceIds = uniqueInOrder5(sourceItems.flatMap(sourceIdsForDistillationInput));
   const rawContents = sourceItems.flatMap((item) => item.rawContents);
   const evidenceRefs2 = uniqueSorted3(sourceItems.flatMap((item) => item.evidenceRefs));
   const sourceAdmissionDecisionIds = uniqueSorted3(sourceItems.flatMap((item) => item.admissionDecisionIds));
+  const sourceEpisodeIds = uniqueSorted3(sourceItems.flatMap((item) => item.sourceEpisodeIds));
   const sourceSemanticMemoryIds = uniqueSorted3(sourceItems.flatMap((item) => item.sourceSemanticMemoryIds));
   const highRiskDomains = Array.from(new Set(sourceItems.filter(isHighRiskDistillationDomain).map((item) => item.domain))).sort();
   const hasMixedMetadata = hasMixedDistillationMetadata(sourceItems);
@@ -21745,7 +21952,53 @@ function buildDistillationInputCandidate(normalizedKey, items, hasActiveOverlap)
     rawContents,
     evidenceRefs: evidenceRefs2,
     sourceAdmissionDecisionIds,
+    sourceEpisodeIds,
     sourceSemanticMemoryIds
+  };
+}
+function buildOrphanAdmissionCandidates(input) {
+  const draftsById = new Map(input.drafts.map((draft) => [draft.id, draft]));
+  const draftIdsCoveredByInputs = new Set(input.distillationInputs.flatMap((item) => item.sourceDraftIds));
+  return input.admissions.filter((admission) => admission.action === "admit_to_distillation").filter((admission) => !draftIdsCoveredByInputs.has(admission.draftId)).sort((left, right) => left.id.localeCompare(right.id)).flatMap((admission) => {
+    const draft = draftsById.get(admission.draftId);
+    if (draft === void 0) {
+      return [];
+    }
+    const normalizedKey = normalizedKeyForDraft(draft);
+    return [buildOrphanAdmissionCandidate(draft, admission, input.activeKeys.has(normalizedKey))];
+  });
+}
+function buildOrphanAdmissionCandidate(draft, admission, hasActiveOverlap) {
+  const normalizedKey = normalizedKeyForDraft(draft);
+  const route = routeCandidateDraft({ draft, admission });
+  const semanticRoute = hasActiveOverlap ? {
+    ...route,
+    risk: "high",
+    updatePolicy: "manual_only",
+    reasons: uniqueInOrder5([`active memory already has normalizedKey ${normalizedKey}`, ...route.reasons])
+  } : route;
+  const risk = hasActiveOverlap ? "high" : semanticRoute.risk;
+  const semanticMemory = semanticCandidateFromDraft({
+    draft,
+    admission,
+    route: semanticRoute,
+    now: admission.createdAt
+  });
+  return {
+    id: `distill-${normalizedKey}`,
+    normalizedKey,
+    content: draft.content,
+    sourceIds: [draft.id],
+    evidence: evidenceForDraft(draft),
+    recommendedAction: "needs_review",
+    risk,
+    reasons: buildOrphanAdmissionReasons(normalizedKey, draft, admission, hasActiveOverlap),
+    ...draft.sourceOfTruth === void 0 ? {} : { sourceOfTruth: draft.sourceOfTruth },
+    semanticMemory,
+    rawContents: [draft.content],
+    evidenceRefs: uniqueSorted3(draft.evidenceRefs),
+    sourceAdmissionDecisionIds: [admission.id],
+    sourceEpisodeIds: uniqueSorted3(draft.sourceEpisodeIds)
   };
 }
 function mergeCandidatesByNormalizedKey(candidates) {
@@ -21761,24 +22014,107 @@ function mergeCandidatesByNormalizedKey(candidates) {
 }
 function mergeDistilledCandidates(left, right) {
   const risk = highestRisk(left.risk, right.risk);
+  const sourceIds = uniqueSorted3([...left.sourceIds, ...right.sourceIds]);
+  const evidence = [...left.evidence, ...right.evidence];
+  const reasons = uniqueInOrder5([...left.reasons, ...right.reasons]);
+  const sourceOfTruth = left.sourceOfTruth ?? right.sourceOfTruth;
+  const evidenceRefs2 = mergeOptionalStrings(left.evidenceRefs, right.evidenceRefs, "sorted");
+  const sourceAdmissionDecisionIds = mergeOptionalStrings(
+    left.sourceAdmissionDecisionIds,
+    right.sourceAdmissionDecisionIds,
+    "sorted"
+  );
+  const sourceEpisodeIds = mergeOptionalStrings(left.sourceEpisodeIds, right.sourceEpisodeIds, "sorted");
+  const sourceSemanticMemoryIds = mergeOptionalStrings(
+    left.sourceSemanticMemoryIds,
+    right.sourceSemanticMemoryIds,
+    "sorted"
+  );
   return {
     ...left,
-    sourceIds: uniqueSorted3([...left.sourceIds, ...right.sourceIds]),
-    evidence: [...left.evidence, ...right.evidence],
+    sourceIds,
+    evidence,
     recommendedAction: risk === "low" && left.recommendedAction === "merge_pending" && right.recommendedAction === "merge_pending" ? "merge_pending" : "needs_review",
     risk,
-    reasons: uniqueInOrder4([...left.reasons, ...right.reasons]),
-    sourceOfTruth: left.sourceOfTruth ?? right.sourceOfTruth,
-    semanticMemory: left.semanticMemory ?? right.semanticMemory,
+    reasons,
+    sourceOfTruth,
+    semanticMemory: mergeSemanticMemoryPreviews(left.semanticMemory, right.semanticMemory, {
+      risk,
+      reasons,
+      sourceOfTruth,
+      sourceEpisodeIds
+    }),
     rawContents: mergeOptionalStrings(left.rawContents, right.rawContents),
-    evidenceRefs: mergeOptionalStrings(left.evidenceRefs, right.evidenceRefs, "sorted"),
-    sourceAdmissionDecisionIds: mergeOptionalStrings(
-      left.sourceAdmissionDecisionIds,
-      right.sourceAdmissionDecisionIds,
-      "sorted"
-    ),
-    sourceSemanticMemoryIds: mergeOptionalStrings(left.sourceSemanticMemoryIds, right.sourceSemanticMemoryIds, "sorted")
+    evidenceRefs: evidenceRefs2,
+    sourceAdmissionDecisionIds,
+    sourceEpisodeIds,
+    sourceSemanticMemoryIds
   };
+}
+function mergeSemanticMemoryPreviews(left, right, merged) {
+  if (left === void 0) return right;
+  if (right === void 0) return left;
+  const routing = mergeSemanticRouting(left.routing, right.routing, merged.risk, merged.reasons);
+  const reviewPolicy = routing?.updatePolicy ?? strongestReviewPolicy(left.reviewPolicy, right.reviewPolicy, merged.risk);
+  const reviewState = {
+    ...left.reviewState ?? {},
+    ...right.reviewState ?? {},
+    ...merged.sourceOfTruth === void 0 ? {} : { sourceOfTruth: merged.sourceOfTruth },
+    admissionReasons: uniqueInOrder5([
+      ...left.reviewState?.admissionReasons ?? [],
+      ...right.reviewState?.admissionReasons ?? []
+    ]),
+    sourceDraftIds: uniqueSorted3([
+      ...left.reviewState?.sourceDraftIds ?? [],
+      ...right.reviewState?.sourceDraftIds ?? []
+    ]),
+    sourceEpisodeIds: uniqueSorted3([
+      ...left.reviewState?.sourceEpisodeIds ?? [],
+      ...right.reviewState?.sourceEpisodeIds ?? [],
+      ...merged.sourceEpisodeIds ?? []
+    ])
+  };
+  return {
+    ...left,
+    ...merged.sourceOfTruth === void 0 ? {} : { sourceOfTruth: merged.sourceOfTruth },
+    evidence: mergeStructuredEvidence(left.evidence, right.evidence),
+    ...routing === void 0 ? {} : { routing },
+    reviewPolicy,
+    reviewState,
+    supersedes: uniqueSorted3([...left.supersedes, ...right.supersedes]),
+    updatedAt: maxIsoTimestamp(left.updatedAt, right.updatedAt)
+  };
+}
+function mergeSemanticRouting(left, right, risk, reasons) {
+  const base = left ?? right;
+  if (base === void 0) return void 0;
+  const updatePolicy = risk === "high" ? "manual_only" : risk === "medium" && base.updatePolicy === "strict_auto_promote" ? "pending_review" : base.updatePolicy;
+  return {
+    ...base,
+    risk,
+    updatePolicy,
+    reasons: uniqueInOrder5([...left?.reasons ?? [], ...right?.reasons ?? [], ...reasons])
+  };
+}
+function strongestReviewPolicy(left, right, risk) {
+  if (risk === "high" || left === "manual_only" || right === "manual_only") return "manual_only";
+  if (risk === "medium" && (left === "strict_auto_promote" || right === "strict_auto_promote")) return "pending_review";
+  if (left === "pending_review" || right === "pending_review") return "pending_review";
+  return left;
+}
+function mergeStructuredEvidence(left, right) {
+  const seen = /* @__PURE__ */ new Set();
+  const merged = [];
+  for (const item of [...left, ...right]) {
+    const key = [item.id, item.sourceKind, item.sourceRef, item.whatHappened].join("\0");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+function maxIsoTimestamp(left, right) {
+  return left >= right ? left : right;
 }
 function highestRisk(left, right) {
   return riskRank(left) >= riskRank(right) ? left : right;
@@ -21793,7 +22129,7 @@ function mergeOptionalStrings(left, right, order = "preserve") {
     return void 0;
   }
   const values = [...left ?? [], ...right ?? []];
-  return order === "sorted" ? uniqueSorted3(values) : uniqueInOrder4(values);
+  return order === "sorted" ? uniqueSorted3(values) : uniqueInOrder5(values);
 }
 function isHighRiskDomain(item) {
   return item.domain === "personal" || item.domain === "relationship" || item.domain === "affective";
@@ -21838,8 +22174,15 @@ function distillationMetadataSignature(item) {
 function normalizedKeyForDistillationInput(input) {
   return input.normalizedKey ?? input.id;
 }
+function normalizedKeyForDraft(draft) {
+  return draft.normalizedKey ?? draft.id;
+}
 function sourceIdsForDistillationInput(input) {
   return input.sourceDraftIds.length > 0 ? input.sourceDraftIds : [input.id];
+}
+function evidenceForDraft(draft) {
+  const refs = draft.evidenceRefs.length > 0 ? draft.evidenceRefs : [draft.sourceOfTruth ?? draft.id];
+  return refs.map((summary) => ({ summary }));
 }
 function chooseRepresentativeRawContent(items) {
   return items.flatMap((item) => item.rawContents).sort((left, right) => {
@@ -21895,7 +22238,7 @@ function firstDefined(items) {
 function uniqueSorted3(items) {
   return Array.from(new Set(items)).sort();
 }
-function uniqueInOrder4(items) {
+function uniqueInOrder5(items) {
   return Array.from(new Set(items));
 }
 function buildReasons(normalizedKey, pendingCount, hasActiveOverlap, highRiskDomains, hasMixedMetadata) {
@@ -21912,6 +22255,13 @@ function buildDistillationInputReasons(normalizedKey, items, hasActiveOverlap, h
     ...highRiskDomains.map((domain) => `high-risk distillation input domain ${domain}`),
     ...hasMixedMetadata ? [`mixed distillation input metadata for normalizedKey ${normalizedKey}`] : [],
     `normalizedKey ${normalizedKey} has ${items.length} v2 distillation input${items.length === 1 ? "" : "s"}`
+  ];
+}
+function buildOrphanAdmissionReasons(normalizedKey, draft, admission, hasActiveOverlap) {
+  return [
+    ...hasActiveOverlap ? [`active memory already has normalizedKey ${normalizedKey}`] : [],
+    `draft ${draft.id} admitted to distillation by ${admission.id}`,
+    `no v2 distillation input covers draft ${draft.id}`
   ];
 }
 
@@ -22560,7 +22910,7 @@ async function resolveSelection(cwd, request) {
   const project = projectOption === void 0 ? { projectId, displayName: unlabeledProjectName(projectId) } : { projectId, displayName: projectOption.displayName };
   const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
   const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(projectId) ?? codexProjectMemoryRoot(projectId);
-  const memoryRoots = request.scope === "global" ? [globalMemoryRoot] : request.scope === "all" ? uniqueInOrder5([globalMemoryRoot, projectMemoryRoot]) : [projectMemoryRoot];
+  const memoryRoots = request.scope === "global" ? [globalMemoryRoot] : request.scope === "all" ? uniqueInOrder6([globalMemoryRoot, projectMemoryRoot]) : [projectMemoryRoot];
   const memoryRoot = request.scope === "global" ? globalMemoryRoot : projectMemoryRoot;
   return {
     scope: request.scope,
@@ -22713,7 +23063,7 @@ function isCodexUiMemoryScope(value) {
 function isValidProjectId(value) {
   return /^[A-Za-z0-9._-]+$/.test(value) && !/^\.+$/.test(value);
 }
-function uniqueInOrder5(values) {
+function uniqueInOrder6(values) {
   const seen = /* @__PURE__ */ new Set();
   return values.filter((value) => {
     if (seen.has(value)) return false;
@@ -23347,7 +23697,7 @@ function reviewSection(title, rows) {
         \${rows.map(([label, value]) => \`
           <div>
             <dt>\${escapeHtml(label)}</dt>
-            <dd>\${escapeHtml(value || 'none')}</dd>
+            <dd>\${escapeHtml(value || 'missing')}</dd>
           </div>
         \`).join('')}
       </dl>
@@ -23966,17 +24316,12 @@ function renderPendingDetail(candidate) {
   if (state.pendingAction) return renderConfirmForm(candidate, state.pendingAction)
   return \`
     <div class="rail-stack">
-      \${renderSemanticReviewCard(candidate, { compact: false })}
-      <div class="soft-panel">
-        <h3>Review Action</h3>
-        <p>\${escapeHtml(WRITE_ACTION_COPY)}</p>
-        <div class="detail-actions">
-          \${['approve', 'reject', 'defer', 'edit'].map((action) => \`
-            <button class="soft-button compact" type="button" data-action="\${action}">\${escapeHtml(actionLabel(action))}</button>
-          \`).join('')}
-        </div>
-        \${state.actionError ? \`<p class="notice error">\${escapeHtml(state.actionError)}</p>\` : ''}
-      </div>
+      \${renderProposedSemanticMemorySection(candidate)}
+      \${renderEpisodeEvidenceSection(candidate)}
+      \${renderAdmissionRoutingSection(candidate)}
+      \${renderUpdatePolicySection(candidate)}
+      \${renderUseBoundariesSection(candidate)}
+      \${renderReviewActionSection(candidate)}
     </div>
   \`
 }
@@ -24027,74 +24372,163 @@ function formatReadinessReason(reason) {
   return reason.text || reason.code || 'Review reason present.'
 }
 
-function renderEpisodeEvidence(evidence) {
-  if (!evidence) return ''
+function renderProposedSemanticMemorySection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const proposed = candidate.proposedSemanticMemory || {}
+  return renderWorkflowSection('Proposed Semantic Memory', [
+    ['Content', firstPresent(memory.content, proposed.content, candidate.content)],
+    ['Kind', firstPresent(memory.kind, proposed.type, candidate.candidateKind, candidate.type)],
+    ['Module', memory.module],
+    ['Scope', firstPresent(memory.scope, proposed.scope, candidate.scope)],
+    ['Domain', firstPresent(memory.domain, candidate.domain)],
+    ['Source of truth', sourceOfTruthForWorkflow(candidate)]
+  ])
+}
+
+function renderEpisodeEvidenceSection(candidate) {
+  const evidence = workflowEvidenceForCandidate(candidate)
+  return renderWorkflowSection('Episode Evidence', [
+    ['Evidence ref', evidence.evidenceRef],
+    ['When', evidence.when],
+    ['What happened', evidence.whatHappened],
+    ['Why important', evidence.whyImportant],
+    ['Result', evidence.result],
+    ['Source', evidence.source]
+  ])
+}
+
+function renderAdmissionRoutingSection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const routing = memory.routing || candidate.routing || {}
+  const reviewState = memory.reviewState || candidate.reviewState || {}
+  return renderWorkflowSection('Admission / Routing Decision', [
+    ['Admission action', firstPresent(candidate.admissionAction, candidate.action, reviewState.admissionAction)],
+    ['Admitted by', reviewState.admittedBy],
+    ['Admission score', reviewState.admissionScore],
+    ['Admission reasons', reviewState.admissionReasons],
+    ['Module', firstPresent(routing.module, memory.module)],
+    ['Risk', firstPresent(routing.risk, candidate.risk)],
+    ['Routing reasons', routing.reasons],
+    ['Tags', firstArrayWithValues(reviewState.tags, candidate.tags)]
+  ])
+}
+
+function renderUpdatePolicySection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const routing = memory.routing || candidate.routing || {}
+  const reviewState = memory.reviewState || candidate.reviewState || {}
+  const readiness = candidate.readiness || candidate.activeReadiness || {}
+  const readinessStatus = readiness.status || (readiness.ready === false ? 'needs_rewrite' : readiness.ready === true ? 'ready' : '')
+  const targetShape = readiness.targetShape || readiness.suggestedShape
+  return renderWorkflowSection('Update Policy', [
+    ['Update policy', firstPresent(routing.updatePolicy, memory.reviewPolicy, candidate.updatePolicy)],
+    ['Review policy', firstPresent(memory.reviewPolicy, routing.updatePolicy, candidate.reviewPolicy)],
+    ['Readiness', readinessStatus],
+    ['Target shape', targetShape],
+    ['Recommendation', candidate.recommendation],
+    ['Review hash', candidate.reviewHash ? shortHash(candidate.reviewHash) : ''],
+    ['Promote after', reviewState.promoteAfter],
+    ['Expires at', firstPresent(memory.expiresAt, candidate.expiresAt)]
+  ])
+}
+
+function renderUseBoundariesSection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  const proposed = candidate.proposedSemanticMemory || {}
+  return renderWorkflowSection('Use Boundaries', [
+    ['Use when', firstArrayWithValues(memory.useWhen, proposed.useWhen)],
+    ['Do not use when', firstArrayWithValues(memory.doNotUseWhen, proposed.doNotUseWhen)],
+    ['Evidence strength', proposed.evidenceStrength],
+    ['Future usefulness', proposed.futureUsefulness],
+    ['Expiry', firstPresent(proposed.expiry, memory.expiresAt, candidate.expiresAt)]
+  ])
+}
+
+function renderReviewActionSection(candidate) {
   return \`
-    <h3>Episode Evidence</h3>
-    <div class="soft-inset rail-item">
-      <strong>When</strong>
-      <span>\${escapeHtml(evidence.when || 'unknown')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>What happened</strong>
-      <span>\${escapeHtml(evidence.whatHappened || 'No event summary available.')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Why important</strong>
-      <span>\${escapeHtml(evidence.whyImportant || 'No importance summary available.')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Result</strong>
-      <span>\${escapeHtml(evidence.result || 'No result summary available.')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Source</strong>
-      <span>\${escapeHtml(evidence.source || 'unknown')}</span>
+    <div class="soft-panel">
+      <h3>Review Action</h3>
+      <p>\${escapeHtml(WRITE_ACTION_COPY)}</p>
+      <div class="detail-actions">
+        \${['approve', 'reject', 'defer', 'edit'].map((action) => \`
+          <button class="soft-button compact" type="button" data-action="\${action}">\${escapeHtml(actionLabel(action))}</button>
+        \`).join('')}
+      </div>
+      \${state.actionError ? \`<p class="notice error">\${escapeHtml(state.actionError)}</p>\` : ''}
     </div>
   \`
 }
 
-function renderProposedSemanticMemory(memory) {
-  if (!memory) return ''
+function renderWorkflowSection(title, rows) {
   return \`
-    <h3>Proposed Semantic Memory</h3>
-    <div class="soft-inset rail-item">
-      <strong>Type</strong>
-      <span>\${escapeHtml(memory.type || 'memory')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Scope</strong>
-      <span>\${escapeHtml(memory.scope || 'project')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Content</strong>
-      <span>\${escapeHtml(memory.content || '')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Use when</strong>
-      <span>\${escapeHtml(formatValueList(memory.useWhen))}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Do not use when</strong>
-      <span>\${escapeHtml(formatValueList(memory.doNotUseWhen))}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Evidence strength</strong>
-      <span>\${escapeHtml(memory.evidenceStrength || 'unknown')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Future usefulness</strong>
-      <span>\${escapeHtml(memory.futureUsefulness || 'unknown')}</span>
-    </div>
-    <div class="soft-inset rail-item">
-      <strong>Expiry</strong>
-      <span>\${escapeHtml(memory.expiry || 'none')}</span>
+    <div class="soft-panel">
+      <h3>\${escapeHtml(title)}</h3>
+      \${rows.map(([label, value]) => renderWorkflowItem(label, value)).join('')}
     </div>
   \`
+}
+
+function renderWorkflowItem(label, value) {
+  return \`
+    <div class="soft-inset rail-item">
+      <strong>\${escapeHtml(label)}</strong>
+      <span>\${escapeHtml(formatWorkflowValue(value))}</span>
+    </div>
+  \`
+}
+
+function workflowEvidenceForCandidate(candidate) {
+  const memory = candidate.semanticMemory || {}
+  const structuredEvidence = Array.isArray(memory.evidence) ? memory.evidence[0] : null
+  const episodeEvidence = candidate.episodeEvidence || {}
+  return {
+    evidenceRef: firstPresent(structuredEvidence?.sourceRef, structuredEvidence?.evidenceRef, candidate.evidenceRef) || firstArrayWithValues(candidate.evidenceRefs),
+    when: firstPresent(structuredEvidence?.when, episodeEvidence.when),
+    whatHappened: firstPresent(structuredEvidence?.whatHappened, episodeEvidence.whatHappened),
+    whyImportant: firstPresent(structuredEvidence?.whyImportant, episodeEvidence.whyImportant),
+    result: firstPresent(structuredEvidence?.result, episodeEvidence.result),
+    source: firstPresent(structuredEvidence?.sourceKind, structuredEvidence?.source, episodeEvidence.source, candidate.source)
+  }
+}
+
+function sourceOfTruthForWorkflow(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  return firstPresent(
+    candidate.semanticMemory?.sourceOfTruth,
+    candidate.proposedSemanticMemory?.sourceOfTruth,
+    candidate.sourceOfTruth,
+    memory.sourceOfTruth,
+    candidate.normalizedKey
+  )
+}
+
+function firstPresent(...values) {
+  return values.find((value) => {
+    if (value === undefined || value === null) return false
+    return String(value).trim() !== ''
+  })
+}
+
+function firstArrayWithValues(...values) {
+  return values.find((value) => Array.isArray(value) && value.some((item) => String(item || '').trim() !== '')) || []
+}
+
+function formatWorkflowValue(value) {
+  if (Array.isArray(value)) return formatWorkflowList(value)
+  if (value === undefined || value === null) return 'missing'
+  const textValue = String(value).trim()
+  return textValue === '' ? 'missing' : textValue
+}
+
+function formatWorkflowList(value) {
+  const items = Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+  return items.length > 0 ? items.join(' \xB7 ') : 'missing'
 }
 
 function formatValueList(value) {
-  if (!Array.isArray(value) || value.length === 0) return 'none'
+  if (!Array.isArray(value) || value.length === 0) return 'missing'
   return value.join(' \xB7 ')
 }
 
@@ -26308,7 +26742,7 @@ async function markSimilarHintTransferable(input) {
 async function findActiveMemory(cwd, memoryId, currentProjectOnly = false) {
   const current = await identifyCodexProject(cwd);
   const currentRoot = await ensureCodexProjectMemoryRoot(current.projectId);
-  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder6([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
+  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder7([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
   for (const memoryRoot of roots) {
     const active = await readActiveMemoriesFromRoot(memoryRoot);
     const memory = active.find((item) => item.id === memoryId);
@@ -26353,7 +26787,7 @@ function memoryPortability(memory) {
 function projectIdFromMemoryRoot(memoryRoot) {
   return basename6(dirname11(memoryRoot));
 }
-function uniqueInOrder6(values) {
+function uniqueInOrder7(values) {
   const seen = /* @__PURE__ */ new Set();
   const unique2 = [];
   for (const value of values) {

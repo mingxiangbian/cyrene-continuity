@@ -107,7 +107,7 @@ export async function runCodexAdmissionPipeline(
     },
     now: input.now,
     recordRejectedCandidate: input.recordRejectedCandidate,
-    allowAutoPromote: input.allowAutoPromote
+    allowAutoPromote: route.updatePolicy === 'strict_auto_promote' && input.allowAutoPromote !== false
   })
 
   if (proposed.result.action !== 'reject') {

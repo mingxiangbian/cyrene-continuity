@@ -54,6 +54,7 @@ export function toCandidateDraft(input: CandidateDraftInput): CandidateDraft {
     evidenceRefs: input.evidenceRefs ?? evidenceRefs(input.candidate.evidence),
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input.candidate),
     ...(sourceOfTruth === undefined ? {} : { sourceOfTruth }),
+    ...(input.candidate.taskState === undefined ? {} : { taskState: input.candidate.taskState }),
     tags: input.candidate.tags ?? [],
     createdAt: input.now ?? new Date().toISOString()
   }
@@ -68,7 +69,18 @@ function evidenceRefs(evidence: MemoryEvidence[]): string[] {
 
 function sourceOfTruthFromEvidence(evidence: MemoryEvidence[]): string | undefined {
   return evidence
-    .map(evidenceRef)
+    .map(sourceBoundaryRef)
+    .find((value): value is string => value !== undefined)
+}
+
+function sourceBoundaryRef(entry: MemoryEvidence): string | undefined {
+  return [
+    entry.traceRefs?.[0],
+    entry.evidenceGroupId,
+    entry.runId,
+    entry.taskHash
+  ]
+    .map(nonEmptyString)
     .find((value): value is string => value !== undefined)
 }
 

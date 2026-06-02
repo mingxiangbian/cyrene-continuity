@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runCodexAdmissionPipeline } from '../src/codex/admission-pipeline.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { proposeCodexMemoryCandidate } from '../src/codex/memory-propose.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
 import {
@@ -13,10 +14,19 @@ import {
 } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
+vi.mock('../src/codex/memory-propose.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/codex/memory-propose.js')>()
+  return {
+    ...actual,
+    proposeCodexMemoryCandidate: vi.fn(actual.proposeCodexMemoryCandidate)
+  }
+})
+
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
 
 afterEach(async () => {
+  vi.clearAllMocks()
   vi.unstubAllEnvs()
   process.env.HOME = originalHome
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
@@ -213,7 +223,7 @@ describe('runCodexAdmissionPipeline', () => {
       semanticMemoryId: `semantic-${result.admission.draftId}`,
       target: {
         module: 'procedural',
-        updatePolicy: 'pending_review',
+        updatePolicy: 'strict_auto_promote',
         risk: 'low'
       },
       createdAt: result.admission.createdAt
@@ -224,10 +234,153 @@ describe('runCodexAdmissionPipeline', () => {
     expect(review[0]).toMatchObject({
       id: `review-semantic-${result.admission.draftId}`,
       semanticMemoryId: `semantic-${result.admission.draftId}`,
-      policy: 'pending_review',
+      policy: 'strict_auto_promote',
       createdAt: result.admission.createdAt
     })
     expect(review[0]?.reasons).toEqual(routing[0]?.target.reasons)
+  })
+
+  it('keeps source-of-truth raw excerpts reference-only without pending or distillation writes', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-reference-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-reference-project-')
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'file',
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
+        normalizedKey: 'agents-md-all-edits-surgical',
+        sourceOfTruth: 'AGENTS.md',
+        evidence: [{ summary: 'AGENTS.md', sourceKind: 'file' }],
+        source: 'file'
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('reference_only')
+    const routing = await readRoutingDecisionsFromRoot(result.memoryRoot)
+    expect(routing[0]?.target).toMatchObject({
+      module: 'procedural',
+      updatePolicy: 'drop',
+      risk: 'low'
+    })
+    await expect(readDistillationInputsFromRoot(result.memoryRoot)).resolves.toEqual([])
+    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not infer reference-only source boundaries from evidence summaries', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-summary-boundary-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-summary-boundary-project-')
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'file',
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
+        normalizedKey: 'agents-md-summary-only-boundary',
+        evidence: [{ summary: 'AGENTS.md', sourceKind: 'file' }],
+        source: 'file'
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('admit_to_distillation')
+    expect(result.admission.reasons).toContain('raw_file_rule_excerpt')
+    expect(result.admission.reasons).not.toContain('source_of_truth_duplicate')
+  })
+
+  it('routes task state sidecars without pending writes', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-task-state-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-task-state-project-')
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'review_summary',
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        candidateKind: 'project_fact',
+        content: 'This branch review is currently in progress.',
+        normalizedKey: 'branch-review-progress',
+        evidence: [{ summary: 'Review summary records in-progress state.' }],
+        taskState: {
+          kind: 'implementation_progress',
+          summary: 'Branch review is in progress.'
+        }
+      } as unknown as Parameters<typeof runCodexAdmissionPipeline>[0]['candidate'],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('task_state')
+    const routing = await readRoutingDecisionsFromRoot(result.memoryRoot)
+    expect(routing[0]?.target).toMatchObject({
+      module: 'task_state',
+      updatePolicy: 'defer'
+    })
+    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('passes router update policy into proposal auto-promotion gating', async () => {
+    const proposeSpy = vi.mocked(proposeCodexMemoryCandidate)
+    const home = await createTempDir('cyrene-admission-pipeline-policy-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-policy-project-')
+
+    await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'user_explicit',
+      allowAutoPromote: true,
+      candidate: {
+        domain: 'relationship',
+        type: 'relationship_boundary',
+        strength: 'hard',
+        scope: 'project',
+        candidateKind: 'user_instruction',
+        content: 'Do not infer relationship or affective memory without explicit user approval.',
+        normalizedKey: 'manual-only-relationship-memory',
+        source: 'user_explicit',
+        evidence: [{ summary: 'User explicitly set a relationship memory boundary.', sourceKind: 'user_explicit' }],
+        scores: { evidenceStrength: 0.9, stability: 0.9, usefulness: 0.8, safety: 0.9, sensitivity: 0.7 }
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'file',
+      allowAutoPromote: true,
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        strength: 'hard',
+        scope: 'project',
+        candidateKind: 'workflow_rule',
+        content: 'Memory routing changes must preserve review-hash validation because active writes require v5 policy gates.',
+        normalizedKey: 'strict-routing-review-hash-policy',
+        source: 'file',
+        evidence: [{ summary: 'AGENTS.md documents the review-hash memory policy.', sourceKind: 'file' }],
+        scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.8, safety: 0.95, sensitivity: 0.05 }
+      },
+      now: '2026-05-31T00:10:00.000Z'
+    })
+
+    const manualCall = proposeSpy.mock.calls.find(
+      ([call]) => call.candidate.normalizedKey === 'manual-only-relationship-memory'
+    )
+    const strictCall = proposeSpy.mock.calls.find(
+      ([call]) => call.candidate.normalizedKey === 'strict-routing-review-hash-policy'
+    )
+    expect(manualCall?.[0].allowAutoPromote).toBe(false)
+    expect(strictCall?.[0].allowAutoPromote).toBe(true)
   })
 
   it('does not write routing or review decisions when proposal rejects admitted candidates', async () => {
@@ -329,6 +482,36 @@ describe('runCodexAdmissionPipeline', () => {
     })
 
     expect(result.action).toBe('reject_duplicate')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('does not infer source-of-truth duplicate reasons from evidence summaries', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-summary-duplicate-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-summary-duplicate-project-')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(activeMemory('duplicate-summary-key'))}\n`)
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'file',
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        candidateKind: 'project_fact',
+        content: 'Duplicate active memory.',
+        normalizedKey: 'duplicate-summary-key',
+        evidence: [{ summary: 'AGENTS.md', sourceKind: 'file' }],
+        source: 'file'
+      },
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('reject_duplicate')
+    expect(result.admission.reasons).toContain('duplicate_active')
+    expect(result.admission.reasons).not.toContain('source_of_truth_duplicate')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 

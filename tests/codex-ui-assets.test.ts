@@ -1,5 +1,26 @@
 import { readFile } from 'node:fs/promises'
+import { Script, createContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
+
+async function loadAppHelpers(): Promise<Record<string, (input: unknown) => unknown>> {
+  const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
+  const executableSource = source.replace(/\nexport \{ TABS, WRITE_ACTION_COPY, escapeHtml \}\s*$/, '\n')
+  const context = createContext({
+    document: { querySelector: () => null }
+  })
+  new Script(`
+${executableSource}
+globalThis.__helpers = {
+  renderPendingDetail,
+  renderUseBoundariesSection,
+  sourceOfTruthForWorkflow,
+  workflowEvidenceForCandidate,
+  formatWorkflowValue,
+  formatWorkflowList
+}
+`, { filename: 'src/ui/static/app.js' }).runInContext(context)
+  return (context as { __helpers: Record<string, (input: unknown) => unknown> }).__helpers
+}
 
 describe('Codex UI source assets', () => {
   it('includes triage and retrieval explain UI surfaces', async () => {
@@ -25,25 +46,80 @@ describe('Codex UI source assets', () => {
     const pendingDetailStart = source.indexOf('function renderPendingDetail(candidate)')
     const confirmFormStart = source.indexOf('function renderConfirmForm(candidate, action)')
     const pendingDetail = source.slice(pendingDetailStart, confirmFormStart)
+    const useBoundariesStart = source.indexOf('function renderUseBoundariesSection(candidate)')
+    const reviewActionStart = source.indexOf('function renderReviewActionSection(candidate)')
+    const useBoundariesSection = source.slice(useBoundariesStart, reviewActionStart)
+    const workflowItemStart = source.indexOf('function renderWorkflowItem(label, value)')
+    const workflowEvidenceStart = source.indexOf('function workflowEvidenceForCandidate(candidate)')
+    const workflowItem = source.slice(workflowItemStart, workflowEvidenceStart)
 
     expect(pendingDetailStart).toBeGreaterThanOrEqual(0)
     expect(confirmFormStart).toBeGreaterThan(pendingDetailStart)
-    expect(pendingDetail).toContain('renderSemanticReviewCard')
+    expect(pendingDetail).toContain('renderProposedSemanticMemorySection(candidate)')
+    expect(pendingDetail).toContain('renderEpisodeEvidenceSection(candidate)')
+    expect(pendingDetail).toContain('renderAdmissionRoutingSection(candidate)')
+    expect(pendingDetail).toContain('renderUpdatePolicySection(candidate)')
+    expect(pendingDetail).toContain('renderUseBoundariesSection(candidate)')
+    expect(pendingDetail).toContain('renderReviewActionSection(candidate)')
     expect(pendingDetail).toContain('Review Action')
-    expect(source).toContain('What will be remembered')
-    expect(source).toContain('Identity')
-    expect(source).toContain('Policy')
-    expect(source).toContain('Use boundaries')
-    expect(source).toContain('Evidence')
+    expect(source).toContain('Proposed Semantic Memory')
+    expect(source).toContain('Episode Evidence')
+    expect(source).toContain('Admission / Routing Decision')
+    expect(source).toContain('Update Policy')
+    expect(useBoundariesStart).toBeGreaterThanOrEqual(0)
+    expect(reviewActionStart).toBeGreaterThan(useBoundariesStart)
+    expect(useBoundariesSection).toContain("renderWorkflowSection('Use Boundaries'")
+    expect(useBoundariesSection).not.toContain("renderWorkflowSection('Use boundaries'")
+    expect(source).toContain('Source of truth')
+    expect(source).toContain('Evidence ref')
+    expect(source).toContain('Routing reasons')
+    expect(workflowItem).toContain('formatWorkflowValue(value)')
+    expect(pendingDetail).not.toContain('renderSemanticReviewCard(candidate, { compact: false })')
     expect(pendingDetail).not.toContain('renderEvidence')
     expect(pendingDetail).not.toContain('evidenceSummary')
     expect(source).not.toContain('function renderEvidence(candidate)')
+  })
+
+  it('renders workflow detail fallbacks for legacy candidates', async () => {
+    const helpers = await loadAppHelpers()
+    const legacyCandidate = {
+      id: 'legacy-1',
+      content: 'Legacy pending memory',
+      candidateKind: 'project_fact',
+      domain: 'project',
+      scope: 'project',
+      normalizedKey: 'legacy-normalized-key',
+      reviewHash: 'abcdef1234567890'
+    }
+
+    const detail = String(helpers.renderPendingDetail(legacyCandidate))
+
+    expect(helpers.sourceOfTruthForWorkflow({
+      semanticMemory: { sourceOfTruth: 'semantic-source' },
+      proposedSemanticMemory: { sourceOfTruth: 'proposed-source' },
+      sourceOfTruth: 'candidate-source',
+      normalizedKey: 'normalized-key'
+    })).toBe('semantic-source')
+    expect(helpers.sourceOfTruthForWorkflow({
+      proposedSemanticMemory: { sourceOfTruth: 'proposed-source' },
+      normalizedKey: 'normalized-key'
+    })).toBe('proposed-source')
+    expect(helpers.sourceOfTruthForWorkflow(legacyCandidate)).toBe('legacy-normalized-key')
+    expect(detail).toContain('<h3>Use Boundaries</h3>')
+    expect(detail).not.toContain('<h3>Use boundaries</h3>')
+    expect(detail).toMatch(/<strong>Source of truth<\/strong>\s*<span>legacy-normalized-key<\/span>/)
+    expect(detail).toMatch(/<strong>Evidence ref<\/strong>\s*<span>missing<\/span>/)
+    expect(detail).toMatch(/<strong>What happened<\/strong>\s*<span>missing<\/span>/)
+    expect(detail).toMatch(/<strong>Routing reasons<\/strong>\s*<span>missing<\/span>/)
+    expect(detail).toMatch(/<strong>Use when<\/strong>\s*<span>missing<\/span>/)
+    expect(detail).toMatch(/<strong>Do not use when<\/strong>\s*<span>missing<\/span>/)
   })
 
   it('renders semantic review sections in pending rows and detail rail', async () => {
     const source = await readFile(new URL('../src/ui/static/app.js', import.meta.url), 'utf8')
 
     expect(source).toContain('renderSemanticReviewCard')
+    expect(source).toContain('renderSemanticReviewCard(candidate, { selected, compact: true })')
     expect(source).toContain('semanticMemoryForCandidate')
     expect(source).toContain('Review policy')
     expect(source).toContain('Review hash')

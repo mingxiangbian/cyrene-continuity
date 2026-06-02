@@ -12,14 +12,14 @@ export function routeCandidateDraft(input: {
   draft: CandidateDraft
   admission: AdmissionDecision
 }): RoutedMemoryTarget {
-  const module = moduleForDraft(input.draft)
+  const module = moduleForDraft(input.draft, input.admission)
   const risk = riskForDraft(input.draft, input.admission)
-  const updatePolicy = updatePolicyForRoute(input.draft, risk)
+  const updatePolicy = updatePolicyForRoute(input.draft, input.admission, module, risk)
   return {
     module,
     updatePolicy,
     risk,
-    reasons: routingReasons(input.draft, module, risk)
+    reasons: routingReasons(input.draft, input.admission, module, risk, updatePolicy)
   }
 }
 
@@ -78,8 +78,9 @@ export function reviewDecisionForRoute(input: {
   }
 }
 
-function moduleForDraft(draft: CandidateDraft): MemoryModule {
-  if (draft.domain === 'system') return 'system'
+function moduleForDraft(draft: CandidateDraft, admission: AdmissionDecision): MemoryModule {
+  if (admission.action === 'task_state' || draft.taskState !== undefined) return 'task_state'
+  if (draft.domain === 'system') return draft.scope === 'global' ? 'global_policy' : 'system'
   if (draft.domain === 'personal') return 'preference'
   if (draft.domain === 'relationship' || draft.domain === 'affective') return 'relationship_affective'
   if (draft.candidateKind === 'workflow_rule' || draft.domain === 'procedural') return 'procedural'
@@ -94,14 +95,38 @@ function riskForDraft(draft: CandidateDraft, admission: AdmissionDecision): Rout
   return 'low'
 }
 
-function updatePolicyForRoute(draft: CandidateDraft, risk: RoutedMemoryTarget['risk']): RoutedMemoryTarget['updatePolicy'] {
-  if (risk === 'high' || draft.domain === 'system') return 'manual_only'
+function updatePolicyForRoute(
+  draft: CandidateDraft,
+  admission: AdmissionDecision,
+  module: MemoryModule,
+  risk: RoutedMemoryTarget['risk']
+): RoutedMemoryTarget['updatePolicy'] {
+  if (admission.action === 'reference_only') return 'drop'
+  if (admission.action === 'task_state') return 'defer'
+  if (admission.action === 'auto_drop' || admission.action === 'reject_duplicate') return 'drop'
+  if (admission.action === 'auto_defer' || admission.action === 'episode_only') return 'defer'
+  if (risk === 'high' || isManualOnlyModule(module)) return 'manual_only'
   if (draft.scope === 'session') return 'defer'
+  if (canEnterStrictAutoPromoteGate(draft, admission, module, risk)) return 'strict_auto_promote'
   return 'pending_review'
 }
 
-function routingReasons(draft: CandidateDraft, module: MemoryModule, risk: RoutedMemoryTarget['risk']): string[] {
+function routingReasons(
+  draft: CandidateDraft,
+  admission: AdmissionDecision,
+  module: MemoryModule,
+  risk: RoutedMemoryTarget['risk'],
+  updatePolicy: RoutedMemoryTarget['updatePolicy']
+): string[] {
   const reasons = [`candidate kind ${draft.candidateKind} maps to ${module} module`]
+  if (admission.action === 'reference_only') {
+    reasons.push('source-of-truth duplicate is reference-only')
+    return reasons
+  }
+  if (admission.action === 'task_state') {
+    reasons.push('task state is deferred outside active memory review')
+    return reasons
+  }
   if (risk === 'high') {
     reasons.push('high sensitivity or protected domain requires manual review')
     return reasons
@@ -110,12 +135,38 @@ function routingReasons(draft: CandidateDraft, module: MemoryModule, risk: Route
     reasons.push('session scoped memory is deferred')
     return reasons
   }
-  if (draft.domain === 'system') {
-    reasons.push('system memory requires manual review')
+  if (updatePolicy === 'manual_only') {
+    reasons.push('protected memory module requires manual review')
+    return reasons
+  }
+  if (updatePolicy === 'strict_auto_promote') {
+    reasons.push('trusted low-risk project/procedural memory may enter v5 auto-promotion gate')
     return reasons
   }
   reasons.push('project/procedural memory requires review before activation')
   return reasons
+}
+
+function isManualOnlyModule(module: MemoryModule): boolean {
+  return (
+    module === 'relationship_affective' ||
+    module === 'global_policy' ||
+    module === 'preference' ||
+    module === 'principle_candidate'
+  )
+}
+
+function canEnterStrictAutoPromoteGate(
+  draft: CandidateDraft,
+  admission: AdmissionDecision,
+  module: MemoryModule,
+  risk: RoutedMemoryTarget['risk']
+): boolean {
+  if (admission.action !== 'admit_to_pending') return false
+  if (risk !== 'low') return false
+  if (draft.sourceKind !== 'file' && draft.sourceKind !== 'tool_trace' && draft.sourceKind !== 'user_explicit') return false
+  if (module === 'project_semantic' || module === 'procedural') return true
+  return module === 'system' && draft.scope === 'project'
 }
 
 function structuredEvidenceForDraft(

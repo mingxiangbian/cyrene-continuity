@@ -48,12 +48,13 @@ export function activeMemoryToSemanticMemory(memory: CyreneMemory): SemanticMemo
     content: memory.content,
     useWhen: useWhenForKind(kind),
     doNotUseWhen: doNotUseWhenForKind(kind),
-    sourceOfTruth: memory.normalizedKey,
+    sourceOfTruth: memory.sourceOfTruth ?? memory.normalizedKey,
     evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.createdAt, memory.content, kind),
     routing: routingForMemory(module, scores, 'active'),
     reviewPolicy: reviewPolicyForMemory(module, scores, 'active'),
     reviewState: {
       normalizedKey: memory.normalizedKey,
+      ...(memory.sourceOfTruth === undefined ? {} : { sourceOfTruth: memory.sourceOfTruth }),
       type: memory.type,
       strength: memory.strength,
       source: memory.source,
@@ -87,12 +88,13 @@ export function pendingMemoryToSemanticMemory(memory: PendingMemory): SemanticMe
     content: memory.content,
     useWhen: useWhenForKind(kind),
     doNotUseWhen: doNotUseWhenForKind(kind),
-    sourceOfTruth: memory.normalizedKey,
+    sourceOfTruth: memory.sourceOfTruth ?? memory.normalizedKey,
     evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.lastSeenAt, memory.content, kind),
     routing: routingForMemory(module, scores, 'pending'),
     reviewPolicy: reviewPolicyForMemory(module, scores, 'pending'),
     reviewState: {
       normalizedKey: memory.normalizedKey,
+      ...(memory.sourceOfTruth === undefined ? {} : { sourceOfTruth: memory.sourceOfTruth }),
       type: memory.type,
       strength: memory.strength,
       source: memory.source,
@@ -125,6 +127,7 @@ export function semanticMemoryToActiveMemory(memory: SemanticMemory): CyreneMemo
   const type = reviewState.type ?? typeForSemanticMemory(memory)
   const scores = reviewState.scores ?? scoresForSemanticMemory(memory)
   const source = memorySource(reviewState.source ?? firstEvidenceSource(memory.evidence))
+  const sourceOfTruth = reviewState.sourceOfTruth ?? memory.sourceOfTruth
   return {
     id: memory.id,
     domain: memory.domain,
@@ -134,6 +137,7 @@ export function semanticMemoryToActiveMemory(memory: SemanticMemory): CyreneMemo
     status: 'active',
     content: memory.content,
     normalizedKey: reviewState.normalizedKey ?? memory.sourceOfTruth ?? normalizedKeyForContent(memory.domain, type, memory.content),
+    ...(sourceOfTruth === undefined ? {} : { sourceOfTruth }),
     evidence: memoryEvidenceForSemantic(memory),
     source,
     ...(reviewState.portability === undefined ? {} : { portability: reviewState.portability }),
@@ -159,6 +163,7 @@ export function semanticMemoryToPendingMemory(memory: SemanticMemory): PendingMe
   const updatedAt = memory.updatedAt || memory.createdAt
   const firstSeenAt = reviewState.firstSeenAt ?? memory.createdAt
   const lastSeenAt = reviewState.lastSeenAt ?? updatedAt
+  const sourceOfTruth = reviewState.sourceOfTruth ?? memory.sourceOfTruth
   return {
     id: memory.id,
     domain: memory.domain,
@@ -168,6 +173,7 @@ export function semanticMemoryToPendingMemory(memory: SemanticMemory): PendingMe
     status: 'pending',
     content: memory.content,
     normalizedKey: reviewState.normalizedKey ?? memory.sourceOfTruth ?? normalizedKeyForContent(memory.domain, type, memory.content),
+    ...(sourceOfTruth === undefined ? {} : { sourceOfTruth }),
     evidence: memoryEvidenceForSemantic(memory),
     source,
     ...(reviewState.portability === undefined ? {} : { portability: reviewState.portability }),

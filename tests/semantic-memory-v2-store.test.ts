@@ -233,6 +233,67 @@ describe('Semantic memory v2 store', () => {
     ])
   })
 
+  it('keeps legacy pending records canonical when semantic projection also exists', async () => {
+    const root = await createTempDir('cyrene-v2-pending-canonical-root-')
+    const pending = pendingMemory({
+      evidence: [
+        {
+          runId: 'review-run-1',
+          evidenceGroupId: 'legacy-group-1',
+          summary: 'Exact legacy pending evidence.',
+          sourceKind: 'review_event'
+        }
+      ]
+    })
+
+    await writePendingMemoriesFromRoot(root, [pending])
+
+    await expect(readSemanticMemoriesFromRoot(root)).resolves.toHaveLength(1)
+    await expect(readPendingMemoriesFromRoot(root)).resolves.toEqual([pending])
+  })
+
+  it('uses semantic sourceOfTruth as compatibility normalizedKey when reviewState has no normalizedKey', async () => {
+    const root = await createTempDir('cyrene-v2-source-key-root-')
+
+    await writeSemanticMemoriesFromRoot(root, [
+      semanticMemory({
+        id: 'active-source-key',
+        status: 'active',
+        sourceOfTruth: 'AGENTS.md',
+        reviewPolicy: 'strict_auto_promote',
+        reviewState: {
+          type: 'procedural_rule',
+          strength: 'hard',
+          source: 'file',
+          scores: { evidenceStrength: 0.9, stability: 0.9, usefulness: 0.8, safety: 0.95, sensitivity: 0.1 },
+          tags: ['workflow_rule']
+        }
+      }),
+      semanticMemory({
+        id: 'pending-source-key',
+        status: 'pending',
+        sourceOfTruth: 'AGENTS.md',
+        reviewState: {
+          type: 'procedural_rule',
+          strength: 'soft',
+          source: 'file',
+          scores: { evidenceStrength: 0.8, stability: 0.75, usefulness: 0.8, safety: 0.95, sensitivity: 0.1 },
+          seenCount: 1,
+          firstSeenAt: '2026-06-01T00:00:00.000Z',
+          lastSeenAt: '2026-06-01T00:00:00.000Z',
+          tags: ['workflow_rule']
+        }
+      })
+    ])
+
+    await expect(readActiveMemoriesFromRoot(root)).resolves.toMatchObject([
+      { id: 'active-source-key', normalizedKey: 'AGENTS.md', sourceOfTruth: 'AGENTS.md' }
+    ])
+    await expect(readPendingMemoriesFromRoot(root)).resolves.toMatchObject([
+      { id: 'pending-source-key', normalizedKey: 'AGENTS.md', sourceOfTruth: 'AGENTS.md' }
+    ])
+  })
+
   it('migrates legacy active memory and resets legacy pending memory with audit events', async () => {
     const root = await createTempDir('cyrene-v2-migration-root-')
     await writeFile(join(root, 'index.jsonl'), `${JSON.stringify(activeMemory())}\n`)

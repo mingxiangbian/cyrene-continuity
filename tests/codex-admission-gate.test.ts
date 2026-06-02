@@ -146,6 +146,45 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.reasons).toContain('needs_active_memory_rewrite')
   })
 
+  it('keeps source-of-truth duplicate raw excerpts reference-only', () => {
+    const sourceDuplicateDecision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'agents-md-all-edits-surgical',
+        sourceOfTruth: 'AGENTS.md'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(sourceDuplicateDecision.action).toBe('reference_only')
+    expect(sourceDuplicateDecision.reasons).toContain('source_of_truth_duplicate')
+    expect(sourceDuplicateDecision.reasons).toContain('raw_file_rule_excerpt')
+  })
+
+  it('does not mark operational source-of-truth rewrites as reference-only', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'AGENTS.md requires Codex to use surgical edits for non-trivial code changes and keep each changed line tied to the requested task.',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'agents-md-operational-surgical-edits',
+        sourceOfTruth: 'AGENTS.md'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).not.toBe('reference_only')
+    expect(['admit_to_pending', 'admit_to_distillation']).toContain(decision.action)
+    expect(decision.reasons).toContain('raw_file_rule_excerpt')
+    expect(decision.reasons).not.toContain('source_of_truth_duplicate')
+  })
+
   it('admits canonical workflow rules with source-of-truth context', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({
@@ -227,8 +266,8 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.targetMemoryId).toBe('active-1')
   })
 
-  it('routes implementation progress task state to episode only before durable handling', () => {
-    const decision = evaluateCandidateAdmission({
+  it('routes implementation progress task state to task state before durable handling', () => {
+    const taskDecision = evaluateCandidateAdmission({
       draft: draft({
         content: 'Core memory pipeline changes must preserve review-hash validation. 当前 Task 2 implementation is in progress.',
         candidateKind: 'workflow_rule',
@@ -244,13 +283,13 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(decision.action).toBe('episode_only')
-    expect(decision.reasons).toContain('task_state')
-    expect(decision.reasons).toContain('temporary_status')
+    expect(taskDecision.action).toBe('task_state')
+    expect(taskDecision.reasons).toContain('task_state')
+    expect(taskDecision.reasons).toContain('temporary_status')
   })
 
-  it('routes explicit implementation progress task state to episode only instead of pending', () => {
-    const decision = evaluateCandidateAdmission({
+  it('routes explicit implementation progress task state to task state instead of pending', () => {
+    const taskDecision = evaluateCandidateAdmission({
       draft: draft({
         content: 'I have finished checking this update for review bugs in the current branch.',
         candidateKind: 'user_instruction',
@@ -267,13 +306,13 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(decision.action).toBe('episode_only')
-    expect(decision.reasons).toContain('explicit_user_instruction')
-    expect(decision.reasons).toContain('task_state')
+    expect(taskDecision.action).toBe('task_state')
+    expect(taskDecision.reasons).toContain('explicit_user_instruction')
+    expect(taskDecision.reasons).toContain('task_state')
   })
 
-  it('routes task state to episode only instead of merging with duplicate pending memory', () => {
-    const decision = evaluateCandidateAdmission({
+  it('routes task state to task state instead of merging with duplicate pending memory', () => {
+    const taskDecision = evaluateCandidateAdmission({
       draft: draft({
         content: 'This branch review is currently in progress.',
         candidateKind: 'project_fact',
@@ -289,9 +328,9 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(decision.action).toBe('episode_only')
-    expect(decision.reasons).toContain('task_state')
-    expect(decision.reasons).not.toContain('duplicate_pending')
+    expect(taskDecision.action).toBe('task_state')
+    expect(taskDecision.reasons).toContain('task_state')
+    expect(taskDecision.reasons).not.toContain('duplicate_pending')
   })
 
   it('merges duplicate pending memory by normalizedKey', () => {

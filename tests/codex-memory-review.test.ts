@@ -232,14 +232,14 @@ describe('Codex pending memory review', () => {
     expect(summary.semanticMemory).toMatchObject({
       module: 'procedural',
       reviewPolicy: 'pending_review',
-      sourceOfTruth: candidate.normalizedKey,
+      sourceOfTruth: 'run-1',
       routing: {
         updatePolicy: 'pending_review'
       }
     })
     expect(summary.semanticMemory.evidence).toEqual([
-      expect.objectContaining({ sourceRef: candidate.normalizedKey }),
-      expect.objectContaining({ sourceRef: candidate.normalizedKey })
+      expect.objectContaining({ sourceRef: 'run-1' }),
+      expect.objectContaining({ sourceRef: 'run-2' })
     ])
     expect(summary.readiness.reasons.map((reason) => reason.code)).not.toContain('none')
   })
@@ -255,9 +255,10 @@ describe('Codex pending memory review', () => {
 
     expect(summary.recommendation).toBe('defer')
     expect(summary.semanticMemory.evidence).toEqual([])
-    expect(summary.readiness.reasons).toEqual([
-      expect.objectContaining({ code: 'missing_structured_evidence' })
-    ])
+    expect(summary.readiness.reasons).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_structured_evidence' }),
+      expect.objectContaining({ code: 'missing_source_of_truth' })
+    ]))
   })
 
   it('defers pending review when source of truth is missing', () => {
@@ -266,8 +267,8 @@ describe('Codex pending memory review', () => {
       normalizedKey: '   ',
       seenCount: 2,
       evidence: [
-        { runId: 'run-1', summary: 'First workflow evidence.' },
-        { runId: 'run-2', summary: 'Second workflow evidence.' }
+        { summary: 'First workflow evidence.' },
+        { summary: 'Second workflow evidence.' }
       ]
     })
 
@@ -280,13 +281,13 @@ describe('Codex pending memory review', () => {
     ])
   })
 
-  it('summarizes runtime-missing normalizedKey as missing source of truth', () => {
+  it('summarizes runtime-missing source boundary as missing source of truth', () => {
     const { normalizedKey: _normalizedKey, ...candidateWithoutKey } = createPending({
       id: 'runtime-missing-source-of-truth',
       seenCount: 2,
       evidence: [
-        { runId: 'run-1', summary: 'First workflow evidence.' },
-        { runId: 'run-2', summary: 'Second workflow evidence.' }
+        { summary: 'First workflow evidence.' },
+        { summary: 'Second workflow evidence.' }
       ]
     })
 
@@ -647,6 +648,74 @@ describe('Codex pending memory review', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('requires rewrite before promoting candidates without explicit source boundary or evidence trace', async () => {
+    const home = await createTempDir('cyrene-review-source-boundary-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-source-boundary-project-')
+    const candidate = createPending({
+      id: 'pending-without-source-boundary',
+      seenCount: 2,
+      evidence: [{ summary: 'A file mentioned this workflow rule.', sourceKind: 'file' }]
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'needs_rewrite',
+      candidateId: candidate.id,
+      readiness: expect.objectContaining({
+        ready: false,
+        status: 'needs_rewrite',
+        reasons: expect.arrayContaining(['missing_source_of_truth'])
+      }),
+      reviewHash: reviewHashForPendingMemory(candidate)
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+  })
+
+  it('requires rewrite before promoting raw file rule excerpts even with explicit source truth', async () => {
+    const home = await createTempDir('cyrene-review-raw-file-excerpt-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-raw-file-excerpt-project-')
+    const candidate = createPending({
+      id: 'pending-raw-file-rule-excerpt',
+      sourceOfTruth: 'AGENTS.md',
+      content: 'AGENTS.md requires every code change to stay surgical and trace directly to the requested issue.',
+      normalizedKey: 'agents-md-surgical-change-rule',
+      seenCount: 2,
+      evidence: [{ runId: 'run-agents', summary: 'AGENTS.md contains the surgical change rule.', sourceKind: 'file' }]
+    })
+    const memoryRoot = await seedPending(cwd, [candidate])
+
+    const result = await promoteCodexPendingMemory({
+      cwd,
+      id: candidate.id,
+      reviewHash: reviewHashForPendingMemory(candidate),
+      now: '2026-05-25T01:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'needs_rewrite',
+      candidateId: candidate.id,
+      reason: 'Pending memory needs structured review before promotion: raw_file_rule_excerpt.',
+      readiness: expect.objectContaining({
+        ready: false,
+        status: 'needs_rewrite',
+        reasons: expect.arrayContaining(['raw_file_rule_excerpt'])
+      }),
+      reviewHash: reviewHashForPendingMemory(candidate)
+    })
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('requires explicit resolution before promoting a normalizedKey conflict', async () => {

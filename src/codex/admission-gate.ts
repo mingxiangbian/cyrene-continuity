@@ -53,7 +53,10 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
   const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons))
   const admissionScore = admissionScoreFor(scores)
   if (reasons.includes('task_state')) {
-    return decision(input.draft, 'episode_only', reasons, scores, now)
+    return decision(input.draft, 'task_state', reasons, scores, now)
+  }
+  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
+    return decision(input.draft, 'reference_only', ['source_of_truth_duplicate', ...reasons], scores, now)
   }
 
   const duplicatePending = findByNormalizedKey(input.pending, input.draft.normalizedKey)
@@ -223,7 +226,7 @@ function admissionScoreFor(scores: AdmissionScores): number {
 }
 
 function actionFor(draft: CandidateDraft, reasons: AdmissionReason[], score: number): AdmissionDecision['action'] {
-  if (reasons.includes('task_state')) return 'episode_only'
+  if (reasons.includes('task_state')) return 'task_state'
   if (reasons.includes('explicit_user_instruction')) return 'admit_to_pending'
   if (reasons.includes('needs_active_memory_rewrite')) return 'admit_to_distillation'
   if (
@@ -240,6 +243,20 @@ function actionFor(draft: CandidateDraft, reasons: AdmissionReason[], score: num
   if (score < 0.5) return 'episode_only'
   if (score < 0.65) return 'admit_to_distillation'
   return draft.candidateKind === 'project_fact' ? 'admit_to_distillation' : 'admit_to_pending'
+}
+
+function isSourceOfTruthReferenceOnly(draft: CandidateDraft, reasons: AdmissionReason[]): boolean {
+  if (draft.sourceOfTruth === undefined || draft.sourceOfTruth.trim() === '') {
+    return false
+  }
+  if (!reasons.includes('raw_file_rule_excerpt')) {
+    return false
+  }
+  return !hasOperationalInterpretationSignal(draft.content)
+}
+
+function hasOperationalInterpretationSignal(content: string): boolean {
+  return /because|exception|applies when|mitigation|\buse\b|non-trivial|keep each|避免|例外|适用|边界|改写|使用|非琐碎|非平凡/i.test(content)
 }
 
 function decision(
