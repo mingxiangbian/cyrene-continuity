@@ -49,6 +49,13 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
     })
   }
 
+  const reasons = reasonsForDraft(input.draft)
+  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons))
+  const admissionScore = admissionScoreFor(scores)
+  if (reasons.includes('task_state')) {
+    return decision(input.draft, 'episode_only', reasons, scores, now)
+  }
+
   const duplicatePending = findByNormalizedKey(input.pending, input.draft.normalizedKey)
   if (duplicatePending !== undefined) {
     return decision(
@@ -63,9 +70,6 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
     )
   }
 
-  const reasons = reasonsForDraft(input.draft)
-  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons))
-  const admissionScore = admissionScoreFor(scores)
   const action = actionFor(input.draft, reasons, admissionScore)
   return decision(input.draft, action, reasons, scores, now)
 }
@@ -219,8 +223,8 @@ function admissionScoreFor(scores: AdmissionScores): number {
 }
 
 function actionFor(draft: CandidateDraft, reasons: AdmissionReason[], score: number): AdmissionDecision['action'] {
-  if (reasons.includes('explicit_user_instruction')) return 'admit_to_pending'
   if (reasons.includes('task_state')) return 'episode_only'
+  if (reasons.includes('explicit_user_instruction')) return 'admit_to_pending'
   if (reasons.includes('needs_active_memory_rewrite')) return 'admit_to_distillation'
   if (
     reasons.includes('valuable_workflow_rule') ||

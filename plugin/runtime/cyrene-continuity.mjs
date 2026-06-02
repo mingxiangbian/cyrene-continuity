@@ -17598,6 +17598,12 @@ function evaluateCandidateAdmission(input) {
       targetMemoryId: tombstone.memoryId ?? tombstone.id
     });
   }
+  const reasons = reasonsForDraft(input.draft);
+  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons));
+  const admissionScore = admissionScoreFor(scores);
+  if (reasons.includes("task_state")) {
+    return decision(input.draft, "episode_only", reasons, scores, now);
+  }
   const duplicatePending = findByNormalizedKey(input.pending, input.draft.normalizedKey);
   if (duplicatePending !== void 0) {
     return decision(
@@ -17611,9 +17617,6 @@ function evaluateCandidateAdmission(input) {
       }
     );
   }
-  const reasons = reasonsForDraft(input.draft);
-  const scores = scoresFor(input.draft, scoreOverridesForReasons(reasons));
-  const admissionScore = admissionScoreFor(scores);
   const action = actionFor(input.draft, reasons, admissionScore);
   return decision(input.draft, action, reasons, scores, now);
 }
@@ -17731,8 +17734,8 @@ function admissionScoreFor(scores) {
   );
 }
 function actionFor(draft, reasons, score) {
-  if (reasons.includes("explicit_user_instruction")) return "admit_to_pending";
   if (reasons.includes("task_state")) return "episode_only";
+  if (reasons.includes("explicit_user_instruction")) return "admit_to_pending";
   if (reasons.includes("needs_active_memory_rewrite")) return "admit_to_distillation";
   if (reasons.includes("valuable_workflow_rule") || reasons.includes("valuable_known_pitfall") || reasons.includes("valuable_rejected_approach") || reasons.includes("valuable_project_decision")) {
     return score >= 0.5 ? "admit_to_pending" : "admit_to_distillation";

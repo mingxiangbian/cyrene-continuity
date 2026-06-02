@@ -249,6 +249,51 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.reasons).toContain('temporary_status')
   })
 
+  it('routes explicit implementation progress task state to episode only instead of pending', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'I have finished checking this update for review bugs in the current branch.',
+        candidateKind: 'user_instruction',
+        sourceKind: 'user_explicit',
+        normalizedKey: 'explicit-task-state-review-progress',
+        taskState: {
+          kind: 'implementation_progress',
+          summary: 'Review bug check finished in current branch.'
+        }
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('episode_only')
+    expect(decision.reasons).toContain('explicit_user_instruction')
+    expect(decision.reasons).toContain('task_state')
+  })
+
+  it('routes task state to episode only instead of merging with duplicate pending memory', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: 'This branch review is currently in progress.',
+        candidateKind: 'project_fact',
+        normalizedKey: 'duplicate-pending-key',
+        taskState: {
+          kind: 'implementation_progress',
+          summary: 'Branch review is in progress.'
+        }
+      }),
+      pending: [pending('duplicate-pending-key')],
+      active: [],
+      tombstones: [],
+      now: '2026-05-31T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('episode_only')
+    expect(decision.reasons).toContain('task_state')
+    expect(decision.reasons).not.toContain('duplicate_pending')
+  })
+
   it('merges duplicate pending memory by normalizedKey', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({ normalizedKey: 'duplicate-pending-key' }),
