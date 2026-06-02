@@ -22524,10 +22524,21 @@ function buildDistillationInputCandidate(normalizedKey, items, hasActiveOverlap)
   const content = chooseRepresentativeRawContent(sourceItems);
   const sourceOfTruth = firstDefined(sourceItems.map((item) => item.sourceOfTruth));
   const candidateId = `distill-${normalizedKey}`;
+  const representative = sourceItems[0];
+  const shaped = shapePendingCandidateContent({
+    content,
+    candidateKind: representative?.candidateKind,
+    scope: representative?.scope,
+    domain: representative?.domain,
+    normalizedKey,
+    sourceOfTruth,
+    evidenceRefs: evidenceRefs2,
+    tags: []
+  });
   const draft = candidateDraftFromDistillationInputs({
     id: candidateId,
     normalizedKey,
-    content,
+    content: shaped.content,
     sourceItems,
     sourceOfTruth
   });
@@ -22547,14 +22558,19 @@ function buildDistillationInputCandidate(normalizedKey, items, hasActiveOverlap)
   return {
     id: candidateId,
     normalizedKey,
-    content,
+    content: shaped.content,
     sourceIds,
     evidence: sourceItems.flatMap((item) => item.evidenceRefs.map((summary) => ({ summary }))),
     recommendedAction: "needs_review",
     risk,
     reasons: buildDistillationInputReasons(normalizedKey, sourceItems, hasActiveOverlap, highRiskDomains, hasMixedMetadata),
     ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
-    semanticMemory,
+    semanticMemory: {
+      ...semanticMemory,
+      content: shaped.content,
+      useWhen: shaped.useWhen,
+      doNotUseWhen: shaped.doNotUseWhen
+    },
     rawContents,
     evidenceRefs: evidenceRefs2,
     sourceAdmissionDecisionIds,
