@@ -416,6 +416,8 @@ export function mergePendingMemory(existing: PendingMemory, candidate: PendingMe
   return {
     ...existing,
     content: existing.content,
+    useWhen: existing.useWhen ?? candidate.useWhen,
+    doNotUseWhen: existing.doNotUseWhen ?? candidate.doNotUseWhen,
     scores: averageScores(existing.scores, existing.seenCount, candidate.scores, candidate.seenCount),
     seenCount,
     lastSeenAt: latestIso(existing.lastSeenAt, candidate.lastSeenAt),

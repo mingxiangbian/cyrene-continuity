@@ -406,6 +406,8 @@ export interface PendingMemory {
   scope: MemoryScope
   status: 'pending'
   content: string
+  useWhen?: string[]
+  doNotUseWhen?: string[]
   normalizedKey: string
   sourceOfTruth?: string
   evidence: MemoryEvidence[]
