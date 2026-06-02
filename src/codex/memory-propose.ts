@@ -9,6 +9,7 @@ import { summarizePendingMemory } from './memory-review.js'
 import { evaluateAutoPromotionPolicy } from './memory-triage.js'
 import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
+import { shapePendingCandidateContent } from './semantic-content-builder.js'
 import {
   combineEvalGateResults,
   runV5AutoPromotionEvalGate,
@@ -408,6 +409,16 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     tags: input.tags ?? [],
     type: input.type
   })
+  const shaped = shapePendingCandidateContent({
+    content: input.content,
+    candidateKind,
+    scope: input.scope ?? 'project',
+    domain: input.domain,
+    normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
+    sourceOfTruth: input.sourceOfTruth,
+    evidenceRefs: evidenceRefsForCandidate(input.evidence),
+    tags: input.tags ?? []
+  })
   return {
     id: randomUUID(),
     domain: input.domain,
@@ -415,7 +426,7 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     strength: input.strength ?? 'soft',
     scope: input.scope ?? 'project',
     status: 'pending',
-    content: input.content,
+    content: shaped.content,
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
     ...(input.sourceOfTruth === undefined ? {} : { sourceOfTruth: input.sourceOfTruth }),
     evidence: input.evidence,
@@ -435,6 +446,19 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     candidateKind,
     tags: input.tags ?? []
   }
+}
+
+function evidenceRefsForCandidate(evidence: MemoryEvidence[]): string[] {
+  return evidence.flatMap((entry) => [
+    ...(entry.traceRefs ?? []),
+    ...(entry.messageIds ?? []),
+    entry.runId,
+    entry.sessionId,
+    entry.taskHash,
+    entry.quoteHash,
+    entry.evidenceGroupId,
+    entry.summary
+  ]).flatMap((value) => value === undefined ? [] : [value])
 }
 
 function normalizeKey(value: string): string {
