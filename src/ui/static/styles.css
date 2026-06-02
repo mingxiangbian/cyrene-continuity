@@ -445,6 +445,23 @@ p {
   align-items: start;
 }
 
+.memory-review-header:has(.pending-select) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.pending-select {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+
+.pending-select input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--coral);
+}
+
 .memory-review-header h3 {
   margin: 2px 0 0;
   color: var(--ink);
@@ -568,6 +585,24 @@ p {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.section-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-toolbar h3 {
+  margin: 0;
+}
+
+.muted-copy {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .confirm-form {

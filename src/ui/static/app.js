@@ -6,6 +6,7 @@ const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
 const PREPARE_DRY_RUN_ENDPOINT = '/api/memory/prepare/dry-run'
 const PREPARE_APPLY_ENDPOINT = '/api/memory/prepare/apply'
 const DISTILL_DRY_RUN_ENDPOINT = '/api/memory/distill/dry-run'
+const BATCH_REJECT_ENDPOINT = '/api/memory/pending/reject-batch'
 const EMPTY_DASHBOARD = {
   status: {},
   diagnostics: {},
@@ -51,6 +52,7 @@ const state = {
   error: '',
   sessionToken: '',
   selectedPendingId: '',
+  selectedPendingIds: [],
   pendingAction: null,
   receipt: null,
   actionError: '',
@@ -117,6 +119,9 @@ async function loadDashboard(options = {}) {
       throw new Error(payload.error?.message || 'Dashboard API returned an error.')
     }
     state.dashboard = mergeDashboard(payload.data)
+    state.selectedPendingIds = state.selectedPendingIds.filter((id) =>
+      listPending().some((candidate) => candidate.id === id)
+    )
     if (!state.selectedProjectId) {
       state.selectedProjectId = state.dashboard.selection?.projectId || state.dashboard.projects?.currentProjectId || ''
     }
@@ -308,6 +313,22 @@ function renderWorkspace() {
       render()
     })
   })
+  workspace.querySelectorAll('[data-pending-select]').forEach((checkbox) => {
+    checkbox.addEventListener('click', (event) => {
+      event.stopPropagation()
+    })
+    checkbox.addEventListener('change', () => {
+      togglePendingSelection(checkbox.dataset.pendingSelect || '', checkbox.checked)
+    })
+  })
+  const rejectSelected = workspace.querySelector('[data-reject-selected-pending]')
+  if (rejectSelected) {
+    rejectSelected.addEventListener('click', rejectSelectedPending)
+  }
+  const rejectAll = workspace.querySelector('[data-reject-all-pending]')
+  if (rejectAll) {
+    rejectAll.addEventListener('click', rejectAllPendingInView)
+  }
   workspace.querySelectorAll('[data-active-action]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeAction = {
@@ -380,12 +401,20 @@ function renderOverview() {
 
 function renderInbox() {
   const pending = listPending()
+  const selectedCount = pending.filter((candidate) => state.selectedPendingIds.includes(candidate.id)).length
   return `
     <section class="page-stack">
       ${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}
       <div class="soft-inset boundary-copy">${escapeHtml(WRITE_ACTION_COPY)}</div>
       <div class="soft-panel">
-        <h3>Pending candidates</h3>
+        <div class="section-toolbar">
+          <h3>Pending candidates</h3>
+          <div class="detail-actions">
+            <button class="soft-button compact" type="button" data-reject-selected-pending ${selectedCount === 0 ? 'disabled' : ''}>Reject selected</button>
+            <button class="soft-button compact" type="button" data-reject-all-pending ${pending.length === 0 ? 'disabled' : ''}>Reject all in view</button>
+          </div>
+        </div>
+        <p class="muted-copy">${escapeHtml(String(selectedCount))} selected</p>
         ${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
       </div>
     </section>
@@ -415,6 +444,11 @@ function renderSemanticReviewCard(candidate, options = {}) {
   return `
     <article class="memory-review-card selectable-row ${selected ? 'selected' : ''}" data-pending-id="${escapeHtml(candidate.id)}">
       <header class="memory-review-header">
+        ${state.activeTab === 'inbox' ? `
+          <label class="pending-select" aria-label="Select pending candidate">
+            <input type="checkbox" data-pending-select="${escapeHtml(candidate.id)}" ${state.selectedPendingIds.includes(candidate.id) ? 'checked' : ''}>
+          </label>
+        ` : ''}
         <div>
           <p class="eyebrow">${escapeHtml(memory.module || 'semantic memory')} · ${escapeHtml(memory.status || 'pending')}</p>
           <h3>${escapeHtml(memory.content || candidate.content || candidate.id || 'Pending candidate')}</h3>
@@ -1576,6 +1610,57 @@ async function submitPendingAction(candidate, formData) {
   render()
 }
 
+function togglePendingSelection(id, selected) {
+  if (!id) return
+  const current = new Set(state.selectedPendingIds)
+  if (selected) {
+    current.add(id)
+  } else {
+    current.delete(id)
+  }
+  state.selectedPendingIds = Array.from(current)
+  render()
+}
+
+function rejectSelectedPending() {
+  const selected = listPending().filter((candidate) => state.selectedPendingIds.includes(candidate.id))
+  submitBatchPendingReject(selected)
+}
+
+function rejectAllPendingInView() {
+  submitBatchPendingReject(listPending())
+}
+
+async function submitBatchPendingReject(candidates) {
+  const candidatesWithHashes = candidates
+    .filter((candidate) => candidate.reviewHash)
+    .map((candidate) => ({ id: candidate.id, reviewHash: candidate.reviewHash }))
+  if (candidatesWithHashes.length === 0) return
+  try {
+    const response = await apiFetch(`${BATCH_REJECT_ENDPOINT}${selectionQuery()}`, {
+      method: 'POST',
+      body: JSON.stringify({ candidates: candidatesWithHashes, reason: 'Rejected by Codex pending memory bulk review.' })
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Batch reject failed.')
+    }
+    await loadDashboard({ renderAfter: false })
+    const results = Array.isArray(payload.data?.results) ? payload.data.results : []
+    const rejectedIds = new Set(results.filter((result) => result.action === 'reject').map((result) => result.id))
+    state.selectedPendingIds = state.selectedPendingIds.filter((id) => !rejectedIds.has(id))
+    state.receipt = payload.data?.receipt || null
+    state.pendingAction = null
+    state.actionError = ''
+    if (rejectedIds.has(state.selectedPendingId)) {
+      state.selectedPendingId = ''
+    }
+  } catch (error) {
+    state.actionError = errorMessage(error)
+  }
+  render()
+}
+
 function selectionQuery() {
   const params = new URLSearchParams()
   params.set('scope', state.memoryScope)
@@ -1627,6 +1712,7 @@ function selectedProjectOption() {
 }
 
 function actionLabel(action) {
+  if (action === 'reject_batch') return 'Reject batch'
   if (action === 'approve') return 'Approve'
   if (action === 'reject') return 'Reject'
   if (action === 'defer') return 'Defer'

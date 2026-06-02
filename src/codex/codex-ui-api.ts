@@ -273,6 +273,17 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       })
     }
 
+    if (input.pathname === '/api/memory/pending/reject-batch') {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      const selection = parseSelectionRequest(input.searchParams)
+      if ('error' in selection) return selection.error
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, 'batch pending reject')
+      if (unsupportedScope !== undefined) return unsupportedScope
+      return handleBatchPendingReject(input, selection.value)
+    }
+
     const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname)
     if (activeWriteRoute !== undefined) {
       if (input.method.toUpperCase() !== 'POST') {
@@ -349,6 +360,69 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
   } catch (error) {
     return failure(500, 'internal_error', errorMessage(error))
   }
+}
+
+async function handleBatchPendingReject(
+  input: HandleCodexUiApiRequestInput,
+  selection: CodexUiSelectionRequest
+): Promise<CodexUiApiResult<unknown>> {
+  const body = input.body
+  if (!isRecord(body) || !Array.isArray(body.candidates)) {
+    return failure(400, 'invalid_request', 'Batch pending reject requires candidates.')
+  }
+  const candidates = parseBatchRejectCandidates(body.candidates)
+  if ('error' in candidates) return candidates.error
+  const reason = typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason.trim() : undefined
+  const results = []
+
+  for (const candidate of candidates.value) {
+    const result = await rejectCodexPendingMemory({
+      cwd: input.cwd,
+      projectId: selection.projectId,
+      id: candidate.id,
+      reviewHash: candidate.reviewHash,
+      reason,
+      now: input.now
+    })
+    results.push({
+      id: candidate.id,
+      action: result.result.action,
+      reviewHash: candidate.reviewHash,
+      reason: 'reason' in result.result ? result.result.reason : undefined
+    })
+  }
+
+  const rejectedCount = results.filter((result) => result.action === 'reject').length
+  const failedCount = results.length - rejectedCount
+  return ok({
+    receipt: {
+      action: 'reject_batch',
+      rejectedCount,
+      failedCount,
+      createdAt: input.now ?? new Date().toISOString(),
+      summary: `Rejected ${rejectedCount} pending memor${rejectedCount === 1 ? 'y' : 'ies'}; ${failedCount} failed.`
+    },
+    results
+  })
+}
+
+function parseBatchRejectCandidates(
+  value: unknown[]
+): { value: Array<{ id: string; reviewHash: string }> } | { error: CodexUiApiResult<never> } {
+  const candidates: Array<{ id: string; reviewHash: string }> = []
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.id !== 'string' || item.id.trim() === '') {
+      return { error: failure(400, 'invalid_request', 'Batch pending reject candidate id is required.') }
+    }
+    if (typeof item.reviewHash !== 'string' || item.reviewHash.trim() === '') {
+      return { error: failure(400, 'invalid_request', 'Batch pending reject candidate reviewHash is required.') }
+    }
+    candidates.push({ id: item.id.trim(), reviewHash: item.reviewHash.trim() })
+  }
+  if (candidates.length === 0) {
+    return { error: failure(400, 'invalid_request', 'Batch pending reject requires at least one candidate.') }
+  }
+  return { value: candidates }
 }
 
 function parseMemoryWriteRoute(pathname: string): MemoryWriteRoute | undefined {

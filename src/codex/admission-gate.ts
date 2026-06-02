@@ -23,6 +23,9 @@ const ONE_TIME_ACTION_PATTERN =
 const NUMERIC_SNAPSHOT_PATTERN =
   /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i
 const TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i
+const REVIEW_SUMMARY_STATUS_PATTERN =
+  /(?:修复|完成|清理|归零|通过|merge|push|merged|pushed|typecheck|plugin validation|review summary failed|测试|pending)/i
+const TEST_COUNT_PATTERN = /(?:tests?|测试).{0,16}\d+|\d+.{0,16}(?:tests?|测试)/i
 const VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i
 const PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i
 
@@ -108,6 +111,15 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   if (TEMPORARY_STATUS_PATTERN.test(draft.content)) {
     reasons.push('temporary_status')
   }
+  if (isReviewSummaryStatusNoise(draft)) {
+    reasons.push('temporary_status', 'low_future_usefulness')
+  }
+  if (TEST_COUNT_PATTERN.test(draft.content)) {
+    reasons.push('stale_numeric_snapshot', 'low_actionability')
+  }
+  if (isSourceOfTruthPolicyExcerpt(draft)) {
+    reasons.push('raw_file_rule_excerpt')
+  }
   if (draft.taskState !== undefined) {
     reasons.push('task_state')
   }
@@ -133,6 +145,21 @@ function isDurablePrescriptiveGuidance(draft: CandidateDraft): boolean {
     draft.candidateKind === 'rejected_approach' ||
     draft.candidateKind === 'user_instruction'
   return durableKind && PRESCRIPTIVE_PATTERN.test(draft.content)
+}
+
+function isReviewSummaryStatusNoise(draft: CandidateDraft): boolean {
+  return draft.sourceKind === 'review_summary' &&
+    !isDurablePrescriptiveGuidance(draft) &&
+    REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content)
+}
+
+function isSourceOfTruthPolicyExcerpt(draft: CandidateDraft): boolean {
+  if (draft.sourceOfTruth === undefined) return false
+  if (!/(?:^|\/)(?:AGENTS\.md|README\.md|CONTRIBUTING\.md)$/i.test(draft.sourceOfTruth.trim())) {
+    return false
+  }
+  if (draft.sourceKind !== 'file') return false
+  return /(?:仓库工作规则|仓库政策|repository policy|working rules|agent guidance)/i.test(draft.content)
 }
 
 function scoreOverridesForReasons(reasons: AdmissionReason[]): Partial<AdmissionScores> {

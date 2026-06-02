@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { handleCodexUiApiRequest } from '../src/codex/codex-ui-api.js'
+import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { appendSemanticRewriteReceiptFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
@@ -335,6 +336,112 @@ describe('handleCodexUiApiRequest', () => {
           originalContentHash: 'old-content-hash'
         }
       })
+    }
+  })
+
+  it('batch rejects selected pending memories through the Web UI API', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const first = createPending({ id: 'pending-a', normalizedKey: 'pending-a' })
+    const second = createPending({ id: 'pending-b', normalizedKey: 'pending-b' })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), [first, second].map((item) => JSON.stringify(item)).join('\n') + '\n')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/pending/reject-batch',
+      body: {
+        reason: 'Bulk cleanup.',
+        candidates: [
+          { id: first.id, reviewHash: reviewHashForPendingMemory(first) },
+          { id: second.id, reviewHash: reviewHashForPendingMemory(second) }
+        ]
+      },
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: {
+          action: 'reject_batch',
+          rejectedCount: 2,
+          failedCount: 0
+        },
+        results: [
+          { id: 'pending-a', action: 'reject' },
+          { id: 'pending-b', action: 'reject' }
+        ]
+      })
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+    const events = await readFile(join(memoryRoot, 'events.jsonl'), 'utf8')
+    expect(events).toContain('"candidateId":"pending-a"')
+    expect(events).toContain('"candidateId":"pending-b"')
+  })
+
+  it('keeps hash-conflicted candidates when batch rejecting pending memories', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const first = createPending({ id: 'pending-a', normalizedKey: 'pending-a' })
+    const second = createPending({ id: 'pending-b', normalizedKey: 'pending-b' })
+    await writeFile(join(memoryRoot, 'pending.jsonl'), [first, second].map((item) => JSON.stringify(item)).join('\n') + '\n')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/pending/reject-batch',
+      body: {
+        candidates: [
+          { id: first.id, reviewHash: reviewHashForPendingMemory(first) },
+          { id: second.id, reviewHash: 'wrong-review-hash' }
+        ]
+      },
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      expect(result.body.data).toMatchObject({
+        receipt: {
+          action: 'reject_batch',
+          rejectedCount: 1,
+          failedCount: 1
+        },
+        results: [
+          { id: 'pending-a', action: 'reject' },
+          { id: 'pending-b', action: 'conflict' }
+        ]
+      })
+    }
+    const pendingAfter = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    expect(pendingAfter).not.toContain('pending-a')
+    expect(pendingAfter).toContain('pending-b')
+  })
+
+  it('rejects all-scope batch pending reject because the route mutates one memory root', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, pending } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/pending/reject-batch',
+      searchParams: new URLSearchParams('scope=all'),
+      body: {
+        candidates: [{ id: pending.id, reviewHash: reviewHashForPendingMemory(pending) }]
+      }
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error.message).toContain('scope=all')
     }
   })
 

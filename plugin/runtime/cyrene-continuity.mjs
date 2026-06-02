@@ -17741,6 +17741,8 @@ import { randomUUID as randomUUID9 } from "node:crypto";
 var ONE_TIME_ACTION_PATTERN = /(?:使用|ran|run|checked|检查|修复|完成|准备|reviewed|looked at).*?(?:工具|tool|command|命令|问题|issue|review)/i;
 var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i;
 var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
+var REVIEW_SUMMARY_STATUS_PATTERN = /(?:修复|完成|清理|归零|通过|merge|push|merged|pushed|typecheck|plugin validation|review summary failed|测试|pending)/i;
+var TEST_COUNT_PATTERN = /(?:tests?|测试).{0,16}\d+|\d+.{0,16}(?:tests?|测试)/i;
 var VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i;
 var PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i;
 function evaluateCandidateAdmission(input) {
@@ -17819,6 +17821,15 @@ function reasonsForDraft(draft) {
   if (TEMPORARY_STATUS_PATTERN.test(draft.content)) {
     reasons.push("temporary_status");
   }
+  if (isReviewSummaryStatusNoise(draft)) {
+    reasons.push("temporary_status", "low_future_usefulness");
+  }
+  if (TEST_COUNT_PATTERN.test(draft.content)) {
+    reasons.push("stale_numeric_snapshot", "low_actionability");
+  }
+  if (isSourceOfTruthPolicyExcerpt(draft)) {
+    reasons.push("raw_file_rule_excerpt");
+  }
   if (draft.taskState !== void 0) {
     reasons.push("task_state");
   }
@@ -17836,6 +17847,17 @@ function duplicateActiveReasons(draft) {
 function isDurablePrescriptiveGuidance(draft) {
   const durableKind = draft.candidateKind === "workflow_rule" || draft.candidateKind === "known_pitfall" || draft.candidateKind === "rejected_approach" || draft.candidateKind === "user_instruction";
   return durableKind && PRESCRIPTIVE_PATTERN.test(draft.content);
+}
+function isReviewSummaryStatusNoise(draft) {
+  return draft.sourceKind === "review_summary" && !isDurablePrescriptiveGuidance(draft) && REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content);
+}
+function isSourceOfTruthPolicyExcerpt(draft) {
+  if (draft.sourceOfTruth === void 0) return false;
+  if (!/(?:^|\/)(?:AGENTS\.md|README\.md|CONTRIBUTING\.md)$/i.test(draft.sourceOfTruth.trim())) {
+    return false;
+  }
+  if (draft.sourceKind !== "file") return false;
+  return /(?:仓库工作规则|仓库政策|repository policy|working rules|agent guidance)/i.test(draft.content);
 }
 function scoreOverridesForReasons(reasons) {
   const noisy = reasons.some(
@@ -23075,6 +23097,16 @@ async function handleCodexUiApiRequest(input) {
         selection: publicSelection(selection)
       });
     }
+    if (input.pathname === "/api/memory/pending/reject-batch") {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      const selection = parseSelectionRequest(input.searchParams);
+      if ("error" in selection) return selection.error;
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, "batch pending reject");
+      if (unsupportedScope !== void 0) return unsupportedScope;
+      return handleBatchPendingReject(input, selection.value);
+    }
     const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname);
     if (activeWriteRoute !== void 0) {
       if (input.method.toUpperCase() !== "POST") {
@@ -23147,6 +23179,60 @@ async function handleCodexUiApiRequest(input) {
   } catch (error2) {
     return failure(500, "internal_error", errorMessage4(error2));
   }
+}
+async function handleBatchPendingReject(input, selection) {
+  const body = input.body;
+  if (!isRecord7(body) || !Array.isArray(body.candidates)) {
+    return failure(400, "invalid_request", "Batch pending reject requires candidates.");
+  }
+  const candidates = parseBatchRejectCandidates(body.candidates);
+  if ("error" in candidates) return candidates.error;
+  const reason = typeof body.reason === "string" && body.reason.trim() !== "" ? body.reason.trim() : void 0;
+  const results = [];
+  for (const candidate of candidates.value) {
+    const result2 = await rejectCodexPendingMemory({
+      cwd: input.cwd,
+      projectId: selection.projectId,
+      id: candidate.id,
+      reviewHash: candidate.reviewHash,
+      reason,
+      now: input.now
+    });
+    results.push({
+      id: candidate.id,
+      action: result2.result.action,
+      reviewHash: candidate.reviewHash,
+      reason: "reason" in result2.result ? result2.result.reason : void 0
+    });
+  }
+  const rejectedCount = results.filter((result2) => result2.action === "reject").length;
+  const failedCount = results.length - rejectedCount;
+  return ok({
+    receipt: {
+      action: "reject_batch",
+      rejectedCount,
+      failedCount,
+      createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString(),
+      summary: `Rejected ${rejectedCount} pending memor${rejectedCount === 1 ? "y" : "ies"}; ${failedCount} failed.`
+    },
+    results
+  });
+}
+function parseBatchRejectCandidates(value) {
+  const candidates = [];
+  for (const item of value) {
+    if (!isRecord7(item) || typeof item.id !== "string" || item.id.trim() === "") {
+      return { error: failure(400, "invalid_request", "Batch pending reject candidate id is required.") };
+    }
+    if (typeof item.reviewHash !== "string" || item.reviewHash.trim() === "") {
+      return { error: failure(400, "invalid_request", "Batch pending reject candidate reviewHash is required.") };
+    }
+    candidates.push({ id: item.id.trim(), reviewHash: item.reviewHash.trim() });
+  }
+  if (candidates.length === 0) {
+    return { error: failure(400, "invalid_request", "Batch pending reject requires at least one candidate.") };
+  }
+  return { value: candidates };
 }
 function parseMemoryWriteRoute(pathname) {
   const match = /^\/api\/memory\/([^/]+)\/(approve|reject|defer|edit)$/.exec(pathname);
@@ -23964,6 +24050,7 @@ const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
 const PREPARE_DRY_RUN_ENDPOINT = '/api/memory/prepare/dry-run'
 const PREPARE_APPLY_ENDPOINT = '/api/memory/prepare/apply'
 const DISTILL_DRY_RUN_ENDPOINT = '/api/memory/distill/dry-run'
+const BATCH_REJECT_ENDPOINT = '/api/memory/pending/reject-batch'
 const EMPTY_DASHBOARD = {
   status: {},
   diagnostics: {},
@@ -24009,6 +24096,7 @@ const state = {
   error: '',
   sessionToken: '',
   selectedPendingId: '',
+  selectedPendingIds: [],
   pendingAction: null,
   receipt: null,
   actionError: '',
@@ -24075,6 +24163,9 @@ async function loadDashboard(options = {}) {
       throw new Error(payload.error?.message || 'Dashboard API returned an error.')
     }
     state.dashboard = mergeDashboard(payload.data)
+    state.selectedPendingIds = state.selectedPendingIds.filter((id) =>
+      listPending().some((candidate) => candidate.id === id)
+    )
     if (!state.selectedProjectId) {
       state.selectedProjectId = state.dashboard.selection?.projectId || state.dashboard.projects?.currentProjectId || ''
     }
@@ -24266,6 +24357,22 @@ function renderWorkspace() {
       render()
     })
   })
+  workspace.querySelectorAll('[data-pending-select]').forEach((checkbox) => {
+    checkbox.addEventListener('click', (event) => {
+      event.stopPropagation()
+    })
+    checkbox.addEventListener('change', () => {
+      togglePendingSelection(checkbox.dataset.pendingSelect || '', checkbox.checked)
+    })
+  })
+  const rejectSelected = workspace.querySelector('[data-reject-selected-pending]')
+  if (rejectSelected) {
+    rejectSelected.addEventListener('click', rejectSelectedPending)
+  }
+  const rejectAll = workspace.querySelector('[data-reject-all-pending]')
+  if (rejectAll) {
+    rejectAll.addEventListener('click', rejectAllPendingInView)
+  }
   workspace.querySelectorAll('[data-active-action]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeAction = {
@@ -24338,12 +24445,20 @@ function renderOverview() {
 
 function renderInbox() {
   const pending = listPending()
+  const selectedCount = pending.filter((candidate) => state.selectedPendingIds.includes(candidate.id)).length
   return \`
     <section class="page-stack">
       \${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}
       <div class="soft-inset boundary-copy">\${escapeHtml(WRITE_ACTION_COPY)}</div>
       <div class="soft-panel">
-        <h3>Pending candidates</h3>
+        <div class="section-toolbar">
+          <h3>Pending candidates</h3>
+          <div class="detail-actions">
+            <button class="soft-button compact" type="button" data-reject-selected-pending \${selectedCount === 0 ? 'disabled' : ''}>Reject selected</button>
+            <button class="soft-button compact" type="button" data-reject-all-pending \${pending.length === 0 ? 'disabled' : ''}>Reject all in view</button>
+          </div>
+        </div>
+        <p class="muted-copy">\${escapeHtml(String(selectedCount))} selected</p>
         \${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
       </div>
     </section>
@@ -24373,6 +24488,11 @@ function renderSemanticReviewCard(candidate, options = {}) {
   return \`
     <article class="memory-review-card selectable-row \${selected ? 'selected' : ''}" data-pending-id="\${escapeHtml(candidate.id)}">
       <header class="memory-review-header">
+        \${state.activeTab === 'inbox' ? \`
+          <label class="pending-select" aria-label="Select pending candidate">
+            <input type="checkbox" data-pending-select="\${escapeHtml(candidate.id)}" \${state.selectedPendingIds.includes(candidate.id) ? 'checked' : ''}>
+          </label>
+        \` : ''}
         <div>
           <p class="eyebrow">\${escapeHtml(memory.module || 'semantic memory')} \xB7 \${escapeHtml(memory.status || 'pending')}</p>
           <h3>\${escapeHtml(memory.content || candidate.content || candidate.id || 'Pending candidate')}</h3>
@@ -25534,6 +25654,57 @@ async function submitPendingAction(candidate, formData) {
   render()
 }
 
+function togglePendingSelection(id, selected) {
+  if (!id) return
+  const current = new Set(state.selectedPendingIds)
+  if (selected) {
+    current.add(id)
+  } else {
+    current.delete(id)
+  }
+  state.selectedPendingIds = Array.from(current)
+  render()
+}
+
+function rejectSelectedPending() {
+  const selected = listPending().filter((candidate) => state.selectedPendingIds.includes(candidate.id))
+  submitBatchPendingReject(selected)
+}
+
+function rejectAllPendingInView() {
+  submitBatchPendingReject(listPending())
+}
+
+async function submitBatchPendingReject(candidates) {
+  const candidatesWithHashes = candidates
+    .filter((candidate) => candidate.reviewHash)
+    .map((candidate) => ({ id: candidate.id, reviewHash: candidate.reviewHash }))
+  if (candidatesWithHashes.length === 0) return
+  try {
+    const response = await apiFetch(\`\${BATCH_REJECT_ENDPOINT}\${selectionQuery()}\`, {
+      method: 'POST',
+      body: JSON.stringify({ candidates: candidatesWithHashes, reason: 'Rejected by Codex pending memory bulk review.' })
+    })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Batch reject failed.')
+    }
+    await loadDashboard({ renderAfter: false })
+    const results = Array.isArray(payload.data?.results) ? payload.data.results : []
+    const rejectedIds = new Set(results.filter((result) => result.action === 'reject').map((result) => result.id))
+    state.selectedPendingIds = state.selectedPendingIds.filter((id) => !rejectedIds.has(id))
+    state.receipt = payload.data?.receipt || null
+    state.pendingAction = null
+    state.actionError = ''
+    if (rejectedIds.has(state.selectedPendingId)) {
+      state.selectedPendingId = ''
+    }
+  } catch (error) {
+    state.actionError = errorMessage(error)
+  }
+  render()
+}
+
 function selectionQuery() {
   const params = new URLSearchParams()
   params.set('scope', state.memoryScope)
@@ -25585,6 +25756,7 @@ function selectedProjectOption() {
 }
 
 function actionLabel(action) {
+  if (action === 'reject_batch') return 'Reject batch'
   if (action === 'approve') return 'Approve'
   if (action === 'reject') return 'Reject'
   if (action === 'defer') return 'Defer'
@@ -25773,7 +25945,7 @@ export { TABS, WRITE_ACTION_COPY, escapeHtml }
   },
   "/styles.css": {
     "contentType": "text/css; charset=utf-8",
-    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.triage-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 12px;\n  margin-bottom: 12px;\n}\n\n.explain-list {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-list {\n  display: grid;\n  gap: 10px;\n  margin: 12px 0 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-item {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.memory-review-card {\n  display: grid;\n  gap: 12px;\n  min-width: 0;\n  padding: 14px 0;\n  border-top: 1px solid var(--line);\n}\n\n.memory-review-card:first-of-type {\n  border-top: 0;\n}\n\n.memory-review-header {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.memory-review-header h3 {\n  margin: 2px 0 0;\n  color: var(--ink);\n  font-size: 15px;\n  line-height: 1.35;\n  overflow-wrap: anywhere;\n}\n\n.memory-review-sections {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 10px;\n}\n\n.memory-review-sections.compact {\n  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));\n}\n\n.review-section {\n  min-width: 0;\n  padding: 10px;\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.review-section h4 {\n  margin: 0 0 8px;\n  color: var(--ink);\n  font-size: 12px;\n  line-height: 1.25;\n}\n\n.review-section dl {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n}\n\n.review-section dl div {\n  display: grid;\n  gap: 2px;\n  min-width: 0;\n}\n\n.review-section dt {\n  color: var(--muted);\n  font-size: 11px;\n  font-weight: 650;\n}\n\n.review-section dd {\n  margin: 0;\n  color: var(--body);\n  font-size: 13px;\n  line-height: 1.35;\n  overflow-wrap: anywhere;\n}\n\n.detail-rail .memory-review-card {\n  cursor: default;\n  padding: 0;\n  border-top: 0;\n}\n\n.detail-rail .memory-review-header {\n  grid-template-columns: 1fr;\n}\n\n.detail-rail .memory-review-header .row-actions {\n  justify-content: flex-start;\n  max-width: none;\n}\n\n.detail-rail .memory-review-sections {\n  grid-template-columns: 1fr;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.row-actions {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 360px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.active-action-form {\n  border-color: rgba(93, 184, 166, 0.3);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n\n  .row-actions {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
+    "body": ':root {\n  --canvas: #f4efe7;\n  --surface: #fffaf2;\n  --surface-inset: #eadfce;\n  --ink: #181715;\n  --body: #5f584f;\n  --muted: #8d8479;\n  --coral: #cc785c;\n  --teal: #5db8a6;\n  --amber: #d4a017;\n  --red: #c64545;\n  --line: rgba(118, 91, 70, 0.16);\n  --shadow-soft: 0 18px 42px rgba(91, 68, 48, 0.12);\n  --shadow-inset: inset 0 1px 2px rgba(91, 68, 48, 0.12);\n  --shadow-pressed: inset 5px 5px 12px rgba(91, 68, 48, 0.12), inset -5px -5px 12px rgba(255, 250, 242, 0.72);\n  --radius: 8px;\n  --sidebar-width: 276px;\n  --rail-width: 320px;\n}\n\n* {\n  box-sizing: border-box;\n}\n\nhtml {\n  min-height: 100%;\n  background: var(--canvas);\n}\n\nbody {\n  margin: 0;\n  min-height: 100vh;\n  background: var(--canvas);\n  color: var(--ink);\n  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n  font-size: 15px;\n  line-height: 1.45;\n}\n\nbutton,\ninput,\ntextarea,\nselect {\n  font: inherit;\n}\n\n.app-shell {\n  display: grid;\n  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);\n  min-height: 100vh;\n}\n\n.sidebar {\n  position: sticky;\n  top: 0;\n  align-self: start;\n  display: flex;\n  flex-direction: column;\n  gap: 28px;\n  min-width: 0;\n  height: 100vh;\n  padding: 24px 18px;\n  background: var(--surface-inset);\n  border-right: 1px solid var(--line);\n}\n\n.main-shell {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  background: var(--canvas);\n}\n\n.brand-lockup {\n  display: grid;\n  grid-template-columns: 44px minmax(0, 1fr);\n  gap: 12px;\n  align-items: center;\n}\n\n.brand-mark {\n  display: grid;\n  width: 44px;\n  height: 44px;\n  place-items: center;\n  border: 1px solid rgba(204, 120, 92, 0.38);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--coral);\n  font-weight: 760;\n  box-shadow: var(--shadow-inset);\n}\n\n.eyebrow {\n  margin: 0 0 4px;\n  color: var(--muted);\n  font-size: 12px;\n  font-weight: 680;\n  text-transform: uppercase;\n  letter-spacing: 0;\n}\n\nh1,\nh2,\nh3,\np {\n  margin-top: 0;\n}\n\nh1 {\n  margin-bottom: 0;\n  font-size: 18px;\n  font-weight: 720;\n  line-height: 1.2;\n}\n\nh2 {\n  margin-bottom: 0;\n  font-size: 24px;\n  font-weight: 720;\n  line-height: 1.15;\n}\n\nh3 {\n  margin-bottom: 12px;\n  font-size: 15px;\n  font-weight: 720;\n  line-height: 1.25;\n}\n\np {\n  color: var(--body);\n}\n\n.nav-list {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n}\n\n.nav-button {\n  display: flex;\n  align-items: center;\n  width: 100%;\n  min-height: 42px;\n  padding: 0 12px;\n  border: 1px solid transparent;\n  border-radius: var(--radius);\n  background: transparent;\n  color: var(--body);\n  text-align: left;\n  cursor: pointer;\n}\n\n.nav-button:hover {\n  border-color: rgba(204, 120, 92, 0.24);\n  background: rgba(255, 250, 242, 0.55);\n  color: var(--ink);\n}\n\n.nav-button[aria-current="page"] {\n  border-color: rgba(204, 120, 92, 0.38);\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.topbar {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  min-height: 88px;\n  padding: 20px 28px;\n  border-bottom: 1px solid var(--line);\n  background: rgba(255, 250, 242, 0.72);\n}\n\n.chip-row {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.topbar-actions {\n  display: grid;\n  gap: 10px;\n  justify-items: end;\n}\n\n.scope-controls {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n}\n\n.soft-select {\n  min-width: 220px;\n  max-width: 320px;\n  min-height: 38px;\n  padding: 0 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control {\n  display: inline-flex;\n  min-height: 38px;\n  padding: 4px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n}\n\n.segmented-control button {\n  min-width: 72px;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  background: transparent;\n  color: var(--body);\n  cursor: pointer;\n}\n\n.segmented-control button[aria-pressed="true"] {\n  background: var(--surface);\n  color: var(--coral);\n  box-shadow: var(--shadow-soft);\n}\n\n.content-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(260px, var(--rail-width));\n  gap: 20px;\n  width: 100%;\n  max-width: 1480px;\n  margin: 0 auto;\n  padding: 24px 28px;\n}\n\n.workspace,\n.detail-rail {\n  min-width: 0;\n}\n\n.rail-stack,\n.page-stack {\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n\n.section-header {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-height: 58px;\n}\n\n.soft-panel {\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  box-shadow: var(--shadow-soft);\n  padding: 18px;\n}\n\n.soft-inset {\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-inset);\n  color: var(--body);\n  padding: 12px;\n}\n\n.soft-button {\n  min-width: 110px;\n  min-height: 38px;\n  padding: 0 14px;\n  border: 1px solid rgba(118, 91, 70, 0.18);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--ink);\n  cursor: pointer;\n}\n\n.soft-button.primary {\n  border-color: rgba(204, 120, 92, 0.42);\n  background: var(--coral);\n  color: #fffaf2;\n}\n\n.soft-button.danger {\n  border-color: rgba(198, 69, 69, 0.38);\n  color: var(--red);\n}\n\n.soft-button.compact {\n  min-width: 74px;\n  min-height: 34px;\n  padding: 0 10px;\n  font-size: 13px;\n}\n\n.soft-button:disabled {\n  cursor: not-allowed;\n  opacity: 0.58;\n}\n\n.status-chip {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  max-width: 220px;\n  padding: 0 10px;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface);\n  color: var(--body);\n  white-space: nowrap;\n  text-overflow: ellipsis;\n}\n\n.status-chip b {\n  color: var(--ink);\n  font-size: 12px;\n}\n\n.status-chip.ok {\n  border-color: rgba(93, 184, 166, 0.42);\n  color: #287d70;\n}\n\n.status-chip.warn {\n  border-color: rgba(212, 160, 23, 0.44);\n  color: #8b650c;\n}\n\n.status-chip.error {\n  border-color: rgba(198, 69, 69, 0.4);\n  color: var(--red);\n}\n\n.status-chip.muted {\n  color: var(--muted);\n}\n\n.metric-grid {\n  display: grid;\n  grid-template-columns: repeat(4, minmax(128px, 1fr));\n  gap: 12px;\n}\n\n.triage-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 12px;\n  margin-bottom: 12px;\n}\n\n.explain-list {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-list {\n  display: grid;\n  gap: 10px;\n  margin: 12px 0 0;\n  padding: 0;\n  list-style: none;\n}\n\n.distill-item {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.metric-card {\n  display: grid;\n  gap: 6px;\n  min-height: 116px;\n}\n\n.metric-card span,\n.metric-card small,\n.row-meta {\n  color: var(--muted);\n  font-size: 13px;\n}\n\n.metric-card strong {\n  color: var(--coral);\n  font-size: 30px;\n  line-height: 1;\n}\n\n.data-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: center;\n  min-height: 76px;\n  padding: 12px 0;\n  border-top: 1px solid var(--line);\n}\n\n.data-row:first-of-type {\n  border-top: 0;\n}\n\n.candidate-row {\n  align-items: start;\n}\n\n.memory-review-card {\n  display: grid;\n  gap: 12px;\n  min-width: 0;\n  padding: 14px 0;\n  border-top: 1px solid var(--line);\n}\n\n.memory-review-card:first-of-type {\n  border-top: 0;\n}\n\n.memory-review-header {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto;\n  gap: 14px;\n  align-items: start;\n}\n\n.memory-review-header:has(.pending-select) {\n  grid-template-columns: auto minmax(0, 1fr) auto;\n}\n\n.pending-select {\n  display: grid;\n  place-items: center;\n  width: 24px;\n  height: 24px;\n}\n\n.pending-select input {\n  width: 16px;\n  height: 16px;\n  accent-color: var(--coral);\n}\n\n.memory-review-header h3 {\n  margin: 2px 0 0;\n  color: var(--ink);\n  font-size: 15px;\n  line-height: 1.35;\n  overflow-wrap: anywhere;\n}\n\n.memory-review-sections {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));\n  gap: 10px;\n}\n\n.memory-review-sections.compact {\n  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));\n}\n\n.review-section {\n  min-width: 0;\n  padding: 10px;\n  border: 1px solid rgba(118, 91, 70, 0.12);\n  border-radius: var(--radius);\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.review-section h4 {\n  margin: 0 0 8px;\n  color: var(--ink);\n  font-size: 12px;\n  line-height: 1.25;\n}\n\n.review-section dl {\n  display: grid;\n  gap: 8px;\n  margin: 0;\n}\n\n.review-section dl div {\n  display: grid;\n  gap: 2px;\n  min-width: 0;\n}\n\n.review-section dt {\n  color: var(--muted);\n  font-size: 11px;\n  font-weight: 650;\n}\n\n.review-section dd {\n  margin: 0;\n  color: var(--body);\n  font-size: 13px;\n  line-height: 1.35;\n  overflow-wrap: anywhere;\n}\n\n.detail-rail .memory-review-card {\n  cursor: default;\n  padding: 0;\n  border-top: 0;\n}\n\n.detail-rail .memory-review-header {\n  grid-template-columns: 1fr;\n}\n\n.detail-rail .memory-review-header .row-actions {\n  justify-content: flex-start;\n  max-width: none;\n}\n\n.detail-rail .memory-review-sections {\n  grid-template-columns: 1fr;\n}\n\n.selectable-row {\n  cursor: pointer;\n}\n\n.selectable-row:hover {\n  background: rgba(255, 250, 242, 0.48);\n}\n\n.selectable-row.selected {\n  padding-inline: 12px;\n  border-color: rgba(204, 120, 92, 0.28);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow-pressed);\n}\n\n.row-title {\n  color: var(--ink);\n  font-weight: 650;\n  overflow-wrap: anywhere;\n}\n\n.row-meta {\n  margin-top: 6px;\n}\n\n.row-actions {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 360px;\n}\n\n.action-strip {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: 8px;\n  max-width: 340px;\n}\n\n.detail-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}\n\n.section-toolbar {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: 10px;\n}\n\n.section-toolbar h3 {\n  margin: 0;\n}\n\n.muted-copy {\n  margin: 8px 0 0;\n  color: var(--muted);\n  font-size: 12px;\n}\n\n.confirm-form {\n  display: grid;\n  gap: 10px;\n}\n\n.confirm-form label {\n  display: grid;\n  gap: 6px;\n  color: var(--body);\n  font-size: 0.86rem;\n}\n\n.confirm-form textarea,\n.confirm-form input {\n  width: 100%;\n  padding: 10px 12px;\n  border: 1px solid var(--line);\n  border-radius: var(--radius);\n  background: var(--surface-inset);\n  box-shadow: var(--shadow-pressed);\n  color: var(--ink);\n  font: inherit;\n}\n\n.receipt-panel {\n  border-color: rgba(93, 184, 166, 0.42);\n}\n\n.active-action-form {\n  border-color: rgba(93, 184, 166, 0.3);\n}\n\n.danger-panel {\n  border-color: rgba(198, 69, 69, 0.24);\n}\n\n.boundary-copy {\n  border-left: 4px solid var(--coral);\n  color: var(--ink);\n}\n\n.action-panel {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 16px;\n}\n\n.notice {\n  color: var(--body);\n}\n\n.notice.warn {\n  color: #8b650c;\n}\n\n.notice.error {\n  color: var(--red);\n}\n\n.notice.muted {\n  color: var(--muted);\n}\n\n.empty-state {\n  min-height: 54px;\n  display: flex;\n  align-items: center;\n}\n\n.profile-preview {\n  min-height: 280px;\n  max-height: 560px;\n  margin: 0;\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  color: var(--body);\n  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;\n  font-size: 13px;\n  line-height: 1.5;\n}\n\n.rail-item {\n  display: grid;\n  gap: 6px;\n  margin-top: 10px;\n}\n\n.rail-item strong,\n.rail-item span {\n  overflow-wrap: anywhere;\n}\n\n:focus-visible {\n  outline: 3px solid rgba(93, 184, 166, 0.62);\n  outline-offset: 3px;\n}\n\n@media (max-width: 1060px) {\n  .app-shell {\n    grid-template-columns: 1fr;\n  }\n\n  .sidebar {\n    position: relative;\n    height: auto;\n    padding: 16px;\n    border-right: 0;\n    border-bottom: 1px solid var(--line);\n  }\n\n  .nav-list {\n    flex-direction: row;\n    gap: 8px;\n    overflow-x: auto;\n    padding-bottom: 2px;\n  }\n\n  .nav-button {\n    width: auto;\n    min-width: 132px;\n  }\n\n  .topbar,\n  .action-panel {\n    align-items: flex-start;\n    flex-direction: column;\n  }\n\n  .topbar-actions {\n    justify-items: start;\n    width: 100%;\n  }\n\n  .chip-row {\n    justify-content: flex-start;\n  }\n\n  .scope-controls {\n    justify-content: flex-start;\n  }\n\n  .content-grid {\n    grid-template-columns: 1fr;\n  }\n}\n\n@media (max-width: 720px) {\n  .topbar,\n  .content-grid {\n    padding: 18px;\n  }\n\n  .metric-grid {\n    grid-template-columns: repeat(2, minmax(128px, 1fr));\n  }\n\n  .data-row {\n    grid-template-columns: 1fr;\n  }\n\n  .action-strip {\n    justify-content: flex-start;\n    max-width: none;\n  }\n\n  .row-actions {\n    justify-content: flex-start;\n    max-width: none;\n  }\n}\n\n@media (max-width: 440px) {\n  .brand-lockup {\n    grid-template-columns: 38px minmax(0, 1fr);\n  }\n\n  .brand-mark {\n    width: 38px;\n    height: 38px;\n  }\n\n  .metric-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .soft-button.compact {\n    min-width: 96px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  *,\n  *::before,\n  *::after {\n    scroll-behavior: auto !important;\n    transition-duration: 0.001ms !important;\n    animation-duration: 0.001ms !important;\n    animation-iteration-count: 1 !important;\n  }\n}\n'
   }
 };
 

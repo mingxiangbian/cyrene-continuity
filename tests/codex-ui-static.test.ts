@@ -140,6 +140,19 @@ describe('Codex UI static assets', () => {
     expect(js).toContain('renderMemoryPrepareResult')
   })
 
+  it('bundles bulk pending reject controls for inbox cleanup', () => {
+    const js = getCodexUiStaticAsset('/app.js')?.body
+
+    expect(js).toContain("const BATCH_REJECT_ENDPOINT = '/api/memory/pending/reject-batch'")
+    expect(js).toContain('selectedPendingIds')
+    expect(js).toContain('data-pending-select')
+    expect(js).toContain('data-reject-selected-pending')
+    expect(js).toContain('data-reject-all-pending')
+    expect(js).toContain('rejectSelectedPending')
+    expect(js).toContain('rejectAllPendingInView')
+    expect(js).toContain('submitBatchPendingReject')
+  })
+
   it('wires static asset generation into plugin build', async () => {
     const buildScript = await readFile('scripts/build-plugin.mjs', 'utf8')
     const generatedSource = await readFile('src/codex/codex-ui-static.generated.ts', 'utf8')

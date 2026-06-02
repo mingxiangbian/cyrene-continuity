@@ -165,6 +165,50 @@ describe('evaluateCandidateAdmission', () => {
     expect(sourceDuplicateDecision.reasons).toContain('raw_file_rule_excerpt')
   })
 
+  it('keeps single-evidence AGENTS.md repository policy excerpts reference-only', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: '仓库工作规则：必须进行直接针对请求问题的精确更改（surgical changes）。',
+        candidateKind: 'workflow_rule',
+        normalizedKey: 'agents-md-surgical-changes-excerpt',
+        sourceKind: 'file',
+        sourceOfTruth: 'AGENTS.md',
+        evidenceRefs: ['AGENTS.md']
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('reference_only')
+    expect(decision.reasons).toContain('source_of_truth_duplicate')
+    expect(decision.reasons).toContain('raw_file_rule_excerpt')
+  })
+
+  it('keeps review-summary implementation status out of pending even when typed as a project decision', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: '修复 automation prompt 误捕获漏洞，清理旧 pending 并使之归零，全量测试 620 通过，typecheck 和 plugin validation 均通过。',
+        candidateKind: 'project_decision',
+        domain: 'project',
+        normalizedKey: 'fixed-automation-prompt-cleared-pending-tests-passed',
+        sourceKind: 'review_summary',
+        sourceOfTruth: 'review_summary:status-noise'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(decision.action).not.toBe('admit_to_pending')
+    expect(['episode_only', 'admit_to_distillation', 'auto_drop']).toContain(decision.action)
+    expect(decision.reasons).toContain('temporary_status')
+    expect(decision.reasons).toContain('stale_numeric_snapshot')
+    expect(decision.reasons).toContain('low_future_usefulness')
+  })
+
   it('does not mark operational source-of-truth rewrites as reference-only', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({
