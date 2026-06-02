@@ -52,6 +52,9 @@ describe('Codex UI static assets', () => {
     const episodeEvidenceSection = appSource.slice(episodeEvidenceStart, admissionRoutingStart)
     const updatePolicyStart = appSource.indexOf('function renderUpdatePolicySection(candidate)')
     const admissionRoutingSection = appSource.slice(admissionRoutingStart, updatePolicyStart)
+    const semanticPrepareStart = appSource.indexOf('function renderSemanticPrepareSection(candidate)')
+    const reviewActionSectionStart = appSource.indexOf('function renderReviewActionSection(candidate)')
+    const semanticPrepareSection = appSource.slice(semanticPrepareStart, reviewActionSectionStart)
 
     expect(pendingDetailStart).toBeGreaterThanOrEqual(0)
     expect(confirmFormStart).toBeGreaterThan(pendingDetailStart)
@@ -68,16 +71,19 @@ describe('Codex UI static assets', () => {
     expect(episodeEvidenceStart).toBeGreaterThan(proposedMemoryStart)
     expect(admissionRoutingStart).toBeGreaterThan(episodeEvidenceStart)
     expect(updatePolicyStart).toBeGreaterThan(admissionRoutingStart)
+    expect(semanticPrepareStart).toBeGreaterThan(updatePolicyStart)
+    expect(reviewActionSectionStart).toBeGreaterThan(semanticPrepareStart)
     expect(appSource).toContain('Proposed Semantic Memory')
     expect(appSource).toContain('Episode Evidence')
     expect(appSource).toContain('Admission / Routing Decision')
+    expect(appSource).toContain('Semantic Prepare')
     expect(appSource).toContain('Review Action')
     expect(appSource).toContain('Update Policy')
     expect(appSource).toContain('Source of truth')
     expect(appSource).toContain('Evidence ref')
     expect(appSource).toContain('Routing reasons')
     expect(pendingDetail).toMatch(
-      /renderProposedSemanticMemorySection\(candidate\)[\s\S]*renderEpisodeEvidenceSection\(candidate\)[\s\S]*renderAdmissionRoutingSection\(candidate\)[\s\S]*renderUpdatePolicySection\(candidate\)[\s\S]*renderUseBoundariesSection\(candidate\)[\s\S]*renderReviewActionSection\(candidate\)/
+      /renderProposedSemanticMemorySection\(candidate\)[\s\S]*renderEpisodeEvidenceSection\(candidate\)[\s\S]*renderAdmissionRoutingSection\(candidate\)[\s\S]*renderUpdatePolicySection\(candidate\)[\s\S]*renderUseBoundariesSection\(candidate\)[\s\S]*renderSemanticPrepareSection\(candidate\)[\s\S]*renderReviewActionSection\(candidate\)/
     )
     expect(useBoundariesSection).toContain("renderWorkflowSection('Use Boundaries'")
     expect(useBoundariesSection).not.toContain("renderWorkflowSection('Use boundaries'")
@@ -91,6 +97,14 @@ describe('Codex UI static assets', () => {
     expect(workflowItem).toContain('formatWorkflowValue(value)')
     expect(episodeEvidenceSection).toContain("['Evidence ref', evidence.evidenceRef]")
     expect(admissionRoutingSection).toContain("['Routing reasons', routing.reasons]")
+    expect(semanticPrepareSection).toContain("renderWorkflowSection('Semantic Prepare'")
+    expect(semanticPrepareSection).toContain("['Method', receipt.method]")
+    expect(semanticPrepareSection).toContain("['Changed fields', receipt.changedFields]")
+    expect(semanticPrepareSection).toContain("['Eligibility reasons', receipt.eligibilityReasons]")
+    expect(semanticPrepareSection).toContain("['Validator reasons', receipt.validatorReasons]")
+    expect(semanticPrepareSection).toContain(
+      "['Original content hash', receipt.originalContentHash ? shortHash(receipt.originalContentHash) : '']"
+    )
     expect(pendingDetail).not.toContain('renderSemanticReviewCard(candidate, { compact: false })')
   })
 

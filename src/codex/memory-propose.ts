@@ -427,6 +427,8 @@ function toPendingMemory(input: CodexMemoryCandidateInput, now: string): Pending
     scope: input.scope ?? 'project',
     status: 'pending',
     content: shaped.content,
+    useWhen: shaped.useWhen,
+    doNotUseWhen: shaped.doNotUseWhen,
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
     ...(input.sourceOfTruth === undefined ? {} : { sourceOfTruth: input.sourceOfTruth }),
     evidence: input.evidence,

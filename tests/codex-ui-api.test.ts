@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { handleCodexUiApiRequest } from '../src/codex/codex-ui-api.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { appendSemanticRewriteReceiptFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -276,6 +277,64 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.pending[0].semanticMemory.evidence.length).toBeGreaterThan(0)
       expect(data.pending[0].episodeEvidence.whatHappened).not.toBe('')
       expect(data.pending[0].proposedSemanticMemory.useWhen.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('returns pending memory semantic rewrite receipt status', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot, pending } = await seedProject()
+    await appendSemanticRewriteReceiptFromRoot(memoryRoot, {
+      id: 'receipt-1',
+      pendingMemoryId: pending.id,
+      action: 'replace_content',
+      method: 'deterministic',
+      oldReviewHash: 'old-review-hash',
+      newReviewHash: 'new-review-hash',
+      originalContentHash: 'old-content-hash',
+      rewrittenContentHash: 'new-content-hash',
+      changedFields: ['content'],
+      eligibilityReasons: ['implementation_note'],
+      validatorReasons: ['rewritten_content_is_active_ready'],
+      sourceOfTruth: 'review_summary:ui',
+      createdAt: '2026-06-02T00:00:00.000Z'
+    })
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/memory/pending' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        pending: Array<{
+          semanticRewrite?: {
+            status: string
+            receipt?: {
+              action: string
+              method: string
+              oldReviewHash?: string
+              newReviewHash?: string
+              changedFields: string[]
+              eligibilityReasons: string[]
+              validatorReasons: string[]
+              originalContentHash: string
+            }
+          }
+        }>
+      }
+      expect(data.pending[0]?.semanticRewrite).toMatchObject({
+        status: 'prepared',
+        receipt: {
+          action: 'replace_content',
+          method: 'deterministic',
+          oldReviewHash: 'old-review-hash',
+          newReviewHash: 'new-review-hash',
+          changedFields: ['content'],
+          eligibilityReasons: ['implementation_note'],
+          validatorReasons: ['rewritten_content_is_active_ready'],
+          originalContentHash: 'old-content-hash'
+        }
+      })
     }
   })
 

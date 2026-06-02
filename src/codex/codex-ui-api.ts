@@ -15,6 +15,7 @@ import {
   assertSafeMemoryDataFileTarget,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
+  readSemanticRewriteReceiptsFromRoot,
   readTombstonesFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
@@ -995,8 +996,14 @@ async function readPendingFromSelection(selection: CodexUiResolvedSelection): Pr
   memoryRoot: string
   memoryRoots: string[]
 }> {
-  const pending = (await Promise.all(selection.memoryRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat()
-  const summaries = sortPendingNewestFirst(pending.map((candidate) => summarizePendingMemory(candidate)))
+  const now = new Date().toISOString()
+  const pendingByRoot = await Promise.all(selection.memoryRoots.map(async (root) => ({
+    pending: await readPendingMemoriesFromRoot(root),
+    receipts: await readSemanticRewriteReceiptsFromRoot(root)
+  })))
+  const summaries = sortPendingNewestFirst(pendingByRoot.flatMap((root) =>
+    root.pending.map((candidate) => summarizePendingMemory(candidate, now, root.receipts))
+  ))
   return {
     project: selection.project,
     selection: publicSelection(selection),

@@ -4,11 +4,13 @@ import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.
 import {
   appendSemanticRewriteReceiptFromRoot,
   readActiveMemoriesFromRoot,
+  readMemoryEventsFromRoot,
   readPendingMemoriesFromRoot,
   readSemanticRewriteReceiptsFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
 import type {
+  MemoryEvent,
   PendingMemory,
   SemanticRewriteReceipt
 } from '../memory/types.js'
@@ -52,14 +54,16 @@ async function runCodexMemoryPrepareFromRoot(
   input: Required<Pick<CodexMemoryPrepareInput, 'memoryRoot' | 'dryRun'>> & CodexMemoryPrepareInput
 ): Promise<CodexMemoryPrepareResult> {
   const now = input.now ?? new Date().toISOString()
-  const [activeBefore, pending, existingReceipts] = await Promise.all([
+  const [activeBefore, pending, existingReceipts, memoryEvents] = await Promise.all([
     readActiveMemoriesFromRoot(input.memoryRoot),
     readPendingMemoriesFromRoot(input.memoryRoot),
-    readSemanticRewriteReceiptsFromRoot(input.memoryRoot)
+    readSemanticRewriteReceiptsFromRoot(input.memoryRoot),
+    readMemoryEventsFromRoot(input.memoryRoot)
   ])
   const prepared = preparePendingBatch(pending, existingReceipts, {
     now,
-    maxItemsPerRun: input.maxItemsPerRun
+    maxItemsPerRun: input.maxItemsPerRun,
+    userReviewEvents: memoryEvents
   })
 
   if (input.dryRun) {
@@ -98,7 +102,7 @@ async function runCodexMemoryPrepareFromRoot(
 function preparePendingBatch(
   pending: PendingMemory[],
   existingReceipts: SemanticRewriteReceipt[],
-  input: { now: string; maxItemsPerRun?: number }
+  input: { now: string; maxItemsPerRun?: number; userReviewEvents: MemoryEvent[] }
 ): {
   results: SemanticRewritePreparationResult[]
   nextPending: PendingMemory[]
@@ -116,7 +120,10 @@ function preparePendingBatch(
       continue
     }
 
-    const result = preparePendingSemanticRewrite(candidate, { now: input.now })
+    const result = preparePendingSemanticRewrite(candidate, {
+      now: input.now,
+      ineligibleReasons: reviewIneligibilityReasonsForCandidate(candidate, input.userReviewEvents)
+    })
     results.push(result)
     nextPending.push(result.next)
     processed += 1
@@ -127,6 +134,21 @@ function preparePendingBatch(
   }
 
   return { results, nextPending, receipts }
+}
+
+function reviewIneligibilityReasonsForCandidate(candidate: PendingMemory, events: MemoryEvent[]): string[] {
+  const reasons: string[] = []
+  for (const event of events) {
+    if (event.candidateId !== candidate.id) continue
+    const reviewAction = typeof event.details?.reviewAction === 'string' ? event.details.reviewAction : undefined
+    if (reviewAction === 'edit') reasons.push('user_edited_pending')
+    if (reviewAction === 'defer') reasons.push('user_deferred_pending')
+    if (reviewAction === 'reject') reasons.push('user_rejected_pending')
+    if (reviewAction === 'promote') reasons.push('user_approved_pending')
+    if (event.action === 'reject') reasons.push('user_rejected_pending')
+    if (event.action === 'promote') reasons.push('user_approved_pending')
+  }
+  return Array.from(new Set(reasons))
 }
 
 function hasCurrentSuccessfulReceipt(candidate: PendingMemory, receipts: SemanticRewriteReceipt[]): boolean {

@@ -19,6 +19,7 @@ import {
   appendTombstoneFromRoot,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
+  readSemanticRewriteReceiptsFromRoot,
   readTombstonesFromRoot,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
@@ -38,6 +39,7 @@ import type {
   MemoryScores,
   MemoryTombstone,
   PendingMemory,
+  SemanticRewriteReceipt,
   SemanticMemory
 } from '../memory/types.js'
 import { MEMORY_CONFLICT_RESOLUTIONS } from '../memory/types.js'
@@ -91,6 +93,13 @@ export interface CodexPendingProposedSemanticMemory {
   expiry: string
 }
 
+export type CodexPendingSemanticRewriteStatus = 'needs_rewrite' | 'prepared' | 'rewrite_failed'
+
+export interface CodexPendingSemanticRewriteSummary {
+  status: CodexPendingSemanticRewriteStatus
+  receipt?: SemanticRewriteReceipt
+}
+
 export interface CodexNormalizedKeyConflict {
   id: string
   content: string
@@ -128,6 +137,7 @@ export interface CodexPendingMemorySummary {
   lastSeenAt: string
   expiresAt?: string
   reviewHash: string
+  semanticRewrite?: CodexPendingSemanticRewriteSummary
   evidenceSummary: string[]
   scores: PendingMemory['scores']
 }
@@ -326,7 +336,11 @@ export function reviewHashForSemanticMemory(memory: SemanticMemory): string {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
 
-export function summarizePendingMemory(candidate: PendingMemory, now = new Date().toISOString()): CodexPendingMemorySummary {
+export function summarizePendingMemory(
+  candidate: PendingMemory,
+  now = new Date().toISOString(),
+  semanticRewriteReceipts: SemanticRewriteReceipt[] = []
+): CodexPendingMemorySummary {
   const semanticMemory = pendingReviewSemanticMemory(candidate)
   const reviewHash = reviewHashForPendingMemory(candidate)
   const candidateKind = deriveMemoryCandidateKind(candidate)
@@ -367,11 +381,42 @@ export function summarizePendingMemory(candidate: PendingMemory, now = new Date(
     lastSeenAt: candidate.lastSeenAt,
     expiresAt: candidate.expiresAt,
     reviewHash,
+    ...semanticRewriteSummaryFor(candidate, semanticRewriteReceipts, activeReadiness),
     evidenceSummary: candidate.evidence
       .map((entry) => entry.summary ?? entry.quote ?? entry.runId ?? '')
       .filter((text) => text.trim() !== ''),
     scores: candidate.scores
   }
+}
+
+function semanticRewriteSummaryFor(
+  candidate: PendingMemory,
+  receipts: SemanticRewriteReceipt[],
+  activeReadiness: ActiveMemoryReadinessResult
+): { semanticRewrite?: CodexPendingSemanticRewriteSummary } {
+  const receipt = latestSemanticRewriteReceiptForCandidate(candidate, receipts)
+  if (receipt !== undefined) {
+    const status: CodexPendingSemanticRewriteStatus = receipt.action === 'fail'
+      ? 'rewrite_failed'
+      : 'prepared'
+    return { semanticRewrite: { status, receipt } }
+  }
+  if (activeReadiness.status === 'needs_rewrite') {
+    return { semanticRewrite: { status: 'needs_rewrite' } }
+  }
+  return {}
+}
+
+function latestSemanticRewriteReceiptForCandidate(
+  candidate: PendingMemory,
+  receipts: SemanticRewriteReceipt[]
+): SemanticRewriteReceipt | undefined {
+  return receipts
+    .filter((receipt) => receipt.pendingMemoryId === candidate.id)
+    .sort((left, right) => {
+      const byTime = right.createdAt.localeCompare(left.createdAt)
+      return byTime === 0 ? right.id.localeCompare(left.id) : byTime
+    })[0]
 }
 
 function deriveRecommendation(
@@ -708,12 +753,18 @@ export async function listCodexPendingMemories(input: {
   limit?: number
 }): Promise<CodexPendingMemoryListResult> {
   const { project, memoryRoot, readableRoots } = await getProjectAndReadableMemoryRoots(input.cwd, input.projectId)
-  const pending = sortPendingNewestFirst((await Promise.all(readableRoots.map((root) => readPendingMemoriesFromRoot(root)))).flat())
-  const summaries = pending.map((candidate) => summarizePendingMemory(candidate))
+  const now = new Date().toISOString()
+  const pendingByRoot = await Promise.all(readableRoots.map(async (root) => ({
+    pending: await readPendingMemoriesFromRoot(root),
+    receipts: await readSemanticRewriteReceiptsFromRoot(root)
+  })))
+  const summaries = sortPendingNewestFirst(pendingByRoot.flatMap((root) =>
+    root.pending.map((candidate) => summarizePendingMemory(candidate, now, root.receipts))
+  ))
   return {
     project,
     pending: input.limit === undefined ? summaries : summaries.slice(0, input.limit),
-    total: pending.length,
+    total: summaries.length,
     memoryRoot
   }
 }
@@ -1549,7 +1600,7 @@ async function findPendingCandidateInCodexRoots(cwd: string, id: string, project
   return { project, memoryRoot, pending: [], candidate: undefined }
 }
 
-function sortPendingNewestFirst(pending: PendingMemory[]): PendingMemory[] {
+function sortPendingNewestFirst<T extends { id: string; lastSeenAt: string }>(pending: T[]): T[] {
   return [...pending].sort((left, right) => {
     const lastSeen = right.lastSeenAt.localeCompare(left.lastSeenAt)
     return lastSeen === 0 ? left.id.localeCompare(right.id) : lastSeen

@@ -22,12 +22,14 @@ export { validateSemanticRewriteCandidate } from './semantic-rewrite-validator.j
 
 export interface SemanticRewriteOptions {
   now?: string
+  ineligibleReasons?: string[]
 }
 
 export interface SemanticRewritePreparationResult {
   action: SemanticRewriteReceiptAction
   original: PendingMemory
   next: PendingMemory
+  eligibilityReasons: string[]
   validation: SemanticRewriteValidationResult
   receipt?: SemanticRewriteReceipt
 }
@@ -37,6 +39,10 @@ export function preparePendingSemanticRewrite(
   options: SemanticRewriteOptions = {}
 ): SemanticRewritePreparationResult {
   const now = options.now ?? new Date().toISOString()
+  const ineligibleReasons = semanticPrepareIneligibilityReasons(candidate, options.ineligibleReasons ?? [])
+  if (ineligibleReasons.length > 0) {
+    return skipSemanticRewrite(candidate, ineligibleReasons)
+  }
   const candidateKind = deriveMemoryCandidateKind(candidate)
   const readiness = evaluateActiveMemoryReadiness({
     content: candidate.content,
@@ -65,6 +71,7 @@ export function preparePendingSemanticRewrite(
       action,
       original: candidate,
       next: validation.valid ? next : candidate,
+      eligibilityReasons: readiness.reasons,
       validation,
       receipt: semanticRewriteReceipt({
         original: candidate,
@@ -79,7 +86,8 @@ export function preparePendingSemanticRewrite(
     }
   }
 
-  if (classifySemanticBoundaryPattern(candidate) !== undefined) {
+  const boundaryEligibilityReason = boundaryEnrichmentEligibilityReason(candidate)
+  if (boundaryEligibilityReason !== undefined) {
     const boundaries = deriveSemanticBoundaries({
       content: candidate.content,
       candidateKind,
@@ -106,6 +114,7 @@ export function preparePendingSemanticRewrite(
       action,
       original: candidate,
       next: validation.valid ? next : candidate,
+      eligibilityReasons: [boundaryEligibilityReason],
       validation,
       receipt: semanticRewriteReceipt({
         original: candidate,
@@ -113,7 +122,7 @@ export function preparePendingSemanticRewrite(
         action,
         method: 'deterministic',
         changedFields: validation.valid ? ['useWhen', 'doNotUseWhen'] : [],
-        eligibilityReasons: ['semantic_boundary_pattern'],
+        eligibilityReasons: [boundaryEligibilityReason],
         validatorReasons: validation.valid ? ['boundary_enrichment_preserves_content_hash'] : validation.reasons,
         now
       })
@@ -129,8 +138,58 @@ export function preparePendingSemanticRewrite(
     action: 'skip',
     original: candidate,
     next: candidate,
+    eligibilityReasons: ['already_ready_without_prepare_changes'],
     validation
   }
+}
+
+function skipSemanticRewrite(candidate: PendingMemory, eligibilityReasons: string[]): SemanticRewritePreparationResult {
+  return {
+    action: 'skip',
+    original: candidate,
+    next: candidate,
+    eligibilityReasons,
+    validation: validateSemanticRewriteCandidate({
+      original: candidate,
+      next: candidate,
+      action: 'skip'
+    })
+  }
+}
+
+function semanticPrepareIneligibilityReasons(
+  candidate: PendingMemory,
+  externalReasons: readonly string[]
+): string[] {
+  return uniqueInOrder([
+    ...externalReasons,
+    ...(nonEmptyString(candidate.sourceOfTruth) === undefined ? ['source_boundary_unconfirmed'] : []),
+    ...(candidate.domain === 'personal' || candidate.domain === 'relationship' || candidate.domain === 'affective'
+      ? ['high_risk_memory_domain']
+      : []),
+    ...(candidate.conflictsWith !== undefined && candidate.conflictsWith.length > 0 ? ['conflicted_pending'] : []),
+    ...(candidate.promoteAfter !== undefined ? ['user_deferred_pending'] : []),
+    ...(candidate.userConfirmed ? ['user_confirmed_pending'] : [])
+  ])
+}
+
+function boundaryEnrichmentEligibilityReason(candidate: PendingMemory): string | undefined {
+  if (classifySemanticBoundaryPattern(candidate) !== undefined) return 'semantic_boundary_pattern'
+  if (hasTemplateSemanticBoundaries(candidate)) return 'template_semantic_boundaries'
+  return undefined
+}
+
+function hasTemplateSemanticBoundaries(candidate: PendingMemory): boolean {
+  return [
+    ...(candidate.useWhen ?? []),
+    ...(candidate.doNotUseWhen ?? [])
+  ].some(isTemplateSemanticBoundary)
+}
+
+function isTemplateSemanticBoundary(value: string): boolean {
+  return /Future task matches/i.test(value) ||
+    /evidence no longer supports this memory/i.test(value) ||
+    /source of truth no longer says/i.test(value)
 }
 
 function rewriteContentForReadiness(candidate: PendingMemory, reasons: readonly string[]): string | undefined {
@@ -156,6 +215,16 @@ function rewriteImplementationNote(content: string): string {
 function rewriteRawFileRuleExcerpt(content: string): string {
   const source = /\bAGENTS\.md\b/i.test(content) ? 'AGENTS.md' : 'the source-of-truth file'
   return `${source} is the source of truth for repository working rules; active memory should reference it instead of copying raw policy text.`
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+function uniqueInOrder(values: readonly string[]): string[] {
+  return Array.from(new Set(values))
 }
 
 function semanticRewriteReceipt(input: {

@@ -17,6 +17,7 @@ import {
 } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { renderMemoryProjectionsFromRoot } from '../src/memory/memory-exporter.js'
+import { appendSemanticRewriteReceiptFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -132,6 +133,46 @@ describe('Codex pending memory review', () => {
       evidenceSummary: ['User confirmed Codex pending review workflow.']
     })
     expect(result.pending[0]?.reviewHash).toBe(reviewHashForPendingMemory(candidate))
+  })
+
+  it('lists latest semantic rewrite receipt status for pending candidates', async () => {
+    const home = await createTempDir('cyrene-review-receipt-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-receipt-project-')
+    const candidate = createPending()
+    const memoryRoot = await seedPending(cwd, [candidate])
+    const reviewHash = reviewHashForPendingMemory(candidate)
+    await appendSemanticRewriteReceiptFromRoot(memoryRoot, {
+      id: 'receipt-1',
+      pendingMemoryId: candidate.id,
+      action: 'enrich_boundaries',
+      method: 'deterministic',
+      oldReviewHash: reviewHash,
+      newReviewHash: reviewHash,
+      originalContentHash: 'content-hash',
+      rewrittenContentHash: 'content-hash',
+      changedFields: ['useWhen', 'doNotUseWhen'],
+      eligibilityReasons: ['template_semantic_boundaries'],
+      validatorReasons: ['boundary_enrichment_preserves_content_hash'],
+      sourceOfTruth: 'review_summary:receipt',
+      createdAt: '2026-06-02T00:00:00.000Z'
+    })
+
+    const result = await listCodexPendingMemories({ cwd })
+
+    expect(result.pending[0]?.semanticRewrite).toMatchObject({
+      status: 'prepared',
+      receipt: {
+        action: 'enrich_boundaries',
+        method: 'deterministic',
+        oldReviewHash: reviewHash,
+        newReviewHash: reviewHash,
+        changedFields: ['useWhen', 'doNotUseWhen'],
+        eligibilityReasons: ['template_semantic_boundaries'],
+        validatorReasons: ['boundary_enrichment_preserves_content_hash'],
+        originalContentHash: 'content-hash'
+      }
+    })
   })
 
   it('summarizes pending review metadata for CLI display', async () => {

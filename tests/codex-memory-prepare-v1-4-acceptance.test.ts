@@ -9,6 +9,7 @@ import { proposeCodexMemoryCandidate } from '../src/codex/memory-propose.js'
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { validateSemanticRewriteCandidate } from '../src/codex/semantic-rewrite.js'
 import {
+  appendMemoryEventFromRoot,
   appendDistillationInputFromRoot,
   readActiveMemoriesFromRoot,
   readDistillationInputsFromRoot,
@@ -219,6 +220,62 @@ describe('Codex memory v1.4 acceptance outcomes', () => {
     })
   })
 
+  it('skips pending candidates outside semantic prepare eligibility', async () => {
+    const memoryRoot = await createTempDir('cyrene-v14-prepare-ineligible-')
+    const candidates = [
+      createPending({
+        id: 'pending-high-risk',
+        domain: 'personal',
+        content: IMPLEMENTATION_NOTE_INPUT,
+        normalizedKey: 'personal-implementation-note',
+        sourceOfTruth: 'review_summary:high-risk',
+        candidateKind: 'project_decision',
+        tags: ['project_decision']
+      }),
+      createPending({
+        id: 'pending-conflicted',
+        content: IMPLEMENTATION_NOTE_INPUT,
+        normalizedKey: 'conflicted-implementation-note',
+        sourceOfTruth: 'review_summary:conflicted',
+        candidateKind: 'project_decision',
+        tags: ['project_decision'],
+        conflictsWith: ['active-1']
+      }),
+      createPending({
+        id: 'pending-no-source-boundary',
+        content: IMPLEMENTATION_NOTE_INPUT,
+        normalizedKey: 'no-source-implementation-note',
+        sourceOfTruth: undefined,
+        candidateKind: 'project_decision',
+        tags: ['project_decision']
+      }),
+      createPending({
+        id: 'pending-user-edited',
+        content: IMPLEMENTATION_NOTE_INPUT,
+        normalizedKey: 'edited-implementation-note',
+        sourceOfTruth: 'review_summary:edited',
+        candidateKind: 'project_decision',
+        tags: ['project_decision']
+      })
+    ]
+    await writePendingMemoriesFromRoot(memoryRoot, candidates)
+    await appendMemoryEventFromRoot(memoryRoot, {
+      id: 'event-user-edit',
+      action: 'pending',
+      at: NOW,
+      reason: 'User edited candidate wording.',
+      candidateId: 'pending-user-edited',
+      details: { reviewAction: 'edit' }
+    })
+    const pendingBefore = await readPendingMemoriesFromRoot(memoryRoot)
+
+    const result = await runCodexMemoryPrepare({ memoryRoot, dryRun: false, now: NOW })
+
+    expect(result.results.map((item) => item.action)).toEqual(['skip', 'skip', 'skip', 'skip'])
+    await expect(readPendingMemoriesFromRoot(memoryRoot)).resolves.toEqual(pendingBefore)
+    await expect(readSemanticRewriteReceiptsFromRoot(memoryRoot)).resolves.toEqual([])
+  })
+
   it('enriches recognized ready pending boundaries without changing content hash', async () => {
     const memoryRoot = await createTempDir('cyrene-v14-prepare-boundaries-')
     const pending = createPending({
@@ -247,6 +304,41 @@ describe('Codex memory v1.4 acceptance outcomes', () => {
     const receipt = (await readSemanticRewriteReceiptsFromRoot(memoryRoot))[0]
     expect(receipt).toMatchObject({
       pendingMemoryId: 'pending-ready-boundaries',
+      action: 'enrich_boundaries',
+      changedFields: ['useWhen', 'doNotUseWhen']
+    })
+    expect(receipt?.originalContentHash).toBe(receipt?.rewrittenContentHash)
+  })
+
+  it('enriches generic template boundaries without changing content hash', async () => {
+    const memoryRoot = await createTempDir('cyrene-v14-prepare-template-boundaries-')
+    const pending = createPending({
+      id: 'pending-template-boundaries',
+      content: 'Review API handlers should keep write routes hash-checked before mutating pending memory.',
+      normalizedKey: 'review-api-hash-checked-writes',
+      candidateKind: 'workflow_rule',
+      tags: ['workflow_rule'],
+      useWhen: ['Future task matches review-api-hash-checked-writes'],
+      doNotUseWhen: ['The evidence no longer supports this memory.']
+    })
+    await writePendingMemoriesFromRoot(memoryRoot, [pending])
+
+    const result = await runCodexMemoryPrepare({ memoryRoot, dryRun: false, now: NOW })
+
+    expect(result.results[0]).toMatchObject({
+      action: 'enrich_boundaries',
+      validation: {
+        beforeReadiness: { ready: true, status: 'ready' },
+        afterReadiness: { ready: true, status: 'ready' }
+      }
+    })
+    const pendingAfter = await readPendingMemoriesFromRoot(memoryRoot)
+    expect(pendingAfter[0]?.content).toBe(pending.content)
+    expect(pendingAfter[0]?.useWhen?.join(' ')).not.toContain('Future task matches')
+    expect(pendingAfter[0]?.useWhen).toContain('Applying the workflow rule described in this memory.')
+    const receipt = (await readSemanticRewriteReceiptsFromRoot(memoryRoot))[0]
+    expect(receipt).toMatchObject({
+      pendingMemoryId: 'pending-template-boundaries',
       action: 'enrich_boundaries',
       changedFields: ['useWhen', 'doNotUseWhen']
     })
@@ -407,10 +499,14 @@ describe('Codex memory v1.4 acceptance outcomes', () => {
     expect(pending).toHaveLength(2)
     const byKey = new Map(pending.map((item) => [item.normalizedKey, item]))
     expect(byKey.get('pending-memory-rejection-review-hash')).toMatchObject({
-      content: PENDING_REJECTION_WORKFLOW_EXPECTED
+      content: PENDING_REJECTION_WORKFLOW_EXPECTED,
+      useWhen: expect.arrayContaining(['Rejecting pending memory candidates in the Cyrene review flow.'])
     })
     expect(byKey.get('pending-review-hash-canonical-records')).toMatchObject({
-      content: PENDING_HASH_FALSE_CONFLICT_EXPECTED
+      content: PENDING_HASH_FALSE_CONFLICT_EXPECTED,
+      doNotUseWhen: expect.arrayContaining([
+        'The code already reads the current pending.jsonl record as the canonical source.'
+      ])
     })
   })
 })

@@ -44,6 +44,8 @@ describe('Codex memory v1.4 pending creation shaping', () => {
       'Pending-memory rejection workflows must validate each candidate review hash before mutation and verify the queue state after rejection.'
     )
     expect(pending[0]?.candidateKind).toBe('workflow_rule')
+    expect(pending[0]?.useWhen).toContain('Rejecting pending memory candidates in the Cyrene review flow.')
+    expect(pending[0]?.doNotUseWhen).toContain('The task does not mutate pending memory review state.')
   })
 
   it('does not materialize distillation admissions as pending during shaping', async () => {

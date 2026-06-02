@@ -1212,6 +1212,7 @@ function renderPendingDetail(candidate) {
       ${renderAdmissionRoutingSection(candidate)}
       ${renderUpdatePolicySection(candidate)}
       ${renderUseBoundariesSection(candidate)}
+      ${renderSemanticPrepareSection(candidate)}
       ${renderReviewActionSection(candidate)}
     </div>
   `
@@ -1332,6 +1333,23 @@ function renderUseBoundariesSection(candidate) {
     ['Evidence strength', proposed.evidenceStrength],
     ['Future usefulness', proposed.futureUsefulness],
     ['Expiry', firstPresent(proposed.expiry, memory.expiresAt, candidate.expiresAt)]
+  ])
+}
+
+function renderSemanticPrepareSection(candidate) {
+  const semanticRewrite = candidate.semanticRewrite || {}
+  const receipt = semanticRewrite.receipt || {}
+  if (!semanticRewrite.status && !receipt.action) return ''
+  return renderWorkflowSection('Semantic Prepare', [
+    ['Status', semanticRewrite.status],
+    ['Action', receipt.action],
+    ['Method', receipt.method],
+    ['Old review hash', receipt.oldReviewHash ? shortHash(receipt.oldReviewHash) : ''],
+    ['New review hash', receipt.newReviewHash ? shortHash(receipt.newReviewHash) : ''],
+    ['Changed fields', receipt.changedFields],
+    ['Eligibility reasons', receipt.eligibilityReasons],
+    ['Validator reasons', receipt.validatorReasons],
+    ['Original content hash', receipt.originalContentHash ? shortHash(receipt.originalContentHash) : '']
   ])
 }
 
