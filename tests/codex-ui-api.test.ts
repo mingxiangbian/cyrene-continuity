@@ -754,6 +754,96 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
+  it('runs memory prepare dry-run without mutating pending memory', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+      id: 'prepare-implementation-note',
+      domain: 'project',
+      type: 'project_fact',
+      content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+      normalizedKey: 'v1-admission-gate-subagent-worktree',
+      candidateKind: 'project_decision',
+      sourceOfTruth: 'review_summary:task-1',
+      tags: ['project_decision']
+    }))}\n`)
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/prepare/dry-run',
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { dryRun: boolean; results: Array<{ action: string }> }
+      expect(data.dryRun).toBe(true)
+      expect(data.results).toContainEqual(expect.objectContaining({ action: 'replace_content' }))
+    }
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
+  it('applies memory prepare to pending only and records receipts', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot, active } = await seedProject()
+    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+      id: 'prepare-implementation-note',
+      domain: 'project',
+      type: 'project_fact',
+      content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+      normalizedKey: 'v1-admission-gate-subagent-worktree',
+      candidateKind: 'project_decision',
+      sourceOfTruth: 'review_summary:task-1',
+      tags: ['project_decision']
+    }))}\n`)
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/prepare/apply',
+      now: '2026-06-02T00:00:00.000Z'
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as { dryRun: boolean; activeBeforeCount: number; activeAfterCount: number; receipts: Array<{ action: string }> }
+      expect(data.dryRun).toBe(false)
+      expect(data.activeBeforeCount).toBe(1)
+      expect(data.activeAfterCount).toBe(1)
+      expect(data.receipts).toContainEqual(expect.objectContaining({ action: 'replace_content' }))
+    }
+    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(active.content)
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
+      'Admission-gate memory work should coordinate independent tasks through subagent-driven execution in an isolated worktree.'
+    )
+    await expect(readFile(join(memoryRoot, 'semantic_rewrite_receipts.jsonl'), 'utf8')).resolves.toContain('replace_content')
+  })
+
+  it('rejects all-scope memory prepare because the route operates on one memory root', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'POST',
+      pathname: '/api/memory/prepare/dry-run',
+      searchParams: new URLSearchParams('scope=all')
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body.ok).toBe(false)
+    if (!result.body.ok) {
+      expect(result.body.error.message).toContain('scope=all')
+    }
+  })
+
   it('applies safe triage decisions and leaves review-only candidates pending', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)

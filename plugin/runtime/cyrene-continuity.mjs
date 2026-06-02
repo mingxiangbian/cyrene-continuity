@@ -10251,8 +10251,8 @@ function pendingMemoryToSemanticMemory(memory) {
     scope: memory.scope,
     domain: memory.domain,
     content: memory.content,
-    useWhen: useWhenForKind(kind),
-    doNotUseWhen: doNotUseWhenForKind(kind),
+    useWhen: memory.useWhen ?? useWhenForKind(kind),
+    doNotUseWhen: memory.doNotUseWhen ?? doNotUseWhenForKind(kind),
     sourceOfTruth: memory.sourceOfTruth ?? memory.normalizedKey,
     evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.lastSeenAt, memory.content, kind),
     routing: routingForMemory(module, scores, "pending"),
@@ -10334,6 +10334,8 @@ function semanticMemoryToPendingMemory(memory) {
     scope: memory.scope,
     status: "pending",
     content: memory.content,
+    ...memory.useWhen.length === 0 ? {} : { useWhen: memory.useWhen },
+    ...memory.doNotUseWhen.length === 0 ? {} : { doNotUseWhen: memory.doNotUseWhen },
     normalizedKey: reviewState.normalizedKey ?? memory.sourceOfTruth ?? normalizedKeyForContent(memory.domain, type, memory.content),
     ...sourceOfTruth === void 0 ? {} : { sourceOfTruth },
     evidence: memoryEvidenceForSemantic(memory),
@@ -10482,6 +10484,7 @@ var DISTILLATION_INPUTS_FILE = "distillation_inputs.jsonl";
 var ROUTING_DECISIONS_FILE = "routing_decisions.jsonl";
 var REVIEW_DECISIONS_FILE = "review_decisions.jsonl";
 var ACTIVATION_EVENTS_FILE = "activation_events.jsonl";
+var SEMANTIC_REWRITE_RECEIPTS_FILE = "semantic_rewrite_receipts.jsonl";
 var EVENTS_FILE = "events.jsonl";
 var TOMBSTONES_FILE = "tombstones.jsonl";
 var MAX_PENDING_EVIDENCE = 10;
@@ -10649,6 +10652,17 @@ async function readDistillationInputsFromRoot(memoryRoot) {
   }
   return readJsonLines(join4(memoryRoot, DISTILLATION_INPUTS_FILE));
 }
+async function appendSemanticRewriteReceiptFromRoot(memoryRoot, receipt) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await appendJsonLine(join4(root, SEMANTIC_REWRITE_RECEIPTS_FILE), receipt);
+}
+async function readSemanticRewriteReceiptsFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, SEMANTIC_REWRITE_RECEIPTS_FILE));
+}
 async function appendRoutingDecisionFromRoot(memoryRoot, decision2) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, ROUTING_DECISIONS_FILE), decision2);
@@ -10696,6 +10710,8 @@ function mergePendingMemory(existing, candidate) {
   return {
     ...existing,
     content: existing.content,
+    useWhen: existing.useWhen ?? candidate.useWhen,
+    doNotUseWhen: existing.doNotUseWhen ?? candidate.doNotUseWhen,
     scores: averageScores(existing.scores, existing.seenCount, candidate.scores, candidate.seenCount),
     seenCount,
     lastSeenAt: latestIso(existing.lastSeenAt, candidate.lastSeenAt),
@@ -18128,6 +18144,203 @@ function enforcePendingBudget(input) {
   };
 }
 
+// src/codex/semantic-boundaries.ts
+var PENDING_MEMORY_REJECTION_WORKFLOW = {
+  useWhen: [
+    "Rejecting pending memory candidates in the Cyrene review flow.",
+    "Changing pending-memory review actions that depend on review-hash validation.",
+    "Verifying pending queue state after reject/defer/promote mutations."
+  ],
+  doNotUseWhen: [
+    "The task does not mutate pending memory review state.",
+    "The review hash is unavailable or was not read from the current pending record.",
+    "The task concerns active memory edits rather than pending candidate review."
+  ],
+  reasons: [
+    "The content defines a reusable workflow rather than a one-time rejection event.",
+    "It names the required pre-mutation and post-mutation checks: review-hash validation and queue verification."
+  ]
+};
+var PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL = {
+  useWhen: [
+    "Diagnosing review-hash conflicts for pending memory candidates.",
+    "Reading or validating pending review records.",
+    "Changing semantic projection or cache code that feeds pending review state."
+  ],
+  doNotUseWhen: [
+    "The hash comes from an active memory record rather than pending review.",
+    "The code already reads the current pending.jsonl record as the canonical source.",
+    "The task is unrelated to pending review hashes, semantic projection, or cache-derived review data."
+  ],
+  reasons: [
+    "The content describes a known pitfall with a mitigation.",
+    "It identifies semantic projection and cache-derived data as false-conflict sources and pending.jsonl as the canonical data source."
+  ]
+};
+function deriveSemanticBoundaries(input) {
+  const pattern = classifySemanticBoundaryPattern(input);
+  if (pattern === "pending_memory_rejection_workflow") return cloneBoundaries(PENDING_MEMORY_REJECTION_WORKFLOW);
+  if (pattern === "pending_review_hash_false_conflict_pitfall") {
+    return cloneBoundaries(PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL);
+  }
+  return fallbackBoundariesFor(candidateKindOf(input));
+}
+function classifySemanticBoundaryPattern(input) {
+  const content = normalizeContent(contentOf(input));
+  if (isPendingMemoryRejectionWorkflow(content)) return "pending_memory_rejection_workflow";
+  if (isPendingReviewHashFalseConflictPitfall(content)) return "pending_review_hash_false_conflict_pitfall";
+  return void 0;
+}
+function fallbackBoundariesFor(candidateKind) {
+  if (candidateKind === "workflow_rule") {
+    return cloneBoundaries({
+      useWhen: [
+        "Applying the workflow rule described in this memory.",
+        "Changing the process or code path named by the memory content."
+      ],
+      doNotUseWhen: [
+        "The task is outside the process or code path named by the memory content.",
+        "Current source files or explicit user instructions contradict the memory."
+      ],
+      reasons: [
+        "The candidate kind is workflow_rule, so boundaries emphasize when to apply the procedure and when to ignore it."
+      ]
+    });
+  }
+  if (candidateKind === "known_pitfall") {
+    return cloneBoundaries({
+      useWhen: [
+        "Diagnosing or preventing the pitfall described in this memory.",
+        "Changing the component or workflow named by the memory content."
+      ],
+      doNotUseWhen: [
+        "The task cannot encounter the described failure mode.",
+        "Current source files or explicit user instructions contradict the memory."
+      ],
+      reasons: [
+        "The candidate kind is known_pitfall, so boundaries emphasize the failure mode and mitigation context."
+      ]
+    });
+  }
+  if (candidateKind === "project_decision") {
+    return cloneBoundaries({
+      useWhen: [
+        "Making design changes that touch the project decision described in this memory.",
+        "Checking the current rationale for the architecture or workflow boundary named by the memory content."
+      ],
+      doNotUseWhen: [
+        "The task is outside the decision boundary named by the memory content.",
+        "A newer project decision or explicit user instruction supersedes this memory."
+      ],
+      reasons: [
+        "The candidate kind is project_decision, so boundaries emphasize the decision boundary and supersession conditions."
+      ]
+    });
+  }
+  if (candidateKind === "rejected_approach") {
+    return cloneBoundaries({
+      useWhen: [
+        "Considering the rejected approach described in this memory.",
+        "Reopening a design decision in the same project area."
+      ],
+      doNotUseWhen: [
+        "The task uses a different approach or project area.",
+        "New explicit direction supersedes the rejection rationale."
+      ],
+      reasons: [
+        "The candidate kind is rejected_approach, so boundaries prevent repeating a previously rejected design path."
+      ]
+    });
+  }
+  if (candidateKind === "open_question") {
+    return cloneBoundaries({
+      useWhen: [
+        "Resolving the open question described in this memory.",
+        "Continuing work in the project area named by the question."
+      ],
+      doNotUseWhen: [
+        "The question has already been answered or superseded.",
+        "The task is outside the project area named by the question."
+      ],
+      reasons: [
+        "The candidate kind is open_question, so boundaries emphasize unresolved context rather than stable facts."
+      ]
+    });
+  }
+  if (candidateKind === "user_instruction") {
+    return cloneBoundaries({
+      useWhen: [
+        "Following the explicit user instruction captured in this memory.",
+        "Choosing defaults for work covered by the instruction."
+      ],
+      doNotUseWhen: [
+        "The user gives a newer instruction for the current task.",
+        "The task falls outside the instruction scope."
+      ],
+      reasons: [
+        "The candidate kind is user_instruction, so boundaries preserve explicit user direction while allowing newer overrides."
+      ]
+    });
+  }
+  return cloneBoundaries({
+    useWhen: [
+      "Using the project context described in this memory.",
+      "Working in the project area named by the memory content."
+    ],
+    doNotUseWhen: [
+      "The task is outside the project area named by the memory content.",
+      "Current source files or explicit user instructions contradict the memory."
+    ],
+    reasons: [
+      "No specialized semantic pattern matched, so boundaries stay conservative and tied to the memory content."
+    ]
+  });
+}
+function cloneBoundaries(boundaries) {
+  return {
+    useWhen: [...boundaries.useWhen],
+    doNotUseWhen: [...boundaries.doNotUseWhen],
+    reasons: [...boundaries.reasons]
+  };
+}
+function isPendingMemoryRejectionWorkflow(content) {
+  return /(?:拒绝\s*pending\s*memory|pending-memory rejection|reject(?:ing)?\s+pending memory)/i.test(content) && /(?:哈希校验|review hash|review-hash)/i.test(content) && /(?:pending\s*列表|queue state|列表为空|after rejection)/i.test(content);
+}
+function isPendingReviewHashFalseConflictPitfall(content) {
+  return /(?:pending\s*review|pending-review)/i.test(content) && /(?:哈希|hash|review-hash)/i.test(content) && /semantic\s*projection/i.test(content) && /(?:假冲突|false conflict|false review-hash conflicts?)/i.test(content) && /(?:pending\.jsonl|缓存|cache-derived|cache)/i.test(content);
+}
+function candidateKindOf(input) {
+  return typeof input === "string" ? void 0 : input.candidateKind ?? input.kind;
+}
+function contentOf(input) {
+  return typeof input === "string" ? input : input.content;
+}
+function normalizeContent(content) {
+  return content.trim().replace(/\s+/g, " ");
+}
+
+// src/codex/semantic-content-builder.ts
+var PENDING_MEMORY_REJECTION_WORKFLOW_CONTENT = "Pending-memory rejection workflows must validate each candidate review hash before mutation and verify the queue state after rejection.";
+var PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL_CONTENT = "Pending-review hashes must be read from canonical pending.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.";
+function shapePendingCandidateContent(input) {
+  const originalContent = contentOf2(input);
+  const shapedContent = rewriteContentFor(input) ?? originalContent;
+  return {
+    content: shapedContent,
+    changed: shapedContent !== originalContent,
+    ...deriveSemanticBoundaries(input)
+  };
+}
+function rewriteContentFor(input) {
+  const pattern = classifySemanticBoundaryPattern(input);
+  if (pattern === "pending_memory_rejection_workflow") return PENDING_MEMORY_REJECTION_WORKFLOW_CONTENT;
+  if (pattern === "pending_review_hash_false_conflict_pitfall") return PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL_CONTENT;
+  return void 0;
+}
+function contentOf2(input) {
+  return typeof input === "string" ? input : input.content;
+}
+
 // src/codex/memory-propose.ts
 function normalizedKeyForCodexMemoryCandidate(input) {
   return input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`);
@@ -18388,6 +18601,16 @@ function toPendingMemory(input, now) {
     tags: input.tags ?? [],
     type: input.type
   });
+  const shaped = shapePendingCandidateContent({
+    content: input.content,
+    candidateKind,
+    scope: input.scope ?? "project",
+    domain: input.domain,
+    normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
+    sourceOfTruth: input.sourceOfTruth,
+    evidenceRefs: evidenceRefsForCandidate(input.evidence),
+    tags: input.tags ?? []
+  });
   return {
     id: randomUUID10(),
     domain: input.domain,
@@ -18395,7 +18618,7 @@ function toPendingMemory(input, now) {
     strength: input.strength ?? "soft",
     scope: input.scope ?? "project",
     status: "pending",
-    content: input.content,
+    content: shaped.content,
     normalizedKey: normalizedKeyForCodexMemoryCandidate(input),
     ...input.sourceOfTruth === void 0 ? {} : { sourceOfTruth: input.sourceOfTruth },
     evidence: input.evidence,
@@ -18415,6 +18638,18 @@ function toPendingMemory(input, now) {
     candidateKind,
     tags: input.tags ?? []
   };
+}
+function evidenceRefsForCandidate(evidence) {
+  return evidence.flatMap((entry) => [
+    ...entry.traceRefs ?? [],
+    ...entry.messageIds ?? [],
+    entry.runId,
+    entry.sessionId,
+    entry.taskHash,
+    entry.quoteHash,
+    entry.evidenceGroupId,
+    entry.summary
+  ]).flatMap((value) => value === void 0 ? [] : [value]);
 }
 function normalizeKey(value) {
   const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
@@ -21664,8 +21899,301 @@ async function readableMemoryRoot(memoryRoot) {
   }
 }
 
-// src/codex/triage-apply.ts
+// src/codex/semantic-rewrite.ts
 import { randomUUID as randomUUID17 } from "node:crypto";
+
+// src/codex/semantic-rewrite-validator.ts
+import { createHash as createHash12 } from "node:crypto";
+function validateSemanticRewriteCandidate(input) {
+  const beforeReadiness = activeReadinessForPending2(input.original);
+  const afterReadiness = activeReadinessForPending2(input.next);
+  const reasons = [];
+  if (input.original.sourceOfTruth !== void 0 && input.next.sourceOfTruth !== input.original.sourceOfTruth) {
+    reasons.push("source_of_truth_must_be_preserved");
+  }
+  if (input.next.scope !== input.original.scope) {
+    reasons.push("scope_must_not_change");
+  }
+  if (input.next.domain !== input.original.domain) {
+    reasons.push("domain_must_not_change");
+  }
+  if (input.next.scores.safety < input.original.scores.safety || input.next.scores.sensitivity > input.original.scores.sensitivity) {
+    reasons.push("risk_must_not_expand");
+  }
+  if (input.action === "replace_content") {
+    if (beforeReadiness.ready) {
+      reasons.push("replace_content_requires_needs_rewrite");
+    }
+    if (input.next.content === input.original.content) {
+      reasons.push("replacement_content_must_change");
+    }
+    if (!afterReadiness.ready) {
+      reasons.push("rewritten_content_must_be_active_ready");
+    }
+  }
+  if (input.action === "enrich_boundaries") {
+    if (contentHashForSemanticRewrite(input.next.content) !== contentHashForSemanticRewrite(input.original.content)) {
+      reasons.push("boundary_enrichment_must_not_change_content");
+    }
+  }
+  return {
+    valid: reasons.length === 0,
+    reasons,
+    beforeReadiness,
+    afterReadiness
+  };
+}
+function contentHashForSemanticRewrite(content) {
+  return createHash12("sha256").update(content).digest("hex");
+}
+function activeReadinessForPending2(candidate) {
+  return evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind: deriveMemoryCandidateKind(candidate),
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  });
+}
+
+// src/codex/semantic-rewrite.ts
+function preparePendingSemanticRewrite(candidate, options = {}) {
+  const now = options.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const candidateKind = deriveMemoryCandidateKind(candidate);
+  const readiness = evaluateActiveMemoryReadiness({
+    content: candidate.content,
+    candidateKind,
+    domain: candidate.domain,
+    type: candidate.type,
+    tags: candidate.tags
+  });
+  if (!readiness.ready) {
+    const rewrittenContent = rewriteContentForReadiness(candidate, readiness.reasons);
+    const next = rewrittenContent === void 0 ? candidate : {
+      ...candidate,
+      content: rewrittenContent,
+      lastSeenAt: now
+    };
+    const validation2 = validateSemanticRewriteCandidate({
+      original: candidate,
+      next,
+      action: rewrittenContent === void 0 ? "fail" : "replace_content"
+    });
+    const action = validation2.valid ? "replace_content" : "fail";
+    return {
+      action,
+      original: candidate,
+      next: validation2.valid ? next : candidate,
+      validation: validation2,
+      receipt: semanticRewriteReceipt({
+        original: candidate,
+        next: validation2.valid ? next : candidate,
+        action,
+        method: "deterministic",
+        changedFields: validation2.valid ? ["content"] : [],
+        eligibilityReasons: readiness.reasons,
+        validatorReasons: validation2.valid ? ["rewritten_content_is_active_ready"] : validation2.reasons,
+        now
+      })
+    };
+  }
+  if (classifySemanticBoundaryPattern(candidate) !== void 0) {
+    const boundaries = deriveSemanticBoundaries({
+      content: candidate.content,
+      candidateKind,
+      domain: candidate.domain,
+      scope: candidate.scope,
+      normalizedKey: candidate.normalizedKey,
+      sourceOfTruth: candidate.sourceOfTruth,
+      evidenceRefs: evidenceRefsForPending(candidate.evidence),
+      tags: candidate.tags
+    });
+    const next = {
+      ...candidate,
+      useWhen: boundaries.useWhen,
+      doNotUseWhen: boundaries.doNotUseWhen,
+      lastSeenAt: now
+    };
+    const validation2 = validateSemanticRewriteCandidate({
+      original: candidate,
+      next,
+      action: "enrich_boundaries"
+    });
+    const action = validation2.valid ? "enrich_boundaries" : "fail";
+    return {
+      action,
+      original: candidate,
+      next: validation2.valid ? next : candidate,
+      validation: validation2,
+      receipt: semanticRewriteReceipt({
+        original: candidate,
+        next: validation2.valid ? next : candidate,
+        action,
+        method: "deterministic",
+        changedFields: validation2.valid ? ["useWhen", "doNotUseWhen"] : [],
+        eligibilityReasons: ["semantic_boundary_pattern"],
+        validatorReasons: validation2.valid ? ["boundary_enrichment_preserves_content_hash"] : validation2.reasons,
+        now
+      })
+    };
+  }
+  const validation = validateSemanticRewriteCandidate({
+    original: candidate,
+    next: candidate,
+    action: "skip"
+  });
+  return {
+    action: "skip",
+    original: candidate,
+    next: candidate,
+    validation
+  };
+}
+function rewriteContentForReadiness(candidate, reasons) {
+  if (reasons.includes("implementation_note")) {
+    return rewriteImplementationNote(candidate.content);
+  }
+  if (reasons.includes("raw_file_rule_excerpt")) {
+    return rewriteRawFileRuleExcerpt(candidate.content);
+  }
+  if (reasons.includes("overbroad_workflow_rule")) {
+    return "For non-trivial code or architecture changes, keep edits traceable to the requested issue and leave unrelated code untouched.";
+  }
+  return void 0;
+}
+function rewriteImplementationNote(content) {
+  if (/admission[-\s]?gate/i.test(content) && /subagent-driven/i.test(content) && /(?:隔离工作区|worktree)/i.test(content)) {
+    return "Admission-gate memory work should coordinate independent tasks through subagent-driven execution in an isolated worktree.";
+  }
+  return "Project memory should retain reusable guidance from completed implementation work instead of storing one-time implementation history.";
+}
+function rewriteRawFileRuleExcerpt(content) {
+  const source = /\bAGENTS\.md\b/i.test(content) ? "AGENTS.md" : "the source-of-truth file";
+  return `${source} is the source of truth for repository working rules; active memory should reference it instead of copying raw policy text.`;
+}
+function semanticRewriteReceipt(input) {
+  const oldReviewHash = reviewHashForPendingMemory(input.original);
+  const newReviewHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? reviewHashForPendingMemory(input.next) : void 0;
+  const rewrittenContentHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? contentHashForSemanticRewrite(input.next.content) : void 0;
+  return {
+    id: randomUUID17(),
+    pendingMemoryId: input.original.id,
+    action: input.action,
+    method: input.method,
+    oldReviewHash,
+    ...newReviewHash === void 0 ? {} : { newReviewHash },
+    originalContentHash: contentHashForSemanticRewrite(input.original.content),
+    ...rewrittenContentHash === void 0 ? {} : { rewrittenContentHash },
+    changedFields: input.changedFields,
+    eligibilityReasons: input.eligibilityReasons,
+    validatorReasons: input.validatorReasons,
+    ...input.original.sourceOfTruth === void 0 ? {} : { sourceOfTruth: input.original.sourceOfTruth },
+    createdAt: input.now
+  };
+}
+function evidenceRefsForPending(evidence) {
+  return evidence.flatMap((entry) => [
+    ...entry.traceRefs ?? [],
+    ...entry.messageIds ?? [],
+    entry.runId,
+    entry.sessionId,
+    entry.taskHash,
+    entry.quoteHash,
+    entry.evidenceGroupId,
+    entry.summary
+  ]).flatMap((value) => value === void 0 ? [] : [value]);
+}
+
+// src/codex/codex-memory-prepare.ts
+async function runCodexMemoryPrepare(input) {
+  const memoryRoot = await resolveMemoryRoot(input);
+  if (input.dryRun ?? true) {
+    return runCodexMemoryPrepareFromRoot({ ...input, memoryRoot, dryRun: true });
+  }
+  return withMemoryMaintenanceLockFromRoot(
+    memoryRoot,
+    (lockedMemoryRoot) => runCodexMemoryPrepareFromRoot({ ...input, memoryRoot: lockedMemoryRoot, dryRun: false })
+  );
+}
+async function runCodexMemoryPrepareFromRoot(input) {
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const [activeBefore, pending, existingReceipts] = await Promise.all([
+    readActiveMemoriesFromRoot(input.memoryRoot),
+    readPendingMemoriesFromRoot(input.memoryRoot),
+    readSemanticRewriteReceiptsFromRoot(input.memoryRoot)
+  ]);
+  const prepared = preparePendingBatch(pending, existingReceipts, {
+    now,
+    maxItemsPerRun: input.maxItemsPerRun
+  });
+  if (input.dryRun) {
+    return {
+      memoryRoot: input.memoryRoot,
+      dryRun: true,
+      activeBeforeCount: activeBefore.length,
+      activeAfterCount: activeBefore.length,
+      pendingBeforeCount: pending.length,
+      pendingAfterCount: prepared.nextPending.length,
+      results: prepared.results,
+      nextPending: prepared.nextPending,
+      receipts: prepared.receipts
+    };
+  }
+  await writePendingMemoriesFromRoot(input.memoryRoot, prepared.nextPending);
+  for (const receipt of prepared.receipts) {
+    await appendSemanticRewriteReceiptFromRoot(input.memoryRoot, receipt);
+  }
+  const activeAfter = await readActiveMemoriesFromRoot(input.memoryRoot);
+  return {
+    memoryRoot: input.memoryRoot,
+    dryRun: false,
+    activeBeforeCount: activeBefore.length,
+    activeAfterCount: activeAfter.length,
+    pendingBeforeCount: pending.length,
+    pendingAfterCount: prepared.nextPending.length,
+    results: prepared.results,
+    nextPending: prepared.nextPending,
+    receipts: prepared.receipts
+  };
+}
+function preparePendingBatch(pending, existingReceipts, input) {
+  const maxItems = input.maxItemsPerRun ?? pending.length;
+  const results = [];
+  const nextPending = [];
+  const receipts = [];
+  let processed = 0;
+  for (const candidate of pending) {
+    if (processed >= maxItems || hasCurrentSuccessfulReceipt(candidate, existingReceipts)) {
+      nextPending.push(candidate);
+      continue;
+    }
+    const result2 = preparePendingSemanticRewrite(candidate, { now: input.now });
+    results.push(result2);
+    nextPending.push(result2.next);
+    processed += 1;
+    if (result2.action !== "skip" && result2.receipt !== void 0) {
+      receipts.push(result2.receipt);
+    }
+  }
+  return { results, nextPending, receipts };
+}
+function hasCurrentSuccessfulReceipt(candidate, receipts) {
+  const currentReviewHash = reviewHashForPendingMemory(candidate);
+  return receipts.some(
+    (receipt) => receipt.pendingMemoryId === candidate.id && receipt.newReviewHash === currentReviewHash && (receipt.action === "replace_content" || receipt.action === "enrich_boundaries")
+  );
+}
+async function resolveMemoryRoot(input) {
+  if (input.memoryRoot !== void 0) {
+    return input.memoryRoot;
+  }
+  const cwd = input.cwd ?? process.cwd();
+  const identity = await identifyCodexProject(cwd);
+  return codexProjectMemoryRoot(identity.projectId);
+}
+
+// src/codex/triage-apply.ts
+import { randomUUID as randomUUID18 } from "node:crypto";
 function applySafeTriageDecisions(input) {
   const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
   const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
@@ -21759,7 +22287,7 @@ function tombstoneForAutoDroppedCandidate(candidate, now) {
 }
 function memoryEventForTriageDecision(action, candidate, now, reason, details) {
   return {
-    id: randomUUID17(),
+    id: randomUUID18(),
     action,
     at: now,
     reason,
@@ -21870,7 +22398,7 @@ async function runCodexMemoryDistill(input) {
   if (input.dryRun === false) {
     throw new Error("Codex memory distill apply is not supported.");
   }
-  const memoryRoot = await resolveMemoryRoot(input);
+  const memoryRoot = await resolveMemoryRoot2(input);
   const [
     pending,
     active,
@@ -21933,7 +22461,7 @@ async function runCodexMemoryDistill(input) {
     }
   };
 }
-async function resolveMemoryRoot(input) {
+async function resolveMemoryRoot2(input) {
   if (input.memoryRoot !== void 0) {
     return input.memoryRoot;
   }
@@ -22412,6 +22940,26 @@ async function handleCodexUiApiRequest(input) {
         now: input.now,
         apply: input.pathname.endsWith("/apply")
       }));
+    }
+    if (input.pathname === "/api/memory/prepare/dry-run" || input.pathname === "/api/memory/prepare/apply") {
+      if (input.method.toUpperCase() !== "POST") {
+        return methodNotAllowed();
+      }
+      const selectionRequest = parseSelectionRequest(input.searchParams);
+      if ("error" in selectionRequest) return selectionRequest.error;
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selectionRequest.value, "memory prepare");
+      if (unsupportedScope !== void 0) return unsupportedScope;
+      const selection = await resolveSelection(input.cwd, selectionRequest.value);
+      const result2 = await runCodexMemoryPrepare({
+        memoryRoot: selection.memoryRoot,
+        dryRun: input.pathname.endsWith("/dry-run"),
+        now: input.now
+      });
+      return ok({
+        ...result2,
+        project: selection.project,
+        selection: publicSelection(selection)
+      });
     }
     const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname);
     if (activeWriteRoute !== void 0) {
@@ -23293,6 +23841,8 @@ const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
 const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
+const PREPARE_DRY_RUN_ENDPOINT = '/api/memory/prepare/dry-run'
+const PREPARE_APPLY_ENDPOINT = '/api/memory/prepare/apply'
 const DISTILL_DRY_RUN_ENDPOINT = '/api/memory/distill/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
@@ -23315,6 +23865,7 @@ const TABS = [
   { id: 'timeline', label: 'Timeline' },
   { id: 'project-memory', label: 'Project Memory' },
   { id: 'triage', label: 'Triage' },
+  { id: 'prepare', label: 'Prepare' },
   { id: 'distillation', label: 'Distillation' },
   { id: 'harvester', label: 'Harvester' },
   { id: 'dream', label: 'Dream' },
@@ -23347,6 +23898,7 @@ const state = {
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
   harvester: { loading: false, result: null, error: '' },
   triage: { loading: false, result: null, error: '', receipt: null },
+  prepare: { loading: false, result: null, error: '' },
   distill: { loading: false, result: null, error: '' }
 }
 
@@ -23577,6 +24129,9 @@ function renderWorkspace() {
   workspace.querySelectorAll('[data-triage-mode]').forEach((button) => {
     button.addEventListener('click', () => runTriage(button.dataset.triageMode || 'dry-run'))
   })
+  workspace.querySelectorAll('[data-prepare-mode]').forEach((button) => {
+    button.addEventListener('click', () => runMemoryPrepare(button.dataset.prepareMode || 'dry-run'))
+  })
   const distillButton = workspace.querySelector('[data-memory-distill-dry-run]')
   if (distillButton) {
     distillButton.addEventListener('click', runMemoryDistillDryRun)
@@ -23623,6 +24178,7 @@ function pageHtml(tabId) {
   if (tabId === 'timeline') return renderTimeline()
   if (tabId === 'project-memory') return renderProjectMemory()
   if (tabId === 'triage') return renderTriage()
+  if (tabId === 'prepare') return renderMemoryPrepare()
   if (tabId === 'distillation') return renderDistillPanel()
   if (tabId === 'harvester') return renderHarvester()
   if (tabId === 'dream') return renderDream()
@@ -24120,6 +24676,101 @@ function triageActionLabel(action) {
 function triageTone(action) {
   if (action === 'auto_drop') return 'error'
   if (action === 'auto_defer' || action === 'recommend') return 'warn'
+  return 'muted'
+}
+
+function renderMemoryPrepare() {
+  const result = state.prepare.result
+  const resultHtml = state.prepare.error
+    ? panel('Prepare failed', escapeHtml(state.prepare.error), 'error')
+    : result
+      ? renderMemoryPrepareResult(result)
+      : panel('Prepare ready', 'Preview or apply semantic cleanup for pending candidates in the selected scope.', 'muted')
+
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Prepare', 'Rewrite pending candidates into reviewable semantic memory shape.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Semantic prepare</h3>
+          <p>Dry-run previews content replacements and boundary enrichment. Apply writes pending records and rewrite receipts; active memory is not changed.</p>
+        </div>
+        <div class="detail-actions">
+          <button class="soft-button primary" type="button" data-prepare-mode="dry-run" \${state.prepare.loading ? 'disabled' : ''}>
+            \${state.prepare.loading ? 'Running prepare' : 'Run prepare dry-run'}
+          </button>
+          <button class="soft-button" type="button" data-prepare-mode="apply" \${state.prepare.loading ? 'disabled' : ''}>
+            \${state.prepare.loading ? 'Applying prepare' : 'Apply prepare'}
+          </button>
+        </div>
+      </div>
+      \${resultHtml}
+    </section>
+  \`
+}
+
+async function runMemoryPrepare(mode) {
+  state.prepare = { loading: true, result: null, error: '' }
+  render()
+  try {
+    const endpoint = mode === 'apply' ? PREPARE_APPLY_ENDPOINT : PREPARE_DRY_RUN_ENDPOINT
+    const response = await apiFetch(\`\${endpoint}\${selectionQuery()}\`, { method: 'POST', body: '{}' })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Prepare API returned an error.')
+    }
+    if (mode === 'apply') {
+      await loadDashboard({ renderAfter: false })
+    }
+    state.prepare = { loading: false, result: payload.data, error: '' }
+  } catch (error) {
+    state.prepare = { loading: false, result: null, error: errorMessage(error) }
+  }
+  render()
+}
+
+function renderMemoryPrepareResult(result) {
+  const results = Array.isArray(result.results) ? result.results : []
+  const receipts = Array.isArray(result.receipts) ? result.receipts : []
+  const changed = results.filter((item) => item.action && item.action !== 'skip').length
+  const title = result.dryRun ? 'Prepare dry-run result' : 'Prepare apply result'
+  return \`
+    <div class="soft-panel">
+      <h3>\${escapeHtml(title)}</h3>
+      <div class="triage-grid">
+        \${metric('Pending', result.pendingBeforeCount ?? 0, \`\${result.pendingAfterCount ?? 0} after prepare\`)}
+        \${metric('Changed', changed, 'replace/enrich/fail actions')}
+        \${metric('Receipts', receipts.length, result.dryRun ? 'preview only' : 'written')}
+        \${metric('Active', result.activeAfterCount ?? 0, \`\${result.activeBeforeCount ?? 0} before prepare\`)}
+      </div>
+      <div class="soft-inset">Scope: \${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} \xB7 \${result.dryRun ? 'preview only' : 'pending updated'}</div>
+      \${results.slice(0, 8).map(renderMemoryPrepareRow).join('') || emptyState('No pending candidates needed prepare.')}
+    </div>
+  \`
+}
+
+function renderMemoryPrepareRow(result) {
+  const receipt = result.receipt || {}
+  const candidateId = result.original?.id || result.next?.id || receipt.pendingMemoryId || 'candidate'
+  const reasons = Array.isArray(result.validation?.reasons) && result.validation.reasons.length > 0
+    ? result.validation.reasons.join(', ')
+    : Array.isArray(receipt.validatorReasons) && receipt.validatorReasons.length > 0
+      ? receipt.validatorReasons.join(', ')
+      : 'validated'
+  return \`
+    <article class="data-row">
+      <div>
+        <div class="row-title">\${escapeHtml(result.action || 'skip')}</div>
+        <div class="row-meta">\${escapeHtml(candidateId)} \xB7 \${escapeHtml(reasons)}</div>
+      </div>
+      \${statusChip('prepare', result.action || 'skip', prepareTone(result.action))}
+    </article>
+  \`
+}
+
+function prepareTone(action) {
+  if (action === 'replace_content' || action === 'enrich_boundaries') return 'ok'
+  if (action === 'fail') return 'error'
   return 'muted'
 }
 
@@ -25312,7 +25963,7 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID18 } from "node:crypto";
+import { randomUUID as randomUUID19 } from "node:crypto";
 import { lstat as lstat15, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
@@ -25320,7 +25971,7 @@ var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID18();
+  const proposalId = randomUUID19();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
     reportPath: join24(previewDir, DREAM_REPORT_FILE),
@@ -25433,7 +26084,7 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID18()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID19()}.tmp`;
   await writeFile9(tempPath, content, "utf8");
   await rename5(tempPath, filePath);
 }
@@ -25442,7 +26093,7 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID19 } from "node:crypto";
+import { randomUUID as randomUUID20 } from "node:crypto";
 import { lstat as lstat17, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
@@ -25766,7 +26417,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID19(),
+      id: randomUUID20(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -25791,7 +26442,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID19(),
+        id: randomUUID20(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -25917,7 +26568,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID19(),
+        id: randomUUID20(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -26052,7 +26703,7 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
   const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID19();
+  const token = randomUUID20();
   while (true) {
     try {
       await mkdir12(lockDir);
@@ -26163,7 +26814,7 @@ function isFileErrorCode14(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash12, randomUUID as randomUUID20 } from "node:crypto";
+import { createHash as createHash13, randomUUID as randomUUID21 } from "node:crypto";
 import { lstat as lstat18, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -26182,7 +26833,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash12("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash13("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -26293,7 +26944,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID20(),
+      id: randomUUID21(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -26540,7 +27191,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID20()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID21()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile11(tempPath, content === "" ? "" : `${content}
 `, "utf8");
@@ -26550,7 +27201,7 @@ async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID20()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID21()}.tmp`;
   await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename6(tempPath, targetPath);
 }
@@ -26690,7 +27341,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash13, randomUUID as randomUUID21 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID22 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -26707,7 +27358,7 @@ function reviewHashForSimilarHintMemory(memory) {
     updatedAt: memory.updatedAt,
     tags: memory.tags
   };
-  return createHash13("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash14("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -26805,7 +27456,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID21(),
+      id: randomUUID22(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -26999,6 +27650,18 @@ async function handleCodexCommand(input) {
     }));
     return;
   }
+  if (command === "memory" && input.args[1] === "prepare") {
+    if (input.args.includes("--dry-run") && input.args.includes("--apply")) {
+      throw new Error("memory prepare accepts only one of --dry-run or --apply");
+    }
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryPrepare({
+      cwd: input.cwd,
+      dryRun: !input.args.includes("--apply"),
+      maxItemsPerRun: parseOptionalPositiveInteger(input.args, "--max-items")
+    }), null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "distill") {
     if (input.args.includes("--apply")) {
       throw new Error("memory distill --apply is not supported; use --dry-run");
@@ -27160,7 +27823,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {

@@ -1701,6 +1701,45 @@ describe('cyrene-continuity codex CLI', () => {
     expect(parsed.decisions).toContainEqual(expect.objectContaining({ action: 'auto_drop', candidateId: 'triage-noise' }))
   })
 
+  it('runs memory prepare dry-run from the Codex CLI without mutating pending memory', async () => {
+    const home = await createTempDir('cyrene-cli-prepare-home-')
+    const repo = await createTempDir('cyrene-cli-prepare-project-')
+    process.env.HOME = home
+    const candidate = createPending({
+      id: 'prepare-implementation-note',
+      domain: 'project',
+      type: 'project_fact',
+      content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
+      normalizedKey: 'v1-admission-gate-subagent-worktree',
+      candidateKind: 'project_decision',
+      sourceOfTruth: 'review_summary:task-1',
+      tags: ['project_decision']
+    })
+    const memoryRoot = await seedCliPending(repo, candidate)
+    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'prepare',
+        '--dry-run'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { dryRun?: boolean; results?: Array<{ action: string }> }
+    expect(parsed.dryRun).toBe(true)
+    expect(parsed.results).toContainEqual(expect.objectContaining({ action: 'replace_content' }))
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+  })
+
   it('runs memory distill dry-run from the CLI', async () => {
     const home = await createTempDir('cyrene-distill-cli-home-')
     process.env.HOME = home

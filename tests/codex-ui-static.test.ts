@@ -116,6 +116,16 @@ describe('Codex UI static assets', () => {
     expect(js).toContain('renderDistillCandidates')
   })
 
+  it('bundles the memory prepare UI surface', () => {
+    const js = getCodexUiStaticAsset('/app.js')?.body
+
+    expect(js).toContain("const PREPARE_DRY_RUN_ENDPOINT = '/api/memory/prepare/dry-run'")
+    expect(js).toContain("const PREPARE_APPLY_ENDPOINT = '/api/memory/prepare/apply'")
+    expect(js).toContain('data-prepare-mode')
+    expect(js).toContain('runMemoryPrepare')
+    expect(js).toContain('renderMemoryPrepareResult')
+  })
+
   it('wires static asset generation into plugin build', async () => {
     const buildScript = await readFile('scripts/build-plugin.mjs', 'utf8')
     const generatedSource = await readFile('src/codex/codex-ui-static.generated.ts', 'utf8')

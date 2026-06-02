@@ -3,6 +3,8 @@ const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
 const TRIAGE_APPLY_ENDPOINT = '/api/memory/triage/apply'
+const PREPARE_DRY_RUN_ENDPOINT = '/api/memory/prepare/dry-run'
+const PREPARE_APPLY_ENDPOINT = '/api/memory/prepare/apply'
 const DISTILL_DRY_RUN_ENDPOINT = '/api/memory/distill/dry-run'
 const EMPTY_DASHBOARD = {
   status: {},
@@ -25,6 +27,7 @@ const TABS = [
   { id: 'timeline', label: 'Timeline' },
   { id: 'project-memory', label: 'Project Memory' },
   { id: 'triage', label: 'Triage' },
+  { id: 'prepare', label: 'Prepare' },
   { id: 'distillation', label: 'Distillation' },
   { id: 'harvester', label: 'Harvester' },
   { id: 'dream', label: 'Dream' },
@@ -57,6 +60,7 @@ const state = {
   projectDelete: { confirming: false, loading: false, error: '', receipt: null },
   harvester: { loading: false, result: null, error: '' },
   triage: { loading: false, result: null, error: '', receipt: null },
+  prepare: { loading: false, result: null, error: '' },
   distill: { loading: false, result: null, error: '' }
 }
 
@@ -287,6 +291,9 @@ function renderWorkspace() {
   workspace.querySelectorAll('[data-triage-mode]').forEach((button) => {
     button.addEventListener('click', () => runTriage(button.dataset.triageMode || 'dry-run'))
   })
+  workspace.querySelectorAll('[data-prepare-mode]').forEach((button) => {
+    button.addEventListener('click', () => runMemoryPrepare(button.dataset.prepareMode || 'dry-run'))
+  })
   const distillButton = workspace.querySelector('[data-memory-distill-dry-run]')
   if (distillButton) {
     distillButton.addEventListener('click', runMemoryDistillDryRun)
@@ -333,6 +340,7 @@ function pageHtml(tabId) {
   if (tabId === 'timeline') return renderTimeline()
   if (tabId === 'project-memory') return renderProjectMemory()
   if (tabId === 'triage') return renderTriage()
+  if (tabId === 'prepare') return renderMemoryPrepare()
   if (tabId === 'distillation') return renderDistillPanel()
   if (tabId === 'harvester') return renderHarvester()
   if (tabId === 'dream') return renderDream()
@@ -830,6 +838,101 @@ function triageActionLabel(action) {
 function triageTone(action) {
   if (action === 'auto_drop') return 'error'
   if (action === 'auto_defer' || action === 'recommend') return 'warn'
+  return 'muted'
+}
+
+function renderMemoryPrepare() {
+  const result = state.prepare.result
+  const resultHtml = state.prepare.error
+    ? panel('Prepare failed', escapeHtml(state.prepare.error), 'error')
+    : result
+      ? renderMemoryPrepareResult(result)
+      : panel('Prepare ready', 'Preview or apply semantic cleanup for pending candidates in the selected scope.', 'muted')
+
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Prepare', 'Rewrite pending candidates into reviewable semantic memory shape.')}
+      <div class="soft-panel action-panel">
+        <div>
+          <h3>Semantic prepare</h3>
+          <p>Dry-run previews content replacements and boundary enrichment. Apply writes pending records and rewrite receipts; active memory is not changed.</p>
+        </div>
+        <div class="detail-actions">
+          <button class="soft-button primary" type="button" data-prepare-mode="dry-run" ${state.prepare.loading ? 'disabled' : ''}>
+            ${state.prepare.loading ? 'Running prepare' : 'Run prepare dry-run'}
+          </button>
+          <button class="soft-button" type="button" data-prepare-mode="apply" ${state.prepare.loading ? 'disabled' : ''}>
+            ${state.prepare.loading ? 'Applying prepare' : 'Apply prepare'}
+          </button>
+        </div>
+      </div>
+      ${resultHtml}
+    </section>
+  `
+}
+
+async function runMemoryPrepare(mode) {
+  state.prepare = { loading: true, result: null, error: '' }
+  render()
+  try {
+    const endpoint = mode === 'apply' ? PREPARE_APPLY_ENDPOINT : PREPARE_DRY_RUN_ENDPOINT
+    const response = await apiFetch(`${endpoint}${selectionQuery()}`, { method: 'POST', body: '{}' })
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.error?.message || 'Prepare API returned an error.')
+    }
+    if (mode === 'apply') {
+      await loadDashboard({ renderAfter: false })
+    }
+    state.prepare = { loading: false, result: payload.data, error: '' }
+  } catch (error) {
+    state.prepare = { loading: false, result: null, error: errorMessage(error) }
+  }
+  render()
+}
+
+function renderMemoryPrepareResult(result) {
+  const results = Array.isArray(result.results) ? result.results : []
+  const receipts = Array.isArray(result.receipts) ? result.receipts : []
+  const changed = results.filter((item) => item.action && item.action !== 'skip').length
+  const title = result.dryRun ? 'Prepare dry-run result' : 'Prepare apply result'
+  return `
+    <div class="soft-panel">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="triage-grid">
+        ${metric('Pending', result.pendingBeforeCount ?? 0, `${result.pendingAfterCount ?? 0} after prepare`)}
+        ${metric('Changed', changed, 'replace/enrich/fail actions')}
+        ${metric('Receipts', receipts.length, result.dryRun ? 'preview only' : 'written')}
+        ${metric('Active', result.activeAfterCount ?? 0, `${result.activeBeforeCount ?? 0} before prepare`)}
+      </div>
+      <div class="soft-inset">Scope: ${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} · ${result.dryRun ? 'preview only' : 'pending updated'}</div>
+      ${results.slice(0, 8).map(renderMemoryPrepareRow).join('') || emptyState('No pending candidates needed prepare.')}
+    </div>
+  `
+}
+
+function renderMemoryPrepareRow(result) {
+  const receipt = result.receipt || {}
+  const candidateId = result.original?.id || result.next?.id || receipt.pendingMemoryId || 'candidate'
+  const reasons = Array.isArray(result.validation?.reasons) && result.validation.reasons.length > 0
+    ? result.validation.reasons.join(', ')
+    : Array.isArray(receipt.validatorReasons) && receipt.validatorReasons.length > 0
+      ? receipt.validatorReasons.join(', ')
+      : 'validated'
+  return `
+    <article class="data-row">
+      <div>
+        <div class="row-title">${escapeHtml(result.action || 'skip')}</div>
+        <div class="row-meta">${escapeHtml(candidateId)} · ${escapeHtml(reasons)}</div>
+      </div>
+      ${statusChip('prepare', result.action || 'skip', prepareTone(result.action))}
+    </article>
+  `
+}
+
+function prepareTone(action) {
+  if (action === 'replace_content' || action === 'enrich_boundaries') return 'ok'
+  if (action === 'fail') return 'error'
   return 'muted'
 }
 

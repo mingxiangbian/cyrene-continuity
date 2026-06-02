@@ -54,6 +54,7 @@ import {
   type CodexPendingMemorySummary
 } from './memory-review.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
+import { runCodexMemoryPrepare } from './codex-memory-prepare.js'
 import { identifyCodexProject, type CodexProjectIdentity } from './project-id.js'
 import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
 import { collectProjectMemorySignals } from './project-memory-signals.js'
@@ -248,6 +249,27 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
         now: input.now,
         apply: input.pathname.endsWith('/apply')
       }))
+    }
+
+    if (input.pathname === '/api/memory/prepare/dry-run' || input.pathname === '/api/memory/prepare/apply') {
+      if (input.method.toUpperCase() !== 'POST') {
+        return methodNotAllowed()
+      }
+      const selectionRequest = parseSelectionRequest(input.searchParams)
+      if ('error' in selectionRequest) return selectionRequest.error
+      const unsupportedScope = rejectAllScopeForSingleRootOperation(selectionRequest.value, 'memory prepare')
+      if (unsupportedScope !== undefined) return unsupportedScope
+      const selection = await resolveSelection(input.cwd, selectionRequest.value)
+      const result = await runCodexMemoryPrepare({
+        memoryRoot: selection.memoryRoot,
+        dryRun: input.pathname.endsWith('/dry-run'),
+        now: input.now
+      })
+      return ok({
+        ...result,
+        project: selection.project,
+        selection: publicSelection(selection)
+      })
     }
 
     const activeWriteRoute = parseActiveMemoryWriteRoute(input.pathname)
