@@ -14,7 +14,6 @@ import {
 import {
   appendMemoryEventFromRoot,
   assertSafeMemoryDataFileTarget,
-  readSemanticMemoriesFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
 import type {
@@ -35,6 +34,7 @@ import { listCodexProjects } from './project-registry.js'
 
 const INDEX_FILE = 'index.jsonl'
 const PENDING_FILE = 'pending.jsonl'
+const SEMANTIC_MEMORIES_FILE = 'semantic_memories.jsonl'
 const HIGH_RISK_DOMAINS = new Set<MemoryDomain>(['personal', 'relationship', 'affective'])
 const LOW_RISK_DOMAINS = new Set<MemoryDomain>(['project', 'procedural', 'system'])
 const REVIEW_SUMMARY_NOISE_PHRASES = [
@@ -113,6 +113,18 @@ interface JsonLinesReadResult<T> {
   malformedLines: number
 }
 
+interface DropAudit {
+  id: string
+  source: RecommendationReviewPackage['source']
+  sourceStatus: 'active' | 'pending'
+  domain: string
+  type: string
+  normalizedKey: string
+  content: string
+  dropReason: string
+  originalRecord: CyreneMemory | PendingMemory | SemanticMemory
+}
+
 export async function runCodexMemoryLifecycleMigrateV15(
   input: CodexMemoryLifecycleMigrateV15Input
 ): Promise<CodexMemoryLifecycleMigrateV15Result> {
@@ -128,9 +140,17 @@ export async function runCodexMemoryLifecycleMigrateV15(
     projectId: currentProject.projectId,
     memoryRoot: codexProjectMemoryRoot(currentProject.projectId)
   })
+  let registryFailure: CodexMemoryLifecycleMigrateV15RootResult | undefined
   if (input.allProjects === true) {
-    for (const project of await listCodexProjects().catch(() => [])) {
-      addRoot({ scope: 'project', projectId: project.projectId, memoryRoot: project.memoryRoot })
+    try {
+      for (const project of await listCodexProjects()) {
+        addRoot({ scope: 'project', projectId: project.projectId, memoryRoot: project.memoryRoot })
+      }
+    } catch (error) {
+      registryFailure = skippedRootResult(
+        { scope: 'project', memoryRoot: join(codexGlobalMemoryRoot(), '..', '..', 'projects') },
+        `project registry listing failed: ${errorMessage(error)}`
+      )
     }
   }
 
@@ -145,6 +165,9 @@ export async function runCodexMemoryLifecycleMigrateV15(
     }
     results.push(await migrateReadableRoot({ ...root, memoryRoot: readable.memoryRoot }, { dryRun, now }))
   }
+  if (registryFailure !== undefined) {
+    results.push(registryFailure)
+  }
 
   return {
     action: 'migrate_memory_lifecycle_v1_5',
@@ -157,21 +180,24 @@ async function migrateReadableRoot(
   root: MemoryRootSpec,
   input: { dryRun: boolean; now: string }
 ): Promise<CodexMemoryLifecycleMigrateV15RootResult> {
-  const [legacyActiveRead, legacyPendingRead, existingSemantic] = await Promise.all([
+  const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
     readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, INDEX_FILE)),
     readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, PENDING_FILE)),
-    readSemanticMemoriesFromRoot(root.memoryRoot)
+    readJsonLinesWithMalformed<SemanticMemory>(join(root.memoryRoot, SEMANTIC_MEMORIES_FILE))
   ])
   const legacyActive = legacyActiveRead.records
   const legacyPending = legacyPendingRead.records
+  const existingSemantic = semanticRead.records
   const active = legacyActive.filter((memory) => memory.status === 'active')
   const pending = legacyPending.filter((memory) => memory.status === 'pending')
   const semanticActive = existingSemantic.filter((memory) => memory.status === 'active')
   const semanticPending = existingSemantic.filter((memory) => memory.status === 'pending')
-  const malformedJsonLines = legacyActiveRead.malformedLines + legacyPendingRead.malformedLines
+  const malformedJsonLines = legacyActiveRead.malformedLines + legacyPendingRead.malformedLines + semanticRead.malformedLines
+  const activeIds = new Set([...active, ...semanticActive].map((memory) => memory.id))
   const processedIds = new Set<string>()
   const converted: SemanticMemory[] = []
   const recommendations: Recommendation[] = []
+  const dropAudits: DropAudit[] = []
   const result = baseRootResult(root, {
     legacyActiveBefore: active.length,
     legacyPendingBefore: pending.length,
@@ -188,49 +214,6 @@ async function migrateReadableRoot(
     }
   }
 
-  for (const memory of pending) {
-    processedIds.add(memory.id)
-    if (isReviewSummaryNoise(memory) || isLowValueNoise(memory)) {
-      result.droppedPending += 1
-      continue
-    }
-    const recommendationReason = recommendationReasonForPending(root.scope, memory)
-    if (recommendationReason !== undefined || root.scope === 'global') {
-      result.recommendations += 1
-      recommendations.push(recommendationForPending(memory, recommendationReason ?? 'global pending memory requires manual review'))
-      continue
-    }
-
-    converted.push(withLifecycle(pendingMemoryToSemanticMemory(memory), 'trial', input.now))
-    result.convertedPendingToTrial += 1
-  }
-
-  for (const memory of semanticPending) {
-    if (processedIds.has(memory.id)) {
-      continue
-    }
-    processedIds.add(memory.id)
-    const pendingMemory = semanticMemoryToPendingMemory(memory)
-    if (isReviewSummaryNoise(pendingMemory) || isLowValueNoise(pendingMemory)) {
-      result.droppedPending += 1
-      continue
-    }
-    const recommendationReason = recommendationReasonForPending(root.scope, pendingMemory)
-    if (recommendationReason !== undefined || root.scope === 'global') {
-      result.recommendations += 1
-      recommendations.push(recommendationForSemantic(
-        memory,
-        'pending',
-        pendingMemory,
-        recommendationReason ?? 'global pending memory requires manual review'
-      ))
-      continue
-    }
-
-    converted.push(withLifecycle(memory, 'trial', input.now))
-    result.convertedPendingToTrial += 1
-  }
-
   for (const memory of active) {
     if (processedIds.has(memory.id)) {
       continue
@@ -238,6 +221,7 @@ async function migrateReadableRoot(
     processedIds.add(memory.id)
     if (isLowValueNoise(memory)) {
       result.droppedActive += 1
+      dropAudits.push(dropAuditForActive(memory, 'low-value memory'))
       continue
     }
     const recommendationReason = recommendationReasonForActive(root.scope, memory)
@@ -264,6 +248,7 @@ async function migrateReadableRoot(
     const activeMemory = semanticMemoryToActiveMemory(memory)
     if (isLowValueNoise(activeMemory)) {
       result.droppedActive += 1
+      dropAudits.push(dropAuditForSemantic(memory, 'active', activeMemory, 'low-value memory'))
       continue
     }
     const recommendationReason = recommendationReasonForActive(root.scope, activeMemory)
@@ -282,6 +267,74 @@ async function migrateReadableRoot(
     }
   }
 
+  for (const memory of pending) {
+    if (activeIds.has(memory.id)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForPending(memory, 'duplicate pending id shadowed by active memory'))
+      continue
+    }
+    if (processedIds.has(memory.id)) {
+      continue
+    }
+    processedIds.add(memory.id)
+    if (isReviewSummaryNoise(memory)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForPending(memory, 'review-summary noise'))
+      continue
+    }
+    if (isLowValueNoise(memory)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForPending(memory, 'low-value memory'))
+      continue
+    }
+    const recommendationReason = recommendationReasonForPending(root.scope, memory)
+    if (recommendationReason !== undefined || root.scope === 'global') {
+      result.recommendations += 1
+      recommendations.push(recommendationForPending(memory, recommendationReason ?? 'global pending memory requires manual review'))
+      continue
+    }
+
+    converted.push(withLifecycle(pendingMemoryToSemanticMemory(memory), 'trial', input.now))
+    result.convertedPendingToTrial += 1
+  }
+
+  for (const memory of semanticPending) {
+    const pendingMemory = semanticMemoryToPendingMemory(memory)
+    if (activeIds.has(memory.id)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForSemantic(memory, 'pending', pendingMemory, 'duplicate pending id shadowed by active memory'))
+      continue
+    }
+    if (processedIds.has(memory.id)) {
+      continue
+    }
+    processedIds.add(memory.id)
+    if (isReviewSummaryNoise(pendingMemory)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForSemantic(memory, 'pending', pendingMemory, 'review-summary noise'))
+      continue
+    }
+    if (isLowValueNoise(pendingMemory)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForSemantic(memory, 'pending', pendingMemory, 'low-value memory'))
+      continue
+    }
+    const recommendationReason = recommendationReasonForPending(root.scope, pendingMemory)
+    if (recommendationReason !== undefined || root.scope === 'global') {
+      result.recommendations += 1
+      recommendations.push(recommendationForSemantic(
+        memory,
+        'pending',
+        pendingMemory,
+        recommendationReason ?? 'global pending memory requires manual review'
+      ))
+      continue
+    }
+
+    converted.push(withLifecycle(memory, 'trial', input.now))
+    result.convertedPendingToTrial += 1
+  }
+
   const nextSemantic = upsertSemanticMemories(
     existingSemantic.filter((memory) => !processedIds.has(memory.id)),
     converted
@@ -289,15 +342,18 @@ async function migrateReadableRoot(
   result.semanticAfter = nextSemantic.length
 
   if (!input.dryRun) {
+    for (const recommendation of recommendations) {
+      await appendMemoryEventFromRoot(root.memoryRoot, recommendationEvent(root, recommendation, input.now))
+    }
+    for (const audit of dropAudits) {
+      await appendMemoryEventFromRoot(root.memoryRoot, dropAuditEvent(root, audit, input.now))
+    }
     await writeSemanticMemoriesFromRoot(root.memoryRoot, nextSemantic)
     await writeJsonLinesAtomic(join(root.memoryRoot, PENDING_FILE), [])
     await writeJsonLinesAtomic(
       join(root.memoryRoot, INDEX_FILE),
       nextSemantic.filter((memory) => memory.status === 'active').map(semanticMemoryToActiveMemory)
     )
-    for (const recommendation of recommendations) {
-      await appendMemoryEventFromRoot(root.memoryRoot, recommendationEvent(root, recommendation, input.now))
-    }
     await appendMemoryEventFromRoot(root.memoryRoot, completionEvent(result, input.now))
   }
 
@@ -505,6 +561,53 @@ function recommendationForSemantic(
   }
 }
 
+function dropAuditForPending(memory: PendingMemory, dropReason: string): DropAudit {
+  return {
+    id: memory.id,
+    source: 'legacy_pending',
+    sourceStatus: 'pending',
+    domain: memory.domain,
+    type: memory.type,
+    normalizedKey: memory.normalizedKey,
+    content: memory.content,
+    dropReason,
+    originalRecord: memory
+  }
+}
+
+function dropAuditForActive(memory: CyreneMemory, dropReason: string): DropAudit {
+  return {
+    id: memory.id,
+    source: 'legacy_index',
+    sourceStatus: 'active',
+    domain: memory.domain,
+    type: memory.type,
+    normalizedKey: memory.normalizedKey,
+    content: memory.content,
+    dropReason,
+    originalRecord: memory
+  }
+}
+
+function dropAuditForSemantic(
+  memory: SemanticMemory,
+  sourceStatus: 'active' | 'pending',
+  normalizedMemory: CyreneMemory | PendingMemory,
+  dropReason: string
+): DropAudit {
+  return {
+    id: memory.id,
+    source: 'semantic_memory',
+    sourceStatus,
+    domain: memory.domain,
+    type: normalizedMemory.type,
+    normalizedKey: normalizedMemory.normalizedKey,
+    content: memory.content,
+    dropReason,
+    originalRecord: memory
+  }
+}
+
 function recommendationEvent(root: MemoryRootSpec, recommendation: Recommendation, now: string): MemoryEvent {
   return {
     id: randomUUID(),
@@ -523,6 +626,32 @@ function recommendationEvent(root: MemoryRootSpec, recommendation: Recommendatio
       reason: recommendation.reason,
       contentPreview: recommendation.content.slice(0, 160),
       reviewPackage: recommendation.reviewPackage
+    }
+  }
+}
+
+function dropAuditEvent(root: MemoryRootSpec, audit: DropAudit, now: string): MemoryEvent {
+  return {
+    id: randomUUID(),
+    action: 'audit',
+    at: now,
+    reason: audit.dropReason === 'low-value memory'
+      ? 'v1.5 migration dropped low-value memory'
+      : 'v1.5 migration dropped memory',
+    ...(audit.sourceStatus === 'active' ? { memoryId: audit.id } : { candidateId: audit.id }),
+    details: {
+      migration: 'memory_lifecycle_v1_5',
+      scope: root.scope,
+      projectId: root.projectId,
+      id: audit.id,
+      source: audit.source,
+      sourceStatus: audit.sourceStatus,
+      domain: audit.domain,
+      type: audit.type,
+      normalizedKey: audit.normalizedKey,
+      dropReason: audit.dropReason,
+      contentPreview: audit.content.slice(0, 160),
+      originalRecord: audit.originalRecord
     }
   }
 }
@@ -663,4 +792,8 @@ async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promis
 
 function isFileErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

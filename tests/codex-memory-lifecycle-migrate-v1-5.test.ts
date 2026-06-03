@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -318,6 +318,70 @@ describe('Codex memory lifecycle v1.5 migration', () => {
       event.memoryId === 'project-low-value-active' &&
       event.reason === 'v1.5 migration recommended manual review for high-risk memory'
     )).toBeUndefined()
+    expect(events.find((event) =>
+      event.memoryId === 'project-low-value-active' &&
+      event.reason === 'v1.5 migration dropped low-value memory'
+    )).toMatchObject({
+      action: 'audit',
+      details: {
+        id: 'project-low-value-active',
+        sourceStatus: 'active',
+        normalizedKey: 'project-low-value-active',
+        dropReason: 'low-value memory'
+      }
+    })
+  })
+
+  it('lets active memory win when legacy pending has the same id', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-duplicate-id-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-duplicate-id-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createActive({
+        id: 'dup-memory',
+        scope: 'project',
+        normalizedKey: 'dup-memory-active',
+        content: 'Duplicate ids must preserve the active project memory when a stale pending row has the same id.'
+      })
+    ])
+    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [
+      createPending({
+        id: 'dup-memory',
+        content: 'FYI.',
+        normalizedKey: 'dup-memory-stale-pending',
+        scores: {
+          evidenceStrength: 0.2,
+          stability: 0.3,
+          usefulness: 0.1,
+          safety: 0.95,
+          sensitivity: 0.1
+        }
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({
+      convertedPendingToTrial: 0,
+      droppedPending: 1,
+      droppedActive: 0
+    })
+    expect((projectResult?.convertedActiveToValidated ?? 0) + (projectResult?.convertedActiveToCore ?? 0)).toBe(1)
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    expect(semantic.find((memory) => memory.id === 'dup-memory')).toMatchObject({
+      id: 'dup-memory',
+      status: 'active'
+    })
+    expect(['validated', 'project_core']).toContain(semantic.find((memory) => memory.id === 'dup-memory')?.confidenceTier)
   })
 
   it('normalizes semantic-only project pending and drops low-value semantic pending', async () => {
@@ -502,6 +566,107 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     })
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
     await expect(readFile(join(memoryRoot, 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('blocks apply without mutating roots that contain malformed semantic JSONL', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-malformed-semantic-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-malformed-semantic-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const indexPath = join(memoryRoot, 'index.jsonl')
+    const originalSemantic = `${JSON.stringify(createSemanticPending({ id: 'semantic-before-malformed' }))}\n{bad json}\n`
+    const originalPending = `${JSON.stringify(createPending({ id: 'pending-before-semantic-malformed' }))}\n`
+    const originalIndex = `${JSON.stringify(createActive({ id: 'active-before-semantic-malformed', scope: 'project' }))}\n`
+    await writeFile(semanticPath, originalSemantic, 'utf8')
+    await writeFile(pendingPath, originalPending, 'utf8')
+    await writeFile(indexPath, originalIndex, 'utf8')
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({
+      skipped: true,
+      reason: expect.stringContaining('malformed JSONL'),
+      malformedJsonLines: 1
+    })
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(originalSemantic)
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
+    await expect(readFile(indexPath, 'utf8')).resolves.toBe(originalIndex)
+  })
+
+  it('does not rewrite memory files when recommendation event append fails', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-event-failure-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-event-failure-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    const indexPath = join(memoryRoot, 'index.jsonl')
+    const originalIndex = `${JSON.stringify(createActive({
+      id: 'event-failure-high-risk',
+      scope: 'project',
+      domain: 'affective',
+      type: 'affective_pattern',
+      content: 'High-risk memory must keep its source files intact if the review receipt cannot be persisted.',
+      normalizedKey: 'event-failure-high-risk',
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.8,
+        usefulness: 0.8,
+        safety: 0.7,
+        sensitivity: 0.85
+      },
+      tags: ['affective']
+    }))}\n`
+    await writeFile(indexPath, originalIndex, 'utf8')
+    await symlink(join(home, 'outside-events.jsonl'), join(memoryRoot, 'events.jsonl'))
+
+    await expect(runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })).rejects.toThrow(/memory data file symlink/)
+
+    await expect(readFile(indexPath, 'utf8')).resolves.toBe(originalIndex)
+    await expect(readFile(join(memoryRoot, 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reports all-projects registry listing failures without skipping current roots', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-registry-failure-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-registry-failure-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    await mkdir(codexGlobalMemoryRoot(), { recursive: true })
+    await mkdir(codexProjectMemoryRoot(project.projectId), { recursive: true })
+    const badProjectRoot = join(home, '.cyrene', 'codex', 'projects', 'bad-registry-entry')
+    await mkdir(badProjectRoot, { recursive: true })
+    await writeFile(join(badProjectRoot, 'project.json'), '{bad json}\n', 'utf8')
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      allProjects: true,
+      apply: false,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    expect(result.roots.find((root) => root.scope === 'global')?.skipped).not.toBe(true)
+    expect(result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)?.skipped).not.toBe(true)
+    expect(result.roots.find((root) =>
+      root.scope === 'project' &&
+      root.skipped === true &&
+      root.reason?.includes('project registry listing failed') === true
+    )).toBeDefined()
   })
 
   it('outputs JSON for the CLI dry-run route', async () => {
