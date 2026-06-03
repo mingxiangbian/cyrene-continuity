@@ -8,8 +8,9 @@ import { rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import { readActivationEventsFromRoot, readReflectionCandidatesFromRoot } from '../src/memory/memory-store.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
 const originalHome = process.env.HOME
@@ -196,6 +197,71 @@ describe('Codex continuity context', () => {
       })
     ])
     await expect(readReflectionCandidatesFromRoot(memoryRoot)).resolves.toEqual([])
+  })
+
+  it('returns workflow-hint activation for matching active project trial memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-trial-activation-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-trial-activation-repo-')
+    const identity = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), JSON.stringify(createSemanticMemory({
+      id: 'trial-memory',
+      confidenceTier: 'trial',
+      activationPolicy: activationPolicyForConfidenceTier('trial'),
+      content: 'Runtime activation validator changes should stay as workflow hints.'
+    })) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime activation validator changes',
+      task: 'coding'
+    })
+
+    expect(context.activation.workflowHints).toEqual([
+      expect.objectContaining({
+        memoryId: 'trial-memory',
+        activationMode: 'workflow_hint'
+      })
+    ])
+    expect(context.activation.planConstraints).toEqual([])
+    expect(context.activation.checklistItems).toEqual([])
+  })
+
+  it('returns constraint and checklist activation for matching active validated memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-validated-activation-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-validated-activation-repo-')
+    const identity = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), JSON.stringify(createSemanticMemory({
+      id: 'validated-memory',
+      confidenceTier: 'validated',
+      activationPolicy: activationPolicyForConfidenceTier('validated'),
+      content: 'Runtime activation validator changes require lifecycle checks.'
+    })) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime activation validator changes',
+      task: 'coding'
+    })
+
+    expect(context.activation.workflowHints).toEqual([])
+    expect(context.activation.planConstraints).toEqual([
+      expect.objectContaining({
+        memoryId: 'validated-memory',
+        activationMode: 'plan_constraint'
+      })
+    ])
+    expect(context.activation.checklistItems).toEqual([
+      expect.objectContaining({
+        memoryId: 'validated-memory',
+        activationMode: 'checklist_item'
+      })
+    ])
   })
 
   it('does not write canonical global activation events for legacy global fallback memory', async () => {
@@ -1076,5 +1142,57 @@ function createPendingMemory(): PendingMemory {
     lastSeenAt: '2026-05-25T00:00:00.000Z',
     expiresAt: '2026-06-24T00:00:00.000Z',
     tags: ['codex']
+  }
+}
+
+function createSemanticMemory(overrides: Partial<SemanticMemory> = {}): SemanticMemory {
+  return {
+    id: 'semantic-memory',
+    status: 'active',
+    module: 'project_semantic',
+    kind: 'workflow_rule',
+    scope: 'project',
+    domain: 'procedural',
+    content: 'Runtime activation validator workflow guidance.',
+    useWhen: ['Changing runtime activation validator behavior'],
+    doNotUseWhen: ['The task is unrelated to runtime activation'],
+    sourceOfTruth: 'test',
+    evidence: [
+      {
+        id: 'semantic-evidence-1',
+        sourceKind: 'file',
+        sourceRef: 'test',
+        when: '2026-06-01T00:00:00.000Z',
+        whatHappened: 'Runtime activation behavior was validated.',
+        whyImportant: 'The memory can guide future runtime activation work.'
+      }
+    ],
+    routing: {
+      module: 'project_semantic',
+      updatePolicy: 'strict_auto_promote',
+      risk: 'low',
+      reasons: ['test memory']
+    },
+    reviewPolicy: 'strict_auto_promote',
+    reviewState: {
+      normalizedKey: 'runtime-activation-validator-workflow',
+      type: 'procedural_rule',
+      strength: 'hard',
+      source: 'file',
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.9,
+        usefulness: 0.9,
+        safety: 0.95,
+        sensitivity: 0.1
+      },
+      tags: ['workflow_rule']
+    },
+    confidenceTier: 'trial',
+    activationPolicy: activationPolicyForConfidenceTier('trial'),
+    supersedes: [],
+    createdAt: '2026-06-01T00:00:00.000Z',
+    updatedAt: '2026-06-01T00:00:00.000Z',
+    ...overrides
   }
 }

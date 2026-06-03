@@ -21,8 +21,8 @@ import {
   retrieveMemories
 } from '../memory/memory-retriever.js'
 import type { RetrievedMemory, RetrieveMemoriesInput } from '../memory/memory-retriever.js'
-import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot } from '../memory/memory-store.js'
-import type { CyreneMemory, PendingMemory } from '../memory/types.js'
+import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot, readSemanticMemoriesFromRoot } from '../memory/memory-store.js'
+import type { CyreneMemory, PendingMemory, SemanticMemory } from '../memory/types.js'
 import { estimateTokens } from '../token-counter.js'
 import { codexMemoryDbPath, codexMemoryIndexRoots } from './codex-memory-index.js'
 import {
@@ -50,6 +50,7 @@ import { buildCodexProjectFingerprint } from './project-fingerprint.js'
 import { identifyCodexProject } from './project-id.js'
 import { appendActivationEventsFailOpen } from './memory-feedback.js'
 import type { CodexPendingReviewNotice } from './memory-review.js'
+import { buildMemoryActivations, type MemoryActivation } from './memory-activation.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
 
@@ -154,6 +155,11 @@ export interface CodexContinuityContext {
   projectMemory: RoutedMemoryDigestItem[]
   pendingHypotheses: PendingHypothesisDigestItem[]
   similarProjectHints: SimilarProjectHintDigestItem[]
+  activation: {
+    workflowHints: MemoryActivation[]
+    planConstraints: MemoryActivation[]
+    checklistItems: MemoryActivation[]
+  }
   responseStrategy: {
     tone: string
     verbosity: string
@@ -241,6 +247,15 @@ export async function getCodexContinuityContext(input: {
     fallback: legacyRetrievalInput
   })
   const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot)
+  const [projectActivationMemories, globalActivationMemories] = await Promise.all([
+    runtimeActivationMemoriesForRoute(projectMemoryRoot, routedMemory.projectMemory),
+    runtimeActivationMemoriesForRoute(globalMemoryRoot, routedMemory.globalMemory)
+  ])
+  const activation = buildMemoryActivations({
+    query: input.userMessage,
+    globalMemories: globalActivationMemories,
+    projectMemories: projectActivationMemories
+  })
   await Promise.all([
     appendActivationEventsFailOpen({
       memoryRoot: globalMemoryRoot,
@@ -300,6 +315,7 @@ export async function getCodexContinuityContext(input: {
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
+    activation,
     responseStrategy: {
       tone: snapshot.strategy.tone,
       verbosity: snapshot.strategy.verbosity,
@@ -359,6 +375,23 @@ export async function getCodexContinuityContext(input: {
       reason: snapshot.dissent.reason
     }
   }
+}
+
+async function runtimeActivationMemoriesForRoute(
+  memoryRoot: string,
+  routedMemory: Array<IndexedActiveMemory | RetrievedMemory>
+): Promise<Array<SemanticMemory | CyreneMemory>> {
+  const projectedMemories = routedMemory.map((item) => item.memory)
+  const projectedById = new Map(projectedMemories.map((memory) => [memory.id, memory]))
+  if (projectedById.size === 0) {
+    return []
+  }
+  const semanticById = new Map(
+    (await readSemanticMemoriesFromRoot(memoryRoot))
+      .filter((memory) => memory.status === 'active' && projectedById.get(memory.id)?.content === memory.content)
+      .map((memory) => [memory.id, memory])
+  )
+  return projectedMemories.map((memory) => semanticById.get(memory.id) ?? memory)
 }
 
 interface RoutedMemoryResult {
