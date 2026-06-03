@@ -2,6 +2,38 @@ import { createHash, randomUUID } from 'node:crypto'
 import { appendActivationEventFromRoot, appendReflectionCandidateFromRoot } from '../memory/memory-store.js'
 import type { ActivationEventType, ReflectionCandidate, SemanticMemory } from '../memory/types.js'
 
+function queryHashFor(query: string): string {
+  return createHash('sha256').update(query).digest('hex').slice(0, 16)
+}
+
+export async function appendActivationEventFailOpen(input: {
+  memoryRoot: string
+  memoryId: string
+  projectId?: string
+  query?: string
+  event: ActivationEventType
+  activationId?: string
+  reason?: string
+  evidenceRef?: string
+  now?: string
+}): Promise<void> {
+  try {
+    await appendActivationEventFromRoot(input.memoryRoot, {
+      id: randomUUID(),
+      memoryId: input.memoryId,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      ...(input.query === undefined ? {} : { queryHash: queryHashFor(input.query) }),
+      event: input.event,
+      ...(input.activationId === undefined ? {} : { activationId: input.activationId }),
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+      ...(input.evidenceRef === undefined ? {} : { evidenceRef: input.evidenceRef }),
+      createdAt: input.now ?? new Date().toISOString()
+    })
+  } catch {
+    // Continuity feedback is advisory; failures must not block callers.
+  }
+}
+
 export async function appendActivationEventsFailOpen(input: {
   memoryRoot: string
   memoryIds: string[]
@@ -14,16 +46,17 @@ export async function appendActivationEventsFailOpen(input: {
   try {
     const memoryIds = [...new Set(input.memoryIds)].sort()
     const createdAt = input.now ?? new Date().toISOString()
-    const queryHash = createHash('sha256').update(input.query).digest('hex').slice(0, 16)
-    await Promise.all(memoryIds.map((memoryId) => appendActivationEventFromRoot(input.memoryRoot, {
-      id: randomUUID(),
-      memoryId,
-      projectId: input.projectId,
-      queryHash,
-      event: input.event ?? 'retrieved',
-      ...(input.evidenceRef === undefined ? {} : { evidenceRef: input.evidenceRef }),
-      createdAt
-    })))
+    for (const memoryId of memoryIds) {
+      await appendActivationEventFailOpen({
+        memoryRoot: input.memoryRoot,
+        memoryId,
+        projectId: input.projectId,
+        query: input.query,
+        event: input.event ?? 'retrieved',
+        evidenceRef: input.evidenceRef,
+        now: createdAt
+      })
+    }
   } catch {
     // Continuity context construction must not fail because feedback logging failed.
   }
