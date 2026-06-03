@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -135,6 +135,30 @@ function createSemanticPending(overrides: Partial<SemanticMemory> = {}): Semanti
     updatedAt: '2026-06-02T00:00:00.000Z',
     ...overrides
   }
+}
+
+function createSemanticActive(overrides: Partial<SemanticMemory> = {}): SemanticMemory {
+  return createSemanticPending({
+    id: 'semantic-active-1',
+    status: 'active',
+    content: 'Semantic active workflow rules without lifecycle fields should be classified during v1.5 migration.',
+    reviewPolicy: 'strict_auto_promote',
+    reviewState: {
+      normalizedKey: 'semantic-active-fixture',
+      type: 'procedural_rule',
+      strength: 'soft',
+      source: 'file',
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.85,
+        usefulness: 0.85,
+        safety: 0.95,
+        sensitivity: 0.1
+      },
+      tags: ['workflow_rule']
+    },
+    ...overrides
+  })
 }
 
 async function captureStdout(task: () => Promise<void>): Promise<string> {
@@ -336,7 +360,11 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     })
 
     const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
-    expect(projectResult).toMatchObject({ convertedPendingToTrial: 1, droppedPending: 1 })
+    expect(projectResult).toMatchObject({
+      semanticPendingBefore: 2,
+      convertedPendingToTrial: 1,
+      droppedPending: 1
+    })
     const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
     expect(semantic.find((memory) => memory.id === 'semantic-pending-trial')).toMatchObject({
       id: 'semantic-pending-trial',
@@ -349,6 +377,131 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     })
     expect(semantic.find((memory) => memory.id === 'semantic-pending-low-value')).toBeUndefined()
     expect(semantic.filter((memory) => memory.status === 'pending')).toEqual([])
+    const events = await readMemoryEventsFromRoot(memoryRoot)
+    const completion = events.find((event) => event.reason === 'completed v1.5 memory lifecycle migration')
+    expect(completion?.details).toMatchObject({ semanticPendingBefore: 2 })
+  })
+
+  it('classifies semantic-only active memory and retains full review packages for recommendations', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-semantic-active-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-semantic-active-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    const highRisk = createSemanticActive({
+      id: 'semantic-active-high-risk',
+      module: 'relationship_affective',
+      kind: 'user_instruction',
+      domain: 'affective',
+      content: 'High-risk semantic active memory should be removed from activation and retained in a full manual review package.',
+      sourceOfTruth: 'semantic-active-high-risk-source',
+      evidence: [
+        {
+          id: 'semantic-active-high-risk-evidence',
+          sourceKind: 'file',
+          sourceRef: 'semantic_memories.jsonl',
+          when: '2026-06-02T00:00:00.000Z',
+          whatHappened: 'A high-risk semantic active memory existed without lifecycle fields.',
+          whyImportant: 'Manual review needs the complete source record.'
+        }
+      ],
+      reviewState: {
+        normalizedKey: 'semantic-active-high-risk',
+        type: 'affective_pattern',
+        strength: 'soft',
+        source: 'file',
+        scores: {
+          evidenceStrength: 0.9,
+          stability: 0.8,
+          usefulness: 0.8,
+          safety: 0.7,
+          sensitivity: 0.85
+        },
+        tags: ['affective', 'manual_review']
+      }
+    })
+    await writeSemanticMemoriesFromRoot(memoryRoot, [
+      createSemanticActive({ id: 'semantic-active-validated' }),
+      highRisk
+    ])
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({
+      semanticActiveBefore: 2,
+      convertedActiveToValidated: 1,
+      convertedActiveToCore: 0,
+      recommendations: 1
+    })
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    expect(semantic.find((memory) => memory.id === 'semantic-active-validated')).toMatchObject({
+      id: 'semantic-active-validated',
+      status: 'active',
+      confidenceTier: 'validated',
+      activationPolicy: {
+        allowedModes: ['workflow_hint', 'plan_constraint', 'checklist_item'],
+        maxRuntimeStrength: 'checklist'
+      }
+    })
+    expect(semantic.find((memory) => memory.id === 'semantic-active-high-risk')).toBeUndefined()
+    expect(semantic.filter((memory) =>
+      memory.status === 'active' &&
+      (memory.confidenceTier === undefined || memory.activationPolicy === undefined)
+    )).toEqual([])
+    const events = await readMemoryEventsFromRoot(memoryRoot)
+    const recommendation = events.find((event) => event.memoryId === 'semantic-active-high-risk')
+    expect(recommendation?.details).toMatchObject({
+      reviewPackage: {
+        source: 'semantic_memory',
+        sourceStatus: 'active',
+        content: highRisk.content,
+        evidence: highRisk.evidence,
+        reviewState: highRisk.reviewState,
+        scores: highRisk.reviewState?.scores,
+        normalizedKey: 'semantic-active-high-risk',
+        tags: ['affective', 'manual_review'],
+        originalRecord: {
+          id: 'semantic-active-high-risk',
+          status: 'active',
+          sourceOfTruth: 'semantic-active-high-risk-source'
+        }
+      }
+    })
+  })
+
+  it('blocks apply without mutating roots that contain malformed legacy JSONL', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-malformed-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-malformed-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const originalPending = `${JSON.stringify(createPending({ id: 'pending-before-malformed' }))}\n{bad json}\n`
+    await writeFile(pendingPath, originalPending, 'utf8')
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({
+      skipped: true,
+      reason: expect.stringContaining('malformed JSONL'),
+      malformedJsonLines: 1
+    })
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
+    await expect(readFile(join(memoryRoot, 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('outputs JSON for the CLI dry-run route', async () => {

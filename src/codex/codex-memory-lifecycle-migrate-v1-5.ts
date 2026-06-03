@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { activationPolicyForConfidenceTier } from '../memory/memory-lifecycle.js'
+import {
+  activationPolicyForConfidenceTier,
+  validateSemanticMemoryLifecycle
+} from '../memory/memory-lifecycle.js'
 import {
   activeMemoryToSemanticMemory,
   pendingMemoryToSemanticMemory,
@@ -56,7 +59,10 @@ export interface CodexMemoryLifecycleMigrateV15RootResult {
   legacyActiveBefore: number
   legacyPendingBefore: number
   semanticBefore: number
+  semanticActiveBefore: number
+  semanticPendingBefore: number
   semanticAfter: number
+  malformedJsonLines: number
   convertedPendingToTrial: number
   convertedActiveToValidated: number
   convertedActiveToCore: number
@@ -85,6 +91,26 @@ interface Recommendation {
   normalizedKey: string
   content: string
   reason: string
+  reviewPackage: RecommendationReviewPackage
+}
+
+interface RecommendationReviewPackage {
+  source: 'legacy_index' | 'legacy_pending' | 'semantic_memory'
+  sourceStatus: 'active' | 'pending'
+  domain: string
+  type: string
+  normalizedKey: string
+  content: string
+  evidence: unknown[]
+  scores?: MemoryScores
+  reviewState?: SemanticMemory['reviewState']
+  tags: string[]
+  originalRecord: CyreneMemory | PendingMemory | SemanticMemory
+}
+
+interface JsonLinesReadResult<T> {
+  records: T[]
+  malformedLines: number
 }
 
 export async function runCodexMemoryLifecycleMigrateV15(
@@ -131,22 +157,36 @@ async function migrateReadableRoot(
   root: MemoryRootSpec,
   input: { dryRun: boolean; now: string }
 ): Promise<CodexMemoryLifecycleMigrateV15RootResult> {
-  const [legacyActive, legacyPending, existingSemantic] = await Promise.all([
-    readJsonLines<CyreneMemory>(join(root.memoryRoot, INDEX_FILE)),
-    readJsonLines<PendingMemory>(join(root.memoryRoot, PENDING_FILE)),
+  const [legacyActiveRead, legacyPendingRead, existingSemantic] = await Promise.all([
+    readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, INDEX_FILE)),
+    readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, PENDING_FILE)),
     readSemanticMemoriesFromRoot(root.memoryRoot)
   ])
+  const legacyActive = legacyActiveRead.records
+  const legacyPending = legacyPendingRead.records
   const active = legacyActive.filter((memory) => memory.status === 'active')
   const pending = legacyPending.filter((memory) => memory.status === 'pending')
+  const semanticActive = existingSemantic.filter((memory) => memory.status === 'active')
   const semanticPending = existingSemantic.filter((memory) => memory.status === 'pending')
+  const malformedJsonLines = legacyActiveRead.malformedLines + legacyPendingRead.malformedLines
   const processedIds = new Set<string>()
   const converted: SemanticMemory[] = []
   const recommendations: Recommendation[] = []
   const result = baseRootResult(root, {
     legacyActiveBefore: active.length,
     legacyPendingBefore: pending.length,
-    semanticBefore: existingSemantic.length
+    semanticBefore: existingSemantic.length,
+    semanticActiveBefore: semanticActive.length,
+    semanticPendingBefore: semanticPending.length,
+    malformedJsonLines
   })
+  if (malformedJsonLines > 0) {
+    return {
+      ...result,
+      skipped: true,
+      reason: 'memory root contains malformed JSONL'
+    }
+  }
 
   for (const memory of pending) {
     processedIds.add(memory.id)
@@ -178,7 +218,9 @@ async function migrateReadableRoot(
     const recommendationReason = recommendationReasonForPending(root.scope, pendingMemory)
     if (recommendationReason !== undefined || root.scope === 'global') {
       result.recommendations += 1
-      recommendations.push(recommendationForPending(
+      recommendations.push(recommendationForSemantic(
+        memory,
+        'pending',
         pendingMemory,
         recommendationReason ?? 'global pending memory requires manual review'
       ))
@@ -207,6 +249,32 @@ async function migrateReadableRoot(
 
     const tier = root.scope === 'global' ? 'global_core' : projectTierForActive(memory)
     converted.push(withLifecycle(activeMemoryToSemanticMemory(memory), tier, input.now))
+    if (tier === 'validated') {
+      result.convertedActiveToValidated += 1
+    } else {
+      result.convertedActiveToCore += 1
+    }
+  }
+
+  for (const memory of semanticActive) {
+    if (processedIds.has(memory.id) || validateSemanticMemoryLifecycle(memory).length === 0) {
+      continue
+    }
+    processedIds.add(memory.id)
+    const activeMemory = semanticMemoryToActiveMemory(memory)
+    if (isLowValueNoise(activeMemory)) {
+      result.droppedActive += 1
+      continue
+    }
+    const recommendationReason = recommendationReasonForActive(root.scope, activeMemory)
+    if (recommendationReason !== undefined) {
+      result.recommendations += 1
+      recommendations.push(recommendationForSemantic(memory, 'active', activeMemory, recommendationReason))
+      continue
+    }
+
+    const tier = root.scope === 'global' ? 'global_core' : projectTierForActive(activeMemory)
+    converted.push(withLifecycle(memory, tier, input.now))
     if (tier === 'validated') {
       result.convertedActiveToValidated += 1
     } else {
@@ -367,7 +435,19 @@ function recommendationForPending(memory: PendingMemory, reason: string): Recomm
     type: memory.type,
     normalizedKey: memory.normalizedKey,
     content: memory.content,
-    reason
+    reason,
+    reviewPackage: {
+      source: 'legacy_pending',
+      sourceStatus: 'pending',
+      domain: memory.domain,
+      type: memory.type,
+      normalizedKey: memory.normalizedKey,
+      content: memory.content,
+      evidence: memory.evidence,
+      scores: memory.scores,
+      tags: memory.tags,
+      originalRecord: memory
+    }
   }
 }
 
@@ -379,7 +459,49 @@ function recommendationForActive(memory: CyreneMemory, reason: string): Recommen
     type: memory.type,
     normalizedKey: memory.normalizedKey,
     content: memory.content,
-    reason
+    reason,
+    reviewPackage: {
+      source: 'legacy_index',
+      sourceStatus: 'active',
+      domain: memory.domain,
+      type: memory.type,
+      normalizedKey: memory.normalizedKey,
+      content: memory.content,
+      evidence: memory.evidence,
+      scores: memory.scores,
+      tags: memory.tags,
+      originalRecord: memory
+    }
+  }
+}
+
+function recommendationForSemantic(
+  memory: SemanticMemory,
+  sourceStatus: 'active' | 'pending',
+  normalizedMemory: CyreneMemory | PendingMemory,
+  reason: string
+): Recommendation {
+  return {
+    id: memory.id,
+    sourceStatus,
+    domain: memory.domain,
+    type: normalizedMemory.type,
+    normalizedKey: normalizedMemory.normalizedKey,
+    content: memory.content,
+    reason,
+    reviewPackage: {
+      source: 'semantic_memory',
+      sourceStatus,
+      domain: memory.domain,
+      type: normalizedMemory.type,
+      normalizedKey: normalizedMemory.normalizedKey,
+      content: memory.content,
+      evidence: memory.evidence,
+      scores: memory.reviewState?.scores ?? normalizedMemory.scores,
+      reviewState: memory.reviewState,
+      tags: memory.reviewState?.tags ?? [memory.kind],
+      originalRecord: memory
+    }
   }
 }
 
@@ -399,7 +521,8 @@ function recommendationEvent(root: MemoryRootSpec, recommendation: Recommendatio
       type: recommendation.type,
       normalizedKey: recommendation.normalizedKey,
       reason: recommendation.reason,
-      contentPreview: recommendation.content.slice(0, 160)
+      contentPreview: recommendation.content.slice(0, 160),
+      reviewPackage: recommendation.reviewPackage
     }
   }
 }
@@ -417,7 +540,10 @@ function completionEvent(result: CodexMemoryLifecycleMigrateV15RootResult, now: 
       legacyActiveBefore: result.legacyActiveBefore,
       legacyPendingBefore: result.legacyPendingBefore,
       semanticBefore: result.semanticBefore,
+      semanticActiveBefore: result.semanticActiveBefore,
+      semanticPendingBefore: result.semanticPendingBefore,
       semanticAfter: result.semanticAfter,
+      malformedJsonLines: result.malformedJsonLines,
       convertedPendingToTrial: result.convertedPendingToTrial,
       convertedActiveToValidated: result.convertedActiveToValidated,
       convertedActiveToCore: result.convertedActiveToCore,
@@ -470,7 +596,13 @@ function baseRootResult(
   root: MemoryRootSpec,
   counts: Partial<Pick<
     CodexMemoryLifecycleMigrateV15RootResult,
-    'legacyActiveBefore' | 'legacyPendingBefore' | 'semanticBefore' | 'semanticAfter'
+    | 'legacyActiveBefore'
+    | 'legacyPendingBefore'
+    | 'semanticBefore'
+    | 'semanticActiveBefore'
+    | 'semanticPendingBefore'
+    | 'semanticAfter'
+    | 'malformedJsonLines'
   >> = {}
 ): CodexMemoryLifecycleMigrateV15RootResult {
   return {
@@ -480,7 +612,10 @@ function baseRootResult(
     legacyActiveBefore: counts.legacyActiveBefore ?? 0,
     legacyPendingBefore: counts.legacyPendingBefore ?? 0,
     semanticBefore: counts.semanticBefore ?? 0,
+    semanticActiveBefore: counts.semanticActiveBefore ?? 0,
+    semanticPendingBefore: counts.semanticPendingBefore ?? 0,
     semanticAfter: counts.semanticAfter ?? counts.semanticBefore ?? 0,
+    malformedJsonLines: counts.malformedJsonLines ?? 0,
     convertedPendingToTrial: 0,
     convertedActiveToValidated: 0,
     convertedActiveToCore: 0,
@@ -490,29 +625,32 @@ function baseRootResult(
   }
 }
 
-async function readJsonLines<T>(filePath: string): Promise<T[]> {
+async function readJsonLinesWithMalformed<T>(filePath: string): Promise<JsonLinesReadResult<T>> {
   let content: string
   try {
     await assertSafeMemoryDataFileTarget(filePath)
     content = await readFile(filePath, 'utf8')
   } catch (error) {
     if (isFileErrorCode(error, 'ENOENT')) {
-      return []
+      return { records: [], malformedLines: 0 }
     }
     throw error
   }
 
-  return content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as T]
-      } catch {
-        return []
-      }
-    })
+  const records: T[] = []
+  let malformedLines = 0
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed === '') {
+      continue
+    }
+    try {
+      records.push(JSON.parse(trimmed) as T)
+    } catch {
+      malformedLines += 1
+    }
+  }
+  return { records, malformedLines }
 }
 
 async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promise<void> {
