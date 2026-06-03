@@ -53,9 +53,11 @@ export function isRuntimeActivatableSemanticMemory(memory: SemanticMemory): bool
 
 export function isLowRiskLifecycleMemory(memory: SemanticMemory): boolean {
   const scores = memory.reviewState?.scores
+  const routingRisk = memory.routing?.risk
   return (
     LOW_RISK_DOMAINS.has(memory.domain) &&
     LOW_RISK_MODULES.has(memory.module) &&
+    (routingRisk === undefined || routingRisk === 'low') &&
     (scores?.sensitivity ?? 0.2) <= 0.35 &&
     (scores?.safety ?? 0.9) >= 0.8
   )
