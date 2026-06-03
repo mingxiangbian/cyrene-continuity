@@ -705,6 +705,8 @@ describe('cyrene-continuity codex CLI', () => {
     } catch (error) {
       const stderr = String((error as { stderr?: string }).stderr ?? '')
       expect(stderr).toContain('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
+      expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply]')
+      expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply]')
       expect(stderr).toContain('ui [--port <n>]')
     }
   })
@@ -967,6 +969,29 @@ describe('cyrene-continuity codex CLI', () => {
     })
     await expect(readFile(join(projectMemoryRoot, 'semantic_memories.jsonl'), 'utf8')).resolves.toContain('cli-project-v2-active')
     await expect(readFile(join(projectMemoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+  })
+
+  it('runs v1.5 lifecycle automation commands from the CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-lifecycle-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-lifecycle-repo-')
+    await identifyCodexProject(repo)
+
+    const daily = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'lifecycle', 'daily', '--dry-run'],
+      { env: cliEnv(home) }
+    )
+    const weekly = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'lifecycle', 'weekly', '--dry-run'],
+      { env: cliEnv(home) }
+    )
+
+    expect(daily.stderr).toBe('')
+    expect(JSON.parse(daily.stdout).action).toBe('memory_lifecycle_daily')
+    expect(weekly.stderr).toBe('')
+    expect(JSON.parse(weekly.stdout).action).toBe('memory_lifecycle_weekly')
   })
 
   it('memory migrate-v2 --all-projects includes registered non-current project roots', async () => {

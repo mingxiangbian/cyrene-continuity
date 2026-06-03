@@ -12,7 +12,9 @@ import {
   runCodexMemoryActiveTombstone
 } from './codex-memory-active-cli.js'
 import { formatCodexMemoryDashboard } from './codex-memory-dashboard.js'
+import { runCodexMemoryLifecycleDaily } from './codex-memory-lifecycle-daily.js'
 import { runCodexMemoryLifecycleMigrateV15 } from './codex-memory-lifecycle-migrate-v1-5.js'
+import { runCodexMemoryLifecycleWeekly } from './codex-memory-lifecycle-weekly.js'
 import { runCodexMemoryMigrateV2 } from './codex-memory-migrate-v2.js'
 import { runCodexMemoryPrepare } from './codex-memory-prepare.js'
 import { runCodexMemoryTriage } from './codex-memory-triage-cli.js'
@@ -244,6 +246,29 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
+  if (command === 'memory' && input.args[1] === 'lifecycle' && input.args[2] === 'daily') {
+    if (input.args.includes('--dry-run') && input.args.includes('--apply')) {
+      throw new Error('memory lifecycle daily accepts only one of --dry-run or --apply')
+    }
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryLifecycleDaily({
+      cwd: input.cwd,
+      includeGlobalRoot: true,
+      apply: input.args.includes('--apply')
+    }), null, 2)}\n`)
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'lifecycle' && input.args[2] === 'weekly') {
+    if (input.args.includes('--dry-run') && input.args.includes('--apply')) {
+      throw new Error('memory lifecycle weekly accepts only one of --dry-run or --apply')
+    }
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryLifecycleWeekly({
+      cwd: input.cwd,
+      apply: input.args.includes('--apply')
+    }), null, 2)}\n`)
+    return
+  }
+
   if (command === 'memory' && input.args[1] === 'active' && input.args[2] === 'archive') {
     process.stdout.write(await runCodexMemoryActiveArchive({
       cwd: input.cwd,
@@ -396,7 +421,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply]|memory lifecycle weekly [--dry-run|--apply]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
