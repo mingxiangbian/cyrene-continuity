@@ -616,10 +616,16 @@ export function validateMemoryQualityFixtures(fixtures: MemoryQualityFixture[] =
         errors.push('fixture old_review_summary_noise must forbid profile')
       }
     }
-    if (fixture.id.startsWith('trial_')) {
+    if (fixture.id === 'trial_applied_twice') {
       const expectedOutput = fixture.expectedOutput.toLowerCase()
-      if (!expectedOutput.includes('validated') && !expectedOutput.includes('recommendation')) {
-        errors.push(`trial fixture ${fixture.id} expectedOutput must mention validated or recommendation`)
+      if (!expectedOutput.includes('validated')) {
+        errors.push('trial fixture trial_applied_twice expectedOutput must mention validated')
+      }
+    }
+    if (fixture.id === 'trial_with_corrected_event') {
+      const expectedOutput = fixture.expectedOutput.toLowerCase()
+      if (!expectedOutput.includes('recommendation')) {
+        errors.push('trial fixture trial_with_corrected_event expectedOutput must mention recommendation')
       }
     }
     if (fixture.expectedClassification === 'global_core' && !fixture.mustNotOutcome.includes('project_detail_global_core')) {

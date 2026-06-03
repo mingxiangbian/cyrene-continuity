@@ -9258,7 +9258,7 @@ var require_discriminator = __commonJS({
       error: error2,
       code(cxt) {
         const { gen, data, schema, parentSchema, it } = cxt;
-        const { oneOf } = parentSchema;
+        const { oneOf: oneOf2 } = parentSchema;
         if (!it.opts.discriminator) {
           throw new Error("discriminator: requires discriminator option");
         }
@@ -9267,7 +9267,7 @@ var require_discriminator = __commonJS({
           throw new Error("discriminator: requires propertyName");
         if (schema.mapping)
           throw new Error("discriminator: mapping is not supported");
-        if (!oneOf)
+        if (!oneOf2)
           throw new Error("discriminator: requires oneOf keyword");
         const valid = gen.let("valid", false);
         const tag = gen.const("tag", (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(tagName)}`);
@@ -9295,8 +9295,8 @@ var require_discriminator = __commonJS({
           const oneOfMapping = {};
           const topRequired = hasRequired(parentSchema);
           let tagRequired = true;
-          for (let i = 0; i < oneOf.length; i++) {
-            let sch = oneOf[i];
+          for (let i = 0; i < oneOf2.length; i++) {
+            let sch = oneOf2[i];
             if ((sch === null || sch === void 0 ? void 0 : sch.$ref) && !(0, util_1.schemaHasRulesButRef)(sch, it.self.RULES)) {
               const ref = sch.$ref;
               sch = compile_1.resolveRef.call(it.self, it.schemaEnv.root, it.baseId, ref);
@@ -10681,6 +10681,13 @@ async function readReviewDecisionsFromRoot(memoryRoot) {
 async function appendActivationEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, ACTIVATION_EVENTS_FILE), event);
+}
+async function readActivationEventsFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, ACTIVATION_EVENTS_FILE));
 }
 async function appendMemoryEventFromRoot(memoryRoot, event) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -15779,6 +15786,16 @@ var MEMORY_TYPES = [
 ];
 var MEMORY_STRENGTHS = ["hard", "soft", "session"];
 var MEMORY_SCOPES = ["global", "project", "session"];
+var PROJECT_CONFIDENCE_TIERS = ["trial", "validated", "project_core"];
+var GLOBAL_CONFIDENCE_TIERS = ["global_core"];
+var CONFIDENCE_TIERS = [...PROJECT_CONFIDENCE_TIERS, ...GLOBAL_CONFIDENCE_TIERS];
+var ACTIVATION_MODES = [
+  "workflow_hint",
+  "plan_constraint",
+  "checklist_item",
+  "workflow_selection"
+];
+var RUNTIME_ACTIVATION_STRENGTHS = ["hint", "constraint", "checklist", "profile"];
 var MEMORY_SOURCES2 = [
   "user_explicit",
   "user_implicit",
@@ -15797,7 +15814,43 @@ var MEMORY_CANDIDATE_KINDS2 = [
   "rejected_approach",
   "open_question"
 ];
+var MEMORY_MODULES = [
+  "project_semantic",
+  "procedural",
+  "system",
+  "preference",
+  "global_policy",
+  "relationship_affective",
+  "principle_candidate",
+  "task_state"
+];
+var SEMANTIC_MEMORY_STATUSES = [
+  "candidate",
+  "pending",
+  "active",
+  "archived",
+  "rejected",
+  "superseded"
+];
+var UPDATE_POLICIES = [
+  "strict_auto_promote",
+  "pending_review",
+  "manual_only",
+  "drop",
+  "defer"
+];
 var MEMORY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
+var ADMISSION_ACTIONS = [
+  "admit_to_pending",
+  "admit_to_distillation",
+  "episode_only",
+  "task_state",
+  "reference_only",
+  "auto_drop",
+  "auto_defer",
+  "merge_with_existing",
+  "reject_duplicate"
+];
 
 // src/codex/memory-review.ts
 var READINESS_REASON_TEXT_LIMIT = 120;
@@ -16882,22 +16935,305 @@ function addDays2(iso, days) {
 
 // src/codex/memory-feedback.ts
 import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
+function queryHashFor(query) {
+  return createHash6("sha256").update(query).digest("hex").slice(0, 16);
+}
+async function appendActivationEventFailOpen(input) {
+  try {
+    await appendActivationEventFromRoot(input.memoryRoot, {
+      id: randomUUID8(),
+      memoryId: input.memoryId,
+      ...input.projectId === void 0 ? {} : { projectId: input.projectId },
+      ...input.query === void 0 ? {} : { queryHash: queryHashFor(input.query) },
+      event: input.event,
+      ...input.activationId === void 0 ? {} : { activationId: input.activationId },
+      ...input.reason === void 0 ? {} : { reason: input.reason },
+      ...input.evidenceRef === void 0 ? {} : { evidenceRef: input.evidenceRef },
+      createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch {
+  }
+}
 async function appendActivationEventsFailOpen(input) {
   try {
     const memoryIds = [...new Set(input.memoryIds)].sort();
     const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-    const queryHash = createHash6("sha256").update(input.query).digest("hex").slice(0, 16);
-    await Promise.all(memoryIds.map((memoryId) => appendActivationEventFromRoot(input.memoryRoot, {
-      id: randomUUID8(),
-      memoryId,
-      projectId: input.projectId,
-      queryHash,
-      event: input.event ?? "retrieved",
-      ...input.evidenceRef === void 0 ? {} : { evidenceRef: input.evidenceRef },
-      createdAt
-    })));
+    for (const memoryId of memoryIds) {
+      await appendActivationEventFailOpen({
+        memoryRoot: input.memoryRoot,
+        memoryId,
+        projectId: input.projectId,
+        query: input.query,
+        event: input.event ?? "retrieved",
+        evidenceRef: input.evidenceRef,
+        now: createdAt
+      });
+    }
   } catch {
   }
+}
+
+// src/codex/memory-activation.ts
+import { createHash as createHash7 } from "node:crypto";
+
+// src/memory/memory-lifecycle.ts
+var LOW_RISK_DOMAINS = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
+var LOW_RISK_MODULES = /* @__PURE__ */ new Set(["project_semantic", "procedural", "system", "global_policy"]);
+var NEGATIVE_EVENT_TYPES = /* @__PURE__ */ new Set(["corrected", "violated", "contradicted"]);
+function activationPolicyForConfidenceTier(tier) {
+  if (tier === "trial") {
+    return { allowedModes: ["workflow_hint"], maxRuntimeStrength: "hint" };
+  }
+  if (tier === "validated") {
+    return { allowedModes: ["workflow_hint", "plan_constraint", "checklist_item"], maxRuntimeStrength: "checklist" };
+  }
+  return { allowedModes: ["workflow_hint", "plan_constraint", "checklist_item"], maxRuntimeStrength: "profile" };
+}
+function validateSemanticMemoryLifecycle(memory) {
+  const findings = [];
+  if (memory.status !== "active") {
+    return findings;
+  }
+  if (memory.confidenceTier === void 0) {
+    findings.push("active memory is missing confidenceTier");
+  }
+  if (memory.activationPolicy === void 0) {
+    findings.push("active memory is missing activationPolicy");
+  }
+  if (memory.confidenceTier !== void 0 && memory.activationPolicy !== void 0 && !activationPolicyMatchesConfidenceTier(memory.confidenceTier, memory.activationPolicy)) {
+    findings.push(`activationPolicy does not match confidenceTier ${memory.confidenceTier}`);
+  }
+  if (memory.scope === "global" && memory.confidenceTier !== void 0 && memory.confidenceTier !== "global_core") {
+    findings.push("global memory must use confidenceTier global_core");
+  }
+  if (memory.scope === "project" && memory.confidenceTier === "global_core") {
+    findings.push("project memory cannot use confidenceTier global_core");
+  }
+  if (memory.confidenceTier === "trial" && memory.activationPolicy?.allowedModes.some((mode) => mode !== "workflow_hint")) {
+    findings.push("trial memory can only allow workflow_hint activation");
+  }
+  if ((memory.confidenceTier === "project_core" || memory.confidenceTier === "global_core") && memory.evidence.length === 0) {
+    findings.push("core memory requires evidence");
+  }
+  if (memory.confidenceTier === "global_core" && !isLowRiskLifecycleMemory(memory)) {
+    findings.push("global_core memory must be low risk");
+  }
+  return findings;
+}
+function isRuntimeActivatableSemanticMemory(memory) {
+  return memory.status === "active" && validateSemanticMemoryLifecycle(memory).length === 0;
+}
+function isLowRiskLifecycleMemory(memory) {
+  const scores = memory.reviewState?.scores;
+  const routingRisk = memory.routing?.risk;
+  return LOW_RISK_DOMAINS.has(memory.domain) && LOW_RISK_MODULES.has(memory.module) && (routingRisk === void 0 || routingRisk === "low") && (scores?.sensitivity ?? 0.2) <= 0.35 && (scores?.safety ?? 0.9) >= 0.8;
+}
+function isNegativeActivationEventType(event) {
+  return NEGATIVE_EVENT_TYPES.has(event);
+}
+function activationPolicyMatchesConfidenceTier(tier, policy) {
+  const expected = activationPolicyForConfidenceTier(tier);
+  return policy.maxRuntimeStrength === expected.maxRuntimeStrength && policy.allowedModes.length === expected.allowedModes.length && policy.allowedModes.every((mode, index) => mode === expected.allowedModes[index]);
+}
+
+// src/codex/memory-activation.ts
+var STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "been",
+  "being",
+  "but",
+  "by",
+  "can",
+  "could",
+  "for",
+  "from",
+  "if",
+  "in",
+  "include",
+  "into",
+  "is",
+  "it",
+  "its",
+  "may",
+  "must",
+  "note",
+  "notes",
+  "of",
+  "on",
+  "or",
+  "outline",
+  "plan",
+  "should",
+  "test",
+  "that",
+  "the",
+  "then",
+  "these",
+  "this",
+  "those",
+  "to",
+  "was",
+  "were",
+  "when",
+  "while",
+  "will",
+  "with",
+  "without",
+  "would",
+  "write",
+  "writing"
+]);
+var DISTINCTIVE_TOKEN_LENGTH = 8;
+var DO_NOT_USE_BOUNDARY_TOKENS = /* @__PURE__ */ new Set([
+  "avoid",
+  "contradict",
+  "contradicted",
+  "contradicts",
+  "doc",
+  "docs",
+  "documentation",
+  "except",
+  "never",
+  "not",
+  "only",
+  "outside",
+  "stale",
+  "unless",
+  "unrelated"
+]);
+function buildMemoryActivations(input) {
+  const maxPerBucket = normalizeMaxPerBucket(input.maxPerBucket);
+  const output = {
+    workflowHints: [],
+    planConstraints: [],
+    checklistItems: []
+  };
+  const queryTokens = tokenize4(input.query);
+  if (queryTokens.length === 0 || maxPerBucket === 0) {
+    return output;
+  }
+  const candidates = [
+    ...input.projectMemories.map((memory) => ({ memory, source: "project" })),
+    ...input.globalMemories.map((memory) => ({ memory, source: "global" }))
+  ];
+  for (const candidate of candidates) {
+    const memory = toSemanticMemory(candidate.memory);
+    if (!isRuntimeActivatableSemanticMemory(memory)) {
+      continue;
+    }
+    const triggerReason = matchTriggerReason(memory, queryTokens);
+    if (triggerReason === null) {
+      continue;
+    }
+    if (memory.confidenceTier === "trial") {
+      pushLimited(output.workflowHints, activationForMemory({
+        memory,
+        source: candidate.source,
+        activationMode: "workflow_hint",
+        text: memory.content,
+        triggerReason
+      }), maxPerBucket);
+      continue;
+    }
+    pushLimited(output.planConstraints, activationForMemory({
+      memory,
+      source: candidate.source,
+      activationMode: "plan_constraint",
+      text: `Plan constraint: ${memory.content}`,
+      triggerReason
+    }), maxPerBucket);
+    pushLimited(output.checklistItems, activationForMemory({
+      memory,
+      source: candidate.source,
+      activationMode: "checklist_item",
+      text: `Verify: ${memory.content}`,
+      triggerReason
+    }), maxPerBucket);
+  }
+  return output;
+}
+function toSemanticMemory(memory) {
+  if (isSemanticMemory(memory)) {
+    return memory;
+  }
+  return activeMemoryToSemanticMemory(memory);
+}
+function isSemanticMemory(memory) {
+  return "module" in memory && "kind" in memory && Array.isArray(memory.useWhen) && Array.isArray(memory.doNotUseWhen);
+}
+function activationForMemory(input) {
+  return {
+    id: stableActivationId(input.memory.id, input.activationMode, input.source),
+    memoryId: input.memory.id,
+    confidenceTier: input.memory.confidenceTier,
+    activationMode: input.activationMode,
+    text: input.text,
+    triggerReason: input.triggerReason,
+    source: input.source,
+    risk: riskForMemory(input.memory)
+  };
+}
+function pushLimited(items, item, maxItems) {
+  if (items.length < maxItems) {
+    items.push(item);
+  }
+}
+function matchTriggerReason(memory, queryTokens) {
+  if (memory.doNotUseWhen.some((boundary) => doNotUseWhenSuppresses(queryTokens, boundary))) {
+    return null;
+  }
+  const memoryTokens = new Set(tokenize4([memory.content, ...memory.useWhen].join(" ")));
+  const matchedTokens = matchingTokens(queryTokens, memoryTokens);
+  if (!isStrongMatch(matchedTokens)) {
+    return null;
+  }
+  return `matched distinctive query tokens: ${matchedTokens.join(", ")}`;
+}
+function doNotUseWhenSuppresses(queryTokens, boundary) {
+  const boundaryTokens = new Set(tokenize4(boundary));
+  if (!isStrongTokenOverlap(queryTokens, boundaryTokens)) {
+    return false;
+  }
+  const boundaryMarkers = matchingTokens([...boundaryTokens], DO_NOT_USE_BOUNDARY_TOKENS);
+  return boundaryMarkers.length === 0 || boundaryMarkers.some((token) => queryTokens.includes(token));
+}
+function isStrongTokenOverlap(queryTokens, candidateTokens) {
+  return isStrongMatch(matchingTokens(queryTokens, candidateTokens));
+}
+function isStrongMatch(tokens) {
+  return tokens.length >= 2 || tokens.some((token) => token.length >= DISTINCTIVE_TOKEN_LENGTH);
+}
+function matchingTokens(queryTokens, candidateTokens) {
+  return queryTokens.filter((token) => candidateTokens.has(token));
+}
+function riskForMemory(memory) {
+  if (memory.routing?.risk === "high" || memory.domain === "personal" || memory.domain === "relationship" || memory.domain === "affective") {
+    return "high";
+  }
+  const scores = memory.reviewState?.scores;
+  if (memory.routing?.risk === "medium" || (scores?.sensitivity ?? 0) > 0.35 || (scores?.safety ?? 1) < 0.8) {
+    return "medium";
+  }
+  return "low";
+}
+function stableActivationId(memoryId, mode, source) {
+  return createHash7("sha256").update(`${memoryId}:${mode}:${source}`).digest("hex").slice(0, 16);
+}
+function normalizeMaxPerBucket(value) {
+  if (value === void 0) return 6;
+  if (!Number.isFinite(value)) return 6;
+  return Math.max(0, Math.floor(value));
+}
+function tokenize4(text) {
+  return Array.from(new Set(
+    (text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).map((token) => token.trim()).filter((token) => token !== "" && !STOP_WORDS.has(token))
+  ));
 }
 
 // src/codex/continuity-context.ts
@@ -16933,6 +17269,15 @@ async function getCodexContinuityContext(input) {
     fallback: legacyRetrievalInput
   });
   const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot);
+  const [projectActivationMemories, globalActivationMemories] = await Promise.all([
+    runtimeActivationMemoriesForRoute(projectMemoryRoot, routedMemory.projectMemory),
+    runtimeActivationMemoriesForRoute(globalMemoryRoot, routedMemory.globalMemory)
+  ]);
+  const activation = buildMemoryActivations({
+    query: input.userMessage,
+    globalMemories: globalActivationMemories,
+    projectMemories: projectActivationMemories
+  });
   await Promise.all([
     appendActivationEventsFailOpen({
       memoryRoot: globalMemoryRoot,
@@ -16991,6 +17336,7 @@ async function getCodexContinuityContext(input) {
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
+    activation,
     responseStrategy: {
       tone: snapshot.strategy.tone,
       verbosity: snapshot.strategy.verbosity,
@@ -17050,6 +17396,17 @@ async function getCodexContinuityContext(input) {
       reason: snapshot.dissent.reason
     }
   };
+}
+async function runtimeActivationMemoriesForRoute(memoryRoot, routedMemory) {
+  const projectedMemories = routedMemory.map((item) => item.memory);
+  const projectedById = new Map(projectedMemories.map((memory) => [memory.id, memory]));
+  if (projectedById.size === 0) {
+    return [];
+  }
+  const semanticById = new Map(
+    (await readSemanticMemoriesFromRoot(memoryRoot)).filter((memory) => memory.status === "active" && projectedById.get(memory.id)?.content === memory.content).map((memory) => [memory.id, memory])
+  );
+  return projectedMemories.map((memory) => semanticById.get(memory.id) ?? memory);
 }
 async function retrieveRoutedMemory(input) {
   const roots = await codexMemoryIndexRoots(input.projectId);
@@ -17281,11 +17638,11 @@ function canonicalGlobalMemorySignature(memory) {
   ]);
 }
 function scorePendingMemory(memory, query) {
-  const tokens = tokenize4(query);
+  const tokens = tokenize5(query);
   if (tokens.length === 0) {
     return 0.2;
   }
-  const haystack = tokenize4([
+  const haystack = tokenize5([
     memory.content,
     memory.normalizedKey,
     memory.domain,
@@ -17346,7 +17703,7 @@ function selectPendingWithinBudget(items, maxItems, maxTokens) {
   }
   return selected;
 }
-function tokenize4(text) {
+function tokenize5(text) {
   return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 function toRoutedMemoryDigestItem(item, input) {
@@ -17980,7 +18337,7 @@ function clamp(value) {
 import { randomUUID as randomUUID11 } from "node:crypto";
 
 // src/codex/memory-propose.ts
-import { createHash as createHash7, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID10 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -18701,7 +19058,7 @@ function evidenceRefsForCandidate(evidence) {
 }
 function normalizeKey(value) {
   const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  return slug.length > 0 ? slug : createHash7("sha256").update(value).digest("hex").slice(0, 16);
+  return slug.length > 0 ? slug : createHash8("sha256").update(value).digest("hex").slice(0, 16);
 }
 function addDays3(iso, days) {
   const date3 = new Date(iso);
@@ -19177,7 +19534,7 @@ function asString(value) {
 }
 
 // src/codex/global-memory-capture.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
 var AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i;
@@ -19292,7 +19649,7 @@ function reviewActionForEvent(event) {
   return void 0;
 }
 function shortHash(value) {
-  return createHash8("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash9("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/hook-trace-store.ts
@@ -19445,7 +19802,7 @@ function isFileErrorCode10(error2, code) {
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile3 } from "node:child_process";
@@ -20144,7 +20501,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash9("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash10("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -20184,7 +20541,7 @@ function isRecord3(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash10, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID14 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile3 } from "node:fs/promises";
@@ -20470,7 +20827,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash10("sha256").update(JSON.stringify({
+  return createHash11("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -21297,9 +21654,9 @@ async function removeExistingSkillSymlink(path) {
 }
 
 // src/codex/active-memory-review.ts
-import { createHash as createHash11, randomUUID as randomUUID16 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID16 } from "node:crypto";
 function contentHashForActiveMemory(memory) {
-  return createHash11("sha256").update(JSON.stringify({
+  return createHash12("sha256").update(JSON.stringify({
     id: memory.id,
     content: memory.content,
     normalizedKey: memory.normalizedKey,
@@ -21597,7 +21954,7 @@ async function refreshModelVisibleMemory(input) {
 }
 function tombstoneForActiveMemory(memory, input) {
   return {
-    id: `tombstone-${memory.id}-${createHash11("sha256").update(`${memory.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
+    id: `tombstone-${memory.id}-${createHash12("sha256").update(`${memory.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
     memoryId: memory.id,
     normalizedKey: memory.normalizedKey,
     domain: memory.domain,
@@ -21897,8 +22254,2051 @@ function errorMessage3(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 
+// src/codex/codex-memory-lifecycle-daily.ts
+import { createHash as createHash13, randomUUID as randomUUID17 } from "node:crypto";
+import { readFile as readFile16 } from "node:fs/promises";
+import { join as join23 } from "node:path";
+var PROJECT_AUTO_PROMOTION_POLICY_ID = "low_risk_project_memory_v1";
+var GLOBAL_AUTO_PROMOTION_POLICY_ID = "low_risk_global_procedural_v1";
+var DAILY_TRIAL_VALIDATION_POLICY_ID = "daily_trial_validation_v1";
+var DAILY_EXPLICIT_GLOBAL_CORE_POLICY_ID = "daily_explicit_global_core_v1";
+var GLOBAL_AUTO_PROMOTION_DOMAINS = /* @__PURE__ */ new Set(["procedural", "system"]);
+var MEMORY_SOURCES3 = /* @__PURE__ */ new Set([
+  "user_explicit",
+  "user_implicit",
+  "assistant_observed",
+  "tool_trace",
+  "file",
+  "legacy_markdown",
+  "review_event"
+]);
+var SEMANTIC_MEMORIES_FILE2 = "semantic_memories.jsonl";
+async function runCodexMemoryLifecycleDaily(input) {
+  const dryRun = input.apply !== true;
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const config2 = createDefaultConfig(input.cwd ?? process.cwd());
+  const roots = (input.projectRoots ?? await defaultProjectRoots(input.cwd)).map((root) => ({
+    ...root,
+    scope: "project"
+  }));
+  if (input.includeGlobalRoot === true) {
+    roots.push({ scope: "global", memoryRoot: codexGlobalMemoryRoot() });
+  }
+  const results = [];
+  for (const root of roots) {
+    results.push(await runDailyForRoot(root, {
+      dryRun,
+      now,
+      projectDailyCap: config2.memoryAutoReviewProjectPromotePerDay,
+      globalDailyCap: config2.memoryAutoReviewGlobalPromotePerDay
+    }));
+  }
+  return {
+    action: "memory_lifecycle_daily",
+    dryRun,
+    roots: results
+  };
+}
+async function runDailyForRoot(root, input) {
+  if (input.dryRun) {
+    return runDailyForReadableRoot(root, input);
+  }
+  return withMemoryMaintenanceLockFromRoot(
+    root.memoryRoot,
+    (lockedMemoryRoot) => runDailyForReadableRoot({ ...root, memoryRoot: lockedMemoryRoot }, input)
+  );
+}
+async function runDailyForReadableRoot(root, input) {
+  const semanticRead = await readSemanticMemoriesStrictFromRoot(root.memoryRoot);
+  if (!semanticRead.ok) {
+    return malformedRootResult(root, semanticRead);
+  }
+  const [memories, activationEvents, memoryEvents] = await Promise.all([
+    Promise.resolve(semanticRead.records),
+    readActivationEventsFromRoot(root.memoryRoot),
+    readMemoryEventsFromRoot(root.memoryRoot)
+  ]);
+  const state = {
+    root,
+    now: input.now,
+    dryRun: input.dryRun,
+    result: baseRootResult(root),
+    events: [],
+    usedToday: countSameDayAutoPromotions(memoryEvents, input.now),
+    dailyCap: root.scope === "project" ? input.projectDailyCap : input.globalDailyCap
+  };
+  const next = [];
+  for (const memory of memories) {
+    const activeInvalidFindings = memory.status === "active" ? validateSemanticMemoryLifecycle(memory) : [];
+    if (activeInvalidFindings.length > 0) {
+      state.result.invalidMemories += 1;
+      state.result.needsMigration += 1;
+      state.events.push(needsMigrationEvent(state, memory, activeInvalidFindings));
+      next.push(memory);
+      continue;
+    }
+    if (root.scope === "project") {
+      next.push(processProjectMemory(state, memory, activationEvents));
+    } else {
+      next.push(processGlobalMemory(state, memory));
+    }
+  }
+  const changed = memories.some((memory, index) => memory !== next[index]);
+  if (!input.dryRun) {
+    for (const event of state.events) {
+      await appendMemoryEventFromRoot(root.memoryRoot, event);
+    }
+    if (changed) {
+      await writeSemanticMemoriesFromRoot(root.memoryRoot, next);
+    }
+  }
+  return state.result;
+}
+function processProjectMemory(state, memory, activationEvents) {
+  if (memory.status !== "active" || memory.scope !== "project" || memory.confidenceTier !== "trial") {
+    return memory;
+  }
+  if (memory.expiresAt !== void 0 && memory.expiresAt <= state.now) {
+    state.result.staleTrials += 1;
+    state.events.push(expireTrialEvent(state, memory));
+    return {
+      ...memory,
+      status: "archived",
+      updatedAt: state.now
+    };
+  }
+  const stats = activationStats(memory.id, activationEvents);
+  if (stats.corrected > 0 || stats.violated > 0) {
+    addProjectRecommendation(
+      state,
+      memory,
+      "negative activation feedback blocks auto-promotion",
+      stats,
+      void 0
+    );
+    return memory;
+  }
+  if (!isLowRiskLifecycleMemory(memory)) {
+    addProjectRecommendation(
+      state,
+      memory,
+      "high-risk trial memory requires manual review",
+      stats,
+      void 0
+    );
+    return memory;
+  }
+  if (hasSourceOfTruthConflict(memory)) {
+    addProjectRecommendation(
+      state,
+      memory,
+      "source-of-truth conflict blocks auto-promotion",
+      stats,
+      void 0
+    );
+    return memory;
+  }
+  if (stats.applied < 2) {
+    return memory;
+  }
+  const evidenceCount = memory.evidence.length;
+  const distinctEvidenceCount3 = distinctStructuredEvidenceCount(memory.evidence);
+  const evalItem = autoPromotionEvalItem({
+    memory,
+    scope: "project",
+    policyId: PROJECT_AUTO_PROMOTION_POLICY_ID,
+    usedToday: state.usedToday,
+    dailyCap: state.dailyCap,
+    evidenceCount,
+    distinctEvidenceCount: distinctEvidenceCount3
+  });
+  const evalGate = runV5AutoPromotionEvalGate([evalItem]);
+  if (!evalGate.passed) {
+    state.result.evalFailures += 1;
+    if (isCapExhaustedEvalFailure(evalGate)) {
+      state.result.capExhausted += 1;
+    }
+    addProjectRecommendation(
+      state,
+      memory,
+      isCapExhaustedEvalFailure(evalGate) ? "daily auto-promotion cap exhausted" : "eval gate blocked auto-promotion",
+      stats,
+      evalGate
+    );
+    return memory;
+  }
+  state.result.promotedTrialToValidated += 1;
+  state.events.push(promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidenceCount3, evalGate));
+  state.usedToday += 1;
+  return {
+    ...memory,
+    confidenceTier: "validated",
+    activationPolicy: activationPolicyForConfidenceTier("validated"),
+    updatedAt: state.now
+  };
+}
+function processGlobalMemory(state, memory) {
+  if (memory.status !== "pending" || memory.scope !== "global") {
+    return memory;
+  }
+  if (!isExplicitLowRiskGlobalCandidate(memory)) {
+    addGlobalRecommendation(state, memory, "high-risk or ambiguous global candidate requires manual review", void 0);
+    return memory;
+  }
+  const evidenceCount = memory.evidence.length;
+  const distinctEvidenceCount3 = distinctStructuredEvidenceCount(memory.evidence);
+  const evalItem = autoPromotionEvalItem({
+    memory,
+    scope: "global",
+    policyId: GLOBAL_AUTO_PROMOTION_POLICY_ID,
+    usedToday: state.usedToday,
+    dailyCap: state.dailyCap,
+    evidenceCount,
+    distinctEvidenceCount: distinctEvidenceCount3
+  });
+  const policyGate = runV5AutoPromotionEvalGate([evalItem]);
+  const globalGate = runV5GlobalAutoPromotionEvalGate([evalItem]);
+  const evalGate = combineEvalGates(policyGate, globalGate);
+  const promoted = {
+    ...memory,
+    status: "active",
+    confidenceTier: "global_core",
+    activationPolicy: activationPolicyForConfidenceTier("global_core"),
+    updatedAt: state.now
+  };
+  const lifecycleFindings = validateSemanticMemoryLifecycle(promoted);
+  if (!evalGate.passed || lifecycleFindings.length > 0) {
+    state.result.evalFailures += evalGate.passed ? 0 : 1;
+    if (isCapExhaustedEvalFailure(evalGate)) {
+      state.result.capExhausted += 1;
+    }
+    addGlobalRecommendation(
+      state,
+      memory,
+      lifecycleFindings.length > 0 ? "candidate would create invalid global_core memory" : isCapExhaustedEvalFailure(evalGate) ? "daily auto-promotion cap exhausted" : "eval gate blocked global auto-promotion",
+      evalGate,
+      lifecycleFindings
+    );
+    return memory;
+  }
+  state.result.promotedExplicitGlobalToCore += 1;
+  state.events.push(promoteGlobalEvent(state, promoted, evidenceCount, distinctEvidenceCount3, evalGate));
+  state.usedToday += 1;
+  return promoted;
+}
+async function defaultProjectRoots(cwd) {
+  if (cwd !== void 0) {
+    const project = await identifyCodexProject(cwd);
+    return [{ projectId: project.projectId, memoryRoot: codexProjectMemoryRoot(project.projectId) }];
+  }
+  return (await getReadableCodexProjectMemoryRoots()).map((memoryRoot) => ({ memoryRoot }));
+}
+function baseRootResult(root) {
+  return {
+    scope: root.scope,
+    ...root.projectId === void 0 ? {} : { projectId: root.projectId },
+    memoryRoot: root.memoryRoot,
+    promotedTrialToValidated: 0,
+    promotedExplicitGlobalToCore: 0,
+    recommendations: 0,
+    staleTrials: 0,
+    invalidMemories: 0,
+    needsMigration: 0,
+    evalFailures: 0,
+    capExhausted: 0
+  };
+}
+function malformedRootResult(root, readResult) {
+  return {
+    ...baseRootResult(root),
+    invalidMemories: readResult.malformedJsonLines,
+    needsMigration: readResult.malformedJsonLines,
+    malformedJsonLines: readResult.malformedJsonLines,
+    skipped: true,
+    reason: readResult.reason
+  };
+}
+function activationStats(memoryId, events) {
+  const applied = events.filter((event) => event.memoryId === memoryId && event.event === "applied");
+  const corrected = events.filter((event) => event.memoryId === memoryId && event.event === "corrected");
+  const violated = events.filter((event) => event.memoryId === memoryId && event.event === "violated");
+  return {
+    applied: applied.length,
+    corrected: corrected.length,
+    violated: violated.length,
+    appliedEventIds: applied.map((event) => event.id),
+    correctedEventIds: corrected.map((event) => event.id),
+    violatedEventIds: violated.map((event) => event.id)
+  };
+}
+function autoPromotionEvalItem(input) {
+  return {
+    candidateId: input.memory.id,
+    domain: input.memory.domain,
+    scope: input.scope,
+    source: sourceForEval(input.memory),
+    policyId: input.policyId,
+    decision: "auto_promote",
+    evidenceCount: input.evidenceCount,
+    distinctEvidenceCount: input.distinctEvidenceCount,
+    usedToday: input.usedToday,
+    dailyCap: input.dailyCap
+  };
+}
+function isExplicitLowRiskGlobalCandidate(memory) {
+  return GLOBAL_AUTO_PROMOTION_DOMAINS.has(memory.domain) && sourceForEval(memory) === "user_explicit" && hasExplicitUserEvidence(memory) && isLowRiskLifecycleMemory(memory);
+}
+function sourceForEval(memory) {
+  if (hasExplicitUserEvidence(memory)) {
+    return "user_explicit";
+  }
+  const evidenceSource = firstEvidenceSource2(memory.evidence);
+  if (evidenceSource !== void 0) {
+    return evidenceSource;
+  }
+  if (memory.reviewState?.source !== void 0) {
+    return memory.reviewState.source;
+  }
+  return "unknown";
+}
+function hasExplicitUserEvidence(memory) {
+  return memory.evidence.some((entry) => entry.sourceKind === "user_explicit") || memory.sourceOfTruth?.startsWith("user_prompt:") === true;
+}
+function firstEvidenceSource2(evidence) {
+  for (const entry of evidence) {
+    if (MEMORY_SOURCES3.has(entry.sourceKind)) {
+      return entry.sourceKind;
+    }
+  }
+  return void 0;
+}
+function distinctStructuredEvidenceCount(evidence) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const entry of evidence) {
+    const explicitKey = firstPresent(entry.id, entry.sourceRef, entry.whatHappened);
+    const key = explicitKey ?? createHash13("sha256").update(`${entry.sourceKind ?? ""}|${entry.when ?? ""}|${entry.whatHappened}|${entry.whyImportant}`).digest("hex");
+    keys.add(key);
+  }
+  return keys.size;
+}
+function firstPresent(...values) {
+  return values.find((value) => value !== void 0 && value.trim() !== "");
+}
+function hasSourceOfTruthConflict(memory) {
+  return (memory.reviewState?.conflictsWith?.length ?? 0) > 0 && memory.reviewState?.normalizedKeyConflictResolution !== "keep_both";
+}
+function countSameDayAutoPromotions(events, now) {
+  const day = now.slice(0, 10);
+  return events.filter(
+    (event) => event.action === "promote" && event.at.slice(0, 10) === day && event.details?.decision === "auto_promote"
+  ).length;
+}
+function isCapExhaustedEvalFailure(evalGate) {
+  return evalGate.results.some(
+    (result2) => result2.findings.some((finding) => finding.reason.includes("daily auto-promotion cap exhausted"))
+  );
+}
+function combineEvalGates(left, right) {
+  return {
+    passed: left.passed && right.passed,
+    failedChecks: Array.from(/* @__PURE__ */ new Set([...left.failedChecks, ...right.failedChecks])),
+    results: [...left.results, ...right.results]
+  };
+}
+function addProjectRecommendation(state, memory, reason, stats, evalGate) {
+  state.result.recommendations += 1;
+  state.events.push({
+    id: randomUUID17(),
+    action: "audit",
+    at: state.now,
+    reason: "v1.5 daily lifecycle recommended manual review for project trial memory",
+    memoryId: memory.id,
+    details: {
+      lifecyclePolicyId: DAILY_TRIAL_VALIDATION_POLICY_ID,
+      reason,
+      appliedEvents: stats.applied,
+      correctedEvents: stats.corrected,
+      violatedEvents: stats.violated,
+      activationEventIds: {
+        applied: stats.appliedEventIds,
+        corrected: stats.correctedEventIds,
+        violated: stats.violatedEventIds
+      },
+      capStatus: {
+        scope: "project",
+        usedToday: state.usedToday,
+        dailyCap: state.dailyCap
+      },
+      ...evalGate === void 0 ? {} : { evalGate }
+    }
+  });
+}
+function addGlobalRecommendation(state, memory, reason, evalGate, lifecycleFindings = []) {
+  state.result.recommendations += 1;
+  state.events.push({
+    id: randomUUID17(),
+    action: "audit",
+    at: state.now,
+    reason: "v1.5 daily lifecycle recommended manual review for global memory candidate",
+    candidateId: memory.id,
+    details: {
+      lifecyclePolicyId: DAILY_EXPLICIT_GLOBAL_CORE_POLICY_ID,
+      reason,
+      domain: memory.domain,
+      module: memory.module,
+      source: sourceForEval(memory),
+      contentPreview: memory.content.slice(0, 160),
+      capStatus: {
+        scope: "global",
+        usedToday: state.usedToday,
+        dailyCap: state.dailyCap
+      },
+      ...lifecycleFindings.length === 0 ? {} : { lifecycleFindings },
+      ...evalGate === void 0 ? {} : { evalGate }
+    }
+  });
+}
+function promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidenceCount3, evalGate) {
+  return {
+    id: randomUUID17(),
+    action: "promote",
+    at: state.now,
+    reason: "v1.5 daily trial validation promoted project trial to validated",
+    memoryId: memory.id,
+    details: {
+      decision: "auto_promote",
+      policyId: PROJECT_AUTO_PROMOTION_POLICY_ID,
+      lifecyclePolicyId: DAILY_TRIAL_VALIDATION_POLICY_ID,
+      previousConfidenceTier: "trial",
+      confidenceTier: "validated",
+      evidenceCount,
+      distinctEvidenceCount: distinctEvidenceCount3,
+      appliedEvents: stats.applied,
+      correctedEvents: stats.corrected,
+      violatedEvents: stats.violated,
+      activationEventIds: {
+        applied: stats.appliedEventIds,
+        corrected: stats.correctedEventIds,
+        violated: stats.violatedEventIds
+      },
+      capStatus: {
+        scope: "project",
+        usedToday: state.usedToday,
+        dailyCap: state.dailyCap
+      },
+      evalGate
+    }
+  };
+}
+function promoteGlobalEvent(state, memory, evidenceCount, distinctEvidenceCount3, evalGate) {
+  return {
+    id: randomUUID17(),
+    action: "promote",
+    at: state.now,
+    reason: "v1.5 daily lifecycle promoted explicit global instruction to global_core",
+    memoryId: memory.id,
+    candidateId: memory.id,
+    details: {
+      decision: "auto_promote",
+      policyId: GLOBAL_AUTO_PROMOTION_POLICY_ID,
+      lifecyclePolicyId: DAILY_EXPLICIT_GLOBAL_CORE_POLICY_ID,
+      confidenceTier: "global_core",
+      evidenceCount,
+      distinctEvidenceCount: distinctEvidenceCount3,
+      capStatus: {
+        scope: "global",
+        usedToday: state.usedToday,
+        dailyCap: state.dailyCap
+      },
+      evalGate
+    }
+  };
+}
+async function readSemanticMemoriesStrictFromRoot(memoryRoot) {
+  const filePath = join23(memoryRoot, SEMANTIC_MEMORIES_FILE2);
+  let content;
+  try {
+    await assertSafeMemoryDataFileTarget(filePath);
+    content = await readFile16(filePath, "utf8");
+  } catch (error2) {
+    if (isFileErrorCode11(error2, "ENOENT")) {
+      return { ok: true, records: [] };
+    }
+    throw error2;
+  }
+  const records = [];
+  let malformedJsonLines = 0;
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    try {
+      records.push(JSON.parse(trimmed));
+    } catch {
+      malformedJsonLines += 1;
+    }
+  }
+  if (malformedJsonLines > 0) {
+    return {
+      ok: false,
+      malformedJsonLines,
+      reason: "semantic memory store contains malformed JSONL"
+    };
+  }
+  return { ok: true, records };
+}
+function isFileErrorCode11(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+function expireTrialEvent(state, memory) {
+  return {
+    id: randomUUID17(),
+    action: "expire",
+    at: state.now,
+    reason: "v1.5 daily lifecycle expired stale project trial memory",
+    memoryId: memory.id,
+    details: {
+      lifecyclePolicyId: DAILY_TRIAL_VALIDATION_POLICY_ID,
+      previousStatus: memory.status,
+      status: "archived",
+      confidenceTier: memory.confidenceTier,
+      expiresAt: memory.expiresAt
+    }
+  };
+}
+function needsMigrationEvent(state, memory, findings) {
+  return {
+    id: randomUUID17(),
+    action: "audit",
+    at: state.now,
+    reason: "v1.5 daily lifecycle found invalid active memory",
+    memoryId: memory.id,
+    details: {
+      lifecyclePolicyId: state.root.scope === "global" ? DAILY_EXPLICIT_GLOBAL_CORE_POLICY_ID : DAILY_TRIAL_VALIDATION_POLICY_ID,
+      reason: "needs_migration",
+      findings,
+      scope: memory.scope,
+      status: memory.status,
+      confidenceTier: memory.confidenceTier
+    }
+  };
+}
+
+// src/codex/codex-memory-lifecycle-migrate-v1-5.ts
+import { randomUUID as randomUUID18 } from "node:crypto";
+import { lstat as lstat14, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join24 } from "node:path";
+var INDEX_FILE2 = "index.jsonl";
+var PENDING_FILE2 = "pending.jsonl";
+var SEMANTIC_MEMORIES_FILE3 = "semantic_memories.jsonl";
+var HIGH_RISK_DOMAINS = /* @__PURE__ */ new Set(["personal", "relationship", "affective"]);
+var LOW_RISK_DOMAINS2 = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
+var REVIEW_SUMMARY_NOISE_PHRASES = [
+  "review summary ok",
+  "merged branch",
+  "deleted local branch"
+];
+var MEMORY_PORTABILITIES = ["local_only", "project_family", "similar_project", "global"];
+var MEMORY_PROFILE_VISIBILITIES = ["always", "safe_summary", "retrieval_only", "never"];
+var ROUTING_RISKS = ["low", "medium", "high"];
+var ADMITTED_BY_VALUES = ["admission_gate_v1"];
+var NORMALIZED_KEY_CONFLICT_RESOLUTIONS2 = ["keep_both"];
+async function runCodexMemoryLifecycleMigrateV15(input) {
+  const currentProject = await identifyCodexProject(input.cwd);
+  const roots = /* @__PURE__ */ new Map();
+  const addRoot = (root) => {
+    roots.set(`${root.scope}:${root.projectId ?? "global"}:${root.memoryRoot}`, root);
+  };
+  addRoot({ scope: "global", memoryRoot: codexGlobalMemoryRoot() });
+  addRoot({
+    scope: "project",
+    projectId: currentProject.projectId,
+    memoryRoot: codexProjectMemoryRoot(currentProject.projectId)
+  });
+  let registryFailure;
+  if (input.allProjects === true) {
+    try {
+      for (const project of await listCodexProjects()) {
+        addRoot({ scope: "project", projectId: project.projectId, memoryRoot: project.memoryRoot });
+      }
+    } catch (error2) {
+      registryFailure = skippedRootResult(
+        { scope: "project", memoryRoot: join24(codexGlobalMemoryRoot(), "..", "..", "projects") },
+        `project registry listing failed: ${errorMessage4(error2)}`
+      );
+    }
+  }
+  const dryRun = input.apply !== true;
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const results = [];
+  for (const root of roots.values()) {
+    const readable = await readableMemoryRoot(root.memoryRoot);
+    if (!readable.ok) {
+      results.push(skippedRootResult(root, readable.reason));
+      continue;
+    }
+    results.push(await migrateReadableRoot({ ...root, memoryRoot: readable.memoryRoot }, { dryRun, now }));
+  }
+  if (registryFailure !== void 0) {
+    results.push(registryFailure);
+  }
+  return {
+    action: "migrate_memory_lifecycle_v1_5",
+    dryRun,
+    roots: results
+  };
+}
+async function migrateReadableRoot(root, input) {
+  const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
+    readJsonLinesWithMalformed(join24(root.memoryRoot, INDEX_FILE2), isValidLegacyActiveMemory),
+    readJsonLinesWithMalformed(join24(root.memoryRoot, PENDING_FILE2), isValidPendingMemory),
+    readJsonLinesWithMalformed(join24(root.memoryRoot, SEMANTIC_MEMORIES_FILE3), isValidSemanticMemory)
+  ]);
+  const legacyActive = legacyActiveRead.records;
+  const legacyPending = legacyPendingRead.records;
+  const existingSemantic = semanticRead.records;
+  const active = legacyActive.filter((memory) => memory.status === "active");
+  const pending = legacyPending.filter((memory) => memory.status === "pending");
+  const semanticActive = existingSemantic.filter((memory) => memory.status === "active");
+  const semanticPending = existingSemantic.filter((memory) => memory.status === "pending");
+  const malformedJsonLines = legacyActiveRead.malformedLines + legacyPendingRead.malformedLines + semanticRead.malformedLines;
+  const processedIds = /* @__PURE__ */ new Set();
+  const semanticRowsToRemove = /* @__PURE__ */ new Set();
+  const converted = [];
+  const recommendations = [];
+  const dropAudits = [];
+  const result2 = baseRootResult2(root, {
+    legacyActiveBefore: active.length,
+    legacyPendingBefore: pending.length,
+    semanticBefore: existingSemantic.length,
+    semanticActiveBefore: semanticActive.length,
+    semanticPendingBefore: semanticPending.length,
+    malformedJsonLines
+  });
+  if (malformedJsonLines > 0) {
+    return {
+      ...result2,
+      skipped: true,
+      reason: "memory root contains malformed JSONL"
+    };
+  }
+  const semanticOwnedIds = new Set(existingSemantic.map((memory) => memory.id));
+  const selectedSemanticIds = /* @__PURE__ */ new Set();
+  const selectedSemanticActive = [];
+  const selectedSemanticPending = [];
+  for (const memory of semanticActive) {
+    if (selectedSemanticIds.has(memory.id)) {
+      semanticRowsToRemove.add(memory);
+      recordDuplicateDrop(result2, dropAudits, dropAuditForSemantic(
+        memory,
+        "active",
+        semanticMemoryToActiveMemory(memory),
+        "duplicate semantic active id shadowed by selected semantic memory"
+      ));
+      continue;
+    }
+    selectedSemanticIds.add(memory.id);
+    selectedSemanticActive.push(memory);
+  }
+  for (const memory of semanticPending) {
+    const pendingMemory = semanticMemoryToPendingMemory(memory);
+    if (selectedSemanticIds.has(memory.id)) {
+      semanticRowsToRemove.add(memory);
+      recordDuplicateDrop(result2, dropAudits, dropAuditForSemantic(
+        memory,
+        "pending",
+        pendingMemory,
+        "duplicate semantic pending id shadowed by selected semantic memory"
+      ));
+      continue;
+    }
+    selectedSemanticIds.add(memory.id);
+    selectedSemanticPending.push(memory);
+  }
+  const selectedLegacyActive = [];
+  const legacyActiveIds = /* @__PURE__ */ new Set();
+  for (const memory of active) {
+    if (semanticOwnedIds.has(memory.id)) {
+      recordDuplicateDrop(result2, dropAudits, dropAuditForActive(memory, "duplicate legacy active id shadowed by semantic memory"));
+      continue;
+    }
+    if (legacyActiveIds.has(memory.id)) {
+      recordDuplicateDrop(result2, dropAudits, dropAuditForActive(memory, "duplicate legacy active id shadowed by earlier active memory"));
+      continue;
+    }
+    legacyActiveIds.add(memory.id);
+    selectedLegacyActive.push(memory);
+  }
+  const selectedLegacyPending = [];
+  const legacyPendingIds = /* @__PURE__ */ new Set();
+  for (const memory of pending) {
+    if (semanticOwnedIds.has(memory.id)) {
+      recordDuplicateDrop(result2, dropAudits, dropAuditForPending(memory, "duplicate legacy pending id shadowed by semantic memory"));
+      continue;
+    }
+    if (legacyActiveIds.has(memory.id)) {
+      recordDuplicateDrop(result2, dropAudits, dropAuditForPending(memory, "duplicate pending id shadowed by active memory"));
+      continue;
+    }
+    if (legacyPendingIds.has(memory.id)) {
+      recordDuplicateDrop(result2, dropAudits, dropAuditForPending(memory, "duplicate legacy pending id shadowed by earlier pending memory"));
+      continue;
+    }
+    legacyPendingIds.add(memory.id);
+    selectedLegacyPending.push(memory);
+  }
+  for (const memory of selectedSemanticActive) {
+    if (validateSemanticMemoryLifecycle(memory).length === 0) {
+      continue;
+    }
+    processedIds.add(memory.id);
+    const activeMemory = semanticMemoryToActiveMemory(memory);
+    if (isLowValueNoise(activeMemory)) {
+      result2.droppedActive += 1;
+      dropAudits.push(dropAuditForSemantic(memory, "active", activeMemory, "low-value memory"));
+      continue;
+    }
+    const recommendationReason = recommendationReasonForActive(root.scope, activeMemory);
+    if (recommendationReason !== void 0) {
+      result2.recommendations += 1;
+      recommendations.push(recommendationForSemantic(memory, "active", activeMemory, recommendationReason));
+      continue;
+    }
+    const tier = semanticLifecycleTierForActive(root.scope, memory, activeMemory, input.now);
+    if (tier === void 0) {
+      result2.recommendations += 1;
+      recommendations.push(recommendationForSemantic(
+        memory,
+        "active",
+        activeMemory,
+        "semantic active memory cannot be migrated to a valid v1.5 lifecycle tier"
+      ));
+      continue;
+    }
+    converted.push(withLifecycle(memory, tier, input.now));
+    if (tier === "validated") {
+      result2.convertedActiveToValidated += 1;
+    } else {
+      result2.convertedActiveToCore += 1;
+    }
+  }
+  for (const memory of selectedSemanticPending) {
+    if (processedIds.has(memory.id)) {
+      continue;
+    }
+    processedIds.add(memory.id);
+    const pendingMemory = semanticMemoryToPendingMemory(memory);
+    if (isReviewSummaryNoise(pendingMemory)) {
+      result2.droppedPending += 1;
+      dropAudits.push(dropAuditForSemantic(memory, "pending", pendingMemory, "review-summary noise"));
+      continue;
+    }
+    if (isLowValueNoise(pendingMemory)) {
+      result2.droppedPending += 1;
+      dropAudits.push(dropAuditForSemantic(memory, "pending", pendingMemory, "low-value memory"));
+      continue;
+    }
+    const recommendationReason = recommendationReasonForPending(root.scope, pendingMemory);
+    if (recommendationReason !== void 0 || root.scope === "global") {
+      result2.recommendations += 1;
+      recommendations.push(recommendationForSemantic(
+        memory,
+        "pending",
+        pendingMemory,
+        recommendationReason ?? "global pending memory requires manual review"
+      ));
+      continue;
+    }
+    converted.push(withLifecycle(memory, "trial", input.now));
+    result2.convertedPendingToTrial += 1;
+  }
+  for (const memory of selectedLegacyActive) {
+    processedIds.add(memory.id);
+    if (isLowValueNoise(memory)) {
+      result2.droppedActive += 1;
+      dropAudits.push(dropAuditForActive(memory, "low-value memory"));
+      continue;
+    }
+    const recommendationReason = recommendationReasonForActive(root.scope, memory);
+    if (recommendationReason !== void 0) {
+      result2.recommendations += 1;
+      recommendations.push(recommendationForActive(memory, recommendationReason));
+      continue;
+    }
+    const tier = root.scope === "global" ? "global_core" : projectTierForActive(memory);
+    converted.push(withLifecycle(activeMemoryToSemanticMemory(memory), tier, input.now));
+    if (tier === "validated") {
+      result2.convertedActiveToValidated += 1;
+    } else {
+      result2.convertedActiveToCore += 1;
+    }
+  }
+  for (const memory of selectedLegacyPending) {
+    processedIds.add(memory.id);
+    if (isReviewSummaryNoise(memory)) {
+      result2.droppedPending += 1;
+      dropAudits.push(dropAuditForPending(memory, "review-summary noise"));
+      continue;
+    }
+    if (isLowValueNoise(memory)) {
+      result2.droppedPending += 1;
+      dropAudits.push(dropAuditForPending(memory, "low-value memory"));
+      continue;
+    }
+    const recommendationReason = recommendationReasonForPending(root.scope, memory);
+    if (recommendationReason !== void 0 || root.scope === "global") {
+      result2.recommendations += 1;
+      recommendations.push(recommendationForPending(memory, recommendationReason ?? "global pending memory requires manual review"));
+      continue;
+    }
+    converted.push(withLifecycle(pendingMemoryToSemanticMemory(memory), "trial", input.now));
+    result2.convertedPendingToTrial += 1;
+  }
+  const nextSemantic = upsertSemanticMemories2(
+    existingSemantic.filter((memory) => !processedIds.has(memory.id) && !semanticRowsToRemove.has(memory)),
+    converted
+  );
+  result2.semanticAfter = nextSemantic.length;
+  if (!input.dryRun) {
+    for (const recommendation of recommendations) {
+      await appendMemoryEventFromRoot(root.memoryRoot, recommendationEvent(root, recommendation, input.now));
+    }
+    for (const audit of dropAudits) {
+      await appendMemoryEventFromRoot(root.memoryRoot, dropAuditEvent(root, audit, input.now));
+    }
+    await writeSemanticMemoriesFromRoot(root.memoryRoot, nextSemantic);
+    await writeJsonLinesAtomic3(join24(root.memoryRoot, PENDING_FILE2), []);
+    await writeJsonLinesAtomic3(
+      join24(root.memoryRoot, INDEX_FILE2),
+      nextSemantic.filter((memory) => memory.status === "active").map(semanticMemoryToActiveMemory)
+    );
+    await appendMemoryEventFromRoot(root.memoryRoot, completionEvent(result2, input.now));
+  }
+  return result2;
+}
+function withLifecycle(memory, confidenceTier, now) {
+  return {
+    ...memory,
+    status: "active",
+    confidenceTier,
+    activationPolicy: activationPolicyForConfidenceTier(confidenceTier),
+    updatedAt: now
+  };
+}
+function projectTierForActive(memory) {
+  if (memory.strength === "hard" && hasEvidence(memory.evidence) && memory.scores.evidenceStrength >= 0.85 && memory.scores.stability >= 0.75 && memory.scores.usefulness >= 0.75) {
+    return "project_core";
+  }
+  return "validated";
+}
+function semanticLifecycleTierForActive(scope, memory, activeMemory, now) {
+  const preferredTier = scope === "global" ? "global_core" : projectTierForActive(activeMemory);
+  if (validateSemanticMemoryLifecycle(withLifecycle(memory, preferredTier, now)).length === 0) {
+    return preferredTier;
+  }
+  if (scope === "project" && preferredTier === "project_core" && validateSemanticMemoryLifecycle(withLifecycle(memory, "validated", now)).length === 0) {
+    return "validated";
+  }
+  return void 0;
+}
+function recommendationReasonForPending(scope, memory) {
+  if (scope === "global") {
+    if (isLowValueNoise(memory)) {
+      return void 0;
+    }
+    return isHighRiskOrAmbiguous(memory) ? highRiskReason(memory) : "global pending memory requires manual review";
+  }
+  if (isHighRiskOrAmbiguous(memory)) {
+    return highRiskReason(memory);
+  }
+  if (!isValuableLowRiskMemory(memory)) {
+    return "ambiguous project pending memory requires manual review";
+  }
+  return void 0;
+}
+function recommendationReasonForActive(scope, memory) {
+  if (scope === "global") {
+    if (isLowRiskGlobalCoreMemory(memory)) {
+      return void 0;
+    }
+    return isHighRiskOrAmbiguous(memory) ? highRiskReason(memory) : "ambiguous global active memory requires manual review";
+  }
+  if (isHighRiskOrAmbiguous(memory)) {
+    return highRiskReason(memory);
+  }
+  if (!isValuableLowRiskMemory(memory)) {
+    return "ambiguous project active memory requires manual review";
+  }
+  return void 0;
+}
+function isLowRiskGlobalCoreMemory(memory) {
+  return isValuableLowRiskMemory(memory) && memory.scope === "global" && (memory.domain === "procedural" || memory.domain === "system" || memory.type === "procedural_rule" || memory.type === "system_policy");
+}
+function isValuableLowRiskMemory(memory) {
+  return LOW_RISK_DOMAINS2.has(memory.domain) && !HIGH_RISK_DOMAINS.has(memory.domain) && hasEvidence(memory.evidence) && memory.scores.safety >= 0.8 && memory.scores.sensitivity <= 0.35 && memory.scores.evidenceStrength >= 0.6 && memory.scores.usefulness >= 0.6 && memory.content.trim().length >= 20;
+}
+function isHighRiskOrAmbiguous(memory) {
+  return HIGH_RISK_DOMAINS.has(memory.domain) || memory.scores.safety < 0.8 || memory.scores.sensitivity > 0.35 || !LOW_RISK_DOMAINS2.has(memory.domain);
+}
+function highRiskReason(memory) {
+  if (HIGH_RISK_DOMAINS.has(memory.domain)) {
+    return `high-risk ${memory.domain} memory requires manual review`;
+  }
+  if (memory.scores.sensitivity > 0.35) {
+    return "high-sensitivity memory requires manual review";
+  }
+  if (memory.scores.safety < 0.8) {
+    return "low-safety memory requires manual review";
+  }
+  return "ambiguous memory domain requires manual review";
+}
+function isReviewSummaryNoise(memory) {
+  const haystack = [
+    memory.content,
+    memory.normalizedKey,
+    memory.sourceOfTruth ?? "",
+    ...memory.evidence.flatMap((entry) => [entry.summary ?? "", entry.quote ?? "", ...entry.traceRefs ?? []])
+  ].join("\n").toLowerCase();
+  return REVIEW_SUMMARY_NOISE_PHRASES.some((phrase) => haystack.includes(phrase));
+}
+function isLowValueNoise(memory) {
+  return !isHighRiskOrAmbiguous(memory) && (memory.scores.usefulness <= 0.25 || memory.scores.evidenceStrength <= 0.25 || memory.content.trim().length < 12);
+}
+function hasEvidence(evidence) {
+  return evidence.some(
+    (entry) => [entry.summary, entry.quote, entry.runId, entry.evidenceGroupId].some((value) => value !== void 0 && value.trim() !== "")
+  );
+}
+function recordDuplicateDrop(result2, dropAudits, audit) {
+  result2.duplicateRecordsDropped += 1;
+  if (audit.sourceStatus === "active") {
+    result2.droppedActive += 1;
+  } else {
+    result2.droppedPending += 1;
+  }
+  dropAudits.push(audit);
+}
+function recommendationForPending(memory, reason) {
+  return {
+    id: memory.id,
+    sourceStatus: "pending",
+    domain: memory.domain,
+    type: memory.type,
+    normalizedKey: memory.normalizedKey,
+    content: memory.content,
+    reason,
+    reviewPackage: {
+      source: "legacy_pending",
+      sourceStatus: "pending",
+      domain: memory.domain,
+      type: memory.type,
+      normalizedKey: memory.normalizedKey,
+      content: memory.content,
+      evidence: memory.evidence,
+      scores: memory.scores,
+      tags: memory.tags,
+      originalRecord: memory
+    }
+  };
+}
+function recommendationForActive(memory, reason) {
+  return {
+    id: memory.id,
+    sourceStatus: "active",
+    domain: memory.domain,
+    type: memory.type,
+    normalizedKey: memory.normalizedKey,
+    content: memory.content,
+    reason,
+    reviewPackage: {
+      source: "legacy_index",
+      sourceStatus: "active",
+      domain: memory.domain,
+      type: memory.type,
+      normalizedKey: memory.normalizedKey,
+      content: memory.content,
+      evidence: memory.evidence,
+      scores: memory.scores,
+      tags: memory.tags,
+      originalRecord: memory
+    }
+  };
+}
+function recommendationForSemantic(memory, sourceStatus, normalizedMemory, reason) {
+  return {
+    id: memory.id,
+    sourceStatus,
+    domain: memory.domain,
+    type: normalizedMemory.type,
+    normalizedKey: normalizedMemory.normalizedKey,
+    content: memory.content,
+    reason,
+    reviewPackage: {
+      source: "semantic_memory",
+      sourceStatus,
+      domain: memory.domain,
+      type: normalizedMemory.type,
+      normalizedKey: normalizedMemory.normalizedKey,
+      content: memory.content,
+      evidence: memory.evidence,
+      scores: memory.reviewState?.scores ?? normalizedMemory.scores,
+      reviewState: memory.reviewState,
+      tags: memory.reviewState?.tags ?? [memory.kind],
+      originalRecord: memory
+    }
+  };
+}
+function dropAuditForPending(memory, dropReason) {
+  return {
+    id: memory.id,
+    source: "legacy_pending",
+    sourceStatus: "pending",
+    domain: memory.domain,
+    type: memory.type,
+    normalizedKey: memory.normalizedKey,
+    content: memory.content,
+    dropReason,
+    originalRecord: memory
+  };
+}
+function dropAuditForActive(memory, dropReason) {
+  return {
+    id: memory.id,
+    source: "legacy_index",
+    sourceStatus: "active",
+    domain: memory.domain,
+    type: memory.type,
+    normalizedKey: memory.normalizedKey,
+    content: memory.content,
+    dropReason,
+    originalRecord: memory
+  };
+}
+function dropAuditForSemantic(memory, sourceStatus, normalizedMemory, dropReason) {
+  return {
+    id: memory.id,
+    source: "semantic_memory",
+    sourceStatus,
+    domain: memory.domain,
+    type: normalizedMemory.type,
+    normalizedKey: normalizedMemory.normalizedKey,
+    content: memory.content,
+    dropReason,
+    originalRecord: memory
+  };
+}
+function recommendationEvent(root, recommendation, now) {
+  return {
+    id: randomUUID18(),
+    action: "audit",
+    at: now,
+    reason: "v1.5 migration recommended manual review for high-risk memory",
+    ...recommendation.sourceStatus === "active" ? { memoryId: recommendation.id } : { candidateId: recommendation.id },
+    details: {
+      migration: "memory_lifecycle_v1_5",
+      scope: root.scope,
+      projectId: root.projectId,
+      sourceStatus: recommendation.sourceStatus,
+      domain: recommendation.domain,
+      type: recommendation.type,
+      normalizedKey: recommendation.normalizedKey,
+      reason: recommendation.reason,
+      contentPreview: recommendation.content.slice(0, 160),
+      reviewPackage: recommendation.reviewPackage
+    }
+  };
+}
+function dropAuditEvent(root, audit, now) {
+  return {
+    id: randomUUID18(),
+    action: "audit",
+    at: now,
+    reason: audit.dropReason === "low-value memory" ? "v1.5 migration dropped low-value memory" : "v1.5 migration dropped memory",
+    ...audit.sourceStatus === "active" ? { memoryId: audit.id } : { candidateId: audit.id },
+    details: {
+      migration: "memory_lifecycle_v1_5",
+      scope: root.scope,
+      projectId: root.projectId,
+      id: audit.id,
+      source: audit.source,
+      sourceStatus: audit.sourceStatus,
+      domain: audit.domain,
+      type: audit.type,
+      normalizedKey: audit.normalizedKey,
+      dropReason: audit.dropReason,
+      contentPreview: audit.content.slice(0, 160),
+      originalRecord: audit.originalRecord
+    }
+  };
+}
+function completionEvent(result2, now) {
+  return {
+    id: randomUUID18(),
+    action: "audit",
+    at: now,
+    reason: "completed v1.5 memory lifecycle migration",
+    details: {
+      migration: "memory_lifecycle_v1_5",
+      scope: result2.scope,
+      projectId: result2.projectId,
+      legacyActiveBefore: result2.legacyActiveBefore,
+      legacyPendingBefore: result2.legacyPendingBefore,
+      semanticBefore: result2.semanticBefore,
+      semanticActiveBefore: result2.semanticActiveBefore,
+      semanticPendingBefore: result2.semanticPendingBefore,
+      semanticAfter: result2.semanticAfter,
+      malformedJsonLines: result2.malformedJsonLines,
+      convertedPendingToTrial: result2.convertedPendingToTrial,
+      convertedActiveToValidated: result2.convertedActiveToValidated,
+      convertedActiveToCore: result2.convertedActiveToCore,
+      droppedPending: result2.droppedPending,
+      droppedActive: result2.droppedActive,
+      recommendations: result2.recommendations,
+      duplicateRecordsDropped: result2.duplicateRecordsDropped
+    }
+  };
+}
+function upsertSemanticMemories2(current, replacements) {
+  const next = [...current];
+  for (const replacement of replacements) {
+    const index = next.findIndex((memory) => memory.id === replacement.id);
+    if (index < 0) {
+      next.push(replacement);
+    } else {
+      next[index] = replacement;
+    }
+  }
+  return next;
+}
+async function readableMemoryRoot(memoryRoot) {
+  try {
+    const stats = await lstat14(memoryRoot);
+    if (stats.isSymbolicLink()) return { ok: false, reason: "memory root is a symlink" };
+    if (!stats.isDirectory()) return { ok: false, reason: "memory root is not a directory" };
+    return { ok: true, memoryRoot: await realpath7(memoryRoot) };
+  } catch (error2) {
+    if (isFileErrorCode12(error2, "ENOENT")) {
+      return { ok: false, reason: "memory root does not exist" };
+    }
+    if (isFileErrorCode12(error2, "EACCES") || isFileErrorCode12(error2, "EPERM")) {
+      return { ok: false, reason: "memory root is unreadable" };
+    }
+    throw error2;
+  }
+}
+function skippedRootResult(root, reason) {
+  return {
+    ...baseRootResult2(root),
+    skipped: true,
+    reason
+  };
+}
+function baseRootResult2(root, counts = {}) {
+  return {
+    scope: root.scope,
+    ...root.projectId === void 0 ? {} : { projectId: root.projectId },
+    memoryRoot: root.memoryRoot,
+    legacyActiveBefore: counts.legacyActiveBefore ?? 0,
+    legacyPendingBefore: counts.legacyPendingBefore ?? 0,
+    semanticBefore: counts.semanticBefore ?? 0,
+    semanticActiveBefore: counts.semanticActiveBefore ?? 0,
+    semanticPendingBefore: counts.semanticPendingBefore ?? 0,
+    semanticAfter: counts.semanticAfter ?? counts.semanticBefore ?? 0,
+    malformedJsonLines: counts.malformedJsonLines ?? 0,
+    convertedPendingToTrial: 0,
+    convertedActiveToValidated: 0,
+    convertedActiveToCore: 0,
+    droppedPending: 0,
+    droppedActive: 0,
+    recommendations: 0,
+    duplicateRecordsDropped: 0
+  };
+}
+async function readJsonLinesWithMalformed(filePath, isValidRecord) {
+  let content;
+  try {
+    await assertSafeMemoryDataFileTarget(filePath);
+    content = await readFile17(filePath, "utf8");
+  } catch (error2) {
+    if (isFileErrorCode12(error2, "ENOENT")) {
+      return { records: [], malformedLines: 0 };
+    }
+    throw error2;
+  }
+  const records = [];
+  let malformedLines = 0;
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (isValidRecord(parsed)) {
+        records.push(parsed);
+      } else {
+        malformedLines += 1;
+      }
+    } catch {
+      malformedLines += 1;
+    }
+  }
+  return { records, malformedLines };
+}
+function isValidLegacyActiveMemory(value) {
+  return isRecord7(value) && isNonEmptyString(value.id) && value.status === "active" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt) && isStringArray3(value.tags);
+}
+function isValidPendingMemory(value) {
+  return isRecord7(value) && isNonEmptyString(value.id) && value.status === "pending" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isStringArray3(value.useWhen, true) && isStringArray3(value.doNotUseWhen, true) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && typeof value.seenCount === "number" && isNonEmptyString(value.firstSeenAt) && isNonEmptyString(value.lastSeenAt) && isNonEmptyString(value.expiresAt) && isStringArray3(value.tags);
+}
+function isValidSemanticMemory(value) {
+  return isRecord7(value) && isNonEmptyString(value.id) && oneOf(SEMANTIC_MEMORY_STATUSES, value.status) && oneOf(MEMORY_MODULES, value.module) && oneOf(MEMORY_CANDIDATE_KINDS2, value.kind) && oneOf(MEMORY_SCOPES, value.scope) && oneOf(MEMORY_DOMAINS, value.domain) && isNonEmptyString(value.content) && isStringArray3(value.useWhen) && isStringArray3(value.doNotUseWhen) && isOptionalString2(value.sourceOfTruth) && isStructuredEvidenceArray(value.evidence) && (value.routing === void 0 || isValidRouting(value.routing)) && oneOf(UPDATE_POLICIES, value.reviewPolicy) && (value.reviewState === void 0 || isValidSemanticReviewState(value.reviewState)) && (value.confidenceTier === void 0 || oneOf(CONFIDENCE_TIERS, value.confidenceTier)) && (value.activationPolicy === void 0 || isValidActivationPolicy(value.activationPolicy)) && isStringArray3(value.supersedes) && isOptionalString2(value.expiresAt) && isOptionalString2(value.reviewAfter) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt);
+}
+function isValidRouting(value) {
+  return isRecord7(value) && oneOf(MEMORY_MODULES, value.module) && oneOf(UPDATE_POLICIES, value.updatePolicy) && oneOf(ROUTING_RISKS, value.risk) && isStringArray3(value.reasons);
+}
+function isValidSemanticReviewState(value) {
+  return isRecord7(value) && isOptionalString2(value.normalizedKey) && isOptionalString2(value.sourceOfTruth) && (value.type === void 0 || oneOf(MEMORY_TYPES, value.type)) && (value.strength === void 0 || oneOf(MEMORY_STRENGTHS, value.strength)) && (value.source === void 0 || oneOf(MEMORY_SOURCES2, value.source)) && (value.portability === void 0 || oneOf(MEMORY_PORTABILITIES, value.portability)) && (value.profileVisibility === void 0 || oneOf(MEMORY_PROFILE_VISIBILITIES, value.profileVisibility)) && (value.scores === void 0 || isMemoryScores(value.scores)) && isStringArray3(value.tags, true) && isOptionalFiniteNumber(value.seenCount) && isOptionalString2(value.firstSeenAt) && isOptionalString2(value.lastSeenAt) && isOptionalString2(value.expiresAt) && isOptionalString2(value.promoteAfter) && (value.admittedBy === void 0 || oneOf(ADMITTED_BY_VALUES, value.admittedBy)) && (value.admissionAction === void 0 || oneOf(ADMISSION_ACTIONS, value.admissionAction)) && isOptionalFiniteNumber(value.admissionScore) && isStringArray3(value.admissionReasons, true) && isStringArray3(value.sourceEpisodeIds, true) && isStringArray3(value.sourceDraftIds, true) && isOptionalBoolean(value.userConfirmed) && (value.normalizedKeyConflictResolution === void 0 || oneOf(NORMALIZED_KEY_CONFLICT_RESOLUTIONS2, value.normalizedKeyConflictResolution)) && isStringArray3(value.conflictsWith, true);
+}
+function isValidActivationPolicy(value) {
+  return isRecord7(value) && Array.isArray(value.allowedModes) && value.allowedModes.every((mode) => oneOf(ACTIVATION_MODES, mode)) && oneOf(RUNTIME_ACTIVATION_STRENGTHS, value.maxRuntimeStrength);
+}
+function isRecord7(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+function isOptionalString2(value) {
+  return value === void 0 || typeof value === "string";
+}
+function isStringArray3(value, optional2 = false) {
+  return optional2 && value === void 0 || Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+function oneOf(values, value) {
+  return typeof value === "string" && values.includes(value);
+}
+function isEvidenceArray(value) {
+  return Array.isArray(value) && value.every(isRecord7);
+}
+function isStructuredEvidenceArray(value) {
+  return Array.isArray(value) && value.every(
+    (entry) => isRecord7(entry) && isNonEmptyString(entry.id) && isNonEmptyString(entry.sourceKind) && isNonEmptyString(entry.sourceRef) && isNonEmptyString(entry.whatHappened) && isNonEmptyString(entry.whyImportant)
+  );
+}
+function isMemoryScores(value) {
+  return isRecord7(value) && isFiniteNumber(value.evidenceStrength) && isFiniteNumber(value.stability) && isFiniteNumber(value.usefulness) && isFiniteNumber(value.safety) && isFiniteNumber(value.sensitivity);
+}
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function isOptionalFiniteNumber(value) {
+  return value === void 0 || isFiniteNumber(value);
+}
+function isOptionalBoolean(value) {
+  return value === void 0 || typeof value === "boolean";
+}
+async function writeJsonLinesAtomic3(filePath, values) {
+  await assertSafeMemoryDataFileTarget(filePath);
+  const tempPath = `${filePath}.${process.pid}.${randomUUID18()}.tmp`;
+  const content = values.map((value) => JSON.stringify(value)).join("\n");
+  await writeFile9(tempPath, content === "" ? "" : `${content}
+`, "utf8");
+  await rename5(tempPath, filePath);
+}
+function isFileErrorCode12(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+function errorMessage4(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+
+// src/codex/codex-memory-lifecycle-weekly.ts
+import { createHash as createHash14, randomUUID as randomUUID20 } from "node:crypto";
+import { readFile as readFile18 } from "node:fs/promises";
+import { join as join26 } from "node:path";
+
+// src/codex/memory-lifecycle-profile.ts
+import { randomUUID as randomUUID19 } from "node:crypto";
+import { open as open4, rename as rename6, rm as rm5 } from "node:fs/promises";
+import { join as join25 } from "node:path";
+var GENERATED_HEADER2 = "<!-- Generated by Cyrene Continuity v1.5. Do not edit manually. -->";
+var MODEL_PROFILE_FILE3 = "MODEL_PROFILE.md";
+async function assertLifecycleProfileTargetSafe(memoryRoot) {
+  return assertMemoryProjectionTargetsSafe(memoryRoot);
+}
+function formatLifecycleProfileFromCoreMemory(input) {
+  const coreTier = input.scope === "global" ? "global_core" : "project_core";
+  const core = input.memories.filter(
+    (memory) => memory.status === "active" && memory.confidenceTier === coreTier && isLowRiskLifecycleMemory(memory) && validateSemanticMemoryLifecycle(memory).length === 0
+  ).map((memory) => sanitizeProfileContent2(memory.content)).filter((content) => content !== null).sort((left, right) => left.localeCompare(right));
+  const lines2 = [
+    GENERATED_HEADER2,
+    "",
+    "# Cyrene Model Profile",
+    "",
+    "## Always Apply",
+    ""
+  ];
+  if (core.length === 0) {
+    lines2.push("- None.");
+  } else {
+    for (const content of core) {
+      lines2.push(`- ${content}`);
+    }
+  }
+  lines2.push("");
+  return `${lines2.join("\n").trimEnd()}
+`;
+}
+async function writeLifecycleProfileFromCoreMemory(input) {
+  const root = await assertLifecycleProfileTargetSafe(input.memoryRoot);
+  const content = formatLifecycleProfileFromCoreMemory({
+    scope: input.scope,
+    memories: input.memories
+  });
+  await writeSafeGeneratedProfile(root, content);
+  return content;
+}
+async function writeSafeGeneratedProfile(memoryRoot, content) {
+  await assertLifecycleProfileTargetSafe(memoryRoot);
+  const targetPath = join25(memoryRoot, MODEL_PROFILE_FILE3);
+  const tempPath = join25(memoryRoot, `.${MODEL_PROFILE_FILE3}.${process.pid}.${Date.now()}.${randomUUID19()}.tmp`);
+  const file = await open4(tempPath, "wx");
+  try {
+    await file.writeFile(content, "utf8");
+  } catch (error2) {
+    await file.close();
+    await rm5(tempPath, { force: true });
+    throw error2;
+  }
+  await file.close();
+  await assertLifecycleProfileTargetSafe(memoryRoot);
+  try {
+    await rename6(tempPath, targetPath);
+  } catch (error2) {
+    await rm5(tempPath, { force: true });
+    throw error2;
+  }
+}
+function sanitizeProfileContent2(content) {
+  const sanitized = content.replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}\b/g, "$1[REDACTED]").replace(/\b(password|passwd|credential|secret|api[_ -]?key|token|private key|ssh key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]").replace(/\b[A-Fa-f0-9]{32,}\b/g, "[REDACTED]").replace(/\s+/g, " ").trim();
+  return sanitized === "" ? null : sanitized;
+}
+
+// src/codex/codex-memory-lifecycle-weekly.ts
+var PROJECT_PROMOTION_POLICY_ID = "low_risk_project_memory_v1";
+var PROJECT_LIFECYCLE_POLICY_ID = "weekly_project_core_v1";
+var GLOBAL_PROMOTION_POLICY_ID = "review_derived_global_preference_v1";
+var GLOBAL_LIFECYCLE_POLICY_ID = "weekly_global_consolidation_v1";
+var PROMOTION_DECISION = "auto_promote";
+var SEMANTIC_MEMORIES_FILE4 = "semantic_memories.jsonl";
+var GLOBAL_DOMAINS = /* @__PURE__ */ new Set(["procedural", "system"]);
+async function runCodexMemoryLifecycleWeekly(input) {
+  const cwd = input.cwd ?? process.cwd();
+  const dryRun = input.apply !== true;
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const config2 = createDefaultConfig(cwd);
+  const projectRoots = input.projectRoots ?? await defaultProjectRoots2(input.cwd);
+  const projectResults = [];
+  const projectCoreMemories = [];
+  for (const root of projectRoots) {
+    const project = await runProjectWeekly({
+      root,
+      dryRun,
+      now,
+      dailyCap: config2.memoryAutoReviewProjectPromotePerDay
+    });
+    projectResults.push(project.result);
+    projectCoreMemories.push(...project.coreMemories);
+  }
+  const global = await runGlobalWeekly({
+    memoryRoot: input.globalRoot ?? codexGlobalMemoryRoot(),
+    projectCoreMemories,
+    dryRun,
+    now,
+    dailyCap: config2.memoryAutoReviewGlobalPromotePerDay
+  });
+  return {
+    action: "memory_lifecycle_weekly",
+    dryRun,
+    projectRoots: projectResults,
+    global
+  };
+}
+async function runProjectWeekly(input) {
+  if (!input.dryRun) {
+    return withMemoryMaintenanceLockFromRoot(
+      input.root.memoryRoot,
+      async (lockedMemoryRoot) => runProjectWeeklyLocked({
+        ...input,
+        root: { ...input.root, memoryRoot: lockedMemoryRoot }
+      })
+    );
+  }
+  return runProjectWeeklyLocked(input);
+}
+async function runProjectWeeklyLocked(input) {
+  const strictSemantic = await readSemanticMemoriesStrictFromRoot2(input.root.memoryRoot);
+  if (strictSemantic.malformedLines > 0) {
+    const result2 = malformedProjectResult(input.root, strictSemantic.malformedLines);
+    if (!input.dryRun) {
+      await appendMemoryEventFromRoot(input.root.memoryRoot, malformedSemanticMemoryEvent({
+        root: input.root,
+        now: input.now,
+        scope: "project",
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
+        malformedLines: strictSemantic.malformedLines
+      }));
+    }
+    return { result: result2, coreMemories: [] };
+  }
+  const [memories, activationEvents, memoryEvents] = await Promise.all([
+    Promise.resolve(strictSemantic.memories),
+    readActivationEventsFromRoot(input.root.memoryRoot),
+    readMemoryEventsFromRoot(input.root.memoryRoot)
+  ]);
+  const next = [...memories];
+  const promotions = [];
+  const recommendations = [];
+  let invalidMemories = 0;
+  let evalFailures = 0;
+  let capExhausted = 0;
+  const malformedSemanticMemories = 0;
+  let usedToday = countAutoPromotionsForDay2(memoryEvents, input.now);
+  for (const [index, memory] of memories.entries()) {
+    if (memory.status !== "active") {
+      continue;
+    }
+    const validationFindings = validateSemanticMemoryLifecycle(memory);
+    if (validationFindings.length > 0) {
+      invalidMemories += 1;
+      recommendations.push({
+        memory,
+        reason: "invalid/needs_migration",
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID
+      });
+      continue;
+    }
+    if (memory.confidenceTier !== "validated") {
+      continue;
+    }
+    const stats = activationStats2(memory.id, activationEvents);
+    const lowRisk = isLowRiskLifecycleMemory(memory);
+    if (!lowRisk || stats.negative > 0) {
+      recommendations.push({
+        memory,
+        reason: stats.negative > 0 ? "negative activation feedback" : "high-risk project memory",
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID
+      });
+      continue;
+    }
+    if (stats.distinctAppliedContexts < 2) {
+      continue;
+    }
+    if (usedToday >= input.dailyCap) {
+      capExhausted += 1;
+      recommendations.push({
+        memory,
+        reason: "project promotion cap exhausted",
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID
+      });
+      continue;
+    }
+    const evalGate = runV5AutoPromotionEvalGate([{
+      candidateId: memory.id,
+      domain: memory.domain,
+      scope: "project",
+      source: sourceForMemory(memory),
+      policyId: PROJECT_PROMOTION_POLICY_ID,
+      decision: PROMOTION_DECISION,
+      evidenceCount: memory.evidence.length,
+      distinctEvidenceCount: stats.distinctAppliedContexts,
+      usedToday,
+      dailyCap: input.dailyCap
+    }]);
+    if (!evalGate.passed) {
+      evalFailures += 1;
+      recommendations.push({
+        memory,
+        reason: "project promotion eval gate failed",
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
+        evalGate
+      });
+      continue;
+    }
+    const after = withConfidenceTier(memory, "project_core", input.now);
+    const promotedFindings = validateSemanticMemoryLifecycle(after);
+    if (promotedFindings.length > 0) {
+      invalidMemories += 1;
+      recommendations.push({
+        memory,
+        reason: "invalid/needs_migration",
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID
+      });
+      continue;
+    }
+    next[index] = after;
+    promotions.push({
+      before: memory,
+      after,
+      stats,
+      usedToday,
+      dailyCap: input.dailyCap,
+      evalGate
+    });
+    usedToday += 1;
+  }
+  const coreMemories = next.filter((memory) => memory.status === "active" && memory.confidenceTier === "project_core").map((memory) => ({
+    projectId: input.root.projectId,
+    memoryRoot: input.root.memoryRoot,
+    memory
+  }));
+  if (!input.dryRun) {
+    if (coreMemories.length > 0) {
+      await assertLifecycleProfileTargetSafe(input.root.memoryRoot);
+    }
+    for (const promotion of promotions) {
+      await appendMemoryEventFromRoot(input.root.memoryRoot, projectPromotionEvent({
+        root: input.root,
+        promotion,
+        now: input.now
+      }));
+    }
+    for (const recommendation of recommendations) {
+      await appendMemoryEventFromRoot(input.root.memoryRoot, recommendationEvent2({
+        root: input.root,
+        recommendation,
+        now: input.now,
+        scope: "project"
+      }));
+    }
+    if (coreMemories.length > 0) {
+      await appendMemoryEventFromRoot(input.root.memoryRoot, profileRegenerationEvent({
+        root: input.root,
+        now: input.now,
+        scope: "project",
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
+        coreMemoryCount: coreMemories.length
+      }));
+    }
+    if (promotions.length > 0) {
+      await writeSemanticMemoriesFromRoot(input.root.memoryRoot, next);
+    }
+    if (coreMemories.length > 0) {
+      await writeLifecycleProfileFromCoreMemory({
+        memoryRoot: input.root.memoryRoot,
+        scope: "project",
+        memories: next
+      });
+    }
+  }
+  return {
+    result: {
+      memoryRoot: input.root.memoryRoot,
+      projectId: input.root.projectId,
+      promotedValidatedToProjectCore: promotions.length,
+      recommendations: recommendations.length,
+      invalidMemories,
+      evalFailures,
+      capExhausted,
+      malformedSemanticMemories
+    },
+    coreMemories
+  };
+}
+async function runGlobalWeekly(input) {
+  if (!input.dryRun) {
+    return withMemoryMaintenanceLockFromRoot(
+      input.memoryRoot,
+      async (lockedMemoryRoot) => runGlobalWeeklyLocked({
+        ...input,
+        memoryRoot: lockedMemoryRoot
+      })
+    );
+  }
+  return runGlobalWeeklyLocked(input);
+}
+async function runGlobalWeeklyLocked(input) {
+  const strictSemantic = await readSemanticMemoriesStrictFromRoot2(input.memoryRoot);
+  if (strictSemantic.malformedLines > 0) {
+    const result2 = malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines);
+    if (!input.dryRun) {
+      await appendMemoryEventFromRoot(input.memoryRoot, malformedSemanticMemoryEvent({
+        root: { memoryRoot: input.memoryRoot },
+        now: input.now,
+        scope: "global",
+        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
+        malformedLines: strictSemantic.malformedLines
+      }));
+    }
+    return result2;
+  }
+  const [existing, memoryEvents] = await Promise.all([
+    Promise.resolve(strictSemantic.memories),
+    readMemoryEventsFromRoot(input.memoryRoot)
+  ]);
+  const existingContent = new Set(
+    existing.filter((memory) => memory.status === "active" && memory.confidenceTier === "global_core").map((memory) => normalizeContent2(memory.content))
+  );
+  const recommendations = [];
+  let invalidMemories = 0;
+  let evalFailures = 0;
+  let capExhausted = 0;
+  const malformedSemanticMemories = 0;
+  let usedToday = countAutoPromotionsForDay2(memoryEvents, input.now);
+  const eligibleProjectCoreMemories = [];
+  for (const memory of existing) {
+    if (memory.status !== "active") {
+      continue;
+    }
+    const validationFindings = validateSemanticMemoryLifecycle(memory);
+    if (validationFindings.length === 0) {
+      continue;
+    }
+    invalidMemories += 1;
+    recommendations.push({
+      memory,
+      reason: "invalid/needs_migration",
+      lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID
+    });
+  }
+  for (const source of input.projectCoreMemories) {
+    const ineligible = globalSourceIneligibilityReason(source);
+    if (ineligible === null) {
+      eligibleProjectCoreMemories.push(source);
+      continue;
+    }
+    if (ineligible === "invalid/needs_migration") {
+      invalidMemories += 1;
+    }
+    recommendations.push({
+      memory: source.memory,
+      reason: ineligible,
+      lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID
+    });
+  }
+  const candidateGroups = globalCandidateGroups(eligibleProjectCoreMemories);
+  const candidates = [];
+  for (const group of candidateGroups) {
+    const base = group.sources[0]?.memory;
+    if (base === void 0) {
+      continue;
+    }
+    if (existingContent.has(normalizeContent2(base.content))) {
+      continue;
+    }
+    if (usedToday >= input.dailyCap) {
+      capExhausted += 1;
+      recommendations.push({
+        memory: base,
+        reason: "global promotion cap exhausted",
+        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID
+      });
+      continue;
+    }
+    const distinctEvidenceCount3 = distinctGlobalEvidenceCount(group.sources);
+    const candidate = globalCoreMemoryFromProjectCore(group.sources, input.now);
+    const validationFindings = validateSemanticMemoryLifecycle(candidate);
+    if (validationFindings.length > 0) {
+      invalidMemories += 1;
+      recommendations.push({
+        memory: base,
+        reason: "invalid/needs_migration",
+        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID
+      });
+      continue;
+    }
+    const evalItem = {
+      candidateId: candidate.id,
+      domain: candidate.domain,
+      scope: "global",
+      source: "review_event",
+      policyId: GLOBAL_PROMOTION_POLICY_ID,
+      decision: PROMOTION_DECISION,
+      evidenceCount: group.sources.length,
+      distinctEvidenceCount: distinctEvidenceCount3,
+      usedToday,
+      dailyCap: input.dailyCap
+    };
+    const evalGate = combineEvalGateResults([
+      runV5AutoPromotionEvalGate([evalItem]),
+      runV5GlobalAutoPromotionEvalGate([evalItem])
+    ]);
+    if (!evalGate.passed) {
+      evalFailures += 1;
+      recommendations.push({
+        memory: base,
+        reason: "global promotion eval gate failed",
+        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
+        evalGate
+      });
+      continue;
+    }
+    candidates.push({
+      memory: candidate,
+      sources: group.sources,
+      distinctEvidenceCount: distinctEvidenceCount3,
+      usedToday,
+      dailyCap: input.dailyCap,
+      evalGate
+    });
+    existingContent.add(normalizeContent2(candidate.content));
+    usedToday += 1;
+  }
+  const next = [...existing, ...candidates.map((candidate) => candidate.memory)];
+  const hasGlobalProfileContent = next.some(
+    (memory) => memory.status === "active" && memory.confidenceTier === "global_core" && isLowRiskLifecycleMemory(memory) && validateSemanticMemoryLifecycle(memory).length === 0
+  );
+  if (!input.dryRun) {
+    if (hasGlobalProfileContent) {
+      await assertLifecycleProfileTargetSafe(input.memoryRoot);
+    }
+    for (const candidate of candidates) {
+      await appendMemoryEventFromRoot(input.memoryRoot, globalPromotionEvent({
+        memoryRoot: input.memoryRoot,
+        candidate,
+        now: input.now
+      }));
+    }
+    for (const recommendation of recommendations) {
+      await appendMemoryEventFromRoot(input.memoryRoot, recommendationEvent2({
+        root: { memoryRoot: input.memoryRoot },
+        recommendation,
+        now: input.now,
+        scope: "global"
+      }));
+    }
+    if (hasGlobalProfileContent) {
+      await appendMemoryEventFromRoot(input.memoryRoot, profileRegenerationEvent({
+        root: { memoryRoot: input.memoryRoot },
+        now: input.now,
+        scope: "global",
+        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
+        coreMemoryCount: next.filter(
+          (memory) => memory.status === "active" && memory.confidenceTier === "global_core" && isLowRiskLifecycleMemory(memory) && validateSemanticMemoryLifecycle(memory).length === 0
+        ).length
+      }));
+    }
+    if (candidates.length > 0) {
+      await writeSemanticMemoriesFromRoot(input.memoryRoot, next);
+    }
+    if (hasGlobalProfileContent) {
+      await writeLifecycleProfileFromCoreMemory({
+        memoryRoot: input.memoryRoot,
+        scope: "global",
+        memories: next
+      });
+    }
+  }
+  return {
+    memoryRoot: input.memoryRoot,
+    promotedToGlobalCore: candidates.length,
+    recommendations: recommendations.length,
+    invalidMemories,
+    evalFailures,
+    capExhausted,
+    malformedSemanticMemories
+  };
+}
+function withConfidenceTier(memory, confidenceTier, now) {
+  return {
+    ...memory,
+    confidenceTier,
+    activationPolicy: activationPolicyForConfidenceTier(confidenceTier),
+    updatedAt: now
+  };
+}
+function activationStats2(memoryId, events) {
+  const appliedContextKeys = [];
+  const activationEventIds = [];
+  let applied = 0;
+  let negative = 0;
+  for (const event of events) {
+    if (event.memoryId !== memoryId) {
+      continue;
+    }
+    if (event.event === "applied") {
+      applied += 1;
+      activationEventIds.push(event.id);
+      appliedContextKeys.push(event.evidenceRef ?? event.activationId ?? event.queryHash ?? event.createdAt);
+    }
+    if (isNegativeActivationEventType(event.event)) {
+      negative += 1;
+    }
+  }
+  return {
+    applied,
+    negative,
+    distinctAppliedContexts: new Set(appliedContextKeys).size,
+    appliedContextKeys: Array.from(new Set(appliedContextKeys)),
+    activationEventIds
+  };
+}
+function sourceForMemory(memory) {
+  const source = memory.reviewState?.source ?? memory.evidence[0]?.sourceKind;
+  if (source === "file" || source === "tool_trace" || source === "user_explicit" || source === "review_event" || source === "user_implicit" || source === "assistant_observed" || source === "legacy_markdown") {
+    return source;
+  }
+  return "review_event";
+}
+function globalCandidateGroups(projectCoreMemories) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const source of projectCoreMemories) {
+    const key = normalizeContent2(source.memory.content);
+    groups.set(key, [...groups.get(key) ?? [], source]);
+  }
+  return Array.from(groups.entries()).map(([key, sources]) => ({ key, sources })).filter((group) => distinctProjectCount(group.sources) >= 2);
+}
+function globalSourceIneligibilityReason(source) {
+  const memory = source.memory;
+  const findings = validateSemanticMemoryLifecycle(memory);
+  if (findings.length > 0) {
+    return "invalid/needs_migration";
+  }
+  if (!isLowRiskLifecycleMemory(memory)) {
+    return "high-risk project_core memory";
+  }
+  if (!GLOBAL_DOMAINS.has(memory.domain)) {
+    return "not procedural/system global content";
+  }
+  if (containsProjectSpecificDetail(memory.content)) {
+    return "project-specific global candidate";
+  }
+  return null;
+}
+function globalCoreMemoryFromProjectCore(sources, now) {
+  const base = sources[0]?.memory;
+  if (base === void 0) {
+    throw new Error("Cannot build global_core memory without project_core sources");
+  }
+  const normalized = normalizeContent2(base.content);
+  return {
+    ...base,
+    id: `global-${createHash14("sha256").update(normalized).digest("hex").slice(0, 16)}`,
+    module: base.domain === "system" ? "system" : "global_policy",
+    scope: "global",
+    confidenceTier: "global_core",
+    activationPolicy: activationPolicyForConfidenceTier("global_core"),
+    evidence: sources.map((source, index) => ({
+      id: `weekly-global-${index + 1}-${source.memory.id}`,
+      sourceKind: "review_event",
+      sourceRef: `weekly:${source.projectId ?? source.memoryRoot}:${source.memory.id}`,
+      when: now,
+      whatHappened: `Project core memory ${source.memory.id} repeated this global candidate.`,
+      whyImportant: "Repeated low-risk project_core content can be consolidated into global_core.",
+      result: `sourceProject=${source.projectId ?? "unknown"}`
+    })),
+    routing: {
+      module: base.domain === "system" ? "system" : "global_policy",
+      updatePolicy: "strict_auto_promote",
+      risk: "low",
+      reasons: ["weekly_global_consolidation"]
+    },
+    reviewPolicy: "strict_auto_promote",
+    reviewState: {
+      ...base.reviewState,
+      source: "review_event",
+      portability: "global",
+      scores: base.reviewState?.scores,
+      tags: Array.from(/* @__PURE__ */ new Set([...base.reviewState?.tags ?? [], "global_core", "weekly_global_consolidation"]))
+    },
+    createdAt: now,
+    updatedAt: now
+  };
+}
+function distinctProjectCount(sources) {
+  return new Set(sources.map((source) => source.projectId ?? source.memoryRoot)).size;
+}
+function distinctGlobalEvidenceCount(sources) {
+  const keys = sources.flatMap((source) => {
+    const evidenceKeys = source.memory.evidence.map(
+      (evidence) => evidence.sourceRef || evidence.id || JSON.stringify(evidence)
+    );
+    return evidenceKeys.length > 0 ? evidenceKeys : [source.memory.id];
+  });
+  return new Set(keys).size;
+}
+function containsProjectSpecificDetail(content) {
+  const normalized = content.toLowerCase();
+  const buildToolCommand = /\b(?:npm|pnpm|yarn|bun|node|tsx|tsc|vite|vitest|jest|pytest|python3?|pip|cargo|go|make)\s+(?:run\s+)?[a-z0-9:_@./-]+/i;
+  const namedProjectPrefix = /\bfor\s+[`'"]?[a-z0-9][a-z0-9._-]*-[a-z0-9._-]+[`'"]?\s*,/i;
+  const namedRepository = /\b(?:repo|repository|project|workspace)\s+[`'"]?[a-z0-9][a-z0-9._-]*-[a-z0-9._-]+[`'"]?/i;
+  return /(^|[\s`'"([{<:=,;])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-][^\s`'")\]}>]*/.test(content) || /(^|[\s`'"([{<:=,;])[A-Za-z]:\\(?:[^\\\s`'")\]}>]+\\)+[^\\\s`'")\]}>]+/.test(content) || /\b(this|current)\s+(repo|repository|project|workspace)\b/.test(normalized) || namedProjectPrefix.test(content) || namedRepository.test(content) || buildToolCommand.test(content);
+}
+function projectPromotionEvent(input) {
+  return {
+    id: randomUUID20(),
+    action: "promote",
+    at: input.now,
+    reason: "v1.5 weekly promoted validated memory to project_core",
+    memoryId: input.promotion.after.id,
+    details: {
+      decision: PROMOTION_DECISION,
+      lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
+      policyId: PROJECT_PROMOTION_POLICY_ID,
+      projectId: input.root.projectId,
+      previousConfidenceTier: input.promotion.before.confidenceTier,
+      confidenceTier: input.promotion.after.confidenceTier,
+      evidenceCount: input.promotion.after.evidence.length,
+      distinctEvidenceCount: input.promotion.stats.distinctAppliedContexts,
+      activationEventIds: input.promotion.stats.activationEventIds,
+      appliedContextKeys: input.promotion.stats.appliedContextKeys,
+      capStatus: {
+        usedToday: input.promotion.usedToday,
+        dailyCap: input.promotion.dailyCap
+      },
+      evalGate: input.promotion.evalGate
+    }
+  };
+}
+function globalPromotionEvent(input) {
+  return {
+    id: randomUUID20(),
+    action: "promote",
+    at: input.now,
+    reason: "v1.5 weekly consolidated project_core memory into global_core",
+    memoryId: input.candidate.memory.id,
+    details: {
+      decision: PROMOTION_DECISION,
+      lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
+      policyId: GLOBAL_PROMOTION_POLICY_ID,
+      sourceMemoryIds: input.candidate.sources.map((source) => source.memory.id),
+      sourceProjectIds: input.candidate.sources.map((source) => source.projectId ?? null),
+      sourceMemoryRoots: input.candidate.sources.map((source) => source.memoryRoot),
+      evidenceCount: input.candidate.sources.length,
+      distinctEvidenceCount: input.candidate.distinctEvidenceCount,
+      capStatus: {
+        usedToday: input.candidate.usedToday,
+        dailyCap: input.candidate.dailyCap
+      },
+      memoryRoot: input.memoryRoot,
+      evalGate: input.candidate.evalGate
+    }
+  };
+}
+function recommendationEvent2(input) {
+  return {
+    id: randomUUID20(),
+    action: "audit",
+    at: input.now,
+    reason: input.scope === "global" ? "v1.5 weekly recommended manual review for global consolidation" : "v1.5 weekly recommended manual review for project memory",
+    memoryId: input.recommendation.memory.id,
+    details: {
+      lifecyclePolicyId: input.recommendation.lifecyclePolicyId,
+      scope: input.scope,
+      projectId: input.root.projectId,
+      reason: input.recommendation.reason,
+      contentPreview: input.recommendation.memory.content.slice(0, 160),
+      confidenceTier: input.recommendation.memory.confidenceTier,
+      domain: input.recommendation.memory.domain,
+      module: input.recommendation.memory.module,
+      evalGate: input.recommendation.evalGate
+    }
+  };
+}
+function profileRegenerationEvent(input) {
+  return {
+    id: randomUUID20(),
+    action: "audit",
+    at: input.now,
+    reason: "v1.5 weekly regenerated core memory profile",
+    details: {
+      lifecyclePolicyId: input.lifecyclePolicyId,
+      scope: input.scope,
+      projectId: input.root.projectId,
+      coreMemoryCount: input.coreMemoryCount
+    }
+  };
+}
+function malformedSemanticMemoryEvent(input) {
+  return {
+    id: randomUUID20(),
+    action: "audit",
+    at: input.now,
+    reason: input.scope === "global" ? "v1.5 weekly recommended manual review for global consolidation" : "v1.5 weekly recommended manual review for project memory",
+    details: {
+      lifecyclePolicyId: input.lifecyclePolicyId,
+      scope: input.scope,
+      projectId: input.root.projectId,
+      reason: "malformed semantic_memories.jsonl",
+      malformedLines: input.malformedLines
+    }
+  };
+}
+function malformedProjectResult(root, malformedSemanticMemories) {
+  return {
+    memoryRoot: root.memoryRoot,
+    projectId: root.projectId,
+    promotedValidatedToProjectCore: 0,
+    recommendations: 1,
+    invalidMemories: malformedSemanticMemories,
+    evalFailures: 0,
+    capExhausted: 0,
+    malformedSemanticMemories
+  };
+}
+function malformedGlobalResult(memoryRoot, malformedSemanticMemories) {
+  return {
+    memoryRoot,
+    promotedToGlobalCore: 0,
+    recommendations: 1,
+    invalidMemories: malformedSemanticMemories,
+    evalFailures: 0,
+    capExhausted: 0,
+    malformedSemanticMemories
+  };
+}
+async function readSemanticMemoriesStrictFromRoot2(memoryRoot) {
+  const filePath = join26(memoryRoot, SEMANTIC_MEMORIES_FILE4);
+  let content;
+  try {
+    await assertSafeMemoryDataFileTarget(filePath);
+    content = await readFile18(filePath, "utf8");
+  } catch (error2) {
+    if (isFileErrorCode13(error2, "ENOENT")) {
+      return { memories: [], malformedLines: 0 };
+    }
+    throw error2;
+  }
+  const memories = [];
+  let malformedLines = 0;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "") {
+      continue;
+    }
+    try {
+      memories.push(JSON.parse(line));
+    } catch {
+      malformedLines += 1;
+    }
+  }
+  return { memories, malformedLines };
+}
+function countAutoPromotionsForDay2(events, now) {
+  const day = now.slice(0, 10);
+  return events.filter(
+    (event) => event.action === "promote" && event.at.slice(0, 10) === day && event.details?.decision === PROMOTION_DECISION
+  ).length;
+}
+function normalizeContent2(content) {
+  return content.toLowerCase().replace(/\s+/g, " ").trim();
+}
+async function defaultProjectRoots2(cwd) {
+  if (cwd !== void 0) {
+    const project = await identifyCodexProject(cwd);
+    return [{ projectId: project.projectId, memoryRoot: codexProjectMemoryRoot(project.projectId) }];
+  }
+  return (await getReadableCodexProjectMemoryRoots()).map((memoryRoot) => ({ memoryRoot }));
+}
+function isFileErrorCode13(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
 // src/codex/codex-memory-migrate-v2.ts
-import { lstat as lstat14 } from "node:fs/promises";
+import { lstat as lstat15 } from "node:fs/promises";
 async function runCodexMemoryMigrateV2(input) {
   const currentProject = await identifyCodexProject(input.cwd);
   const roots = /* @__PURE__ */ new Map();
@@ -21914,7 +24314,7 @@ async function runCodexMemoryMigrateV2(input) {
   }
   const results = [];
   for (const root of roots.values()) {
-    const readable = await readableMemoryRoot(root.memoryRoot);
+    const readable = await readableMemoryRoot2(root.memoryRoot);
     if (!readable.ok) {
       results.push({
         ...root,
@@ -21933,9 +24333,9 @@ async function runCodexMemoryMigrateV2(input) {
     roots: results
   };
 }
-async function readableMemoryRoot(memoryRoot) {
+async function readableMemoryRoot2(memoryRoot) {
   try {
-    const stats = await lstat14(memoryRoot);
+    const stats = await lstat15(memoryRoot);
     if (stats.isSymbolicLink()) return { ok: false, reason: "memory root is a symlink" };
     if (!stats.isDirectory()) return { ok: false, reason: "memory root is not a directory" };
     return { ok: true };
@@ -21948,10 +24348,10 @@ async function readableMemoryRoot(memoryRoot) {
 }
 
 // src/codex/semantic-rewrite.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
+import { randomUUID as randomUUID21 } from "node:crypto";
 
 // src/codex/semantic-rewrite-validator.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 function validateSemanticRewriteCandidate(input) {
   const beforeReadiness = activeReadinessForPending2(input.original);
   const afterReadiness = activeReadinessForPending2(input.next);
@@ -21992,7 +24392,7 @@ function validateSemanticRewriteCandidate(input) {
   };
 }
 function contentHashForSemanticRewrite(content) {
-  return createHash12("sha256").update(content).digest("hex");
+  return createHash15("sha256").update(content).digest("hex");
 }
 function activeReadinessForPending2(candidate) {
   return evaluateActiveMemoryReadiness({
@@ -22177,7 +24577,7 @@ function semanticRewriteReceipt(input) {
   const newReviewHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? reviewHashForPendingMemory(input.next) : void 0;
   const rewrittenContentHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? contentHashForSemanticRewrite(input.next.content) : void 0;
   return {
-    id: randomUUID17(),
+    id: randomUUID21(),
     pendingMemoryId: input.original.id,
     action: input.action,
     method: input.method,
@@ -22313,7 +24713,7 @@ async function resolveMemoryRoot(input) {
 }
 
 // src/codex/triage-apply.ts
-import { randomUUID as randomUUID18 } from "node:crypto";
+import { randomUUID as randomUUID22 } from "node:crypto";
 function applySafeTriageDecisions(input) {
   const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
   const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
@@ -22407,7 +24807,7 @@ function tombstoneForAutoDroppedCandidate(candidate, now) {
 }
 function memoryEventForTriageDecision(action, candidate, now, reason, details) {
   return {
-    id: randomUUID18(),
+    id: randomUUID22(),
     action,
     at: now,
     reason,
@@ -22510,9 +24910,9 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
-import { randomUUID as randomUUID19 } from "node:crypto";
-import { readFile as readFile16 } from "node:fs/promises";
-import { join as join23 } from "node:path";
+import { randomUUID as randomUUID23 } from "node:crypto";
+import { readFile as readFile19 } from "node:fs/promises";
+import { join as join27 } from "node:path";
 
 // src/codex/memory-distill.ts
 async function runCodexMemoryDistill(input) {
@@ -23178,12 +25578,12 @@ async function handleCodexUiApiRequest(input) {
         return notFound();
     }
   } catch (error2) {
-    return failure(500, "internal_error", errorMessage4(error2));
+    return failure(500, "internal_error", errorMessage5(error2));
   }
 }
 async function handleBatchPendingReject(input, selection) {
   const body = input.body;
-  if (!isRecord7(body) || !Array.isArray(body.candidates)) {
+  if (!isRecord8(body) || !Array.isArray(body.candidates)) {
     return failure(400, "invalid_request", "Batch pending reject requires candidates.");
   }
   const candidates = parseBatchRejectCandidates(body.candidates);
@@ -23252,7 +25652,7 @@ async function rejectPendingCandidatesFromRoot(input) {
       for (const candidate of rejected) {
         await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForBatchRejectedCandidate(candidate, now));
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID19(),
+          id: randomUUID23(),
           action: "reject",
           at: now,
           reason: input.reason ?? "Rejected by Codex pending memory review",
@@ -23295,7 +25695,7 @@ function tombstoneForBatchRejectedCandidate(candidate, now) {
 function parseBatchRejectCandidates(value) {
   const candidates = [];
   for (const item of value) {
-    if (!isRecord7(item) || typeof item.id !== "string" || item.id.trim() === "") {
+    if (!isRecord8(item) || typeof item.id !== "string" || item.id.trim() === "") {
       return { error: failure(400, "invalid_request", "Batch pending reject candidate id is required.") };
     }
     if (typeof item.reviewHash !== "string" || item.reviewHash.trim() === "") {
@@ -23326,7 +25726,7 @@ function parseProjectDeleteRoute(pathname) {
 }
 async function handleProjectDeleteRoute(input, route) {
   const body = input.body;
-  if (!isRecord7(body) || typeof body.confirmProjectId !== "string") {
+  if (!isRecord8(body) || typeof body.confirmProjectId !== "string") {
     return failure(400, "invalid_request", "Project memory deletion requires confirmProjectId.");
   }
   if (body.confirmProjectId.trim() !== route.projectId) {
@@ -23348,7 +25748,7 @@ async function handleProjectDeleteRoute(input, route) {
 }
 async function handleMemoryWriteRoute(input, route, selection) {
   const body = input.body;
-  if (!isRecord7(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
+  if (!isRecord8(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
     return failure(400, "invalid_request", "Write requests require reviewHash.");
   }
   const reviewHash = body.reviewHash.trim();
@@ -23399,7 +25799,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
   if (typeof body.changeNote !== "string" || body.changeNote.trim() === "") {
     return failure(400, "invalid_request", "Edit requires a change note.");
   }
-  if (!isRecord7(body.patch)) {
+  if (!isRecord8(body.patch)) {
     return failure(400, "invalid_request", "Edit requires a patch object.");
   }
   const patch = parseEditPatch(body.patch);
@@ -23421,7 +25821,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
 }
 async function handleActiveMemoryWriteRoute(input, route) {
   const body = input.body;
-  if (!isRecord7(body) || typeof body.contentHash !== "string" || body.contentHash.trim() === "") {
+  if (!isRecord8(body) || typeof body.contentHash !== "string" || body.contentHash.trim() === "") {
     return failure(400, "invalid_request", "Active memory write requests require contentHash.");
   }
   if (typeof body.reason !== "string" || body.reason.trim() === "") {
@@ -23517,7 +25917,7 @@ function parseEditPatch(value) {
     patch.tags = value.tags.map((item) => item.trim()).filter(Boolean);
   }
   if (value.scores !== void 0) {
-    if (!isRecord7(value.scores)) {
+    if (!isRecord8(value.scores)) {
       return { error: failure(400, "invalid_request", "Edit patch scores must be an object.") };
     }
     const scores = parseScorePatch(value.scores);
@@ -23978,13 +26378,13 @@ function uniqueInOrder7(values) {
   });
 }
 async function readReviewSummaryRecordsForUi(memoryRoot) {
-  const targetPath = join23(memoryRoot, REVIEW_SUMMARIES_FILE5);
+  const targetPath = join27(memoryRoot, REVIEW_SUMMARIES_FILE5);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
-    content = await readFile16(targetPath, "utf8");
+    content = await readFile19(targetPath, "utf8");
   } catch (error2) {
-    if (isFileErrorCode11(error2, "ENOENT")) {
+    if (isFileErrorCode14(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -24067,16 +26467,16 @@ function hasTag(memory, expected) {
   return memory.tags.includes(expected);
 }
 function isReviewSummaryRecord2(value) {
-  if (!isRecord7(value)) return false;
+  if (!isRecord8(value)) return false;
   return typeof value.id === "string" && typeof value.runId === "string" && optionalString(value.sessionId) && optionalString(value.turnId) && typeof value.createdAt === "string" && (value.status === "ok" || value.status === "failed") && typeof value.summary === "string" && isRedaction(value.redaction) && Array.isArray(value.candidateIds) && value.candidateIds.every((item) => typeof item === "string") && optionalString(value.failureReason);
 }
 function isRedaction(value) {
-  return isRecord7(value) && isRecord7(value.input) && isRecord7(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
+  return isRecord8(value) && isRecord8(value.input) && isRecord8(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
 }
 function optionalString(value) {
   return value === void 0 || typeof value === "string";
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function ok(data) {
@@ -24101,10 +26501,10 @@ function notFound() {
 function methodNotAllowed() {
   return failure(405, "method_not_allowed", "Method not allowed.");
 }
-function errorMessage4(error2) {
+function errorMessage5(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
-function isFileErrorCode11(error2, code) {
+function isFileErrorCode14(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -26107,7 +28507,7 @@ function handleUnhandledRequestError(request, response, error2) {
   }
   const pathname = safeRequestPathname(request);
   if (pathname?.startsWith("/api/")) {
-    writeJson(response, 500, failure2("internal_error", errorMessage5(error2)));
+    writeJson(response, 500, failure2("internal_error", errorMessage6(error2)));
     return;
   }
   writePlain(response, 500, "Internal server error\n");
@@ -26151,7 +28551,7 @@ async function handleApiRequest(input, request, response, pathname, searchParams
       writeJson(response, 400, failure2("invalid_json", "Request body must be valid JSON."));
       return;
     }
-    writeJson(response, 500, failure2("internal_error", errorMessage5(error2)));
+    writeJson(response, 500, failure2("internal_error", errorMessage6(error2)));
   }
 }
 function handleStaticRequest(response, pathname) {
@@ -26171,7 +28571,7 @@ function handleStaticRequest(response, pathname) {
     });
     response.end(asset.body);
   } catch (error2) {
-    writePlain(response, 500, `${errorMessage5(error2)}
+    writePlain(response, 500, `${errorMessage6(error2)}
 `);
   }
 }
@@ -26270,7 +28670,7 @@ function isAddressInfo(address) {
 function isAddressInUseError(error2) {
   return error2 instanceof Error && "code" in error2 && error2.code === "EADDRINUSE";
 }
-function errorMessage5(error2) {
+function errorMessage6(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 var InvalidJsonError = class extends Error {
@@ -26347,21 +28747,21 @@ async function runCodexMemoryDefer(input) {
 }
 
 // src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID20 } from "node:crypto";
-import { lstat as lstat15, mkdir as mkdir11, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
-import { join as join24 } from "node:path";
+import { randomUUID as randomUUID24 } from "node:crypto";
+import { lstat as lstat16, mkdir as mkdir11, readFile as readFile20, realpath as realpath8, rename as rename7, writeFile as writeFile10 } from "node:fs/promises";
+import { join as join28 } from "node:path";
 var DREAM_PREVIEW_DIR = "dream-preview";
 var DREAM_REPORT_FILE = "DREAM_REPORT.md";
 async function writeDreamPreviewArtifacts(input) {
   const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
   const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID20();
+  const proposalId = randomUUID24();
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
   const paths = {
-    reportPath: join24(previewDir, DREAM_REPORT_FILE),
-    proposedChangesPath: join24(previewDir, "proposed_changes.json"),
-    diffPath: join24(previewDir, "diff.json"),
-    evalResultsPath: join24(previewDir, "eval_results.json")
+    reportPath: join28(previewDir, DREAM_REPORT_FILE),
+    proposedChangesPath: join28(previewDir, "proposed_changes.json"),
+    diffPath: join28(previewDir, "diff.json"),
+    evalResultsPath: join28(previewDir, "eval_results.json")
   };
   await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
   await writeJsonAtomic(paths.proposedChangesPath, {
@@ -26385,11 +28785,11 @@ async function readDreamReport(input) {
   }
   try {
     const previewDir = await getExistingPreviewDir(memoryRoot);
-    const reportPath = join24(previewDir, DREAM_REPORT_FILE);
+    const reportPath = join28(previewDir, DREAM_REPORT_FILE);
     await assertSafeMemoryDataFileTarget(reportPath);
-    return { memoryRoot, report: await readFile17(reportPath, "utf8") };
+    return { memoryRoot, report: await readFile20(reportPath, "utf8") };
   } catch (error2) {
-    if (isFileErrorCode12(error2, "ENOENT")) {
+    if (isFileErrorCode15(error2, "ENOENT")) {
       throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
     }
     throw error2;
@@ -26440,27 +28840,27 @@ function renderDreamReport(input) {
 `;
 }
 async function ensurePreviewDir(memoryRoot) {
-  const previewDir = join24(memoryRoot, DREAM_PREVIEW_DIR);
+  const previewDir = join28(memoryRoot, DREAM_PREVIEW_DIR);
   await mkdir11(previewDir, { recursive: true });
-  const stats = await lstat15(previewDir);
+  const stats = await lstat16(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
   }
   if (!stats.isDirectory()) {
     throw new Error(`Refusing to use non-directory dream preview path: ${previewDir}`);
   }
-  return realpath7(previewDir);
+  return realpath8(previewDir);
 }
 async function getExistingPreviewDir(memoryRoot) {
-  const previewDir = join24(memoryRoot, DREAM_PREVIEW_DIR);
-  const stats = await lstat15(previewDir);
+  const previewDir = join28(memoryRoot, DREAM_PREVIEW_DIR);
+  const stats = await lstat16(previewDir);
   if (stats.isSymbolicLink()) {
     throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
   }
   if (!stats.isDirectory()) {
     throw new Error(`Refusing to use non-directory dream preview path: ${previewDir}`);
   }
-  return realpath7(previewDir);
+  return realpath8(previewDir);
 }
 async function writeJsonAtomic(filePath, value) {
   await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}
@@ -26468,21 +28868,21 @@ async function writeJsonAtomic(filePath, value) {
 }
 async function writeTextAtomic(filePath, content) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID20()}.tmp`;
-  await writeFile9(tempPath, content, "utf8");
-  await rename5(tempPath, filePath);
+  const tempPath = `${filePath}.${process.pid}.${randomUUID24()}.tmp`;
+  await writeFile10(tempPath, content, "utf8");
+  await rename7(tempPath, filePath);
 }
-function isFileErrorCode12(error2, code) {
+function isFileErrorCode15(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID21 } from "node:crypto";
-import { lstat as lstat17, mkdir as mkdir12, readFile as readFile18, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
-import { join as join25 } from "node:path";
+import { randomUUID as randomUUID25 } from "node:crypto";
+import { lstat as lstat18, mkdir as mkdir12, readFile as readFile21, rm as rm6, writeFile as writeFile11 } from "node:fs/promises";
+import { join as join29 } from "node:path";
 
 // src/codex/dream-proposal.ts
-import { lstat as lstat16, realpath as realpath8 } from "node:fs/promises";
+import { lstat as lstat17, realpath as realpath9 } from "node:fs/promises";
 async function buildDreamProposalForRoot(input) {
   const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot);
   const active = await readActiveMemoriesFromRoot(memoryRoot);
@@ -26642,16 +29042,16 @@ async function buildDreamProposalForRoot(input) {
 }
 async function resolveReadableMemoryRootPath(memoryRoot) {
   try {
-    const stats = await lstat16(memoryRoot);
+    const stats = await lstat17(memoryRoot);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use memory symlink: ${memoryRoot}`);
     }
     if (!stats.isDirectory()) {
       throw new Error(`Refusing to use non-directory memory path: ${memoryRoot}`);
     }
-    return realpath8(memoryRoot);
+    return realpath9(memoryRoot);
   } catch (error2) {
-    if (isFileErrorCode13(error2, "ENOENT")) {
+    if (isFileErrorCode16(error2, "ENOENT")) {
       return memoryRoot;
     }
     throw error2;
@@ -26675,7 +29075,7 @@ function distinctEvidenceCount2(candidate) {
     candidate.evidence.map((item) => item.evidenceGroupId ?? item.runId ?? item.sessionId ?? item.summary)
   ).size;
 }
-function isFileErrorCode13(error2, code) {
+function isFileErrorCode16(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -26801,7 +29201,7 @@ async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeB
       await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
     }
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID21(),
+      id: randomUUID25(),
       action: "audit",
       at: now,
       reason: "Codex memory dream light pass audited pending memory.",
@@ -26826,7 +29226,7 @@ async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBud
     for (const candidate of pending) {
       const evaluation = evaluatePendingPromotion(candidate, now);
       await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID21(),
+        id: randomUUID25(),
         action: "audit",
         at: now,
         reason: "Codex memory dream REM pass evaluated pending memory.",
@@ -26952,7 +29352,7 @@ async function applyDreamProposal(memoryRoot, proposal, now) {
     if (operation.action === "reject") {
       newTombstones.push(operation.tombstone);
       events.push({
-        id: randomUUID21(),
+        id: randomUUID25(),
         action: "reject",
         at: now,
         reason: operation.reason,
@@ -27086,16 +29486,16 @@ async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
 async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
   const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join25(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID21();
+  const lockDir = join29(locksDir, DREAM_LOCK_DIR);
+  const token = randomUUID25();
   while (true) {
     try {
       await mkdir12(lockDir);
-      await writeFile10(join25(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
+      await writeFile11(join29(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
 `, "utf8");
       return { acquired: true, memoryRoot: root, lockDir, token };
     } catch (error2) {
-      if (!isFileErrorCode14(error2, "EEXIST")) {
+      if (!isFileErrorCode17(error2, "EEXIST")) {
         throw error2;
       }
       const owner = await readDreamLockOwner(lockDir);
@@ -27110,13 +29510,13 @@ async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
   }
 }
 async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join25(memoryRoot, DREAM_LOCKS_DIR);
+  const locksDir = join29(memoryRoot, DREAM_LOCKS_DIR);
   await mkdir12(locksDir).catch((error2) => {
-    if (!isFileErrorCode14(error2, "EEXIST")) {
+    if (!isFileErrorCode17(error2, "EEXIST")) {
       throw error2;
     }
   });
-  const stats = await lstat17(locksDir);
+  const stats = await lstat18(locksDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream locks path: ${locksDir}`);
   }
@@ -27125,9 +29525,9 @@ async function ensureDreamLocksDir(memoryRoot) {
 async function readDreamLockOwner(lockDir) {
   let stats;
   try {
-    stats = await lstat17(lockDir);
+    stats = await lstat18(lockDir);
   } catch (error2) {
-    if (isFileErrorCode14(error2, "ENOENT")) {
+    if (isFileErrorCode17(error2, "ENOENT")) {
       return void 0;
     }
     throw error2;
@@ -27136,7 +29536,7 @@ async function readDreamLockOwner(lockDir) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
   try {
-    const parsed = JSON.parse(await readFile18(join25(lockDir, "owner.json"), "utf8"));
+    const parsed = JSON.parse(await readFile21(join29(lockDir, "owner.json"), "utf8"));
     if (typeof parsed.acquiredAt !== "string") {
       return void 0;
     }
@@ -27146,7 +29546,7 @@ async function readDreamLockOwner(lockDir) {
       ...typeof parsed.token === "string" ? { token: parsed.token } : {}
     };
   } catch (error2) {
-    if (isFileErrorCode14(error2, "ENOENT") || error2 instanceof SyntaxError) {
+    if (isFileErrorCode17(error2, "ENOENT") || error2 instanceof SyntaxError) {
       return void 0;
     }
     throw error2;
@@ -27163,11 +29563,11 @@ async function removeDreamLockIfOwner(lockDir, expectedOwner) {
   if (!isSameDreamLockOwner(owner, expectedOwner)) {
     return false;
   }
-  await rm5(lockDir, { recursive: true, force: true });
+  await rm6(lockDir, { recursive: true, force: true });
   return true;
 }
 async function isDreamLockDirStale(lockDir, now, ttlMs) {
-  const stats = await lstat17(lockDir);
+  const stats = await lstat18(lockDir);
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
   }
@@ -27178,7 +29578,7 @@ async function removeDreamLockIfUnowned(lockDir) {
   if (owner !== void 0) {
     return false;
   }
-  await rm5(lockDir, { recursive: true, force: true });
+  await rm6(lockDir, { recursive: true, force: true });
   return true;
 }
 function isSameDreamLockOwner(owner, expectedOwner) {
@@ -27190,17 +29590,17 @@ function isSameDreamLockOwner(owner, expectedOwner) {
 async function releaseDreamLock(lock) {
   const owner = await readDreamLockOwner(lock.lockDir);
   if (owner !== void 0 && owner.token === lock.token) {
-    await rm5(lock.lockDir, { recursive: true, force: true });
+    await rm6(lock.lockDir, { recursive: true, force: true });
   }
 }
-function isFileErrorCode14(error2, code) {
+function isFileErrorCode17(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash13, randomUUID as randomUUID22 } from "node:crypto";
-import { lstat as lstat18, readFile as readFile19, rename as rename6, writeFile as writeFile11 } from "node:fs/promises";
-import { join as join26 } from "node:path";
+import { createHash as createHash16, randomUUID as randomUUID26 } from "node:crypto";
+import { lstat as lstat19, readFile as readFile22, rename as rename8, writeFile as writeFile12 } from "node:fs/promises";
+import { join as join30 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -27217,7 +29617,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash13("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash16("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -27328,7 +29728,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID22(),
+      id: randomUUID26(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -27559,13 +29959,13 @@ function upsertActiveMemory2(active, memory) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join30(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile19(targetPath, "utf8");
+    const content = await readFile22(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
-    if (isFileErrorCode15(error2, "ENOENT")) {
+    if (isFileErrorCode18(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -27573,21 +29973,21 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join26(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join30(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID22()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
-  await writeFile11(tempPath, content === "" ? "" : `${content}
+  await writeFile12(tempPath, content === "" ? "" : `${content}
 `, "utf8");
-  await rename6(tempPath, targetPath);
+  await rename8(tempPath, targetPath);
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join26(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join30(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID22()}.tmp`;
-  await writeFile11(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
-  await rename6(tempPath, targetPath);
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
+  await writeFile12(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
+  await rename8(tempPath, targetPath);
 }
 function formatPendingProfilePatch(candidates) {
   const pending = candidates.filter((candidate) => candidate.status === "pending");
@@ -27622,7 +30022,7 @@ function formatPendingProfilePatch(candidates) {
 }
 async function assertSafeProfileFileTarget(targetPath, label) {
   try {
-    const stats = await lstat18(targetPath);
+    const stats = await lstat19(targetPath);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use ${label} symlink: ${targetPath}`);
     }
@@ -27630,13 +30030,13 @@ async function assertSafeProfileFileTarget(targetPath, label) {
       throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`);
     }
   } catch (error2) {
-    if (isFileErrorCode15(error2, "ENOENT")) {
+    if (isFileErrorCode18(error2, "ENOENT")) {
       return;
     }
     throw error2;
   }
 }
-function isFileErrorCode15(error2, code) {
+function isFileErrorCode18(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -27725,7 +30125,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash14, randomUUID as randomUUID23 } from "node:crypto";
+import { createHash as createHash17, randomUUID as randomUUID27 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -27742,7 +30142,7 @@ function reviewHashForSimilarHintMemory(memory) {
     updatedAt: memory.updatedAt,
     tags: memory.tags
   };
-  return createHash14("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash17("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -27840,7 +30240,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID23(),
+      id: randomUUID27(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -28065,6 +30465,41 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
+  if (command === "memory" && input.args[1] === "lifecycle" && input.args[2] === "migrate-v1-5") {
+    if (input.args.includes("--dry-run") && input.args.includes("--apply")) {
+      throw new Error("memory lifecycle migrate-v1-5 accepts only one of --dry-run or --apply");
+    }
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryLifecycleMigrateV15({
+      cwd: input.cwd,
+      allProjects: input.args.includes("--all-projects"),
+      apply: input.args.includes("--apply")
+    }), null, 2)}
+`);
+    return;
+  }
+  if (command === "memory" && input.args[1] === "lifecycle" && input.args[2] === "daily") {
+    if (input.args.includes("--dry-run") && input.args.includes("--apply")) {
+      throw new Error("memory lifecycle daily accepts only one of --dry-run or --apply");
+    }
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryLifecycleDaily({
+      cwd: input.cwd,
+      includeGlobalRoot: true,
+      apply: input.args.includes("--apply")
+    }), null, 2)}
+`);
+    return;
+  }
+  if (command === "memory" && input.args[1] === "lifecycle" && input.args[2] === "weekly") {
+    if (input.args.includes("--dry-run") && input.args.includes("--apply")) {
+      throw new Error("memory lifecycle weekly accepts only one of --dry-run or --apply");
+    }
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryLifecycleWeekly({
+      cwd: input.cwd,
+      apply: input.args.includes("--apply")
+    }), null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "active" && input.args[2] === "archive") {
     process.stdout.write(await runCodexMemoryActiveArchive({
       cwd: input.cwd,
@@ -28207,7 +30642,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply]|memory lifecycle weekly [--dry-run|--apply]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -28879,15 +31314,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage6 = "";
+  let errorMessage7 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage6 = map(fullIssue, { data, defaultError: errorMessage6 }).message;
+    errorMessage7 = map(fullIssue, { data, defaultError: errorMessage7 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage6
+    message: errorMessage7
   };
 };
 var EMPTY_PATH = [];
@@ -38709,19 +41144,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage6, refs) {
+function addErrorMessage(res, key, errorMessage7, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage6) {
+  if (errorMessage7) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage6
+      [key]: errorMessage7
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage6, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage7, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage6, refs);
+  addErrorMessage(res, key, errorMessage7, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -40032,8 +42467,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage6 = message;
-                    const error2 = new McpError(errorMessage6.error.code, errorMessage6.error.message, errorMessage6.error.data);
+                    const errorMessage7 = message;
+                    const error2 = new McpError(errorMessage7.error.code, errorMessage7.error.message, errorMessage7.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -41333,23 +43768,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage6 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage6}`);
+          const errorMessage7 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage7}`);
         }
         const { params } = validatedRequest.data;
         const result2 = await Promise.resolve(handler(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result2);
           if (!taskValidationResult.success) {
-            const errorMessage6 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage6}`);
+            const errorMessage7 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage7}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result2);
         if (!validationResult.success) {
-          const errorMessage6 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage6}`);
+          const errorMessage7 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage7}`);
         }
         return validationResult.data;
       };
@@ -41843,12 +44278,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage6) {
+  createToolError(errorMessage7) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage6
+          text: errorMessage7
         }
       ],
       isError: true
@@ -41866,8 +44301,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage6 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage6}`);
+      const errorMessage7 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage7}`);
     }
     return parseResult.data;
   }
@@ -41891,8 +44326,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result2.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage6 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage6}`);
+      const errorMessage7 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage7}`);
     }
   }
   /**
@@ -42104,8 +44539,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage6 = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage6}`);
+          const errorMessage7 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage7}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;

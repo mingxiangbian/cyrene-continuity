@@ -134,7 +134,14 @@ describe('memory quality contract fixtures', () => {
       ...fixtureById('trial_applied_twice'),
       expectedOutput: 'Promote project trial after repeated use.'
     }))).toEqual([
-      'trial fixture trial_applied_twice expectedOutput must mention validated or recommendation'
+      'trial fixture trial_applied_twice expectedOutput must mention validated'
+    ])
+
+    expect(validateMemoryQualityFixtures(fixturesWithReplacement({
+      ...fixtureById('trial_with_corrected_event'),
+      expectedOutput: 'Do not validate; block promotion because negative feedback exists.'
+    }))).toEqual([
+      'trial fixture trial_with_corrected_event expectedOutput must mention recommendation'
     ])
 
     const globalCoreFixture = fixtureById('repeated_project_core_global_candidate')
@@ -160,6 +167,17 @@ describe('memory quality contract fixtures', () => {
     }))).toEqual([
       'fixture core_profile_generation expectedOutput must contain profile contains only core memory'
     ])
+  })
+
+  it('does not infer trial lifecycle wording requirements from id prefix alone', () => {
+    const optionalTrialNoiseFixture: MemoryQualityFixture = {
+      ...fixtureById('old_review_summary_noise'),
+      id: 'trial_dropped_noise' as MemoryQualityFixture['id'],
+      inputSignal: 'A project trial candidate is duplicate migration noise.',
+      expectedOutput: 'Drop or archive as non-durable migration noise.'
+    }
+
+    expect(validateMemoryQualityFixtures([...MEMORY_QUALITY_FIXTURES, optionalTrialNoiseFixture])).toEqual([])
   })
 
   it('exports a coordinator rubric and memory delta report template', () => {
