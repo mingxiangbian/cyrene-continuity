@@ -20,6 +20,31 @@ export type MemoryStrength = typeof MEMORY_STRENGTHS[number]
 export const MEMORY_SCOPES = ['global', 'project', 'session'] as const
 export type MemoryScope = typeof MEMORY_SCOPES[number]
 
+export const PROJECT_CONFIDENCE_TIERS = ['trial', 'validated', 'project_core'] as const
+export type ProjectConfidenceTier = typeof PROJECT_CONFIDENCE_TIERS[number]
+
+export const GLOBAL_CONFIDENCE_TIERS = ['global_core'] as const
+export type GlobalConfidenceTier = typeof GLOBAL_CONFIDENCE_TIERS[number]
+
+export const CONFIDENCE_TIERS = [...PROJECT_CONFIDENCE_TIERS, ...GLOBAL_CONFIDENCE_TIERS] as const
+export type ConfidenceTier = typeof CONFIDENCE_TIERS[number]
+
+export const ACTIVATION_MODES = [
+  'workflow_hint',
+  'plan_constraint',
+  'checklist_item',
+  'workflow_selection'
+] as const
+export type ActivationMode = typeof ACTIVATION_MODES[number]
+
+export const RUNTIME_ACTIVATION_STRENGTHS = ['hint', 'constraint', 'checklist', 'profile'] as const
+export type RuntimeActivationStrength = typeof RUNTIME_ACTIVATION_STRENGTHS[number]
+
+export interface ActivationPolicy {
+  allowedModes: ActivationMode[]
+  maxRuntimeStrength: RuntimeActivationStrength
+}
+
 const MEMORY_PORTABILITIES = ['local_only', 'project_family', 'similar_project', 'global'] as const
 export type MemoryPortability = typeof MEMORY_PORTABILITIES[number]
 
@@ -82,7 +107,15 @@ export const UPDATE_POLICIES = [
 ] as const
 export type UpdatePolicy = typeof UPDATE_POLICIES[number]
 
-export const ACTIVATION_EVENT_TYPES = ['retrieved', 'used', 'ignored', 'contradicted', 'stale'] as const
+export const ACTIVATION_EVENT_TYPES = [
+  'retrieved',
+  'activated',
+  'applied',
+  'ignored',
+  'corrected',
+  'violated',
+  'stale'
+] as const
 export type ActivationEventType = typeof ACTIVATION_EVENT_TYPES[number]
 
 export const REFLECTION_ACTIONS = ['reinforce', 'rewrite', 'deprecate', 'split', 'merge'] as const
@@ -291,6 +324,8 @@ export interface SemanticMemory {
   routing?: RoutedMemoryTarget
   reviewPolicy: UpdatePolicy
   reviewState?: SemanticMemoryReviewState
+  confidenceTier?: ConfidenceTier
+  activationPolicy?: ActivationPolicy
   supersedes: string[]
   expiresAt?: string
   reviewAfter?: string
@@ -337,6 +372,8 @@ export interface ActivationEvent {
   projectId?: string
   queryHash?: string
   event: ActivationEventType
+  activationId?: string
+  reason?: string
   evidenceRef?: string
   createdAt: string
 }
