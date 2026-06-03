@@ -763,6 +763,87 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     await expect(readFile(semanticPath, 'utf8')).resolves.toBe(invalidSemantic)
   })
 
+  it('blocks nested invalid semantic JSONL before rewriting projections', async () => {
+    const invalidCases: Array<{
+      name: string
+      mutate: (memory: Record<string, unknown>) => void
+    }> = [
+      {
+        name: 'review-state-tags',
+        mutate: (memory) => {
+          const reviewState = memory.reviewState as Record<string, unknown>
+          reviewState.tags = 'not-array'
+        }
+      },
+      {
+        name: 'review-state-scores',
+        mutate: (memory) => {
+          const reviewState = memory.reviewState as Record<string, unknown>
+          reviewState.scores = {
+            evidenceStrength: 'high',
+            stability: 0.85,
+            usefulness: 0.85,
+            safety: 0.95,
+            sensitivity: 0.1
+          }
+        }
+      },
+      {
+        name: 'confidence-tier',
+        mutate: (memory) => {
+          memory.confidenceTier = 'definitely_core'
+        }
+      },
+      {
+        name: 'activation-policy',
+        mutate: (memory) => {
+          memory.confidenceTier = 'validated'
+          memory.activationPolicy = {
+            allowedModes: ['workflow_hint', 'made_up_mode'],
+            maxRuntimeStrength: 'checklist'
+          }
+        }
+      }
+    ]
+
+    for (const invalidCase of invalidCases) {
+      const home = await createTempDir(`cyrene-v15-migrate-nested-invalid-${invalidCase.name}-home-`)
+      vi.stubEnv('HOME', home)
+      const repo = await createTempDir(`cyrene-v15-migrate-nested-invalid-${invalidCase.name}-repo-`)
+      await execFileAsync('git', ['init'], { cwd: repo })
+      const project = await identifyCodexProject(repo)
+      const memoryRoot = codexProjectMemoryRoot(project.projectId)
+      await mkdir(memoryRoot, { recursive: true })
+      const indexPath = join(memoryRoot, 'index.jsonl')
+      const pendingPath = join(memoryRoot, 'pending.jsonl')
+      const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+      const semanticMemory = createSemanticActive({ id: `nested-invalid-${invalidCase.name}` }) as unknown as Record<string, unknown>
+      invalidCase.mutate(semanticMemory)
+      const originalIndex = `${JSON.stringify(createActive({ id: `active-before-${invalidCase.name}`, scope: 'project' }))}\n`
+      const originalPending = `${JSON.stringify(createPending({ id: `pending-before-${invalidCase.name}` }))}\n`
+      const originalSemantic = `${JSON.stringify(semanticMemory)}\n`
+      await writeFile(indexPath, originalIndex, 'utf8')
+      await writeFile(pendingPath, originalPending, 'utf8')
+      await writeFile(semanticPath, originalSemantic, 'utf8')
+
+      const result = await runCodexMemoryLifecycleMigrateV15({
+        cwd: repo,
+        apply: true,
+        now: '2026-06-03T00:00:00.000Z'
+      })
+
+      const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+      expect(projectResult).toMatchObject({
+        skipped: true,
+        reason: expect.stringContaining('malformed JSONL'),
+        malformedJsonLines: 1
+      })
+      await expect(readFile(indexPath, 'utf8')).resolves.toBe(originalIndex)
+      await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
+      await expect(readFile(semanticPath, 'utf8')).resolves.toBe(originalSemantic)
+    }
+  })
+
   it('does not promote empty-evidence project semantic active memory to invalid project_core', async () => {
     const home = await createTempDir('cyrene-v15-migrate-empty-evidence-project-home-')
     vi.stubEnv('HOME', home)

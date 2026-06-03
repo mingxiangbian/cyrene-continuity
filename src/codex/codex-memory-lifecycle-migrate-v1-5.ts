@@ -17,6 +17,9 @@ import {
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
 import {
+  ACTIVATION_MODES,
+  ADMISSION_ACTIONS,
+  CONFIDENCE_TIERS,
   MEMORY_CANDIDATE_KINDS,
   MEMORY_DOMAINS,
   MEMORY_MODULES,
@@ -24,10 +27,12 @@ import {
   MEMORY_SOURCES,
   MEMORY_STRENGTHS,
   MEMORY_TYPES,
+  RUNTIME_ACTIVATION_STRENGTHS,
   SEMANTIC_MEMORY_STATUSES,
   UPDATE_POLICIES
 } from '../memory/types.js'
 import type {
+  ActivationPolicy,
   ConfidenceTier,
   CyreneMemory,
   MemoryDomain,
@@ -53,6 +58,11 @@ const REVIEW_SUMMARY_NOISE_PHRASES = [
   'merged branch',
   'deleted local branch'
 ]
+const MEMORY_PORTABILITIES = ['local_only', 'project_family', 'similar_project', 'global'] as const
+const MEMORY_PROFILE_VISIBILITIES = ['always', 'safe_summary', 'retrieval_only', 'never'] as const
+const ROUTING_RISKS = ['low', 'medium', 'high'] as const
+const ADMITTED_BY_VALUES = ['admission_gate_v1'] as const
+const NORMALIZED_KEY_CONFLICT_RESOLUTIONS = ['keep_both'] as const
 
 export interface CodexMemoryLifecycleMigrateV15Input {
   cwd: string
@@ -956,12 +966,69 @@ function isValidSemanticMemory(value: unknown): value is SemanticMemory {
     isNonEmptyString(value.content) &&
     isStringArray(value.useWhen) &&
     isStringArray(value.doNotUseWhen) &&
+    isOptionalString(value.sourceOfTruth) &&
     isStructuredEvidenceArray(value.evidence) &&
+    (value.routing === undefined || isValidRouting(value.routing)) &&
     oneOf(UPDATE_POLICIES, value.reviewPolicy) &&
-    (value.reviewState === undefined || isRecord(value.reviewState)) &&
+    (value.reviewState === undefined || isValidSemanticReviewState(value.reviewState)) &&
+    (value.confidenceTier === undefined || oneOf(CONFIDENCE_TIERS, value.confidenceTier)) &&
+    (value.activationPolicy === undefined || isValidActivationPolicy(value.activationPolicy)) &&
     isStringArray(value.supersedes) &&
+    isOptionalString(value.expiresAt) &&
+    isOptionalString(value.reviewAfter) &&
     isNonEmptyString(value.createdAt) &&
     isNonEmptyString(value.updatedAt)
+  )
+}
+
+function isValidRouting(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    oneOf(MEMORY_MODULES, value.module) &&
+    oneOf(UPDATE_POLICIES, value.updatePolicy) &&
+    oneOf(ROUTING_RISKS, value.risk) &&
+    isStringArray(value.reasons)
+  )
+}
+
+function isValidSemanticReviewState(value: unknown): value is NonNullable<SemanticMemory['reviewState']> {
+  return (
+    isRecord(value) &&
+    isOptionalString(value.normalizedKey) &&
+    isOptionalString(value.sourceOfTruth) &&
+    (value.type === undefined || oneOf(MEMORY_TYPES, value.type)) &&
+    (value.strength === undefined || oneOf(MEMORY_STRENGTHS, value.strength)) &&
+    (value.source === undefined || oneOf(MEMORY_SOURCES, value.source)) &&
+    (value.portability === undefined || oneOf(MEMORY_PORTABILITIES, value.portability)) &&
+    (value.profileVisibility === undefined || oneOf(MEMORY_PROFILE_VISIBILITIES, value.profileVisibility)) &&
+    (value.scores === undefined || isMemoryScores(value.scores)) &&
+    isStringArray(value.tags, true) &&
+    isOptionalFiniteNumber(value.seenCount) &&
+    isOptionalString(value.firstSeenAt) &&
+    isOptionalString(value.lastSeenAt) &&
+    isOptionalString(value.expiresAt) &&
+    isOptionalString(value.promoteAfter) &&
+    (value.admittedBy === undefined || oneOf(ADMITTED_BY_VALUES, value.admittedBy)) &&
+    (value.admissionAction === undefined || oneOf(ADMISSION_ACTIONS, value.admissionAction)) &&
+    isOptionalFiniteNumber(value.admissionScore) &&
+    isStringArray(value.admissionReasons, true) &&
+    isStringArray(value.sourceEpisodeIds, true) &&
+    isStringArray(value.sourceDraftIds, true) &&
+    isOptionalBoolean(value.userConfirmed) &&
+    (
+      value.normalizedKeyConflictResolution === undefined ||
+      oneOf(NORMALIZED_KEY_CONFLICT_RESOLUTIONS, value.normalizedKeyConflictResolution)
+    ) &&
+    isStringArray(value.conflictsWith, true)
+  )
+}
+
+function isValidActivationPolicy(value: unknown): value is ActivationPolicy {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.allowedModes) &&
+    value.allowedModes.every((mode) => oneOf(ACTIVATION_MODES, mode)) &&
+    oneOf(RUNTIME_ACTIVATION_STRENGTHS, value.maxRuntimeStrength)
   )
 }
 
@@ -971,6 +1038,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== ''
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === 'string'
 }
 
 function isStringArray(value: unknown, optional = false): value is string[] | undefined {
@@ -1009,6 +1080,14 @@ function isMemoryScores(value: unknown): value is MemoryScores {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isOptionalFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || isFiniteNumber(value)
+}
+
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === 'boolean'
 }
 
 async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promise<void> {
