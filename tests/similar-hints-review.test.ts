@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ import {
   reviewHashForSimilarHintMemory
 } from '../src/codex/similar-hints-review.js'
 import { openMemoryIndexAdapter } from '../src/memory/memory-index.js'
+import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEvent } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -56,8 +57,7 @@ function activeMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
 }
 
 async function writeActive(memoryRoot: string, memories: CyreneMemory[]): Promise<void> {
-  await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'index.jsonl'), memories.map((memory) => JSON.stringify(memory)).join('\n') + '\n')
+  await writeActiveMemoriesFromRoot(memoryRoot, memories)
 }
 
 function parseJsonLines<T>(content: string): T[] {
@@ -158,7 +158,9 @@ describe('similar hint review tooling', () => {
       action: 'blocked_by_gate',
       memoryId: memory.id
     })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('"portability":"local_only"')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({ id: memory.id, portability: 'local_only' })
+    ])
   })
 
   it('mark-transferable requires a matching review hash', async () => {
@@ -199,7 +201,7 @@ describe('similar hint review tooling', () => {
     })
 
     expect(result).toEqual({ action: 'mark_transferable', memoryId: memory.id, portability: 'similar_project' })
-    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    const active = await readActiveMemoriesFromRoot(memoryRoot)
     expect(active[0]).toMatchObject({ id: memory.id, portability: 'similar_project' })
     const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
     expect(events[0]).toMatchObject({ action: 'update', memoryId: memory.id })

@@ -67,6 +67,8 @@ export function activeMemoryToSemanticMemory(memory: CyreneMemory): SemanticMemo
         ? {}
         : { normalizedKeyConflictResolution: memory.normalizedKeyConflictResolution })
     },
+    ...(memory.confidenceTier === undefined ? {} : { confidenceTier: memory.confidenceTier }),
+    ...(memory.activationPolicy === undefined ? {} : { activationPolicy: memory.activationPolicy }),
     supersedes: memory.supersedes ?? [],
     ...(memory.expiresAt === undefined ? {} : { expiresAt: memory.expiresAt }),
     createdAt: memory.createdAt,
@@ -148,6 +150,8 @@ export function semanticMemoryToActiveMemory(memory: SemanticMemory): CyreneMemo
     ...(memory.expiresAt === undefined ? {} : { expiresAt: memory.expiresAt }),
     ...(reviewState.userConfirmed === undefined ? {} : { userConfirmed: reviewState.userConfirmed }),
     ...(reviewState.profileVisibility === undefined ? {} : { profileVisibility: reviewState.profileVisibility }),
+    ...(memory.confidenceTier === undefined ? {} : { confidenceTier: memory.confidenceTier }),
+    ...(memory.activationPolicy === undefined ? {} : { activationPolicy: memory.activationPolicy }),
     candidateKind: memory.kind,
     ...(reviewState.normalizedKeyConflictResolution === undefined
       ? {}

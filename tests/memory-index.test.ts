@@ -9,6 +9,7 @@ import {
   type MemoryIndexRoot
 } from '../src/memory/memory-index.js'
 import { assertEmbeddingSafeText } from '../src/memory/embedding-provider.js'
+import { writeActiveMemoriesFromRoot, writePendingMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -78,6 +79,14 @@ function pendingMemory(overrides: Partial<PendingMemory> = {}): PendingMemory {
 }
 
 async function writeJsonLines(filePath: string, values: unknown[]): Promise<void> {
+  if (filePath.endsWith('/index.jsonl')) {
+    await writeActiveMemoriesFromRoot(filePath.slice(0, -'/index.jsonl'.length), values as CyreneMemory[])
+    return
+  }
+  if (filePath.endsWith('/review_queue.jsonl')) {
+    await writePendingMemoriesFromRoot(filePath.slice(0, -'/review_queue.jsonl'.length), values as PendingMemory[])
+    return
+  }
   await writeFile(filePath, values.map((value) => JSON.stringify(value)).join('\n') + '\n', 'utf8')
 }
 
@@ -191,7 +200,7 @@ describe('memory SQLite index', () => {
         normalizedKey: 'other-project-local'
       })
     ])
-    await writeJsonLines(join(projectRoot, 'pending.jsonl'), [pendingMemory()])
+    await writeJsonLines(join(projectRoot, 'review_queue.jsonl'), [pendingMemory()])
 
     const roots: MemoryIndexRoot[] = [
       { memoryRoot: globalRoot, projectId: null, scope: 'global' },
@@ -240,7 +249,7 @@ describe('memory SQLite index', () => {
     await mkdir(globalRoot, { recursive: true })
     await mkdir(projectRoot, { recursive: true })
     await mkdir(otherProjectRoot, { recursive: true })
-    await writeJsonLines(join(globalRoot, 'pending.jsonl'), [
+    await writeJsonLines(join(globalRoot, 'review_queue.jsonl'), [
       pendingMemory({
         id: 'global-pending-1',
         scope: 'global',
@@ -249,7 +258,7 @@ describe('memory SQLite index', () => {
         normalizedKey: 'global-pending-router-candidate'
       })
     ])
-    await writeJsonLines(join(projectRoot, 'pending.jsonl'), [
+    await writeJsonLines(join(projectRoot, 'review_queue.jsonl'), [
       pendingMemory({
         id: 'project-pending-1',
         portability: 'project_family',
@@ -257,7 +266,7 @@ describe('memory SQLite index', () => {
         normalizedKey: 'project-pending-router-family-candidate'
       })
     ])
-    await writeJsonLines(join(otherProjectRoot, 'pending.jsonl'), [
+    await writeJsonLines(join(otherProjectRoot, 'review_queue.jsonl'), [
       pendingMemory({
         id: 'other-project-pending-1',
         content: 'Other project pending router candidate must not leak.',
@@ -689,7 +698,7 @@ describe('memory SQLite index', () => {
     const root = await createTempDir('cyrene-memory-index-pending-edges-')
     const projectRoot = join(root, 'projects', 'project-a', 'memory')
     await mkdir(projectRoot, { recursive: true })
-    await writeJsonLines(join(projectRoot, 'pending.jsonl'), [
+    await writeJsonLines(join(projectRoot, 'review_queue.jsonl'), [
       pendingMemory({
         id: 'pending-edge-memory',
         evidence: [{ summary: 'Pending trace ref.', traceRefs: ['src/pending.ts'] }]

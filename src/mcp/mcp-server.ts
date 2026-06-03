@@ -59,7 +59,7 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
   server.registerTool(
     'cyrene_memory_propose',
     {
-      description: 'Propose a structured Cyrene memory candidate for pending-only review.',
+      description: 'Propose a structured Cyrene memory candidate for trial admission or manual review.',
       inputSchema: memoryProposeInputSchema
     },
     async (input) => handleMemoryPropose(input, options.cwd)
@@ -69,7 +69,7 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
     'cyrene_memory_harvest_project',
     {
       description:
-        'Harvest active project signals into pending-only Cyrene memory candidates; use dryRun to preview candidates without writing pending review items.',
+        'Harvest project signals into low-risk trial memories or manual review candidates; use dryRun to preview candidates without writing memory.',
       inputSchema: memoryHarvestProjectInputSchema
     },
     async (input) => handleMemoryHarvestProject(input, options.cwd)

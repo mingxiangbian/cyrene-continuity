@@ -6,8 +6,15 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { handleCodexUiApiRequest } from '../src/codex/codex-ui-api.js'
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
-import { appendSemanticRewriteReceiptFromRoot } from '../src/memory/memory-store.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
+import {
+  appendSemanticRewriteReceiptFromRoot,
+  readActiveMemoriesFromRoot,
+  writeActiveMemoriesFromRoot,
+  writePendingMemoriesFromRoot,
+  writeSemanticMemoriesFromRoot
+} from '../src/memory/memory-store.js'
+import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -39,8 +46,8 @@ async function seedProject(): Promise<{
 
   const active = createActive()
   const pending = createPending()
-  await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(active)}\n`)
-  await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(pending)}\n`)
+  await writeActiveMemoriesFromRoot(memoryRoot, [active])
+  await writePendingMemoriesFromRoot(memoryRoot, [pending])
   await writeFile(
     join(memoryRoot, 'review-summaries.jsonl'),
     `${JSON.stringify(createReviewSummary())}\n`
@@ -93,8 +100,8 @@ function createPending(overrides: Partial<PendingMemory> = {}): PendingMemory {
     strength: 'soft',
     scope: 'project',
     status: 'pending',
-    content: 'Keep memory review pending-only in the UI.',
-    normalizedKey: 'ui-pending-only-review',
+    content: 'Keep memory review queue hash-checked in the UI.',
+    normalizedKey: 'ui-review-queue-hash-check',
     evidence: [{ runId: 'ui-seed-run', summary: 'Seeded pending memory.', sourceKind: 'user_explicit' }],
     source: 'user_explicit',
     scores: {
@@ -123,6 +130,48 @@ function createReviewSummary() {
     summary: 'Reviewed pending memories.',
     redaction: { input: {}, output: {} },
     candidateIds: ['pending-1']
+  }
+}
+
+function createSemanticMemory(overrides: Partial<SemanticMemory> = {}): SemanticMemory {
+  return {
+    id: 'semantic-1',
+    status: 'active',
+    module: 'procedural',
+    kind: 'workflow_rule',
+    scope: 'project',
+    domain: 'procedural',
+    content: 'Lifecycle memory should be grouped by confidence tier.',
+    useWhen: ['Reviewing lifecycle memory in the Web UI.'],
+    doNotUseWhen: ['The task is unrelated to memory review.'],
+    sourceOfTruth: 'test:semantic-memory',
+    evidence: [{
+      id: 'semantic-evidence-1',
+      sourceKind: 'review_event',
+      sourceRef: 'test:semantic-memory',
+      when: '2026-06-03T00:00:00.000Z',
+      whatHappened: 'Seeded lifecycle memory for the UI.',
+      whyImportant: 'The UI should expose v1.5 confidence tiers.'
+    }],
+    reviewPolicy: 'strict_auto_promote',
+    reviewState: {
+      normalizedKey: 'semantic-memory-ui-tier',
+      type: 'procedural_rule',
+      strength: 'soft',
+      source: 'review_event',
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.85,
+        usefulness: 0.85,
+        safety: 0.96,
+        sensitivity: 0.08
+      },
+      tags: ['workflow_rule']
+    },
+    supersedes: [],
+    createdAt: '2026-06-03T00:00:00.000Z',
+    updatedAt: '2026-06-03T00:00:00.000Z',
+    ...overrides
   }
 }
 
@@ -272,7 +321,7 @@ describe('handleCodexUiApiRequest', () => {
         reviewPolicy: expect.any(String),
         sourceOfTruth: expect.any(String),
         evidence: expect.any(Array),
-        content: 'Keep memory review pending-only in the UI.'
+        content: 'Keep memory review queue hash-checked in the UI.'
       })
       expect(data.pending[0].semanticMemory.useWhen.length).toBeGreaterThan(0)
       expect(data.pending[0].semanticMemory.evidence.length).toBeGreaterThan(0)
@@ -345,7 +394,7 @@ describe('handleCodexUiApiRequest', () => {
     const { cwd, memoryRoot } = await seedProject()
     const first = createPending({ id: 'pending-a', normalizedKey: 'pending-a' })
     const second = createPending({ id: 'pending-b', normalizedKey: 'pending-b' })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), [first, second].map((item) => JSON.stringify(item)).join('\n') + '\n')
+    await writePendingMemoriesFromRoot(memoryRoot, [first, second])
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -376,7 +425,7 @@ describe('handleCodexUiApiRequest', () => {
         ]
       })
     }
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe('')
     const events = await readFile(join(memoryRoot, 'events.jsonl'), 'utf8')
     expect(events).toContain('"candidateId":"pending-a"')
     expect(events).toContain('"candidateId":"pending-b"')
@@ -388,7 +437,7 @@ describe('handleCodexUiApiRequest', () => {
     const { cwd, memoryRoot } = await seedProject()
     const first = createPending({ id: 'pending-a', normalizedKey: 'pending-a' })
     const second = createPending({ id: 'pending-b', normalizedKey: 'pending-b' })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), [first, second].map((item) => JSON.stringify(item)).join('\n') + '\n')
+    await writePendingMemoriesFromRoot(memoryRoot, [first, second])
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -418,7 +467,7 @@ describe('handleCodexUiApiRequest', () => {
         ]
       })
     }
-    const pendingAfter = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingAfter = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pendingAfter).not.toContain('pending-a')
     expect(pendingAfter).toContain('pending-b')
   })
@@ -440,8 +489,8 @@ describe('handleCodexUiApiRequest', () => {
       scope: 'global'
     })
     await mkdir(globalRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(projectPending)}\n`)
-    await writeFile(join(globalRoot, 'pending.jsonl'), `${JSON.stringify(globalPending)}\n`)
+    await writePendingMemoriesFromRoot(memoryRoot, [projectPending])
+    await writePendingMemoriesFromRoot(globalRoot, [globalPending])
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -466,8 +515,8 @@ describe('handleCodexUiApiRequest', () => {
         results: [{ id: 'shared-pending-id', action: 'reject' }]
       })
     }
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
-    await expect(readFile(join(globalRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('Global-scoped candidate must remain pending.')
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readFile(join(globalRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain('Global-scoped candidate must remain pending.')
   })
 
   it('rejects all-scope batch pending reject because the route mutates one memory root', async () => {
@@ -492,22 +541,28 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
-  it('returns grouped project memory for all UI labels', async () => {
+  it('returns project lifecycle memory grouped by confidence tier', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
-    await writeFile(
-      join(memoryRoot, 'index.jsonl'),
-      [
-        createActive({ id: 'fact-by-type', candidateKind: undefined, type: 'project_fact', tags: [] }),
-        createActive({ id: 'decision-1', candidateKind: 'project_decision', tags: [] }),
-        createActive({ id: 'workflow-by-type', candidateKind: undefined, type: 'procedural_rule', tags: [] }),
-        createActive({ id: 'pitfall-1', candidateKind: 'known_pitfall', tags: [] }),
-        createActive({ id: 'rejected-1', candidateKind: 'rejected_approach', tags: [] }),
-        createActive({ id: 'question-1', candidateKind: 'open_question', tags: [] }),
-        createActive({ id: 'other-1', candidateKind: undefined, type: 'reference', tags: [] })
-      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
-    )
+    await writeSemanticMemoriesFromRoot(memoryRoot, [
+      createSemanticMemory({
+        id: 'trial-1',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial')
+      }),
+      createSemanticMemory({
+        id: 'validated-1',
+        confidenceTier: 'validated',
+        activationPolicy: activationPolicyForConfidenceTier('validated')
+      }),
+      createSemanticMemory({
+        id: 'core-1',
+        confidenceTier: 'project_core',
+        activationPolicy: activationPolicyForConfidenceTier('project_core')
+      }),
+      createSemanticMemory({ id: 'untiered-1' })
+    ])
 
     const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/project-memory' })
 
@@ -516,76 +571,28 @@ describe('handleCodexUiApiRequest', () => {
     if (result.body.ok) {
       const data = result.body.data as { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
       expect(groupIds(data.groups)).toEqual({
-        'Project Facts': ['fact-by-type'],
-        'Project Decisions': ['decision-1'],
-        'Workflow Rules': ['workflow-by-type'],
-        'Known Pitfalls': ['pitfall-1'],
-        'Rejected Approaches': ['rejected-1'],
-        'Open Questions': ['question-1'],
-        'Other Project Memory': ['other-1']
+        Trial: ['trial-1'],
+        Validated: ['validated-1'],
+        'Project Core': ['core-1'],
+        'Needs Tier Review': ['untiered-1']
       })
     }
   })
 
-  it('returns grouped global memory with personal, affective, and procedural labels', async () => {
+  it('returns global lifecycle memory grouped as global core only', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd } = await seedProject()
     const memoryRoot = codexGlobalMemoryRoot()
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(
-      join(memoryRoot, 'index.jsonl'),
-      [
-        createActive({
-          id: 'preference-1',
-          domain: 'personal',
-          type: 'user_preference',
-          scope: 'global',
-          candidateKind: undefined,
-          tags: []
-        }),
-        createActive({
-          id: 'style-1',
-          domain: 'personal',
-          type: 'interaction_style',
-          scope: 'global',
-          candidateKind: undefined,
-          tags: []
-        }),
-        createActive({
-          id: 'affect-1',
-          domain: 'affective',
-          type: 'affective_pattern',
-          scope: 'global',
-          candidateKind: undefined,
-          tags: []
-        }),
-        createActive({
-          id: 'rule-1',
-          domain: 'procedural',
-          type: 'procedural_rule',
-          scope: 'global',
-          candidateKind: undefined,
-          tags: []
-        }),
-        createActive({
-          id: 'instruction-rule-1',
-          domain: 'procedural',
-          type: 'procedural_rule',
-          scope: 'global',
-          candidateKind: 'user_instruction',
-          tags: []
-        }),
-        createActive({
-          id: 'other-global-1',
-          domain: 'relationship',
-          type: 'reference',
-          scope: 'global',
-          candidateKind: undefined,
-          tags: []
-        })
-      ].map((item) => JSON.stringify(item)).join('\n') + '\n'
-    )
+    await writeSemanticMemoriesFromRoot(memoryRoot, [
+      createSemanticMemory({
+        id: 'global-core-1',
+        scope: 'global',
+        confidenceTier: 'global_core',
+        activationPolicy: activationPolicyForConfidenceTier('global_core')
+      }),
+      createSemanticMemory({ id: 'global-untiered-1', scope: 'global' })
+    ])
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -599,16 +606,8 @@ describe('handleCodexUiApiRequest', () => {
     if (result.body.ok) {
       const data = result.body.data as { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
       expect(groupIds(data.groups)).toEqual({
-        'User Preferences': ['preference-1'],
-        'Interaction Style': ['style-1'],
-        'Relationship Boundaries': [],
-        'Affective Patterns': ['affect-1'],
-        'Workflow Rules': ['instruction-rule-1', 'rule-1'],
-        'System Policies': [],
-        References: ['other-global-1'],
-        Episodes: [],
-        'Project Facts': [],
-        'Other Global Memory': []
+        'Global Core': ['global-core-1'],
+        'Needs Tier Review': ['global-untiered-1']
       })
     }
   })
@@ -652,8 +651,7 @@ describe('handleCodexUiApiRequest', () => {
     const { cwd } = await seedProject()
     const projectId = 'bb1ebd2e94131f05'
     const memoryRoot = codexProjectMemoryRoot(projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({ id: 'delete-me' }))}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [createActive({ id: 'delete-me' })])
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -675,7 +673,7 @@ describe('handleCodexUiApiRequest', () => {
         }
       })
     }
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 
     const projects = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/projects' })
     expect(projects.body.ok).toBe(true)
@@ -685,14 +683,11 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
-  it('keeps empty project memory groups for UI empty states', async () => {
+  it('keeps empty lifecycle memory groups for UI empty states', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
-    await writeFile(
-      join(memoryRoot, 'index.jsonl'),
-      `${JSON.stringify(createActive({ id: 'only-fact', candidateKind: 'project_fact', tags: [] }))}\n`
-    )
+    await writeActiveMemoriesFromRoot(memoryRoot, [createActive({ id: 'only-fact', candidateKind: 'project_fact', tags: [] })])
 
     const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/project-memory' })
 
@@ -701,13 +696,10 @@ describe('handleCodexUiApiRequest', () => {
     if (result.body.ok) {
       const data = result.body.data as { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
       expect(groupIds(data.groups)).toEqual({
-        'Project Facts': ['only-fact'],
-        'Project Decisions': [],
-        'Workflow Rules': [],
-        'Known Pitfalls': [],
-        'Rejected Approaches': [],
-        'Open Questions': [],
-        'Other Project Memory': []
+        Trial: [],
+        Validated: [],
+        'Project Core': [],
+        'Needs Tier Review': ['only-fact']
       })
     }
   })
@@ -720,7 +712,7 @@ describe('handleCodexUiApiRequest', () => {
     vi.stubEnv('CYRENE_STRONG_MODEL', '')
     vi.stubEnv('CYRENE_CHEAP_MODEL', '')
     const { cwd, memoryRoot } = await seedProject()
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     const callModel = vi.fn()
 
     const result = await handleCodexUiApiRequest({
@@ -738,7 +730,7 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.result.action).toBe('needs_model_config')
     }
     expect(callModel).not.toHaveBeenCalled()
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('keeps Web UI project harvest dry-run only when model extraction returns candidates', async () => {
@@ -748,7 +740,7 @@ describe('handleCodexUiApiRequest', () => {
     vi.stubEnv('CYRENE_MODEL', 'test-model')
     vi.stubEnv('CYRENE_API_KEY', 'test-key')
     const { cwd, memoryRoot } = await seedProject()
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     const callModel = vi.fn(async () => ({
       content: JSON.stringify({
         candidates: [{
@@ -778,7 +770,7 @@ describe('handleCodexUiApiRequest', () => {
       )
     }
     expect(callModel).toHaveBeenCalledTimes(1)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('runs memory distillation dry-run for duplicate pending entries', async () => {
@@ -786,7 +778,7 @@ describe('handleCodexUiApiRequest', () => {
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
     await writeFile(
-      join(memoryRoot, 'pending.jsonl'),
+      join(memoryRoot, 'review_queue.jsonl'),
       [
         createPending({
           id: 'distill-duplicate-a',
@@ -826,7 +818,7 @@ describe('handleCodexUiApiRequest', () => {
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
     await writeFile(
-      join(memoryRoot, 'pending.jsonl'),
+      join(memoryRoot, 'review_queue.jsonl'),
       [
         createPending({
           id: 'project-distill-a',
@@ -845,7 +837,7 @@ describe('handleCodexUiApiRequest', () => {
     const globalRoot = codexGlobalMemoryRoot()
     await mkdir(globalRoot, { recursive: true })
     await writeFile(
-      join(globalRoot, 'pending.jsonl'),
+      join(globalRoot, 'review_queue.jsonl'),
       [
         createPending({
           id: 'global-distill-a',
@@ -905,7 +897,7 @@ describe('handleCodexUiApiRequest', () => {
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
     await writeFile(
-      join(memoryRoot, 'pending.jsonl'),
+      join(memoryRoot, 'review_queue.jsonl'),
       [
         createPending({
           id: 'triage-noise',
@@ -928,7 +920,7 @@ describe('handleCodexUiApiRequest', () => {
         })
       ].map((item) => JSON.stringify(item)).join('\n') + '\n'
     )
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -945,7 +937,7 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.decisions).toContainEqual(expect.objectContaining({ action: 'auto_drop', candidateId: 'triage-noise' }))
       expect(data.decisions).toContainEqual(expect.objectContaining({ action: 'recommend', candidateId: 'triage-review' }))
     }
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('rejects all-scope memory triage because the route operates on one memory root', async () => {
@@ -971,7 +963,7 @@ describe('handleCodexUiApiRequest', () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+    await writePendingMemoriesFromRoot(memoryRoot, [createPending({
       id: 'prepare-implementation-note',
       domain: 'project',
       type: 'project_fact',
@@ -980,8 +972,8 @@ describe('handleCodexUiApiRequest', () => {
       candidateKind: 'project_decision',
       sourceOfTruth: 'review_summary:task-1',
       tags: ['project_decision']
-    }))}\n`)
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    })])
+    const pendingBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -997,14 +989,14 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.dryRun).toBe(true)
       expect(data.results).toContainEqual(expect.objectContaining({ action: 'replace_content' }))
     }
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('applies memory prepare to pending only and records receipts', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot, active } = await seedProject()
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+    await writePendingMemoriesFromRoot(memoryRoot, [createPending({
       id: 'prepare-implementation-note',
       domain: 'project',
       type: 'project_fact',
@@ -1013,7 +1005,7 @@ describe('handleCodexUiApiRequest', () => {
       candidateKind: 'project_decision',
       sourceOfTruth: 'review_summary:task-1',
       tags: ['project_decision']
-    }))}\n`)
+    })])
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -1031,8 +1023,10 @@ describe('handleCodexUiApiRequest', () => {
       expect(data.activeAfterCount).toBe(1)
       expect(data.receipts).toContainEqual(expect.objectContaining({ action: 'replace_content' }))
     }
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(active.content)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: active.content })])
+    )
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(
       'Admission-gate memory work should coordinate independent tasks through subagent-driven execution in an isolated worktree.'
     )
     await expect(readFile(join(memoryRoot, 'semantic_rewrite_receipts.jsonl'), 'utf8')).resolves.toContain('replace_content')
@@ -1085,7 +1079,7 @@ describe('handleCodexUiApiRequest', () => {
       tags: ['second']
     })
     await writeFile(
-      join(memoryRoot, 'pending.jsonl'),
+      join(memoryRoot, 'review_queue.jsonl'),
       [
         createPending({
           id: 'triage-noise',
@@ -1118,7 +1112,7 @@ describe('handleCodexUiApiRequest', () => {
         }
       })
     }
-    const pendingAfter = (await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pendingAfter = (await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
       .trim()
       .split('\n')
       .filter(Boolean)
@@ -1135,15 +1129,15 @@ describe('handleCodexUiApiRequest', () => {
     const { cwd, memoryRoot } = await seedProject()
     const globalRoot = codexGlobalMemoryRoot()
     await mkdir(globalRoot, { recursive: true })
-    await writeFile(join(globalRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+    await writePendingMemoriesFromRoot(globalRoot, [createPending({
       id: 'global-triage-noise',
       scope: 'global',
       domain: 'procedural',
       content: 'Ran npm test today.',
       normalizedKey: 'global-ran-npm-test-today',
       evidence: [{ summary: 'temporary command result' }]
-    }))}\n`)
-    const projectBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    })])
+    const projectBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -1168,7 +1162,7 @@ describe('handleCodexUiApiRequest', () => {
         candidateId: 'global-triage-noise'
       }))
     }
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(projectBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(projectBefore)
   })
 
   it('reports DeepSeek model config incomplete when the API key is missing', async () => {
@@ -1243,7 +1237,7 @@ describe('handleCodexUiApiRequest', () => {
       evidence: [{ summary: 'A summary without a source trace.', sourceKind: 'file' }],
       sourceOfTruth: undefined
     })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(weakPending)}\n`)
+    await writePendingMemoriesFromRoot(memoryRoot, [weakPending])
     const hash = await pendingHash(cwd)
 
     const result = await handleCodexUiApiRequest({
@@ -1271,8 +1265,12 @@ describe('handleCodexUiApiRequest', () => {
         }
       })
     }
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Memory review Web UI route button facts should be grouped for the UI.')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(weakPending.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content: 'Memory review Web UI route button facts should be grouped for the UI.' })
+      ])
+    )
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(weakPending.content)
   })
 
   it('allows reject and defer without reasons through the Web UI write routes', async () => {
@@ -1327,7 +1325,9 @@ describe('handleCodexUiApiRequest', () => {
         }
       })
     }
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(pending.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: pending.content })])
+    )
   })
 
   it('archives active memory through hash-checked UI API', async () => {
@@ -1354,7 +1354,7 @@ describe('handleCodexUiApiRequest', () => {
         }
       })
     }
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
   })
 
   it('edits pending memory through the Web UI write route without promoting it', async () => {
@@ -1371,7 +1371,7 @@ describe('handleCodexUiApiRequest', () => {
         reviewHash: hash,
         changeNote: 'User clarified the candidate.',
         patch: {
-          content: 'Keep Web UI write actions hash-checked and pending-only.',
+          content: 'Keep Web UI write actions hash-checked for review queue candidates.',
           candidateKind: 'workflow_rule',
           tags: ['web_ui', 'reviewed'],
           scores: { usefulness: 0.88 }
@@ -1387,13 +1387,17 @@ describe('handleCodexUiApiRequest', () => {
         candidate: expect.objectContaining({
           id: pending.id,
           status: 'pending',
-          content: 'Keep Web UI write actions hash-checked and pending-only.',
+          content: 'Keep Web UI write actions hash-checked for review queue candidates.',
           tags: ['web_ui', 'reviewed']
         })
       })
     }
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('Keep Web UI write actions hash-checked')
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('Memory review Web UI route button facts should be grouped for the UI.')
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain('Keep Web UI write actions hash-checked')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content: 'Memory review Web UI route button facts should be grouped for the UI.' })
+      ])
+    )
   })
 
   it('returns structured method errors for non-GET read routes', async () => {
@@ -1491,7 +1495,7 @@ describe('handleCodexUiApiRequest', () => {
       content: 'High-risk UI memory requires explicit destructive confirmation.',
       normalizedKey: 'ui-high-risk-active-memory'
     })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(active)}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [active])
     const { contentHashForActiveMemory } = await import('../src/codex/active-memory-review.js')
 
     const blocked = await handleCodexUiApiRequest({

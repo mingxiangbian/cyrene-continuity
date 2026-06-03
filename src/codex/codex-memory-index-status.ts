@@ -18,7 +18,7 @@ export interface CodexMemoryIndexStatus {
   staleReason?: string
 }
 
-const INDEXED_SOURCE_FILES = ['index.jsonl', 'pending.jsonl']
+const INDEXED_SOURCE_FILES = ['semantic_memories.jsonl', 'review_queue.jsonl']
 
 export async function readCodexMemoryIndexStatus(memoryRoots: string[]): Promise<CodexMemoryIndexStatus> {
   const diagnostics = await readStatusIndexDiagnostics()

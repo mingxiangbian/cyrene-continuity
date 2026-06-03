@@ -14,7 +14,7 @@ const PENDING_MEMORY_REJECTION_WORKFLOW_CONTENT =
   'Pending-memory rejection workflows must validate each candidate review hash before mutation and verify the queue state after rejection.'
 
 const PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL_CONTENT =
-  'Pending-review hashes must be read from canonical pending.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.'
+  'Pending-review hashes must be read from review_queue.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.'
 
 export function shapePendingCandidateContent(input: SemanticBoundarySource): ShapedPendingCandidateContent {
   const originalContent = contentOf(input)

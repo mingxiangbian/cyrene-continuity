@@ -58,8 +58,8 @@ export async function formatCodexMemoryDashboard(input: {
     `  displayName: ${status.project.displayName}`,
     '',
     'counts:',
-    `  active memories: ${status.roots.global.counts.active + status.roots.project.counts.active}`,
-    `  pending memories: ${status.roots.global.counts.pending + status.roots.project.counts.pending}`,
+    `  lifecycle memories: ${status.roots.global.counts.active + status.roots.project.counts.active}`,
+    `  review queue: ${status.roots.global.counts.pending + status.roots.project.counts.pending}`,
     `  rejected/tombstoned: ${status.roots.global.counts.tombstones + status.roots.project.counts.tombstones}`,
     `  profile candidates: ${status.roots.global.counts.profileCandidates + status.roots.project.counts.profileCandidates}`,
     '',
@@ -148,7 +148,7 @@ async function readDashboardDreamState(root: string): Promise<CodexMemoryDreamSt
 }
 
 function formatTopActiveMemories(memories: CyreneMemory[]): string[] {
-  const lines = ['top active project memories:']
+  const lines = ['top lifecycle project memories:']
   const top = [...memories].sort(compareActiveMemory).slice(0, 5)
   if (top.length === 0) {
     lines.push('- none')
@@ -161,7 +161,7 @@ function formatTopActiveMemories(memories: CyreneMemory[]): string[] {
 }
 
 function formatPendingReview(pending: CodexPendingMemorySummary[]): string[] {
-  const lines = ['pending review:']
+  const lines = ['manual review queue:']
   const top = [...pending].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt)).slice(0, 5)
   if (top.length === 0) {
     lines.push('- none')

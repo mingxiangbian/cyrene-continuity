@@ -420,8 +420,8 @@ describe('dream apply eval gate', () => {
     expect(result.failedChecks).not.toContain('pending_usage_eval')
   })
 
-  it('fails profile_pollution_eval when profile preview includes pending-only content', () => {
-    const candidate = pending({ content: 'Pending-only preference must not enter MODEL_PROFILE.md.' })
+  it('fails profile_pollution_eval when profile preview includes manual review queue content', () => {
+    const candidate = pending({ content: 'Manual review queue preference must not enter MODEL_PROFILE.md.' })
 
     const result = runDreamApplyEvalGate({
       pending: [candidate],
@@ -432,12 +432,12 @@ describe('dream apply eval gate', () => {
         reason: 'needs more evidence',
         distinctEvidenceCount: 1
       }],
-      profilePreview: '# Cyrene Model Profile\n\nPending-only preference must not enter MODEL_PROFILE.md.\n'
+      profilePreview: '# Cyrene Model Profile\n\nManual review queue preference must not enter MODEL_PROFILE.md.\n'
     })
 
     expect(result.passed).toBe(false)
     expect(result.failedChecks).toContain('profile_pollution_eval')
-    expect(JSON.stringify(result.results)).toContain('pending-only content')
+    expect(JSON.stringify(result.results)).toContain('manual review queue content')
   })
 
   it('fails affective_boundary_eval for diagnostic affective claims', () => {
@@ -582,7 +582,7 @@ describe('v6 distillation eval gate', () => {
     const result = runV6DistillationReviewGate([{
       candidateId: 'distill-1',
       mode: 'dry_run',
-      mutatedStores: ['pending.jsonl'],
+      mutatedStores: ['review_queue.jsonl'],
       recommendedAction: 'merge_pending',
       sourceIds: ['p1', 'p2']
     }])

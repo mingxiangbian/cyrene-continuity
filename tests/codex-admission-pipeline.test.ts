@@ -9,8 +9,10 @@ import { identifyCodexProject } from '../src/codex/project-id.js'
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
 import {
   readDistillationInputsFromRoot,
+  writeActiveMemoriesFromRoot,
   readReviewDecisionsFromRoot,
-  readRoutingDecisionsFromRoot
+  readRoutingDecisionsFromRoot,
+  readSemanticMemoriesFromRoot
 } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
@@ -122,7 +124,7 @@ describe('runCodexAdmissionPipeline', () => {
     await expect(lstat(memoryRoot)).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('writes draft and admission records without pending for numeric snapshots', async () => {
@@ -159,7 +161,7 @@ describe('runCodexAdmissionPipeline', () => {
         sourceDraftIds: [result.admission.draftId]
       }
     ])
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('writes admitted pending memory with admission lineage metadata', async () => {
@@ -185,14 +187,14 @@ describe('runCodexAdmissionPipeline', () => {
     })
 
     expect(result.action).toBe('pending')
-    const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('"admittedBy":"admission_gate_v1"')
     expect(pending).toContain('"admissionAction":"admit_to_pending"')
     expect(pending).toContain('"sourceEpisodeIds":["episode-1"]')
     expect(pending).toContain('"sourceDraftIds"')
   })
 
-  it('writes routing and review decisions for admitted pending source-of-truth candidates', async () => {
+  it('writes routing and review decisions for source-of-truth candidates admitted to trial', async () => {
     const home = await createTempDir('cyrene-admission-pipeline-routing-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-admission-pipeline-routing-project-')
@@ -215,7 +217,15 @@ describe('runCodexAdmissionPipeline', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('pending')
+    expect(result.action).toBe('trial')
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe('')
+    const semantic = await readSemanticMemoriesFromRoot(result.memoryRoot)
+    expect(semantic).toEqual([
+      expect.objectContaining({
+        content: 'For non-trivial code changes, repository edits must remain surgical and trace directly to the requested task.',
+        confidenceTier: 'trial'
+      })
+    ])
 
     const routing = await readRoutingDecisionsFromRoot(result.memoryRoot)
     expect(routing).toHaveLength(1)
@@ -270,7 +280,7 @@ describe('runCodexAdmissionPipeline', () => {
       risk: 'low'
     })
     await expect(readDistillationInputsFromRoot(result.memoryRoot)).resolves.toEqual([])
-    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('does not infer reference-only source boundaries from evidence summaries', async () => {
@@ -327,7 +337,7 @@ describe('runCodexAdmissionPipeline', () => {
       module: 'task_state',
       updatePolicy: 'defer'
     })
-    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('passes router update policy into proposal auto-promotion gating', async () => {
@@ -417,7 +427,7 @@ describe('runCodexAdmissionPipeline', () => {
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(pendingMemory({
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(pendingMemory({
       sourceEpisodeIds: ['episode-old'],
       sourceDraftIds: ['draft-old']
     }))}\n`)
@@ -450,7 +460,7 @@ describe('runCodexAdmissionPipeline', () => {
     expect(result.result.candidateId).toBe('pending-existing')
     expect(result.result.review.id).toBe('pending-existing')
 
-    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
       .filter((item) => item.normalizedKey === 'merge-lineage-key')
     expect(pending).toHaveLength(1)
     expect(pending[0]?.id).toBe('pending-existing')
@@ -465,8 +475,7 @@ describe('runCodexAdmissionPipeline', () => {
     const cwd = await createTempDir('cyrene-admission-pipeline-duplicate-project-')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(activeMemory('duplicate-key'))}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [activeMemory('duplicate-key')])
 
     const result = await runCodexAdmissionPipeline({
       cwd,
@@ -483,7 +492,7 @@ describe('runCodexAdmissionPipeline', () => {
     })
 
     expect(result.action).toBe('reject_duplicate')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('does not infer source-of-truth duplicate reasons from evidence summaries', async () => {
@@ -492,8 +501,7 @@ describe('runCodexAdmissionPipeline', () => {
     const cwd = await createTempDir('cyrene-admission-pipeline-summary-duplicate-project-')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(activeMemory('duplicate-summary-key'))}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [activeMemory('duplicate-summary-key')])
 
     const result = await runCodexAdmissionPipeline({
       cwd,
@@ -513,7 +521,7 @@ describe('runCodexAdmissionPipeline', () => {
     expect(result.action).toBe('reject_duplicate')
     expect(result.admission.reasons).toContain('duplicate_active')
     expect(result.admission.reasons).not.toContain('source_of_truth_duplicate')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('rejects duplicate active memory using derived normalized keys', async () => {
@@ -522,8 +530,7 @@ describe('runCodexAdmissionPipeline', () => {
     const cwd = await createTempDir('cyrene-admission-pipeline-derived-duplicate-project-')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(activeMemory('project-project-fact-duplicate-active-memory'))}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [activeMemory('project-project-fact-duplicate-active-memory')])
 
     const result = await runCodexAdmissionPipeline({
       cwd,
@@ -542,7 +549,7 @@ describe('runCodexAdmissionPipeline', () => {
     expect(result.admission.reasons).toContain('duplicate_active')
     const drafts = await readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')
     expect(drafts).toContain('"normalizedKey":"project-project-fact-duplicate-active-memory"')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('drops tombstoned memory using derived normalized keys', async () => {
@@ -569,6 +576,6 @@ describe('runCodexAdmissionPipeline', () => {
 
     expect(result.action).toBe('auto_drop')
     expect(result.admission.reasons).toContain('conflicts_with_tombstone')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

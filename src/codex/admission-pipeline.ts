@@ -18,7 +18,7 @@ import {
 import type { AdmissionDecision, CandidateDraft, CandidateDraftSourceKind, DistillationInput } from '../memory/types.js'
 
 export type CodexAdmissionPipelineResult =
-  | (CodexMemoryProposeResult & { action: 'pending' | 'auto_promote' | 'reject'; admission: AdmissionDecision })
+  | (CodexMemoryProposeResult & { action: 'pending' | 'auto_promote' | 'trial' | 'reject'; admission: AdmissionDecision })
   | {
       project: { projectId: string; displayName: string }
       memoryRoot: string

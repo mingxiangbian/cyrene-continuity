@@ -12,6 +12,8 @@ import { collectProjectMemorySignals, type ProjectMemorySignal } from '../src/co
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
 import { createDefaultConfig, type AppConfig } from '../src/config.js'
 import type { CallModelInput, ModelResponse } from '../src/llm-client.js'
+import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
+import { readSemanticMemoriesFromRoot } from '../src/memory/memory-store.js'
 
 vi.mock('../src/codex/project-memory-signals.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/codex/project-memory-signals.js')>()
@@ -68,8 +70,8 @@ function sampleSignals(): ProjectMemorySignal[] {
       kind: 'repository_policy',
       source: 'file',
       files: ['AGENTS.md'],
-      summary: 'repository policy: preserve pending-only memory review model',
-      evidence: 'Do not imply automatic promotion or active-memory writes without explicit approval.'
+      summary: 'repository policy: preserve v1.5 trial admission and manual review queue boundaries',
+      evidence: 'Strict low-risk project memory may enter trial; high-risk or ambiguous memory stays in manual review.'
     },
     {
       kind: 'hook_trace',
@@ -83,7 +85,7 @@ function sampleSignals(): ProjectMemorySignal[] {
 
 async function readPending(cwd: string): Promise<string> {
   const identity = await identifyCodexProject(cwd)
-  return readFile(join(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl'), 'utf8')
+  return readFile(join(codexProjectMemoryRoot(identity.projectId), 'review_queue.jsonl'), 'utf8')
 }
 
 describe('runCodexProjectMemoryHarvest', () => {
@@ -191,7 +193,7 @@ describe('runCodexProjectMemoryHarvest', () => {
         modelResponse(JSON.stringify({
           candidates: [{
             candidateKind: 'workflow_rule',
-            content: 'Repository changes must preserve the pending-only memory review model.',
+            content: 'Repository changes must preserve v1.5 trial admission and manual review queue boundaries.',
             signalIndexes: [1],
             scope: 'global',
             source: 'user_explicit',
@@ -242,7 +244,7 @@ describe('runCodexProjectMemoryHarvest', () => {
     expect(result.candidates[0]?.content).toMatch(/\.\.\.$/)
   })
 
-  it('writes sanitized project pending memory in normal mode', async () => {
+  it('writes sanitized low-risk project harvest memory as trial in normal mode', async () => {
     const home = await createTempDir('cyrene-harvester-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-harvester-project-')
@@ -266,36 +268,34 @@ describe('runCodexProjectMemoryHarvest', () => {
       now: '2026-05-29T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('pending')
-    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    expect(result.action).toBe('trial')
+    if (result.action !== 'trial') throw new Error(`Expected trial, got ${result.action}`)
     expect(result.candidateIds).toHaveLength(1)
-    const [record] = (await readPending(cwd)).trim().split('\n').map((line) => JSON.parse(line) as {
-      scope: string
-      domain: string
-      type: string
-      candidateKind?: string
-      candidate_kind?: string
-      sourceOfTruth?: string
-      source: string
-      evidence: Array<{ sourceKind?: string; summary?: string; traceRefs?: string[]; evidenceGroupId?: string }>
-      tags: string[]
+    expect(result.memoryIds).toHaveLength(1)
+    const [record] = await readSemanticMemoriesFromRoot(result.memoryRoot)
+    if (record === undefined) throw new Error('Expected trial semantic memory')
+    expect(record).toMatchObject({
+      status: 'active',
+      confidenceTier: 'trial',
+      activationPolicy: activationPolicyForConfidenceTier('trial')
     })
     expect(record).toMatchObject({
       scope: 'project',
       domain: 'project',
-      type: 'project_fact',
-      candidateKind: 'project_decision',
-      source: 'file',
-      tags: expect.arrayContaining(['project_harvest', 'project_decision'])
+      kind: 'project_decision',
+      sourceOfTruth: 'AGENTS.md',
+      reviewState: expect.objectContaining({
+        type: 'project_fact',
+        source: 'file',
+        tags: expect.arrayContaining(['project_harvest', 'project_decision'])
+      })
     })
-    expect(record.candidate_kind).toBeUndefined()
-    expect(record.sourceOfTruth).toBe('AGENTS.md')
     expect(record.evidence[0]).toEqual(expect.objectContaining({
       sourceKind: 'file',
-      summary: expect.stringContaining('repository_policy'),
-      traceRefs: ['AGENTS.md']
+      whatHappened: expect.stringContaining('repository_policy')
     }))
-    expect(record.evidence[0]?.evidenceGroupId).toMatch(/^[a-f0-9]{64}$/)
+    expect(record.evidence[0]?.id).toMatch(/^[a-f0-9]{64}$/)
+    await expect(readPending(cwd)).resolves.toBe('')
   })
 
   it('routes numeric project harvest snapshots to admission without pending write', async () => {
@@ -324,7 +324,7 @@ describe('runCodexProjectMemoryHarvest', () => {
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('stale_numeric_snapshot')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('routes implementation notes to admission without pending write', async () => {
@@ -353,7 +353,7 @@ describe('runCodexProjectMemoryHarvest', () => {
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('implementation_note')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('writes candidate drafts beside existing project harvest pending candidates', async () => {
@@ -369,21 +369,26 @@ describe('runCodexProjectMemoryHarvest', () => {
         modelResponse(JSON.stringify({
           candidates: [{
             candidateKind: 'workflow_rule',
-            content: 'Repository changes must preserve the pending-only memory review model.',
+            content: 'Repository changes must preserve v1.5 trial admission and manual review queue boundaries.',
             signalIndexes: [1]
           }]
         })),
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('pending')
-    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
+    expect(result.action).toBe('trial')
+    if (result.action !== 'trial') throw new Error(`Expected trial, got ${result.action}`)
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     const drafts = await readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')
-    expect(drafts).toContain('Repository changes must preserve the pending-only memory review model.')
+    expect(drafts).toContain('Repository changes must preserve v1.5 trial admission and manual review queue boundaries.')
     expect(drafts).toContain('"sourceKind":"file"')
     expect(drafts).toContain('"candidateKind":"workflow_rule"')
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    expect(semantic[0]).toMatchObject({
+      content: 'Repository changes must preserve v1.5 trial admission and manual review queue boundaries.',
+      confidenceTier: 'trial'
+    })
   })
 
   it('filters invalid candidate kinds and prevents personal or global model output from leaking through', async () => {
@@ -471,7 +476,7 @@ describe('runCodexProjectMemoryHarvest', () => {
         modelResponse(JSON.stringify({
           candidates: [{
             candidateKind: 'workflow_rule',
-            content: 'Repository changes must preserve the pending-only memory review model.',
+            content: 'Repository changes must preserve v1.5 trial admission and manual review queue boundaries.',
             signalIndexes: [99]
           }]
         }))
@@ -496,7 +501,7 @@ describe('runCodexProjectMemoryHarvest', () => {
         modelResponse(JSON.stringify({
           candidates: [{
             candidateKind: 'workflow_rule',
-            content: 'Repository changes must preserve the pending-only memory review model.'
+            content: 'Repository changes must preserve v1.5 trial admission and manual review queue boundaries.'
           }]
         }))
     })
@@ -533,31 +538,31 @@ describe('runCodexProjectMemoryHarvest', () => {
             },
             {
               candidateKind: 'workflow_rule',
-              content: 'Project memory harvester output should stay pending-only.',
+              content: 'Project memory harvester output should stay in the manual review queue.',
               signalIndexes: [1],
               tags: ['api_key']
             },
             {
               candidateKind: 'workflow_rule',
-              content: 'Project memory harvester output should stay pending-only.',
+              content: 'Project memory harvester output should stay in the manual review queue.',
               signalIndexes: [1],
               domain: 'personal'
             },
             {
               candidateKind: 'workflow_rule',
-              content: 'Project memory harvester output should stay pending-only.',
+              content: 'Project memory harvester output should stay in the manual review queue.',
               signalIndexes: [1],
               domain: 'relationship'
             },
             {
               candidateKind: 'workflow_rule',
-              content: 'Project memory harvester output should stay pending-only.',
+              content: 'Project memory harvester output should stay in the manual review queue.',
               signalIndexes: [1],
               domain: 'affective'
             },
             {
               candidateKind: 'workflow_rule',
-              content: 'Project memory harvester output should stay pending-only until review.',
+              content: 'Project memory harvester output may enter trial only after low-risk gates pass.',
               signalIndexes: [1]
             }
           ]
@@ -567,7 +572,7 @@ describe('runCodexProjectMemoryHarvest', () => {
     expect(result.action).toBe('preview')
     if (result.action !== 'preview') throw new Error(`Expected preview, got ${result.action}`)
     expect(result.candidates).toHaveLength(1)
-    expect(result.candidates[0]?.content).toBe('Project memory harvester output should stay pending-only until review.')
+    expect(result.candidates[0]?.content).toBe('Project memory harvester output may enter trial only after low-risk gates pass.')
   })
 
   it('does not preserve model-supplied normalizedKey', async () => {
@@ -591,12 +596,10 @@ describe('runCodexProjectMemoryHarvest', () => {
       now: '2026-05-29T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('pending')
-    if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
-    const [record] = (await readPending(cwd)).trim().split('\n').map((line) => JSON.parse(line) as {
-      normalizedKey: string
-    })
-    expect(record.normalizedKey).not.toBe('model-supplied-normalized-key')
+    expect(result.action).toBe('trial')
+    if (result.action !== 'trial') throw new Error(`Expected trial, got ${result.action}`)
+    const [record] = await readSemanticMemoriesFromRoot(result.memoryRoot)
+    expect(record?.reviewState?.normalizedKey).not.toBe('model-supplied-normalized-key')
   })
 
   it('includes allowed project candidate kinds and collected signals in the prompt', async () => {
@@ -633,7 +636,7 @@ describe('runCodexProjectMemoryHarvest', () => {
     expect(prompt).toContain('Keep English proper nouns and technical terms such as file paths, commands, APIs, libraries, model names, field names, and identifiers in English.')
     expect(prompt).toContain('Candidate content must be 240 characters or fewer.')
     expect(prompt).toContain('repository_policy')
-    expect(prompt).toContain('preserve pending-only memory review model')
+    expect(prompt).toContain('preserve v1.5 trial admission and manual review queue boundaries')
     expect(prompt).toContain('hook_trace')
     expect(prompt).toContain('project memory signal collection')
   })

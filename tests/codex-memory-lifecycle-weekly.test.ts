@@ -191,6 +191,11 @@ describe('weekly core and global consolidation job', () => {
       confidenceTier: 'project_core',
       content: 'Keep implementation changes scoped to owned files.'
     })
+    const secretCore = semanticMemory({
+      id: 'secret-core',
+      confidenceTier: 'project_core',
+      content: 'Never write provider token sk-abc1234567890abcdef1234567890 into generated profiles.'
+    })
     const trial = semanticMemory({
       id: 'trial-memory',
       confidenceTier: 'trial',
@@ -220,10 +225,12 @@ describe('weekly core and global consolidation job', () => {
     const profile = await writeLifecycleProfileFromCoreMemory({
       memoryRoot: root,
       scope: 'project',
-      memories: [trial, validated, highRiskCore, projectCore]
+      memories: [trial, validated, highRiskCore, projectCore, secretCore]
     })
 
     expect(profile).toContain('Keep implementation changes scoped to owned files.')
+    expect(profile).toContain('[REDACTED_SECRET]')
+    expect(profile).not.toContain('sk-abc')
     expect(profile).not.toContain('Trial memory must stay out of profile.')
     expect(profile).not.toContain('Validated memory must stay out of profile.')
     expect(profile).not.toContain('Personal memory must stay out of profile.')

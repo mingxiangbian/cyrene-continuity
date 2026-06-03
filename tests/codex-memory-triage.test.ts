@@ -89,7 +89,7 @@ describe('memory triage', () => {
       pending: [
         pending({
           id: 'durable-today',
-          content: 'Today we decided to keep the memory review UI pending-only.',
+          content: 'Today we decided to keep the memory review UI hash-checked.',
           normalizedKey: 'durable-today-review-decision',
           source: 'user_explicit',
           evidence: [{ summary: 'User stated a durable project decision today.', sourceKind: 'user_explicit' }],
@@ -296,7 +296,7 @@ describe('memory triage', () => {
       apply: true,
       now: '2026-05-31T00:00:00.000Z'
     })
-    const pending = await readFile(join(codexGlobalMemoryRoot(), 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(codexGlobalMemoryRoot(), 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('review-derived-reject-transient-test-status')
     expect(pending).toContain('"source":"review_event"')
     expect(pending).toContain('一次性命令结果')
@@ -311,7 +311,7 @@ describe('memory triage', () => {
     const project = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(project.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), [
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), [
       pending({
         id: 'merge-a',
         normalizedKey: 'same-normalized-key',
@@ -335,7 +335,7 @@ describe('memory triage', () => {
 
     const parsed = JSON.parse(output) as { applied?: { auto_drop: number; auto_defer: number; auto_merge: number } }
     expect(parsed.applied).toEqual({ auto_drop: 0, auto_defer: 0, auto_merge: 1 })
-    const pendingCandidates = jsonl<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pendingCandidates = jsonl<PendingMemory>(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
     const events = jsonl<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
     expect(pendingCandidates.map((candidate) => candidate.id)).toEqual(['merge-a'])
     expect(events).toEqual(expect.arrayContaining([
@@ -361,7 +361,7 @@ describe('memory triage', () => {
       evidence: [{ summary: 'temporary command result' }]
     })
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(candidate)}\n`)
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(candidate)}\n`)
 
     await rejectCodexPendingMemory({
       cwd,

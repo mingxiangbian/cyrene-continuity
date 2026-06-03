@@ -86,7 +86,7 @@ describe('Codex review summary runtime', () => {
     expect(result.candidateIds).toEqual([])
     const summaries = await readReviewSummaries(cwd)
     expect(summaries).toContain('用户要求整理 review-safe summary。')
-    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('writes pending candidates using memory schema enum values', async () => {
@@ -117,7 +117,7 @@ describe('Codex review summary runtime', () => {
     expect(result.action).toBe('pending')
     if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
     expect(result.candidateIds).toHaveLength(1)
-    const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('用户偏好简洁直接的协作风格。')
     expect(pending).toContain('"domain":"personal"')
     expect(pending).toContain('"type":"interaction_style"')
@@ -154,7 +154,7 @@ describe('Codex review summary runtime', () => {
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await expect(readFile(join(memoryRoot, 'admission_decisions.jsonl'), 'utf8')).resolves.toContain('one_time_action')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('bounds generated pending candidate content and evidence for reviewability', async () => {
@@ -185,7 +185,7 @@ describe('Codex review summary runtime', () => {
 
     expect(result.action).toBe('pending')
     if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
-    const [pendingRecord] = (await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8'))
+    const [pendingRecord] = (await readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as {
@@ -215,7 +215,7 @@ describe('Codex review summary runtime', () => {
     expect(result.action).toBe('pending')
     if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
     expect(result.candidateIds).toHaveLength(1)
-    const pending = await readFile(join(codexGlobalMemoryRoot(), 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(codexGlobalMemoryRoot(), 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('以后所有项目都默认先运行 git diff --check。')
     expect(pending).toContain('"source":"user_explicit"')
     expect(pending).toContain('"scope":"global"')
@@ -262,7 +262,7 @@ describe('Codex review summary runtime', () => {
 
     expect(result.action).toBe('pending')
     if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
-    const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('"candidateKind":"project_decision"')
   })
 
@@ -291,7 +291,7 @@ describe('Codex review summary runtime', () => {
 
     expect(result.action).toBe('pending')
     if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
-    const pending = await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('"candidateKind":"known_pitfall"')
   })
 
@@ -329,7 +329,7 @@ describe('Codex review summary runtime', () => {
     expect(drafts).toContain('项目 memory 审批必须使用 review hash。')
     expect(drafts).toContain('"sourceKind":"review_summary"')
     expect(drafts).toContain('"candidateKind":"workflow_rule"')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('项目 memory 审批必须使用 review hash。')
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain('项目 memory 审批必须使用 review hash。')
   })
 
   it('adds stable evidence grouping metadata to generated candidates', async () => {
@@ -362,7 +362,7 @@ describe('Codex review summary runtime', () => {
 
     expect(result.action).toBe('pending')
     if (result.action !== 'pending') throw new Error(`Expected pending, got ${result.action}`)
-    const [pendingRecord] = (await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8'))
+    const [pendingRecord] = (await readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as {
@@ -413,7 +413,7 @@ describe('Codex review summary runtime', () => {
     expect(result.action).toBe('summary')
     if (result.action !== 'summary') throw new Error(`Expected summary, got ${result.action}`)
     expect(result.candidateIds).toEqual([])
-    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     const [summaryRecord] = (await readReviewSummaries(cwd)).trim().split('\n').map((line) => JSON.parse(line) as { candidateIds: string[] })
     expect(summaryRecord.candidateIds).toEqual([])
   })
@@ -454,7 +454,7 @@ describe('Codex review summary runtime', () => {
     expect(summaries).toContain('[REDACTED_SECRET]')
     if (result.action !== 'summary') throw new Error(`Expected summary, got ${result.action}`)
     expect(result.candidateIds).toEqual([])
-    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('redacts failed summary reason when the model leaks provider details', async () => {

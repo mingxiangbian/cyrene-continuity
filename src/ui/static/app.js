@@ -1,4 +1,4 @@
-const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
+const WRITE_ACTION_COPY = 'Manual review actions require confirmation and review hash.'
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
@@ -24,14 +24,11 @@ const EMPTY_DASHBOARD = {
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'inbox', label: 'Inbox' },
+  { id: 'manual-review', label: 'Manual Review' },
   { id: 'timeline', label: 'Timeline' },
-  { id: 'project-memory', label: 'Project Memory' },
-  { id: 'triage', label: 'Triage' },
-  { id: 'prepare', label: 'Prepare' },
-  { id: 'distillation', label: 'Distillation' },
-  { id: 'harvester', label: 'Harvester' },
-  { id: 'dream', label: 'Dream' },
+  { id: 'lifecycle-memory', label: 'Lifecycle Memory' },
+  { id: 'automation', label: 'Automation' },
+  { id: 'tools', label: 'Tools' },
   { id: 'profile', label: 'Profile' }
 ]
 
@@ -204,7 +201,7 @@ function renderTopbar() {
           ? statusChip('Scope', 'Global', 'muted')
           : statusChip('Project ID', shortHash(selection.projectId || 'unknown'), 'muted')}
         ${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
-        ${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
+        ${statusChip('Manual Review', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
         ${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
         ${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
       </div>
@@ -272,7 +269,7 @@ function selectionInfo(dashboard) {
       return { scope: 'project', label: candidate.displayName, projectId: candidate.projectId }
     }
   }
-  return { scope: 'project', label: 'Project Memory', projectId: '' }
+  return { scope: 'project', label: 'Lifecycle Memory', projectId: '' }
 }
 
 function modelLabel(status) {
@@ -305,7 +302,7 @@ function renderWorkspace() {
   }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
-      state.activeTab = 'inbox'
+      state.activeTab = 'manual-review'
       state.selectedPendingId = row.dataset.pendingId || ''
       state.pendingAction = null
       state.receipt = null
@@ -357,9 +354,11 @@ function renderWorkspace() {
 }
 
 function pageHtml(tabId) {
-  if (tabId === 'inbox') return renderInbox()
+  if (tabId === 'manual-review' || tabId === 'inbox') return renderInbox()
   if (tabId === 'timeline') return renderTimeline()
-  if (tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'lifecycle-memory' || tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'automation') return renderAutomation()
+  if (tabId === 'tools') return renderTools()
   if (tabId === 'triage') return renderTriage()
   if (tabId === 'prepare') return renderMemoryPrepare()
   if (tabId === 'distillation') return renderDistillPanel()
@@ -379,8 +378,8 @@ function renderOverview() {
     <section class="page-stack">
       ${sectionHeader('Overview', 'Visibility for the memory pipeline.')}
       <div class="metric-grid">
-        ${metric('Pending', pending.length, 'Awaiting review')}
-        ${metric('Active', active.length, `${selection.label || 'Selected'} memories`)}
+        ${metric('Manual Review', pending.length, 'Awaiting review')}
+        ${renderLifecycleMetrics(active, selection.scope)}
         ${metric('Summaries', summaries.length, 'Stop Hook records')}
         ${metric('Signals', signals.length, 'Current workspace inputs')}
       </div>
@@ -388,8 +387,8 @@ function renderOverview() {
       ${renderTimelineDiagnostic()}
       ${renderRetrievalExplainPanel()}
       <div class="soft-panel">
-        <h3>Recent pending candidates</h3>
-        ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+        <h3>Recent manual review</h3>
+        ${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No manual review candidates.')}
       </div>
       <div class="soft-panel">
         <h3>Recent timeline</h3>
@@ -399,23 +398,43 @@ function renderOverview() {
   `
 }
 
+function renderLifecycleMetrics(memories, scope) {
+  const needsTier = memories.filter((memory) => !memory.confidenceTier).length
+  if (scope === 'global') {
+    return [
+      metric('Global Core', countTier(memories, 'global_core'), 'Core memory'),
+      needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+    ].join('')
+  }
+  return [
+    metric('Trial', countTier(memories, 'trial'), 'Workflow hints'),
+    metric('Validated', countTier(memories, 'validated'), 'Planning constraints'),
+    metric('Project Core', countTier(memories, 'project_core'), 'Profile candidates'),
+    needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+  ].join('')
+}
+
+function countTier(memories, tier) {
+  return memories.filter((memory) => memory.confidenceTier === tier).length
+}
+
 function renderInbox() {
   const pending = listPending()
   const selectedCount = pending.filter((candidate) => state.selectedPendingIds.includes(candidate.id)).length
   return `
     <section class="page-stack">
-      ${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}
+      ${sectionHeader('Manual Review', 'Candidates stay provisional until explicit review.')}
       <div class="soft-inset boundary-copy">${escapeHtml(WRITE_ACTION_COPY)}</div>
       <div class="soft-panel">
         <div class="section-toolbar">
-          <h3>Pending candidates</h3>
+          <h3>Manual candidates</h3>
           <div class="detail-actions">
             <button class="soft-button compact" type="button" data-reject-selected-pending ${selectedCount === 0 ? 'disabled' : ''}>Reject selected</button>
             <button class="soft-button compact" type="button" data-reject-all-pending ${pending.length === 0 ? 'disabled' : ''}>Reject all in view</button>
           </div>
         </div>
         <p class="muted-copy">${escapeHtml(String(selectedCount))} selected</p>
-        ${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+        ${pending.map(renderCandidateRow).join('') || emptyState('No manual review candidates.')}
       </div>
     </section>
   `
@@ -444,14 +463,14 @@ function renderSemanticReviewCard(candidate, options = {}) {
   return `
     <article class="memory-review-card selectable-row ${selected ? 'selected' : ''}" data-pending-id="${escapeHtml(candidate.id)}">
       <header class="memory-review-header">
-        ${state.activeTab === 'inbox' ? `
+        ${state.activeTab === 'manual-review' || state.activeTab === 'inbox' ? `
           <label class="pending-select" aria-label="Select pending candidate">
             <input type="checkbox" data-pending-select="${escapeHtml(candidate.id)}" ${state.selectedPendingIds.includes(candidate.id) ? 'checked' : ''}>
           </label>
         ` : ''}
         <div>
-          <p class="eyebrow">${escapeHtml(memory.module || 'semantic memory')} · ${escapeHtml(memory.status || 'pending')}</p>
-          <h3>${escapeHtml(memory.content || candidate.content || candidate.id || 'Pending candidate')}</h3>
+          <p class="eyebrow">${escapeHtml(memory.module || 'semantic memory')} · ${escapeHtml(reviewQueueStatusLabel(memory.status))}</p>
+          <h3>${escapeHtml(memory.content || candidate.content || candidate.id || 'Review candidate')}</h3>
         </div>
         <div class="row-actions">
           ${statusChip('Readiness', `${readinessStatus} · ${targetShape}`, readinessTone(readinessStatus))}
@@ -462,7 +481,7 @@ function renderSemanticReviewCard(candidate, options = {}) {
       <div class="memory-review-sections ${compact ? 'compact' : ''}">
         ${reviewSection('What will be remembered', [
           ['Content', memory.content || candidate.content || ''],
-          ['Why it matters', evidencePreview.whyImportant || candidate.episodeEvidence?.whyImportant || 'Review before this becomes active memory.']
+          ['Why it matters', evidencePreview.whyImportant || candidate.episodeEvidence?.whyImportant || 'Review before this becomes trial/validated/core memory.']
         ])}
         ${reviewSection('Identity', [
           ['Kind', memory.kind || candidate.candidateKind || candidate.type || 'memory'],
@@ -539,7 +558,7 @@ function renderTimeline() {
   const summaries = listSummaries()
   return `
     <section class="page-stack">
-      ${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}
+      ${sectionHeader('Timeline', 'Stop Hook review summaries and linked review ids.')}
       ${renderTimelineDiagnostic()}
       <div class="soft-panel">
         <h3>Review summaries</h3>
@@ -567,15 +586,15 @@ function renderProjectMemory() {
   const selection = selectionInfo(state.dashboard)
   return `
     <section class="page-stack">
-      ${sectionHeader('Project Memory', `Active memory for ${selection.label || 'selected scope'}.`)}
+      ${sectionHeader('Lifecycle Memory', `Tiered memory for ${selection.label || 'selected scope'}.`)}
       ${state.activeReceipt ? renderActiveReceipt(state.activeReceipt) : ''}
       ${state.activeAction ? renderActiveActionForm() : ''}
       ${groups.length > 0 ? groups.map((group) => `
         <div class="soft-panel">
-          <h3>${escapeHtml(group.label || 'Project memory')}</h3>
-          ${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No active memories in this group.')}
+          <h3>${escapeHtml(group.label || 'Lifecycle memory')}</h3>
+          ${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No lifecycle memories in this group.')}
         </div>
-      `).join('') : panel('Project memory unavailable', 'No grouped project memory returned yet.', 'muted')}
+      `).join('') : panel('Lifecycle memory unavailable', 'No grouped lifecycle memory returned yet.', 'muted')}
     </section>
   `
 }
@@ -588,7 +607,7 @@ function renderMemoryRow(memory) {
         <div class="row-meta">${escapeHtml(memory.candidateKind || memory.type || 'memory')} · ${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
       </div>
       <div class="row-actions">
-        ${statusChip('active', memory.status || 'active', 'ok')}
+        ${statusChip('tier', memoryTierLabel(memory), 'ok')}
         <button class="soft-button compact" type="button" data-active-action="archive" data-memory-id="${escapeHtml(memory.id)}">Archive</button>
         <button class="soft-button compact" type="button" data-active-action="tombstone" data-memory-id="${escapeHtml(memory.id)}">Tombstone</button>
         <button class="soft-button compact" type="button" data-active-action="propose-edit" data-memory-id="${escapeHtml(memory.id)}">Propose edit</button>
@@ -599,7 +618,7 @@ function renderMemoryRow(memory) {
 
 function renderActiveActionForm() {
   const memory = findActiveMemoryById(state.activeAction.id)
-  if (!memory) return panel('Active memory unavailable', 'Refresh the dashboard and try again.', 'error')
+  if (!memory) return panel('Lifecycle memory unavailable', 'Refresh the dashboard and try again.', 'error')
   const action = state.activeAction.action
   const editField = action === 'propose-edit'
     ? `
@@ -645,9 +664,9 @@ function renderActiveActionForm() {
 function renderActiveReceipt(receipt) {
   return `
     <div class="soft-panel receipt-panel">
-      <p class="eyebrow">active memory receipt</p>
+      <p class="eyebrow">lifecycle memory receipt</p>
       <h3>${escapeHtml(activeActionLabel(receipt.action || 'archive'))}</h3>
-      <div class="soft-inset rail-item"><strong>${escapeHtml(receipt.id || 'memory')}</strong><span>${escapeHtml(receipt.summary || 'Active memory action applied.')}</span></div>
+      <div class="soft-inset rail-item"><strong>${escapeHtml(receipt.id || 'memory')}</strong><span>${escapeHtml(receipt.summary || 'Lifecycle memory action applied.')}</span></div>
     </div>
   `
 }
@@ -679,10 +698,10 @@ async function submitActiveAction(formData) {
     })
     const payload = await response.json()
     if (!payload.ok) {
-      throw new Error(payload.error?.message || 'Active memory action failed.')
+      throw new Error(payload.error?.message || 'Lifecycle memory action failed.')
     }
     await loadDashboard({ renderAfter: false })
-    state.activeReceipt = payload.data?.receipt || { id: activeAction.id, action: activeAction.action, summary: 'Active memory action applied.' }
+    state.activeReceipt = payload.data?.receipt || { id: activeAction.id, action: activeAction.action, summary: 'Lifecycle memory action applied.' }
     state.activeAction = null
     state.activeActionError = ''
   } catch (error) {
@@ -709,7 +728,7 @@ function renderHarvester() {
     ? panel('Harvester dry-run failed', escapeHtml(state.harvester.error), 'error')
     : result
       ? renderHarvesterResult(result)
-      : panel('Dry-run ready', 'Preview project-scope candidates without writing pending memory.', 'muted')
+      : panel('Dry-run ready', 'Preview project-scope candidates without writing manual review memory.', 'muted')
 
   return `
     <section class="page-stack">
@@ -717,7 +736,7 @@ function renderHarvester() {
       <div class="soft-panel action-panel">
         <div>
           <h3>Project harvester</h3>
-          <p>Uses the current workspace, not the selected review scope. No pending memory was written.</p>
+          <p>Uses the current workspace, not the selected memory scope. No manual review memory was written.</p>
         </div>
         <button class="soft-button primary" type="button" data-harvest-dry-run ${state.harvester.loading ? 'disabled' : ''}>
           ${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}
@@ -759,7 +778,7 @@ function renderHarvesterResult(result) {
   return `
     <div class="soft-panel">
       <h3>Dry-run result</h3>
-      <div class="soft-inset">Action: ${escapeHtml(result.action || 'preview')} · No pending memory was written.</div>
+      <div class="soft-inset">Action: ${escapeHtml(result.action || 'preview')} · No manual review memory was written.</div>
       ${reason}
       ${warnings.map((warning) => `<p class="notice warn">${escapeHtml(warning)}</p>`).join('')}
       ${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}
@@ -773,15 +792,15 @@ function renderTriage() {
     ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
     : result
       ? renderTriageResult(result)
-      : panel('Triage ready', 'Preview pending-memory cleanup and review recommendations for the selected scope.', 'muted')
+      : panel('Triage ready', 'Preview manual review cleanup and recommendations for the selected scope.', 'muted')
 
   return `
     <section class="page-stack">
-      ${sectionHeader('Triage', 'Cluster and rank pending memory for review.')}
+      ${sectionHeader('Triage', 'Cluster and rank manual review candidates.')}
       <div class="soft-panel action-panel">
         <div>
-          <h3>Pending triage</h3>
-          <p>Preview duplicate, defer, drop, and review recommendations. Safe apply only drops transient noise, merges duplicate pending items, and defers weak candidates.</p>
+          <h3>Manual review triage</h3>
+          <p>Preview duplicate, defer, drop, and review recommendations. Safe apply only drops transient noise, merges duplicate review candidates, and defers weak candidates.</p>
         </div>
         <div class="detail-actions">
           <button class="soft-button primary" type="button" data-triage-mode="dry-run" ${state.triage.loading ? 'disabled' : ''}>
@@ -881,15 +900,15 @@ function renderMemoryPrepare() {
     ? panel('Prepare failed', escapeHtml(state.prepare.error), 'error')
     : result
       ? renderMemoryPrepareResult(result)
-      : panel('Prepare ready', 'Preview or apply semantic cleanup for pending candidates in the selected scope.', 'muted')
+      : panel('Prepare ready', 'Preview or apply semantic cleanup for review candidates in the selected scope.', 'muted')
 
   return `
     <section class="page-stack">
-      ${sectionHeader('Prepare', 'Rewrite pending candidates into reviewable semantic memory shape.')}
+      ${sectionHeader('Prepare', 'Rewrite review candidates into reviewable semantic memory shape.')}
       <div class="soft-panel action-panel">
         <div>
           <h3>Semantic prepare</h3>
-          <p>Dry-run previews content replacements and boundary enrichment. Apply writes pending records and rewrite receipts; active memory is not changed.</p>
+          <p>Dry-run previews content replacements and boundary enrichment. Apply writes manual review records and rewrite receipts; lifecycle memory is not changed.</p>
         </div>
         <div class="detail-actions">
           <button class="soft-button primary" type="button" data-prepare-mode="dry-run" ${state.prepare.loading ? 'disabled' : ''}>
@@ -934,13 +953,13 @@ function renderMemoryPrepareResult(result) {
     <div class="soft-panel">
       <h3>${escapeHtml(title)}</h3>
       <div class="triage-grid">
-        ${metric('Pending', result.pendingBeforeCount ?? 0, `${result.pendingAfterCount ?? 0} after prepare`)}
+        ${metric('Manual Review', result.pendingBeforeCount ?? 0, `${result.pendingAfterCount ?? 0} after prepare`)}
         ${metric('Changed', changed, 'replace/enrich/fail actions')}
         ${metric('Receipts', receipts.length, result.dryRun ? 'preview only' : 'written')}
-        ${metric('Active', result.activeAfterCount ?? 0, `${result.activeBeforeCount ?? 0} before prepare`)}
+        ${metric('Lifecycle', result.activeAfterCount ?? 0, `${result.activeBeforeCount ?? 0} before prepare`)}
       </div>
-      <div class="soft-inset">Scope: ${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} · ${result.dryRun ? 'preview only' : 'pending updated'}</div>
-      ${results.slice(0, 8).map(renderMemoryPrepareRow).join('') || emptyState('No pending candidates needed prepare.')}
+      <div class="soft-inset">Scope: ${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} · ${result.dryRun ? 'preview only' : 'manual review updated'}</div>
+      ${results.slice(0, 8).map(renderMemoryPrepareRow).join('') || emptyState('No review candidates needed prepare.')}
     </div>
   `
 }
@@ -976,11 +995,11 @@ function renderDistillPanel() {
     ? panel('Distillation dry-run failed', escapeHtml(state.distill.error), 'error')
     : result
       ? renderDistillCandidates(result)
-      : panel('Distillation ready', 'Duplicate pending-memory preview.', 'muted')
+      : panel('Distillation ready', 'Duplicate manual review preview.', 'muted')
 
   return `
     <section class="page-stack">
-      ${sectionHeader('Distillation', 'Pending duplicate dry-run.')}
+      ${sectionHeader('Distillation', 'Manual review duplicate dry-run.')}
       <div class="soft-panel action-panel">
         <div>
           <h3>Memory distillation</h3>
@@ -1047,6 +1066,40 @@ function renderDistillCandidate(candidate) {
   `
 }
 
+function renderAutomation() {
+  const dream = state.dashboard.dream.dream || {}
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Automation', 'Scheduled lifecycle maintenance.')}
+      <div class="metric-grid">
+        ${metric('Daily 15:00', 'Trial -> Validated', 'Project lifecycle')}
+        ${metric('Weekly Sun 15:00', 'Validated -> Core', 'Core consolidation')}
+        ${metric('Manual Review', listPending().length, 'High-risk recommendations')}
+      </div>
+      <div class="soft-panel">
+        <h3>Dream status</h3>
+        <div class="soft-inset">
+          Due: ${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
+          Last run: ${escapeHtml(dream.lastDreamAt || 'never')}<br>
+          Status: ${escapeHtml(dream.lastDreamStatus || 'unknown')}
+        </div>
+      </div>
+    </section>
+  `
+}
+
+function renderTools() {
+  return `
+    <section class="page-stack">
+      ${sectionHeader('Tools', 'Maintenance tools for manual review and project signal previews.')}
+      ${renderTriage()}
+      ${renderMemoryPrepare()}
+      ${renderDistillPanel()}
+      ${renderHarvester()}
+    </section>
+  `
+}
+
 function renderDream() {
   const dream = state.dashboard.dream.dream || {}
   return `
@@ -1079,12 +1132,12 @@ function renderProfile() {
 
 function renderDetailRail() {
   const selected = selectedPending()
-  if (state.activeTab === 'inbox' && state.receipt) {
+  if ((state.activeTab === 'manual-review' || state.activeTab === 'inbox') && state.receipt) {
     detailRail.innerHTML = renderReceipt()
     bindDetailRailActions(selected)
     return
   }
-  if (state.activeTab === 'inbox' && selected) {
+  if ((state.activeTab === 'manual-review' || state.activeTab === 'inbox') && selected) {
     detailRail.innerHTML = renderPendingDetail(selected)
     bindDetailRailActions(selected)
     return
@@ -1111,8 +1164,8 @@ function renderDetailRail() {
         `).join('') || emptyState('No signals found.')}
       </div>
       <div class="soft-panel">
-        <h3>Review queue</h3>
-        <p>${escapeHtml(String(pending.length))} pending candidates in this scope</p>
+        <h3>Manual Review</h3>
+        <p>${escapeHtml(String(pending.length))} manual review candidates in this scope</p>
       </div>
     </div>
   `
@@ -1123,7 +1176,7 @@ function renderSelectionRail() {
   const selection = selectionInfo(state.dashboard)
   return `
     <div class="soft-panel">
-      <h3>Review scope</h3>
+      <h3>Memory scope</h3>
       <div class="soft-inset rail-item">
         <strong>${escapeHtml(selection.label || 'Selected memory')}</strong>
         <span>${escapeHtml(selectionMeta(selection))}</span>
@@ -1291,7 +1344,7 @@ function readinessReasonItems(readiness, activeReadiness) {
   if (Array.isArray(activeReadiness?.reasons) && activeReadiness.reasons.length > 0) {
     return activeReadiness.reasons.map((reason) => ({ code: reason, text: reason }))
   }
-  return [{ code: 'reviewable_candidate_shape', text: 'Candidate has no blocking active-memory rewrite signals.' }]
+  return [{ code: 'reviewable_candidate_shape', text: 'Candidate has no blocking lifecycle-memory rewrite signals.' }]
 }
 
 function formatReadinessReason(reason) {
@@ -1540,7 +1593,7 @@ function renderReceipt() {
         <h3>${escapeHtml(actionLabel(receipt.action || 'review'))}</h3>
         <div class="soft-inset rail-item"><strong>${escapeHtml(receipt.id || 'memory')}</strong><span>${escapeHtml(receipt.summary || 'Action completed.')}</span></div>
         <div class="soft-inset rail-item"><strong>reviewHash</strong><span>${escapeHtml(shortHash(receipt.reviewHash || ''))}</span></div>
-        <button class="soft-button compact" type="button" data-clear-receipt>Back to queue</button>
+        <button class="soft-button compact" type="button" data-clear-receipt>Back to Manual Review</button>
       </div>
     </div>
   `
@@ -1639,7 +1692,7 @@ async function submitBatchPendingReject(candidates) {
   try {
     const response = await apiFetch(`${BATCH_REJECT_ENDPOINT}${selectionQuery()}`, {
       method: 'POST',
-      body: JSON.stringify({ candidates: candidatesWithHashes, reason: 'Rejected by Codex pending memory bulk review.' })
+      body: JSON.stringify({ candidates: candidatesWithHashes, reason: 'Rejected by Codex manual review bulk review.' })
     })
     const payload = await response.json()
     if (!payload.ok) {
@@ -1703,6 +1756,19 @@ function selectedPending() {
 
 function findActiveMemoryById(id) {
   return listActive().find((memory) => memory.id === id)
+}
+
+function memoryTierLabel(memory) {
+  if (memory?.confidenceTier === 'trial') return 'Trial'
+  if (memory?.confidenceTier === 'validated') return 'Validated'
+  if (memory?.confidenceTier === 'project_core') return 'Project Core'
+  if (memory?.confidenceTier === 'global_core') return 'Global Core'
+  return 'Needs Tier Review'
+}
+
+function reviewQueueStatusLabel(status) {
+  if (status === 'pending') return 'manual review'
+  return status || 'manual review'
 }
 
 function selectedProjectOption() {

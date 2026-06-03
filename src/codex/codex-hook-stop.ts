@@ -37,6 +37,7 @@ export type CodexStopHookResult =
   | { action: 'noop'; reason: string }
   | { action: 'summary'; summaryId: string; reason: string }
   | { action: 'pending'; candidateId?: string; candidateIds?: string[]; reason: string; summaryId?: string }
+  | { action: 'trial'; candidateIds?: string[]; memoryIds: string[]; reason: string; summaryId?: string }
   | { action: 'reject'; reason: string; summaryId?: string }
   | { action: 'summary_failed'; reason: string; summaryId?: string }
 
@@ -193,6 +194,12 @@ async function handleCodexStopHookPayloadUnsafe(
     explicitResult?.action === 'pending' && explicitResult.result.action === 'pending' ? explicitResult.result : undefined
   const explicitCandidateId = explicitPending?.candidateId
   const harvestCandidateIds = harvest?.action === 'pending' ? harvest.candidateIds : []
+  const harvestTrialMemoryIds = harvest?.action === 'trial'
+    ? harvest.memoryIds
+    : harvest?.action === 'pending'
+      ? harvest.trialMemoryIds ?? []
+      : []
+  const harvestTrialCandidateIds = harvest?.action === 'trial' ? harvest.candidateIds : []
   const proposedCandidateIds = [
     ...reviewCandidateIds,
     ...(explicitCandidateId === undefined ? [] : [explicitCandidateId]),
@@ -215,6 +222,16 @@ async function handleCodexStopHookPayloadUnsafe(
         hasHarvestCandidates: confirmedHarvestCandidateIds.length > 0,
         explicitReason: confirmedExplicitCandidateId === undefined ? undefined : explicitPending?.reason
       }),
+      summaryId
+    }
+  }
+
+  if (harvestTrialMemoryIds.length > 0) {
+    return {
+      action: 'trial',
+      candidateIds: harvestTrialCandidateIds,
+      memoryIds: harvestTrialMemoryIds,
+      reason: 'Codex project memory harvest admitted trial memories.',
       summaryId
     }
   }
@@ -332,7 +349,8 @@ function visibleHookMessage(result: CodexStopHookResult): string {
   const candidateIds = 'candidateIds' in result && Array.isArray(result.candidateIds)
     ? result.candidateIds
     : 'candidateId' in result && typeof result.candidateId === 'string' ? [result.candidateId] : []
-  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder(candidateIds).length}. Review: cyrene-continuity codex memory review`
+  const memoryIds = 'memoryIds' in result && Array.isArray(result.memoryIds) ? result.memoryIds : []
+  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder(candidateIds).length}, trial=${uniqueInOrder(memoryIds).length}. Review: cyrene-continuity codex memory review`
 }
 
 async function recordStopHookFailureSummary(

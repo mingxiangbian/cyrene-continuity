@@ -9,6 +9,11 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { reviewHashForSimilarHintMemory } from '../src/codex/similar-hints-review.js'
+import {
+  readActiveMemoriesFromRoot,
+  writeActiveMemoriesFromRoot,
+  writePendingMemoriesFromRoot
+} from '../src/memory/memory-store.js'
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -149,8 +154,7 @@ async function seedCliPending(cwd: string, pending: PendingMemory | PendingMemor
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
   const values = Array.isArray(pending) ? pending : [pending]
-  await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'pending.jsonl'), values.map((item) => JSON.stringify(item)).join('\n') + '\n', 'utf8')
+  await writePendingMemoriesFromRoot(memoryRoot, values)
   return memoryRoot
 }
 
@@ -159,8 +163,7 @@ async function seedCliActiveMemory(cwd: string): Promise<{ active: CyreneMemory;
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
   const active = createActive({ id: 'cli-active-lifecycle-1' })
-  await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(active)}\n`, 'utf8')
+  await writeActiveMemoriesFromRoot(memoryRoot, [active])
   return { active, contentHash: contentHashForActiveMemory(active), memoryRoot }
 }
 
@@ -886,8 +889,7 @@ describe('cyrene-continuity codex CLI', () => {
     const repo = await createTempDir('cyrene-codex-cli-memory-db-repo-')
     const identity = await identifyCodexProject(repo)
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(projectMemoryRoot, { recursive: true })
-    await writeFile(join(projectMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+    await writeActiveMemoriesFromRoot(projectMemoryRoot, [createActive()])
 
     const result = await execFileAsync(
       process.execPath,
@@ -968,7 +970,7 @@ describe('cyrene-continuity codex CLI', () => {
       semanticMemories: 1
     })
     await expect(readFile(join(projectMemoryRoot, 'semantic_memories.jsonl'), 'utf8')).resolves.toContain('cli-project-v2-active')
-    await expect(readFile(join(projectMemoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readFile(join(projectMemoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe('')
   })
 
   it('runs v1.5 lifecycle automation commands from the CLI', async () => {
@@ -1126,13 +1128,13 @@ describe('cyrene-continuity codex CLI', () => {
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(globalMemoryRoot, { recursive: true })
     await mkdir(projectMemoryRoot, { recursive: true })
-    await writeFile(join(globalMemoryRoot, 'pending.jsonl'), `${JSON.stringify({
+    await writeFile(join(globalMemoryRoot, 'review_queue.jsonl'), `${JSON.stringify({
       ...createPending(),
       id: 'global-status-pending',
       scope: 'global' as const,
       normalizedKey: 'global-status-pending'
     })}\n`)
-    await writeFile(join(projectMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+    await writeActiveMemoriesFromRoot(projectMemoryRoot, [createActive()])
 
     const result = await execFileAsync(
       process.execPath,
@@ -1147,8 +1149,8 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('sqlite index:')
     expect(result.stdout).toContain('fallback mode:')
     expect(result.stdout).toContain('stop hook:')
-    expect(result.stdout).toContain('global pending: 1')
-    expect(result.stdout).toContain('project active: 1')
+    expect(result.stdout).toContain('global review queue: 1')
+    expect(result.stdout).toContain('project trial/validated/core memory: 1')
   })
 
   it('reports SQLite unavailable fallback in memory status without mutating the index', async () => {
@@ -1177,7 +1179,7 @@ describe('cyrene-continuity codex CLI', () => {
     const identity = await identifyCodexProject(repo)
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(projectMemoryRoot, { recursive: true })
-    await writeFile(join(projectMemoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+    await writeActiveMemoriesFromRoot(projectMemoryRoot, [createActive()])
 
     const status = await execFileAsync(
       process.execPath,
@@ -1207,12 +1209,12 @@ describe('cyrene-continuity codex CLI', () => {
     const legacyProjectId = 'legacy-project-id'
     const legacyMemoryRoot = codexProjectMemoryRoot(legacyProjectId)
     const dbPath = join(home, '.cyrene', 'codex', 'memory.db')
-    const currentSource = join(currentMemoryRoot, 'index.jsonl')
-    const legacySource = join(legacyMemoryRoot, 'pending.jsonl')
+    const currentSource = join(currentMemoryRoot, 'semantic_memories.jsonl')
+    const legacySource = join(legacyMemoryRoot, 'review_queue.jsonl')
     await mkdir(currentMemoryRoot, { recursive: true })
     await mkdir(legacyMemoryRoot, { recursive: true })
     await mkdir(join(home, '.cyrene', 'codex'), { recursive: true })
-    await writeFile(currentSource, `${JSON.stringify(createActive())}\n`)
+    await writeActiveMemoriesFromRoot(currentMemoryRoot, [createActive()])
     await writeFile(dbPath, '')
     await writeFile(legacySource, `${JSON.stringify(createPending())}\n`)
     await utimes(currentSource, new Date('2026-05-28T00:00:00.000Z'), new Date('2026-05-28T00:00:00.000Z'))
@@ -1294,7 +1296,7 @@ describe('cyrene-continuity codex CLI', () => {
       'args = ["-y", "@agentmemory/mcp"]',
       'enabled = true'
     ].join('\n'))
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive({
+    await writeActiveMemoriesFromRoot(memoryRoot, [createActive({
       id: 'dashboard-active-1',
       content: 'Dashboard should surface the strongest project memory.',
       scores: {
@@ -1304,8 +1306,8 @@ describe('cyrene-continuity codex CLI', () => {
         safety: 0.95,
         sensitivity: 0.1
       }
-    }))}\n`)
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending({
+    })])
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(createPending({
       id: 'dashboard-pending-1',
       content: 'Dashboard should show pending review.',
       lastSeenAt: '2026-05-28T00:00:00.000Z'
@@ -1344,12 +1346,12 @@ describe('cyrene-continuity codex CLI', () => {
 
     expect(result.stderr).toBe('')
     expect(result.stdout).toContain('Cyrene Memory Dashboard')
-    expect(result.stdout).toContain('active memories: 1')
-    expect(result.stdout).toContain('pending memories: 1')
+    expect(result.stdout).toContain('lifecycle memories: 1')
+    expect(result.stdout).toContain('review queue: 1')
     expect(result.stdout).toContain('rejected/tombstoned: 1')
-    expect(result.stdout).toContain('top active project memories:')
+    expect(result.stdout).toContain('top lifecycle project memories:')
     expect(result.stdout).toContain('Dashboard should surface the strongest project memory.')
-    expect(result.stdout).toContain('pending review:')
+    expect(result.stdout).toContain('manual review queue:')
     expect(result.stdout).toContain('dashboard-pending-1')
     expect(result.stdout).toContain('review summaries:')
     expect(result.stdout).toContain('Dashboard review summary.')
@@ -1410,9 +1412,9 @@ describe('cyrene-continuity codex CLI', () => {
     process.env.HOME = home
     await mkdir(codexProjectMemoryRoot('from-project'), { recursive: true })
     await mkdir(codexProjectMemoryRoot('to-project'), { recursive: true })
-    await writeFile(
-      join(codexProjectMemoryRoot('from-project'), 'index.jsonl'),
-      `${JSON.stringify(createActive({ id: 'from-active', content: 'Merged project memory.' }))}\n`
+    await writeActiveMemoriesFromRoot(
+      codexProjectMemoryRoot('from-project'),
+      [createActive({ id: 'from-active', content: 'Merged project memory.' })]
     )
 
     const result = await execFileAsync(
@@ -1431,8 +1433,8 @@ describe('cyrene-continuity codex CLI', () => {
 
     expect(result.stdout).toContain('merged from: from-project')
     expect(result.stdout).toContain('merged into: to-project')
-    await expect(readFile(join(codexProjectMemoryRoot('to-project'), 'index.jsonl'), 'utf8')).resolves.toContain(
-      'Merged project memory.'
+    await expect(readActiveMemoriesFromRoot(codexProjectMemoryRoot('to-project'))).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: 'Merged project memory.' })])
     )
   })
 
@@ -1535,7 +1537,7 @@ describe('cyrene-continuity codex CLI', () => {
       normalizedKey: 'global-pending-count-diagnostic'
     }
     await mkdir(globalMemoryRoot, { recursive: true })
-    await writeFile(join(globalMemoryRoot, 'pending.jsonl'), `${JSON.stringify(globalPending)}\n`)
+    await writeFile(join(globalMemoryRoot, 'review_queue.jsonl'), `${JSON.stringify(globalPending)}\n`)
 
     const result = await execFileAsync(
       process.execPath,
@@ -1544,8 +1546,8 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('global pending: 1')
-    expect(result.stdout).toContain('project pending: 0')
+    expect(result.stdout).toContain('global review queue: 1')
+    expect(result.stdout).toContain('project review queue: 0')
     expect(result.stdout).toContain('mcp command:')
     expect(result.stdout).toContain('npm')
     expect(result.stdout).toContain('--prefix')
@@ -1577,7 +1579,7 @@ describe('cyrene-continuity codex CLI', () => {
       normalizedKey: 'project-pending-count-diagnostic'
     }
     await mkdir(projectMemoryRoot, { recursive: true })
-    await writeFile(join(projectMemoryRoot, 'pending.jsonl'), `${JSON.stringify(projectPending)}\n`)
+    await writeFile(join(projectMemoryRoot, 'review_queue.jsonl'), `${JSON.stringify(projectPending)}\n`)
 
     const result = await execFileAsync(
       process.execPath,
@@ -1593,8 +1595,8 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('--prefix')
     expect(result.stdout).toContain(repoRoot)
     expect(result.stdout).toContain('mcp command freshness: current repo')
-    expect(result.stdout).toContain('global pending: 0')
-    expect(result.stdout).toContain('project pending: 1')
+    expect(result.stdout).toContain('global review queue: 0')
+    expect(result.stdout).toContain('project review queue: 1')
   })
 
   it('memory review lists pending candidates with review metadata', async () => {
@@ -1711,7 +1713,7 @@ describe('cyrene-continuity codex CLI', () => {
     )
     expect(JSON.parse(approve.stdout).result.action).toBe('promote')
 
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('Edited CLI pending memory.')
     expect(pending).toContain('cli-defer-1')
     expect(pending).not.toContain('cli-reject-1')
@@ -1746,7 +1748,7 @@ describe('cyrene-continuity codex CLI', () => {
 
     expect(result.stderr).toBe('')
     expect(JSON.parse(result.stdout).result.action).toBe('archive')
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
   })
 
   it('runs memory triage dry-run from the Codex CLI', async () => {
@@ -1797,7 +1799,7 @@ describe('cyrene-continuity codex CLI', () => {
       tags: ['project_decision']
     })
     const memoryRoot = await seedCliPending(repo, candidate)
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await execFileAsync(
       process.execPath,
@@ -1818,7 +1820,7 @@ describe('cyrene-continuity codex CLI', () => {
     const parsed = JSON.parse(result.stdout) as { dryRun?: boolean; results?: Array<{ action: string }> }
     expect(parsed.dryRun).toBe(true)
     expect(parsed.results).toContainEqual(expect.objectContaining({ action: 'replace_content' }))
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('runs memory distill dry-run from the CLI', async () => {
@@ -1865,7 +1867,7 @@ describe('cyrene-continuity codex CLI', () => {
       content: 'New CLI pending memory should supersede the old one.'
     })
     const memoryRoot = await seedCliPending(repo, candidate)
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(active)}\n`, 'utf8')
+    await writeActiveMemoriesFromRoot(memoryRoot, [active])
 
     const result = await execFileAsync(
       process.execPath,
@@ -1889,9 +1891,9 @@ describe('cyrene-continuity codex CLI', () => {
     const parsed = JSON.parse(result.stdout)
     expect(parsed.result.action).toBe('promote')
     expect(parsed.result.memory.supersedes).toEqual([active.id])
-    const index = await readFile(join(memoryRoot, 'index.jsonl'), 'utf8')
-    expect(index).toContain(candidate.content)
-    expect(index).not.toContain(active.content)
+    const activeAfter = await readActiveMemoriesFromRoot(memoryRoot)
+    expect(activeAfter).toEqual(expect.arrayContaining([expect.objectContaining({ content: candidate.content })]))
+    expect(activeAfter).not.toEqual(expect.arrayContaining([expect.objectContaining({ content: active.content })]))
   })
 
   it('memory approve rejects invalid normalizedKey conflict resolution values', async () => {
@@ -1936,7 +1938,7 @@ describe('cyrene-continuity codex CLI', () => {
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
     const candidate = createPending()
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(candidate)}\n`)
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(candidate)}\n`)
 
     const result = await execFileAsync(
       process.execPath,
@@ -1947,8 +1949,10 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stderr).toBe('')
     const parsed = JSON.parse(result.stdout) as { roots: Array<{ promoted: number; recommendedPromotions: number; keptPending: number }> }
     expect(parsed.roots.some((root) => root.promoted === 0 && root.recommendedPromotions === 1 && root.keptPending === 1)).toBe(true)
-    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.not.toContain(candidate.content)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: candidate.content })])
+    )
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('runs memory dream preview from the CLI without promoting pending memory', async () => {
@@ -1957,7 +1961,7 @@ describe('cyrene-continuity codex CLI', () => {
     const identity = await identifyCodexProject(process.cwd())
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending())}\n`)
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(createPending())}\n`)
 
     const result = await execFileAsync(
       process.execPath,
@@ -1972,7 +1976,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(parsed.roots.some((root) =>
       root.stage === 'deep-preview' && root.promoted === 0 && root.recommendedPromotions === 1 && root.keptPending === 1
     )).toBe(true)
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
     await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain('cli-dream-promotes-pending')
   })
 
@@ -1982,7 +1986,7 @@ describe('cyrene-continuity codex CLI', () => {
     const identity = await identifyCodexProject(process.cwd())
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending())}\n`)
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(createPending())}\n`)
 
     await execFileAsync(
       process.execPath,
@@ -2008,8 +2012,8 @@ describe('cyrene-continuity codex CLI', () => {
     const identity = await identifyCodexProject(process.cwd())
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending())}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [createActive()])
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(createPending())}\n`)
 
     const result = await execFileAsync(
       process.execPath,
@@ -2021,7 +2025,7 @@ describe('cyrene-continuity codex CLI', () => {
     const parsed = JSON.parse(result.stdout) as { roots: Array<{ maintenance: { activeCount: number; pendingCount: number }; promoted?: number }> }
     expect(parsed.roots.some((root) => root.maintenance.activeCount === 1 && root.maintenance.pendingCount === 1)).toBe(true)
     expect(parsed.roots.every((root) => root.promoted === undefined || root.promoted === 0)).toBe(true)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('CLI dream promotes repeated pending memory.')
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain('CLI dream promotes repeated pending memory.')
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('CLI maintenance renders active memory into the model profile.')
   })
 
@@ -2031,7 +2035,7 @@ describe('cyrene-continuity codex CLI', () => {
     const identity = await identifyCodexProject(process.cwd())
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [createActive()])
 
     const reflect = await execFileAsync(
       process.execPath,
@@ -2071,8 +2075,7 @@ describe('cyrene-continuity codex CLI', () => {
     const identity = await identifyCodexProject(process.cwd())
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     const memory = createActive()
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(memory)}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [memory])
 
     const explain = await execFileAsync(
       process.execPath,
@@ -2103,7 +2106,9 @@ describe('cyrene-continuity codex CLI', () => {
 
     expect(mark.stderr).toBe('')
     expect(JSON.parse(mark.stdout)).toMatchObject({ action: 'mark_transferable', memoryId: memory.id })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain('"portability":"similar_project"')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: memory.id, portability: 'similar_project' })])
+    )
   })
 
   it('runs the similar hints eval check from the Codex CLI', async () => {

@@ -8,6 +8,7 @@ import { buildDreamProposalForRoot } from '../src/codex/dream-proposal.js'
 import { runCodexMemoryDream, testOnlyDreamLock, testOnlyDreamRuntime } from '../src/codex/memory-dream.js'
 import { readCodexMemoryDreamState } from '../src/codex/memory-dream-state.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -29,22 +30,21 @@ async function seedProjectPending(cwd: string, pending: PendingMemory[]): Promis
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
   await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'pending.jsonl'), pending.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writeFile(join(memoryRoot, 'review_queue.jsonl'), pending.map((item) => JSON.stringify(item)).join('\n') + '\n')
   return realpath(memoryRoot)
 }
 
 async function seedProjectActive(cwd: string, active: CyreneMemory[]): Promise<string> {
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-  await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'index.jsonl'), active.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writeActiveMemoriesFromRoot(memoryRoot, active)
   return realpath(memoryRoot)
 }
 
 async function seedGlobalPending(pending: PendingMemory[]): Promise<string> {
   const memoryRoot = codexGlobalMemoryRoot()
   await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'pending.jsonl'), pending.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writeFile(join(memoryRoot, 'review_queue.jsonl'), pending.map((item) => JSON.stringify(item)).join('\n') + '\n')
   return realpath(memoryRoot)
 }
 
@@ -159,8 +159,8 @@ describe('Codex memory dream runtime', () => {
       promoted: 0,
       rejected: 0
     })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
     expect(pending).toHaveLength(1)
     expect(pending[0]?.seenCount).toBe(2)
     const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
@@ -191,11 +191,11 @@ describe('Codex memory dream runtime', () => {
     await delay(50)
     expect(settled).toBe(false)
 
-    await writeFile(join(memoryRoot, 'pending.jsonl'), [first, second].map((item) => JSON.stringify(item)).join('\n') + '\n')
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), [first, second].map((item) => JSON.stringify(item)).join('\n') + '\n')
     await rm(lockDir, { recursive: true, force: true })
     await dream
 
-    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
     expect(pending).toHaveLength(1)
     expect(pending[0]?.seenCount).toBe(2)
     expect(pending[0]?.evidence.map((item) => item.runId)).toEqual(['run-1', 'run-2'])
@@ -216,7 +216,7 @@ describe('Codex memory dream runtime', () => {
 
     await runCodexMemoryDream({ cwd, stage: 'rem', now: '2026-05-26T00:00:00.000Z' })
 
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
     const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -257,7 +257,7 @@ describe('Codex memory dream runtime', () => {
     await delay(50)
     expect(settled).toBe(false)
 
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(second)}\n`)
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(second)}\n`)
     await rm(lockDir, { recursive: true, force: true })
     await dream
 
@@ -301,8 +301,8 @@ describe('Codex memory dream runtime', () => {
     expect(proposal.applyPlan).toEqual([
       expect.objectContaining({ action: 'keep_pending', candidate: expect.objectContaining({ id: candidate.id }) })
     ])
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('builds an empty proposal for a missing root without creating it', async () => {
@@ -387,7 +387,7 @@ describe('Codex memory dream runtime', () => {
       ]
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-preview', now: '2026-05-26T00:00:00.000Z' })
 
@@ -415,11 +415,11 @@ describe('Codex memory dream runtime', () => {
     expect(diff.keepPendingCandidateIds).toEqual([candidate.id])
     const evalResults = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'eval_results.json'), 'utf8')) as { passed: boolean }
     expect(evalResults.passed).toBe(true)
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
     await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'dream-state.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('deep-preview records eval gate failures without rejecting diagnostic affective pending memory', async () => {
@@ -452,7 +452,7 @@ describe('Codex memory dream runtime', () => {
     expect(evalResults.passed).toBe(false)
     expect(evalResults.failedChecks).toContain('affective_boundary_eval')
     await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('deep-apply recommends repeated independent procedural memory without promoting it', async () => {
@@ -477,8 +477,10 @@ describe('Codex memory dream runtime', () => {
       rejected: 0,
       keptPending: 1
     })
-    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.not.toContain(candidate.content)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: candidate.content })])
+    )
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
     await expect(readOptionalText(join(memoryRoot, 'events.jsonl'))).resolves.not.toContain('"action":"promote"')
     await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain('recommend_promote')
     await expect(readdir(join(memoryRoot, 'snapshots'))).resolves.toHaveLength(1)
@@ -515,8 +517,8 @@ describe('Codex memory dream runtime', () => {
       recommendedPromotions: 1,
       keptPending: 1
     })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(recommended.content)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.not.toContain(newer.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(recommended.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.not.toContain(newer.content)
   })
 
   it('deep-apply keeps promotable pending memory when promotion recommendations are disabled', async () => {
@@ -547,7 +549,7 @@ describe('Codex memory dream runtime', () => {
       action: 'keep_pending',
       reason: 'Promotion recommendations are disabled by configuration'
     })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('deep-apply keeps insufficient evidence pending', async () => {
@@ -560,8 +562,8 @@ describe('Codex memory dream runtime', () => {
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, keptPending: 1 })
-    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('deep-apply does not promote same-run duplicate evidence even with different evidence groups', async () => {
@@ -580,8 +582,8 @@ describe('Codex memory dream runtime', () => {
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0 })
-    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('deep-apply keeps assistant-derived candidates pending instead of promoting them', async () => {
@@ -601,8 +603,8 @@ describe('Codex memory dream runtime', () => {
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, rejected: 0, keptPending: 1 })
-    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('deep-apply blocks diagnostic affective claims without mutating memory source files', async () => {
@@ -643,8 +645,8 @@ describe('Codex memory dream runtime', () => {
       keptPending: 1,
       skipped: expect.stringContaining('eval gate')
     })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
     await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readCodexMemoryDreamState(memoryRoot)).resolves.toMatchObject({
       dreamDue: true,
@@ -676,7 +678,7 @@ describe('Codex memory dream runtime', () => {
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, rejected: 1, keptPending: 0 })
-    expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
+    expect((await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).trim()).toBe('')
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'rejected' })
   })
@@ -715,13 +717,13 @@ describe('Codex memory dream runtime', () => {
     const memoryRoot = await seedProjectPending(cwd, [rejected, kept])
     const proposal = await buildDreamProposalForRoot({ memoryRoot, now: '2026-05-26T00:00:00.000Z' })
     await writeFile(
-      join(memoryRoot, 'pending.jsonl'),
+      join(memoryRoot, 'review_queue.jsonl'),
       [rejected, kept, addedAfterProposal].map((item) => JSON.stringify(item)).join('\n') + '\n'
     )
 
     await testOnlyDreamRuntime.applyProposal(memoryRoot, proposal, '2026-05-26T00:00:00.000Z')
 
-    const pendingText = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingText = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pendingText).not.toContain(rejected.content)
     expect(pendingText).toContain(kept.content)
     expect(pendingText).toContain(addedAfterProposal.content)
@@ -744,8 +746,8 @@ describe('Codex memory dream runtime', () => {
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 0, rejected: 1, keptPending: 0 })
-    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.toBe('')
-    expect((await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).trim()).toBe('')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
+    expect((await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).trim()).toBe('')
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({ normalizedKey: candidate.normalizedKey, reason: 'expired' })
   })
@@ -767,7 +769,7 @@ describe('Codex memory dream runtime', () => {
       rejected: 0,
       maintenance: expect.objectContaining({ expired: 1, activeCount: 0 })
     })
-    expect(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).toBe('')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({ normalizedKey: expired.normalizedKey, reason: 'expired' })
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('# Cyrene Model Profile')
@@ -807,7 +809,7 @@ describe('Codex memory dream runtime', () => {
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:01:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)?.skipped).toMatch(/dream lock/)
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
   })
 
   it('deep-apply replaces a stale dream lock without owner metadata', async () => {
@@ -886,7 +888,7 @@ describe('Codex memory dream runtime', () => {
       ]
     })
     const memoryRoot = await seedProjectPending(cwd, [candidate])
-    const pendingBefore = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pendingBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
@@ -897,7 +899,7 @@ describe('Codex memory dream runtime', () => {
       keptPending: 1,
       skipped: expect.stringContaining('disabled')
     })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
     await expect(readFile(join(memoryRoot, 'dream-state.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
@@ -941,7 +943,9 @@ describe('Codex memory dream runtime', () => {
     const result = await runCodexMemoryDream({ cwd, stage: 'deep-apply', now: '2026-05-26T00:00:00.000Z' })
 
     expect(result.roots.find((root) => root.memoryRoot === memoryRoot)).toMatchObject({ promoted: 0, recommendedPromotions: 1 })
-    await expect(readOptionalText(join(memoryRoot, 'index.jsonl'))).resolves.not.toContain(candidate.content)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: candidate.content })])
+    )
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 })

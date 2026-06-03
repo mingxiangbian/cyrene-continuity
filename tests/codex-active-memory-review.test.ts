@@ -13,6 +13,7 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { renderMemoryProjectionsFromRoot } from '../src/memory/memory-exporter.js'
+import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -88,14 +89,14 @@ async function seed(cwd: string, memories: CyreneMemory[]): Promise<string> {
   const project = await identifyCodexProject(cwd)
   const root = codexProjectMemoryRoot(project.projectId)
   await mkdir(root, { recursive: true })
-  await writeFile(join(root, 'index.jsonl'), jsonlText(memories), 'utf8')
+  await writeActiveMemoriesFromRoot(root, memories)
   return realpath(root)
 }
 
 async function seedGlobal(memories: CyreneMemory[]): Promise<string> {
   const root = codexGlobalMemoryRoot()
   await mkdir(root, { recursive: true })
-  await writeFile(join(root, 'index.jsonl'), jsonlText(memories), 'utf8')
+  await writeActiveMemoriesFromRoot(root, memories)
   return realpath(root)
 }
 
@@ -131,7 +132,8 @@ describe('Codex active memory lifecycle', () => {
 
     expect(result.result.action).toBe('archive')
     expect(result.memoryRoot).toBe(root)
-    expect(await readFile(join(root, 'index.jsonl'), 'utf8')).toBe('')
+    await expect(readActiveMemoriesFromRoot(root)).resolves.toEqual([])
+    await expect(readFile(join(root, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(root, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.not.toContain(memory.content)
     const events = jsonl<MemoryEvent>(await readFile(join(root, 'events.jsonl'), 'utf8'))
@@ -173,8 +175,10 @@ describe('Codex active memory lifecycle', () => {
 
     expect(result.result.action).toBe('archive')
     expect(result.memoryRoot).toBe(globalRoot)
-    expect(await readFile(join(globalRoot, 'index.jsonl'), 'utf8')).toBe('')
-    expect(await readFile(join(projectRoot, 'index.jsonl'), 'utf8')).toContain(projectMemory.content)
+    await expect(readActiveMemoriesFromRoot(globalRoot)).resolves.toEqual([])
+    await expect(readActiveMemoriesFromRoot(projectRoot)).resolves.toEqual([
+      expect.objectContaining({ id: projectMemory.id, content: projectMemory.content })
+    ])
   })
 
   it('tombstones active memory with an expiring block', async () => {
@@ -260,7 +264,7 @@ describe('Codex active memory lifecycle', () => {
     const memory = active({ candidateKind: 'project_decision' })
     const existing = pending({ id: 'existing-same-key' })
     const root = await seed(cwd, [memory])
-    await writeFile(join(root, 'pending.jsonl'), jsonlText([existing]), 'utf8')
+    await writeFile(join(root, 'review_queue.jsonl'), jsonlText([existing]), 'utf8')
 
     const result = await proposeEditCodexActiveMemory({
       cwd,
@@ -272,7 +276,7 @@ describe('Codex active memory lifecycle', () => {
     })
 
     expect(result.result.action).toBe('propose_edit')
-    const pendingMemories = jsonl<PendingMemory>(await readFile(join(root, 'pending.jsonl'), 'utf8'))
+    const pendingMemories = jsonl<PendingMemory>(await readFile(join(root, 'review_queue.jsonl'), 'utf8'))
     expect(pendingMemories).toHaveLength(2)
     expect(pendingMemories[0]).toMatchObject({ id: existing.id, content: existing.content })
     expect(pendingMemories[1]).toMatchObject({
@@ -280,7 +284,7 @@ describe('Codex active memory lifecycle', () => {
       normalizedKey: memory.normalizedKey,
       candidateKind: 'project_decision',
       source: memory.source,
-      evidence: memory.evidence,
+      evidence: [{ summary: 'Seed active memory.' }],
       conflictsWith: [memory.id]
     })
     if (result.result.action !== 'propose_edit') throw new Error('expected propose_edit')
@@ -314,10 +318,10 @@ describe('Codex active memory lifecycle', () => {
     })
 
     expect(result.result.action).toBe('supersede')
-    const activeLines = jsonl<CyreneMemory>(await readFile(join(root, 'index.jsonl'), 'utf8'))
+    const activeLines = await readActiveMemoriesFromRoot(root)
     expect(activeLines.map((item) => item.content)).toEqual(['Replacement active memory.'])
     expect(activeLines[0]?.supersedes).toEqual([memory.id])
-    expect(await readFile(join(root, 'pending.jsonl'), 'utf8')).toBe('')
+    expect(await readFile(join(root, 'review_queue.jsonl'), 'utf8')).toBe('')
     const tombstones = jsonl<MemoryTombstone>(await readFile(join(root, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({
       memoryId: memory.id,
@@ -346,7 +350,7 @@ describe('Codex active memory lifecycle', () => {
       conflictsWith: ['some-other-memory']
     })
     const root = await seed(cwd, [memory])
-    await writeFile(join(root, 'pending.jsonl'), jsonlText([replacement]), 'utf8')
+    await writeFile(join(root, 'review_queue.jsonl'), jsonlText([replacement]), 'utf8')
 
     const result = await supersedeCodexActiveMemory({
       cwd,
@@ -362,8 +366,10 @@ describe('Codex active memory lifecycle', () => {
       action: 'conflict',
       reason: 'Pending replacement is not linked to the active memory'
     })
-    expect(await readFile(join(root, 'index.jsonl'), 'utf8')).toContain(memory.content)
-    expect(await readFile(join(root, 'pending.jsonl'), 'utf8')).toContain(replacement.content)
+    await expect(readActiveMemoriesFromRoot(root)).resolves.toEqual([
+      expect.objectContaining({ id: memory.id, content: memory.content })
+    ])
+    expect(await readFile(join(root, 'review_queue.jsonl'), 'utf8')).toContain(replacement.content)
   })
 
   it('rejects supersede when the replacement normalized key conflicts with another active memory', async () => {
@@ -383,7 +389,7 @@ describe('Codex active memory lifecycle', () => {
       conflictsWith: [memory.id]
     })
     const root = await seed(cwd, [memory, other])
-    await writeFile(join(root, 'pending.jsonl'), jsonlText([replacement]), 'utf8')
+    await writeFile(join(root, 'review_queue.jsonl'), jsonlText([replacement]), 'utf8')
 
     const result = await supersedeCodexActiveMemory({
       cwd,
@@ -399,11 +405,10 @@ describe('Codex active memory lifecycle', () => {
       action: 'conflict',
       reason: 'Replacement normalizedKey conflicts with another active memory'
     })
-    const activeLines = await readFile(join(root, 'index.jsonl'), 'utf8')
-    expect(activeLines).toContain(memory.content)
-    expect(activeLines).toContain(other.content)
-    expect(activeLines).not.toContain(replacement.content)
-    expect(await readFile(join(root, 'pending.jsonl'), 'utf8')).toContain(replacement.content)
+    const activeLines = await readActiveMemoriesFromRoot(root)
+    expect(activeLines.map((item) => item.content)).toEqual(expect.arrayContaining([memory.content, other.content]))
+    expect(activeLines.map((item) => item.content)).not.toContain(replacement.content)
+    expect(await readFile(join(root, 'review_queue.jsonl'), 'utf8')).toContain(replacement.content)
   })
 
   it('returns conflict and does not mutate when the active content hash is stale', async () => {
@@ -423,7 +428,9 @@ describe('Codex active memory lifecycle', () => {
     })
 
     expect(result.result.action).toBe('conflict')
-    expect(await readFile(join(root, 'index.jsonl'), 'utf8')).toContain(changed.content)
+    await expect(readActiveMemoriesFromRoot(root)).resolves.toEqual([
+      expect.objectContaining({ id: changed.id, content: changed.content })
+    ])
     await expect(readFile(join(root, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -439,7 +446,7 @@ describe('Codex active memory lifecycle', () => {
       normalizedKey: memory.normalizedKey,
       conflictsWith: [memory.id]
     })
-    await writeFile(join(root, 'pending.jsonl'), jsonlText([unsafe]), 'utf8')
+    await writeFile(join(root, 'review_queue.jsonl'), jsonlText([unsafe]), 'utf8')
 
     const result = await supersedeCodexActiveMemory({
       cwd,
@@ -456,8 +463,10 @@ describe('Codex active memory lifecycle', () => {
       candidateId: unsafe.id,
       reason: 'Affective memory cannot contain diagnostic claims'
     })
-    expect(await readFile(join(root, 'index.jsonl'), 'utf8')).toContain(memory.content)
-    expect(await readFile(join(root, 'pending.jsonl'), 'utf8')).toContain(unsafe.content)
+    await expect(readActiveMemoriesFromRoot(root)).resolves.toEqual([
+      expect.objectContaining({ id: memory.id, content: memory.content })
+    ])
+    expect(await readFile(join(root, 'review_queue.jsonl'), 'utf8')).toContain(unsafe.content)
     await expect(readFile(join(root, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

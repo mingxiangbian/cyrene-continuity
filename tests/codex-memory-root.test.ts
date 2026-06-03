@@ -41,7 +41,7 @@ describe('Codex memory root', () => {
 
   it('reads active memories from an explicit memory root', async () => {
     const root = await createTempDir('cyrene-codex-memory-root-')
-    await writeFile(join(root, 'index.jsonl'), JSON.stringify(createMemory()) + '\n')
+    await writeActiveMemoriesFromRoot(root, [createMemory()])
 
     await expect(readActiveMemoriesFromRoot(root)).resolves.toMatchObject([
       {
@@ -58,14 +58,14 @@ describe('Codex memory root', () => {
     await symlink(join(outside, 'memory'), join(parent, 'memory'))
 
     await expect(readActiveMemoriesFromRoot(join(parent, 'memory'))).rejects.toThrow(/memory symlink/)
-    await expect(readFile(join(outside, 'memory', 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(outside, 'memory', 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('refuses to read active memories through symlinked memory data files', async () => {
     const root = await createTempDir('cyrene-codex-memory-root-')
     const outside = await createTempDir('cyrene-codex-memory-outside-')
-    await writeFile(join(outside, 'index.jsonl'), JSON.stringify(createMemory()) + '\n')
-    await symlink(join(outside, 'index.jsonl'), join(root, 'index.jsonl'))
+    await writeFile(join(outside, 'semantic_memories.jsonl'), JSON.stringify(createMemory()) + '\n')
+    await symlink(join(outside, 'semantic_memories.jsonl'), join(root, 'semantic_memories.jsonl'))
 
     await expect(readActiveMemoriesFromRoot(root)).rejects.toThrow(/memory data file symlink/)
   })
@@ -73,12 +73,12 @@ describe('Codex memory root', () => {
   it('refuses to write active memories through symlinked memory data files', async () => {
     const root = await createTempDir('cyrene-codex-memory-root-')
     const outside = await createTempDir('cyrene-codex-memory-outside-')
-    const outsideIndex = join(outside, 'index.jsonl')
-    await writeFile(outsideIndex, 'outside target must stay unchanged\n')
-    await symlink(outsideIndex, join(root, 'index.jsonl'))
+    const outsideSemantic = join(outside, 'semantic_memories.jsonl')
+    await writeFile(outsideSemantic, 'outside target must stay unchanged\n')
+    await symlink(outsideSemantic, join(root, 'semantic_memories.jsonl'))
 
     await expect(writeActiveMemoriesFromRoot(root, [createMemory()])).rejects.toThrow(/memory data file symlink/)
-    await expect(readFile(outsideIndex, 'utf8')).resolves.toBe('outside target must stay unchanged\n')
+    await expect(readFile(outsideSemantic, 'utf8')).resolves.toBe('outside target must stay unchanged\n')
   })
 
   it('refuses to create Codex memory under a symlinked project root', async () => {
@@ -90,7 +90,7 @@ describe('Codex memory root', () => {
 
     await expect(ensureCodexProjectMemoryRoot('project-1')).rejects.toThrow(/memory symlink/)
     await expect(lstat(join(outside, 'memory'))).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(outside, 'memory', 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(outside, 'memory', 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(outside, 'memory', 'MEMORY.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

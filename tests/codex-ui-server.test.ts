@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { startCodexUiServer, type CodexUiServer } from '../src/codex/codex-ui-server.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -80,8 +81,7 @@ function createActiveMemory(id: string, content: string, scope: CyreneMemory['sc
 }
 
 async function seedActiveMemoryRoot(memoryRoot: string, memories: CyreneMemory[]): Promise<void> {
-  await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'index.jsonl'), memories.map((memory) => JSON.stringify(memory)).join('\n') + '\n')
+  await writeActiveMemoriesFromRoot(memoryRoot, memories)
 }
 
 describe('startCodexUiServer', () => {

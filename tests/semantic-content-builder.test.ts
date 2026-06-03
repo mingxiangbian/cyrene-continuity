@@ -7,9 +7,9 @@ const WORKFLOW_OUTPUT =
   'Pending-memory rejection workflows must validate each candidate review hash before mutation and verify the queue state after rejection.'
 
 const PITFALL_INPUT =
-  'pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 pending.jsonl 直接读取 pending review，而非依赖缓存推导。'
+  'pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 review_queue.jsonl 直接读取 pending review，而非依赖缓存推导。'
 const PITFALL_OUTPUT =
-  'Pending-review hashes must be read from canonical pending.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.'
+  'Pending-review hashes must be read from review_queue.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.'
 
 function expectNoGenericBoundaryText(result: ReturnType<typeof shapePendingCandidateContent>): void {
   const text = [...result.useWhen, ...result.doNotUseWhen, ...result.reasons].join('\n')

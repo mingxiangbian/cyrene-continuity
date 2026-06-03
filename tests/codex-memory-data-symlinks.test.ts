@@ -16,6 +16,7 @@ import {
   listMemorySnapshots,
   restoreMemorySnapshot
 } from '../src/memory/memory-snapshot.js'
+import { writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -36,8 +37,7 @@ async function createTempDir(prefix: string): Promise<string> {
 async function seedProjectActive(cwd: string, active: CyreneMemory[]): Promise<string> {
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-  await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'index.jsonl'), active.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writeActiveMemoriesFromRoot(memoryRoot, active)
   return realpath(memoryRoot)
 }
 

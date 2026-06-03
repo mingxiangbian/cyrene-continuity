@@ -118,7 +118,7 @@ describe('Codex UI static assets', () => {
     expect(html).toContain('class="sidebar"')
     expect(html).toContain('class="main-shell"')
     expect(html).toContain('class="detail-rail"')
-    expect(getCodexUiStaticAsset('/app.js')?.body).toContain('Write actions require confirmation and review hash')
+    expect(getCodexUiStaticAsset('/app.js')?.body).toContain('Manual review actions require confirmation and review hash')
     expect(getCodexUiStaticAsset('/styles.css')?.body).toContain('--coral: #cc785c')
     expect(getCodexUiStaticAsset('/styles.css')?.body).toContain('--canvas: #f4efe7')
   })

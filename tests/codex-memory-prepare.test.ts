@@ -86,7 +86,7 @@ describe('runCodexMemoryPrepare', () => {
   it('returns prepared records in dry-run without writing pending or receipts', async () => {
     const memoryRoot = await createTempDir('cyrene-memory-prepare-dry-run-')
     await writePendingMemoriesFromRoot(memoryRoot, [createPending()])
-    const beforePendingFile = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const beforePendingFile = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await runCodexMemoryPrepare({ memoryRoot, dryRun: true, now: NOW })
 
@@ -96,7 +96,7 @@ describe('runCodexMemoryPrepare', () => {
     expect(result.nextPending[0]?.content).toBe(
       'Admission-gate memory work should coordinate independent tasks through subagent-driven execution in an isolated worktree.'
     )
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toBe(beforePendingFile)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(beforePendingFile)
     await expect(readSemanticRewriteReceiptsFromRoot(memoryRoot)).resolves.toEqual([])
   })
 

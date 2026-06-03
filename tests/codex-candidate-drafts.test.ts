@@ -106,7 +106,7 @@ describe('Candidate draft store', () => {
         domain: 'procedural',
         type: 'procedural_rule',
         candidateKind: 'workflow_rule',
-        content: 'Pending review hash conflicts should be diagnosed from pending.jsonl.',
+        content: 'Pending review hash conflicts should be diagnosed from review_queue.jsonl.',
         evidence: [
           {
             sourceKind: 'file',

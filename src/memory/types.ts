@@ -428,6 +428,8 @@ export interface CyreneMemory {
   }
   userConfirmed?: boolean
   profileVisibility?: MemoryProfileVisibility
+  confidenceTier?: ConfidenceTier
+  activationPolicy?: ActivationPolicy
   candidateKind?: MemoryCandidateKind
   candidate_kind?: MemoryCandidateKind
   normalizedKeyConflictResolution?: 'keep_both'

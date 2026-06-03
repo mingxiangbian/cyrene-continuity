@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile as fsWriteFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -17,7 +17,12 @@ import {
 } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { renderMemoryProjectionsFromRoot } from '../src/memory/memory-exporter.js'
-import { appendSemanticRewriteReceiptFromRoot } from '../src/memory/memory-store.js'
+import {
+  appendSemanticRewriteReceiptFromRoot,
+  readActiveMemoriesFromRoot,
+  writeActiveMemoriesFromRoot,
+  writePendingMemoriesFromRoot
+} from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -35,18 +40,33 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir
 }
 
+async function writeFile(filePath: string, data: string | Uint8Array, options?: BufferEncoding): Promise<void> {
+  if (filePath.endsWith('/index.jsonl')) {
+    await writeActiveMemoriesFromRoot(filePath.slice(0, -'/index.jsonl'.length), parseJsonLines<CyreneMemory>(String(data)))
+    return
+  }
+  if (filePath.endsWith('/review_queue.jsonl')) {
+    await writePendingMemoriesFromRoot(
+      filePath.slice(0, -'/review_queue.jsonl'.length),
+      parseJsonLines<PendingMemory>(String(data))
+    )
+    return
+  }
+  await fsWriteFile(filePath, data, options)
+}
+
 async function seedPending(cwd: string, pending: PendingMemory[]): Promise<string> {
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
   await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'pending.jsonl'), pending.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writePendingMemoriesFromRoot(memoryRoot, pending)
   return memoryRoot
 }
 
 async function seedGlobalPending(pending: PendingMemory[]): Promise<string> {
   const memoryRoot = codexGlobalMemoryRoot()
   await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'pending.jsonl'), pending.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writePendingMemoriesFromRoot(memoryRoot, pending)
   return realpath(memoryRoot)
 }
 
@@ -113,7 +133,7 @@ function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
 }
 
 async function seedActive(memoryRoot: string, active: CyreneMemory[]): Promise<void> {
-  await writeFile(join(memoryRoot, 'index.jsonl'), active.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writeActiveMemoriesFromRoot(memoryRoot, active)
 }
 
 describe('Codex pending memory review', () => {
@@ -519,7 +539,9 @@ describe('Codex pending memory review', () => {
 
     expect(result.result.action).toBe('promote')
     expect(result.memoryRoot).toBe(globalRoot)
-    expect(await readFile(join(globalRoot, 'index.jsonl'), 'utf8')).toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(globalRoot)).resolves.toEqual([
+      expect.objectContaining({ id: candidate.id, content: candidate.content })
+    ])
     await expect(readFile(join(projectRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -566,10 +588,10 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('promote')
-    const index = await readFile(join(memoryRoot, 'index.jsonl'), 'utf8')
-    expect(index).toContain(candidate.content)
-    expect(index).toContain('"userConfirmed":true')
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({ id: candidate.id, content: candidate.content, userConfirmed: true })
+    ])
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending.trim()).toBe('')
     const events = await readFile(join(memoryRoot, 'events.jsonl'), 'utf8')
     expect(parseJsonLines<MemoryEvent>(events)).toEqual([
@@ -616,7 +638,7 @@ describe('Codex pending memory review', () => {
       reason: 'Open question memory candidates cannot become active'
     })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('requires rewrite before promoting implementation notes as active memory', async () => {
@@ -652,7 +674,7 @@ describe('Codex pending memory review', () => {
       })
     })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('requires structured review before promoting candidates missing evidence and source of truth', async () => {
@@ -687,7 +709,7 @@ describe('Codex pending memory review', () => {
       reviewHash: reviewHashForPendingMemory(candidate)
     })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -720,7 +742,7 @@ describe('Codex pending memory review', () => {
       reviewHash: reviewHashForPendingMemory(candidate)
     })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('requires rewrite before promoting raw file rule excerpts even with explicit source truth', async () => {
@@ -756,7 +778,7 @@ describe('Codex pending memory review', () => {
       reviewHash: reviewHashForPendingMemory(candidate)
     })
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('requires explicit resolution before promoting a normalizedKey conflict', async () => {
@@ -796,8 +818,10 @@ describe('Codex pending memory review', () => {
       ],
       resolutionOptions: ['supersede', 'keep_both', 'reject_new']
     })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(active.content)
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({ id: active.id, content: active.content })
+    ])
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
     await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
@@ -831,7 +855,7 @@ describe('Codex pending memory review', () => {
     expect(result.result.action).toBe('promote')
     if (result.result.action !== 'promote') throw new Error('expected promote')
     expect(result.result.memory.supersedes).toEqual([active.id])
-    const index = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    const index = await readActiveMemoriesFromRoot(memoryRoot)
     expect(index.map((memory) => memory.id)).toEqual([candidate.id])
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones).toEqual([
@@ -883,8 +907,8 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('promote')
-    const index = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
-    expect(index.map((memory) => memory.id)).toEqual([active.id, candidate.id])
+    const index = await readActiveMemoriesFromRoot(memoryRoot)
+    expect(index.map((memory) => memory.id).sort()).toEqual([active.id, candidate.id].sort())
     expect(index.map((memory) => memory.normalizedKeyConflictResolution)).toEqual(['keep_both', 'keep_both'])
     const events = parseJsonLines<MemoryEvent>(await readFile(join(memoryRoot, 'events.jsonl'), 'utf8'))
     expect(events).toEqual(expect.arrayContaining([
@@ -930,8 +954,10 @@ describe('Codex pending memory review', () => {
       candidateId: candidate.id,
       reviewHash: reviewHashForPendingMemory(candidate)
     })
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(active.content)
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({ id: active.id, content: active.content })
+    ])
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending.trim()).toBe('')
     const tombstones = parseJsonLines<MemoryTombstone>(await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones).toEqual([
@@ -1016,7 +1042,7 @@ describe('Codex pending memory review', () => {
       scope: 'project',
       userConfirmed: true
     })
-    const index = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    const index = await readActiveMemoriesFromRoot(memoryRoot)
     expect(index[0]).toMatchObject({
       id: candidate.id,
       strength: 'soft',
@@ -1041,7 +1067,7 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('reject')
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending.trim()).toBe('')
     const tombstones = await readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')
     expect(parseJsonLines<MemoryTombstone>(tombstones)).toEqual([
@@ -1077,7 +1103,7 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('edit')
-    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
     expect(pending[0]).toMatchObject({
       id: candidate.id,
       content: 'Use Codex chat approval and review hash before promoting pending memory.',
@@ -1113,7 +1139,7 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('edit')
-    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
     expect(pending).toHaveLength(1)
     expect(pending[0]).toMatchObject({
       id: candidate.id,
@@ -1144,7 +1170,7 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('defer')
-    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8'))
     expect(pending[0]).toMatchObject({
       id: candidate.id,
       promoteAfter: '2026-06-08T02:00:00.000Z'
@@ -1172,7 +1198,7 @@ describe('Codex pending memory review', () => {
 
     expect(edit.result.action).toBe('conflict')
     expect(defer.result.action).toBe('conflict')
-    expect(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).toContain(candidate.content)
+    expect(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).toContain(candidate.content)
   })
 
   it('does not edit pending memory when validator rejects the edited candidate', async () => {
@@ -1191,7 +1217,7 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('rejected_by_validator')
-    expect(await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).toContain(candidate.content)
+    expect(await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).toContain(candidate.content)
   })
 
   it('returns conflict and does not mutate files when review hash is stale', async () => {
@@ -1210,7 +1236,7 @@ describe('Codex pending memory review', () => {
 
     expect(result.result.action).toBe('conflict')
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain(candidate.content)
   })
 
@@ -1235,7 +1261,7 @@ describe('Codex pending memory review', () => {
 
     expect(result.result.action).toBe('conflict')
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain(changedCandidate.content)
   })
 
@@ -1265,12 +1291,12 @@ describe('Codex pending memory review', () => {
 
     try {
       await delay(30)
-      await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(changedCandidate)}\n`, 'utf8')
+      await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(changedCandidate)}\n`, 'utf8')
       await rm(lockPath, { recursive: true, force: true })
       const result = await pendingReject
 
       expect(result.result.action).toBe('conflict')
-      const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+      const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
       expect(pending).toContain(changedCandidate.content)
       await expect(readFile(join(memoryRoot, 'tombstones.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
@@ -1312,7 +1338,7 @@ describe('Codex pending memory review', () => {
 
     expect(result.result.action).toBe('rejected_by_validator')
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain(candidate.content)
   })
 
@@ -1363,7 +1389,7 @@ describe('Codex pending memory review', () => {
     const outsideMemory = join(outsideProject, 'memory')
     const candidate = createPending()
     await mkdir(outsideMemory, { recursive: true })
-    await writeFile(join(outsideMemory, 'pending.jsonl'), `${JSON.stringify(candidate)}\n`, 'utf8')
+    await writeFile(join(outsideMemory, 'review_queue.jsonl'), `${JSON.stringify(candidate)}\n`, 'utf8')
     await mkdir(join(home, '.cyrene', 'codex', 'projects'), { recursive: true })
     await symlink(outsideProject, join(home, '.cyrene', 'codex', 'projects', identity.projectId))
 
@@ -1405,7 +1431,9 @@ describe('Codex pending memory review', () => {
     })
 
     expect(result.result.action).toBe('promote')
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({ id: candidate.id, content: candidate.content })
+    ])
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain(candidate.content)
   })
 
@@ -1444,7 +1472,7 @@ describe('Codex pending memory review', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(outsideTarget, 'utf8')).resolves.toBe('outside original\n')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('rejects promotion before mutation when the snapshots directory is a symlink', async () => {
@@ -1468,7 +1496,7 @@ describe('Codex pending memory review', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('rejects promotion before mutation when the maintenance lock cannot be acquired', async () => {
@@ -1492,7 +1520,7 @@ describe('Codex pending memory review', () => {
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('rejects rendering MODEL_PROFILE.md targets that are directories', async () => {
@@ -1521,7 +1549,7 @@ describe('Codex pending memory review', () => {
 
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readFile(join(memoryRoot, 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(candidate.content)
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
   })
 
   it('removes legacy generated projection files after rendering model profile', async () => {

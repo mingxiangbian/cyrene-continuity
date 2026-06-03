@@ -21,6 +21,7 @@ import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from '../
 import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -216,8 +217,7 @@ describe('Cyrene MCP server', () => {
       updatedAt: '2026-05-30T00:00:00.000Z',
       tags: []
     }
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(memory)}\n`, 'utf8')
+    await writeActiveMemoriesFromRoot(memoryRoot, [memory])
 
     const archiveJson = JSON.parse(
       (await handleActiveMemoryArchive({
@@ -229,7 +229,7 @@ describe('Cyrene MCP server', () => {
     )
 
     expect(archiveJson.result.action).toBe('archive')
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
   })
 
   it('handles memory promote conflict resolution over MCP', async () => {
@@ -253,9 +253,8 @@ describe('Cyrene MCP server', () => {
       process.cwd()
     )
     const proposedJson = JSON.parse(proposed.content[0]?.text ?? '{}')
-    await writeFile(
-      join(proposedJson.memoryRoot, 'index.jsonl'),
-      `${JSON.stringify({
+    await writeActiveMemoriesFromRoot(proposedJson.memoryRoot, [
+      {
         id: 'mcp-active-conflict',
         domain: 'project',
         type: 'project_fact',
@@ -276,9 +275,8 @@ describe('Cyrene MCP server', () => {
         createdAt: '2026-05-24T00:00:00.000Z',
         updatedAt: '2026-05-24T00:00:00.000Z',
         tags: []
-      })}\n`,
-      'utf8'
-    )
+      }
+    ])
 
     const promoteJson = JSON.parse(
       (await handleMemoryPromote(
@@ -293,8 +291,10 @@ describe('Cyrene MCP server', () => {
     )
 
     expect(promoteJson.result.action).toBe('promote')
-    expect(await readFile(join(proposedJson.memoryRoot, 'index.jsonl'), 'utf8')).toContain(
-      'Pending MCP memory should be kept alongside an explicit conflict.'
+    await expect(readActiveMemoriesFromRoot(proposedJson.memoryRoot)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content: 'Pending MCP memory should be kept alongside an explicit conflict.' })
+      ])
     )
   })
 
@@ -486,10 +486,10 @@ describe('Cyrene MCP server', () => {
     expect(source).toContain('Dream Deep')
     expect(source).toContain('recommend repeated independent evidence for review')
     expect(source).not.toContain(['auto', 'promote'].join('-'))
-    expect(source).toContain('show pending candidates as review candidates')
+    expect(source).toContain('show pending items as manual review candidates')
     expect(source).toContain('Do not wait for the user to ask to review them')
     expect(source).toContain('Only present candidates that are confirmed by pending list/get')
-    expect(source).toContain('Pending memory candidates are not active continuity memory')
+    expect(source).toContain('Manual review queue candidates are not trial, validated, or core continuity memory')
   })
 
   it('accepts mcp-server as a local CLI command without treating it as a prompt', async () => {

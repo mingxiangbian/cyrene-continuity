@@ -3,6 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runMemoryMaintenanceFromRoot, type MemoryMaintenanceBudget } from '../src/memory/memory-maintenance.js'
+import {
+  readActiveMemoriesFromRoot,
+  writeActiveMemoriesFromRoot,
+  writePendingMemoriesFromRoot
+} from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -25,8 +30,8 @@ async function seedMemoryRoot(input: {
   tombstones?: MemoryTombstone[]
 }): Promise<void> {
   await mkdir(input.memoryRoot, { recursive: true })
-  await writeJsonLines(join(input.memoryRoot, 'index.jsonl'), input.active ?? [])
-  await writeJsonLines(join(input.memoryRoot, 'pending.jsonl'), input.pending ?? [])
+  await writeActiveMemoriesFromRoot(input.memoryRoot, input.active ?? [])
+  await writePendingMemoriesFromRoot(input.memoryRoot, input.pending ?? [])
   await writeJsonLines(join(input.memoryRoot, 'tombstones.jsonl'), input.tombstones ?? [])
 }
 
@@ -64,8 +69,8 @@ describe('root memory maintenance', () => {
     const snapshot = JSON.parse(await readFile(join(memoryRoot, 'snapshots', snapshotFiles[0] ?? ''), 'utf8')) as {
       active: CyreneMemory[]
     }
-    expect(snapshot.active).toEqual([expired])
-    expect(await readJsonLines<CyreneMemory>(join(memoryRoot, 'index.jsonl'))).toEqual([])
+    expect(snapshot.active).toEqual([expect.objectContaining({ id: expired.id, content: expired.content })])
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
     expect(result).toMatchObject({ snapshotId: expect.stringMatching(/^memory-/), expired: 1, activeCount: 0 })
   })
 
@@ -215,7 +220,7 @@ describe('root memory maintenance', () => {
       now: '2026-05-26T00:00:00.000Z'
     })
 
-    const active = await readJsonLines<CyreneMemory>(join(memoryRoot, 'index.jsonl'))
+    const active = await readActiveMemoriesFromRoot(memoryRoot)
     expect(active).toHaveLength(1)
     expect(active[0]).toMatchObject({
       id: 'stronger',
@@ -253,12 +258,13 @@ describe('root memory maintenance', () => {
       now: '2026-05-26T00:00:00.000Z'
     })
 
-    const active = await readJsonLines<CyreneMemory>(join(memoryRoot, 'index.jsonl'))
+    const active = await readActiveMemoriesFromRoot(memoryRoot)
     expect(active[0]?.content).toBe(`${'x'.repeat(9)}...`)
     expect(active[0]?.evidence).toEqual([
       expect.objectContaining({
-        runId: 'run-long',
-        quote: expect.stringMatching(/\.\.\.$/)
+        evidenceGroupId: 'run-long',
+        summary: expect.stringMatching(/\.\.\.$/),
+        traceRefs: ['run-long']
       })
     ])
     const evidenceTextLength = (active[0]?.evidence ?? []).reduce(
@@ -300,7 +306,7 @@ describe('root memory maintenance', () => {
       now: '2026-05-26T00:00:00.000Z'
     })
 
-    const active = await readJsonLines<CyreneMemory>(join(memoryRoot, 'index.jsonl'))
+    const active = await readActiveMemoriesFromRoot(memoryRoot)
     expect(active.map((memory) => memory.id).sort()).toEqual(['protected', 'useful'])
     expect(await readJsonLines<MemoryTombstone>(join(memoryRoot, 'tombstones.jsonl'))).toEqual([
       expect.objectContaining({ memoryId: 'low-value', reason: 'archived' })
@@ -325,7 +331,7 @@ describe('root memory maintenance', () => {
       now: '2026-05-26T00:00:00.000Z'
     })
 
-    const pending = await readJsonLines<PendingMemory>(join(memoryRoot, 'pending.jsonl'))
+    const pending = await readJsonLines<PendingMemory>(join(memoryRoot, 'review_queue.jsonl'))
     expect(pending.map((candidate) => candidate.id)).toEqual(['newest', 'middle'])
     expect(result.pendingCount).toBe(2)
   })
@@ -348,7 +354,7 @@ describe('root memory maintenance', () => {
       preservePendingCandidateIds: ['older-preserved', 'newer-preserved']
     })
 
-    const pending = await readJsonLines<PendingMemory>(join(memoryRoot, 'pending.jsonl'))
+    const pending = await readJsonLines<PendingMemory>(join(memoryRoot, 'review_queue.jsonl'))
     expect(pending.map((candidate) => candidate.id)).toEqual(['newer-preserved'])
     expect(result.pendingCount).toBe(1)
   })

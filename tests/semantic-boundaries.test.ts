@@ -5,7 +5,7 @@ const WORKFLOW_INPUT =
   '拒绝 pending memory 的流程：按照 Cyrene review 流程，逐条进行哈希校验，确认后执行拒绝操作。操作后需验证 pending 列表为空。'
 
 const PITFALL_INPUT =
-  'pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 pending.jsonl 直接读取 pending review，而非依赖缓存推导。'
+  'pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 review_queue.jsonl 直接读取 pending review，而非依赖缓存推导。'
 
 function expectNoGenericBoundaryText(result: ReturnType<typeof deriveSemanticBoundaries>): void {
   const text = [...result.useWhen, ...result.doNotUseWhen, ...result.reasons].join('\n')
@@ -55,12 +55,12 @@ describe('deriveSemanticBoundaries', () => {
       ],
       doNotUseWhen: [
         'The hash comes from an active memory record rather than pending review.',
-        'The code already reads the current pending.jsonl record as the canonical source.',
+        'The code already reads the current review_queue.jsonl record as the review-queue source.',
         'The task is unrelated to pending review hashes, semantic projection, or cache-derived review data.'
       ],
       reasons: [
         'The content describes a known pitfall with a mitigation.',
-        'It identifies semantic projection and cache-derived data as false-conflict sources and pending.jsonl as the canonical data source.'
+        'It identifies semantic projection and cache-derived data as false-conflict sources and review_queue.jsonl as the review-queue source.'
       ]
     })
     expectNoGenericBoundaryText(result)

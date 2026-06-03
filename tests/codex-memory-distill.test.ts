@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runCodexMemoryDistill } from '../src/codex/memory-distill.js'
+import { writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type {
   AdmissionDecision,
   CandidateDraft,
@@ -271,8 +272,8 @@ describe('Codex memory distillation dry run', () => {
   it('includes v2 distillation inputs as structured semantic preview candidates', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-v2-inputs-')
     const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
-    const indexPath = join(memoryRoot, 'index.jsonl')
-    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+    const pendingPath = join(memoryRoot, 'review_queue.jsonl')
     await mkdir(memoryRoot, { recursive: true })
     const distillationInputsBefore = await writeJsonLines(distillationInputsPath, [
       createDistillationInput({
@@ -292,9 +293,9 @@ describe('Codex memory distillation dry run', () => {
         createdAt: '2026-06-01T01:00:00.000Z'
       })
     ])
-    await writeFile(indexPath, '', 'utf8')
+    await writeFile(semanticPath, '', 'utf8')
     await writeFile(pendingPath, '', 'utf8')
-    const indexBefore = await readFile(indexPath, 'utf8')
+    const semanticBefore = await readFile(semanticPath, 'utf8')
     const pendingBefore = await readFile(pendingPath, 'utf8')
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
@@ -370,15 +371,15 @@ describe('Codex memory distillation dry run', () => {
       }
     })
     await expect(readFile(distillationInputsPath, 'utf8')).resolves.toBe(distillationInputsBefore)
-    await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(semanticBefore)
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('includes singleton v2 distillation input as a structured semantic preview candidate without mutating stores', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-v2-singleton-')
     const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
-    const indexPath = join(memoryRoot, 'index.jsonl')
-    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+    const pendingPath = join(memoryRoot, 'review_queue.jsonl')
     await mkdir(memoryRoot, { recursive: true })
     const distillationInputsBefore = await writeJsonLines(distillationInputsPath, [
       createDistillationInput({
@@ -388,9 +389,9 @@ describe('Codex memory distillation dry run', () => {
         evidenceRefs: ['AGENTS.md']
       })
     ])
-    await writeFile(indexPath, '', 'utf8')
+    await writeFile(semanticPath, '', 'utf8')
     await writeFile(pendingPath, '', 'utf8')
-    const indexBefore = await readFile(indexPath, 'utf8')
+    const semanticBefore = await readFile(semanticPath, 'utf8')
     const pendingBefore = await readFile(pendingPath, 'utf8')
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
@@ -416,21 +417,21 @@ describe('Codex memory distillation dry run', () => {
       }
     })
     await expect(readFile(distillationInputsPath, 'utf8')).resolves.toBe(distillationInputsBefore)
-    await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(semanticBefore)
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
   })
 
   it('shapes distillation input previews without materializing pending memory', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-shaped-preview-')
     const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
-    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const pendingPath = join(memoryRoot, 'review_queue.jsonl')
     await mkdir(memoryRoot, { recursive: true })
     await writeJsonLines(distillationInputsPath, [
       createDistillationInput({
         normalizedKey: 'pending-review-hash-canonical-records',
         candidateKind: 'known_pitfall',
-        rawContents: ['pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 pending.jsonl 直接读取 pending review，而非依赖缓存推导。'],
-        evidenceRefs: ['pending.jsonl', 'semantic projection']
+        rawContents: ['pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 review_queue.jsonl 直接读取 pending review，而非依赖缓存推导。'],
+        evidenceRefs: ['review_queue.jsonl', 'semantic projection']
       })
     ])
     const pendingBefore = await writeJsonLines(pendingPath, [
@@ -447,7 +448,7 @@ describe('Codex memory distillation dry run', () => {
     expect(result.summary.pendingRead).toBe(1)
     expect(result.candidates).toHaveLength(1)
     expect(result.candidates[0]?.semanticMemory?.content ?? result.candidates[0]?.content).toContain(
-      'canonical pending.jsonl records'
+      'review_queue.jsonl records'
     )
     expect(result.candidates[0]?.semanticMemory?.useWhen).toContain(
       'Diagnosing review-hash conflicts for pending memory candidates.'
@@ -473,7 +474,7 @@ describe('Codex memory distillation dry run', () => {
       })
     ])
     await writeJsonLines(join(memoryRoot, 'admission_decisions.jsonl'), [createAdmissionDecision()])
-    await writeFile(join(memoryRoot, 'index.jsonl'), '', 'utf8')
+    await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), '', 'utf8')
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
 
@@ -488,8 +489,8 @@ describe('Codex memory distillation dry run', () => {
 
   it('clusters duplicate pending candidates into an auditable dry-run candidate without mutating stores', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-memory-')
-    const pendingPath = join(memoryRoot, 'pending.jsonl')
-    const indexPath = join(memoryRoot, 'index.jsonl')
+    const pendingPath = join(memoryRoot, 'review_queue.jsonl')
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
     const tombstonesPath = join(memoryRoot, 'tombstones.jsonl')
     const eventsPath = join(memoryRoot, 'events.jsonl')
     const pending = [
@@ -503,10 +504,10 @@ describe('Codex memory distillation dry run', () => {
     ]
     await mkdir(memoryRoot, { recursive: true })
     const pendingBefore = await writeJsonLines(pendingPath, pending)
-    await writeFile(indexPath, '', 'utf8')
+    await writeFile(semanticPath, '', 'utf8')
     await writeFile(tombstonesPath, '{"id":"t1","normalizedKey":"old","scope":"project","domain":"project","type":"project_fact","reason":"deleted","createdAt":"2026-05-01T00:00:00.000Z"}\n', 'utf8')
     await writeFile(eventsPath, '{"id":"e1","action":"audit","at":"2026-05-01T00:00:00.000Z","reason":"existing"}\n', 'utf8')
-    const indexBefore = await readFile(indexPath, 'utf8')
+    const semanticBefore = await readFile(semanticPath, 'utf8')
     const tombstonesBefore = await readFile(tombstonesPath, 'utf8')
     const eventsBefore = await readFile(eventsPath, 'utf8')
 
@@ -528,16 +529,16 @@ describe('Codex memory distillation dry run', () => {
       reasons: ['duplicate normalizedKey release-typecheck has 2 pending candidates']
     })
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
-    await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(semanticBefore)
     await expect(readFile(tombstonesPath, 'utf8')).resolves.toBe(tombstonesBefore)
     await expect(readFile(eventsPath, 'utf8')).resolves.toBe(eventsBefore)
   })
 
   it('merges same-key pending duplicates and v2 distillation input into one candidate', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-same-key-merge-')
-    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const pendingPath = join(memoryRoot, 'review_queue.jsonl')
     const distillationInputsPath = join(memoryRoot, 'distillation_inputs.jsonl')
-    const indexPath = join(memoryRoot, 'index.jsonl')
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
     await mkdir(memoryRoot, { recursive: true })
     const pendingBefore = await writeJsonLines(pendingPath, [
       createPending({
@@ -565,8 +566,8 @@ describe('Codex memory distillation dry run', () => {
         evidenceRefs: ['AGENTS.md']
       })
     ])
-    await writeFile(indexPath, '', 'utf8')
-    const indexBefore = await readFile(indexPath, 'utf8')
+    await writeFile(semanticPath, '', 'utf8')
+    const semanticBefore = await readFile(semanticPath, 'utf8')
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
 
@@ -589,7 +590,7 @@ describe('Codex memory distillation dry run', () => {
     })
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(pendingBefore)
     await expect(readFile(distillationInputsPath, 'utf8')).resolves.toBe(distillationInputsBefore)
-    await expect(readFile(indexPath, 'utf8')).resolves.toBe(indexBefore)
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(semanticBefore)
   })
 
   it('merges same-key orphan admission semantic previews without dropping evidence lineage', async () => {
@@ -655,8 +656,8 @@ describe('Codex memory distillation dry run', () => {
   it('keeps duplicate pending cluster behavior while reporting zero v2 distillation inputs', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-legacy-summary-')
     await mkdir(memoryRoot, { recursive: true })
-    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [createPending(), createPending({ id: 'p2' })])
-    await writeFile(join(memoryRoot, 'index.jsonl'), '', 'utf8')
+    await writeJsonLines(join(memoryRoot, 'review_queue.jsonl'), [createPending(), createPending({ id: 'p2' })])
+    await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), '', 'utf8')
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
 
@@ -690,8 +691,8 @@ describe('Codex memory distillation dry run', () => {
   it('marks duplicate pending candidates as needs_review when active memory overlaps', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-active-overlap-')
     await mkdir(memoryRoot, { recursive: true })
-    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [createPending(), createPending({ id: 'p2' })])
-    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [createActive()])
+    await writeJsonLines(join(memoryRoot, 'review_queue.jsonl'), [createPending(), createPending({ id: 'p2' })])
+    await writeActiveMemoriesFromRoot(memoryRoot, [createActive()])
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
 
@@ -709,11 +710,11 @@ describe('Codex memory distillation dry run', () => {
   it('marks high-risk pending domains as needs_review', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-high-risk-domain-')
     await mkdir(memoryRoot, { recursive: true })
-    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [
+    await writeJsonLines(join(memoryRoot, 'review_queue.jsonl'), [
       createPending({ domain: 'relationship' }),
       createPending({ id: 'p2', domain: 'relationship' })
     ])
-    await writeFile(join(memoryRoot, 'index.jsonl'), '', 'utf8')
+    await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), '', 'utf8')
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
 
@@ -731,7 +732,7 @@ describe('Codex memory distillation dry run', () => {
   it('marks duplicate pending candidates with mixed metadata as needs_review', async () => {
     const memoryRoot = await createTempDir('cyrene-distill-mixed-metadata-')
     await mkdir(memoryRoot, { recursive: true })
-    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [
+    await writeJsonLines(join(memoryRoot, 'review_queue.jsonl'), [
       createPending({
         candidateKind: 'workflow_rule',
         domain: 'procedural',
@@ -744,7 +745,7 @@ describe('Codex memory distillation dry run', () => {
         type: 'project_fact'
       })
     ])
-    await writeFile(join(memoryRoot, 'index.jsonl'), '', 'utf8')
+    await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), '', 'utf8')
 
     const result = await runCodexMemoryDistill({ memoryRoot, dryRun: true })
 

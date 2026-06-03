@@ -10100,7 +10100,7 @@ function isFileErrorCode(error2, code) {
 
 // src/memory/memory-store.ts
 import { randomUUID } from "node:crypto";
-import { appendFile, lstat as lstat3, mkdir as mkdir2, readFile as readFile2, realpath as realpath2, rename, writeFile } from "node:fs/promises";
+import { appendFile, lstat as lstat3, mkdir as mkdir2, readFile as readFile2, realpath as realpath2, rename, rm, writeFile } from "node:fs/promises";
 import { join as join4 } from "node:path";
 
 // src/memory/paths.ts
@@ -10233,6 +10233,8 @@ function activeMemoryToSemanticMemory(memory) {
       ...memory.userConfirmed === void 0 ? {} : { userConfirmed: memory.userConfirmed },
       ...memory.normalizedKeyConflictResolution === void 0 ? {} : { normalizedKeyConflictResolution: memory.normalizedKeyConflictResolution }
     },
+    ...memory.confidenceTier === void 0 ? {} : { confidenceTier: memory.confidenceTier },
+    ...memory.activationPolicy === void 0 ? {} : { activationPolicy: memory.activationPolicy },
     supersedes: memory.supersedes ?? [],
     ...memory.expiresAt === void 0 ? {} : { expiresAt: memory.expiresAt },
     createdAt: memory.createdAt,
@@ -10312,6 +10314,8 @@ function semanticMemoryToActiveMemory(memory) {
     ...memory.expiresAt === void 0 ? {} : { expiresAt: memory.expiresAt },
     ...reviewState.userConfirmed === void 0 ? {} : { userConfirmed: reviewState.userConfirmed },
     ...reviewState.profileVisibility === void 0 ? {} : { profileVisibility: reviewState.profileVisibility },
+    ...memory.confidenceTier === void 0 ? {} : { confidenceTier: memory.confidenceTier },
+    ...memory.activationPolicy === void 0 ? {} : { activationPolicy: memory.activationPolicy },
     candidateKind: memory.kind,
     ...reviewState.normalizedKeyConflictResolution === void 0 ? {} : { normalizedKeyConflictResolution: reviewState.normalizedKeyConflictResolution },
     tags: reviewState.tags ?? [memory.kind],
@@ -10474,8 +10478,9 @@ function addDays(iso, days) {
 }
 
 // src/memory/memory-store.ts
-var INDEX_FILE = "index.jsonl";
-var PENDING_FILE = "pending.jsonl";
+var LEGACY_INDEX_FILE = "index.jsonl";
+var LEGACY_PENDING_FILE = "pending.jsonl";
+var REVIEW_QUEUE_FILE = "review_queue.jsonl";
 var EPISODES_FILE = "episodes.jsonl";
 var CANDIDATE_DRAFTS_FILE = "candidate_drafts.jsonl";
 var ADMISSION_DECISIONS_FILE = "admission_decisions.jsonl";
@@ -10500,10 +10505,10 @@ async function readActiveMemoriesFromRoot(memoryRoot) {
   if (!readable) {
     return [];
   }
-  if (await semanticMemoryStoreExists(memoryRoot)) {
-    return (await readSemanticMemoriesFromRoot(memoryRoot)).filter((memory) => memory.status === "active").map(semanticMemoryToActiveMemory);
+  if (!await semanticMemoryStoreExists(memoryRoot)) {
+    return [];
   }
-  return (await readJsonLines(join4(memoryRoot, INDEX_FILE))).filter((memory) => memory.status === "active");
+  return (await readSemanticMemoriesFromRoot(memoryRoot)).filter((memory) => memory.status === "active").map(semanticMemoryToActiveMemory);
 }
 async function writeActiveMemoriesFromRoot(memoryRoot, memories) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -10511,7 +10516,7 @@ async function writeActiveMemoriesFromRoot(memoryRoot, memories) {
   const current = await semanticProjectionForWrite(root);
   const next = replaceSemanticMemoriesByStatus(current, "active", active.map(activeMemoryToSemanticMemory));
   await writeSemanticMemoriesFromRoot(root, next);
-  await writeJsonLinesAtomic(join4(root, INDEX_FILE), await orderActiveForLegacyProjection(root, active));
+  await removeMemoryDataFileIfExists(join4(root, LEGACY_INDEX_FILE));
 }
 async function ensureWritableMemoryRootPath(memoryRoot) {
   return ensureWritableMemoryRoot(memoryRoot);
@@ -10537,9 +10542,11 @@ async function readPendingMemoriesFromRoot(memoryRoot) {
   if (!readable) {
     return [];
   }
-  const legacyPending = (await readJsonLines(join4(memoryRoot, PENDING_FILE))).filter((memory) => memory.status === "pending");
-  if (legacyPending.length > 0) {
-    return legacyPending;
+  const reviewQueue = (await readJsonLines(join4(memoryRoot, REVIEW_QUEUE_FILE))).filter(
+    (memory) => memory.status === "pending"
+  );
+  if (reviewQueue.length > 0) {
+    return reviewQueue;
   }
   if (await semanticMemoryStoreExists(memoryRoot)) {
     return (await readSemanticMemoriesFromRoot(memoryRoot)).filter((memory) => memory.status === "pending").map(semanticMemoryToPendingMemory);
@@ -10552,7 +10559,8 @@ async function writePendingMemoriesFromRoot(memoryRoot, memories) {
   const current = await semanticProjectionForWrite(root);
   const next = replaceSemanticMemoriesByStatus(current, "pending", pending.map(pendingMemoryToSemanticMemory));
   await writeSemanticMemoriesFromRoot(root, next);
-  await writeJsonLinesAtomic(join4(root, PENDING_FILE), pending);
+  await writeReviewQueueProjectionFromRoot(root, pending);
+  await removeMemoryDataFileIfExists(join4(root, LEGACY_PENDING_FILE));
 }
 async function appendEpisodeMemoryFromRoot(memoryRoot, episode) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
@@ -10598,22 +10606,33 @@ async function writeSemanticMemoriesFromRoot(memoryRoot, memories) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await writeJsonLinesAtomic(join4(root, SEMANTIC_MEMORIES_FILE), memories);
 }
+async function upsertSemanticMemoriesFromRoot(memoryRoot, replacements) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  const current = await semanticProjectionForWrite(root);
+  const next = upsertSemanticMemories(current, replacements);
+  const pending = next.filter((memory) => memory.status === "pending").map(semanticMemoryToPendingMemory);
+  await writeSemanticMemoriesFromRoot(root, next);
+  await writeReviewQueueProjectionFromRoot(root, pending);
+  await removeMemoryDataFileIfExists(join4(root, LEGACY_INDEX_FILE));
+  await removeMemoryDataFileIfExists(join4(root, LEGACY_PENDING_FILE));
+}
 async function migrateMemoryRootToSemanticV2FromRoot(memoryRoot, input = {}) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const legacyActive = (await readJsonLines(join4(root, INDEX_FILE))).filter((memory) => memory.status === "active");
-  const legacyPending = (await readJsonLines(join4(root, PENDING_FILE))).filter((memory) => memory.status === "pending");
+  const legacyActive = (await readJsonLines(join4(root, LEGACY_INDEX_FILE))).filter((memory) => memory.status === "active");
+  const legacyPending = (await readJsonLines(join4(root, LEGACY_PENDING_FILE))).filter((memory) => memory.status === "pending");
   const existingSemantic = await readSemanticMemoriesFromRoot(root);
   const migratedActive = legacyActive.map(activeMemoryToSemanticMemory);
   const activeIds = new Set(migratedActive.map((memory) => memory.id));
   const preservedSemantic = existingSemantic.filter((memory) => !activeIds.has(memory.id));
   const nextSemantic = upsertSemanticMemories(preservedSemantic, migratedActive);
   await writeSemanticMemoriesFromRoot(root, nextSemantic);
-  await writeJsonLinesAtomic(join4(root, INDEX_FILE), legacyActive);
-  await writeJsonLinesAtomic(
-    join4(root, PENDING_FILE),
+  await writeReviewQueueProjectionFromRoot(
+    root,
     nextSemantic.filter((memory) => memory.status === "pending").map(semanticMemoryToPendingMemory)
   );
+  await removeMemoryDataFileIfExists(join4(root, LEGACY_INDEX_FILE));
+  await removeMemoryDataFileIfExists(join4(root, LEGACY_PENDING_FILE));
   await appendMemoryEventFromRoot(root, {
     id: randomUUID(),
     action: "audit",
@@ -10631,7 +10650,7 @@ async function migrateMemoryRootToSemanticV2FromRoot(memoryRoot, input = {}) {
     reason: "Reset legacy pending memory after SemanticMemory v2 migration",
     details: {
       droppedLegacyPending: legacyPending.length,
-      legacyPendingStore: PENDING_FILE
+      legacyPendingStore: LEGACY_PENDING_FILE
     }
   });
   return {
@@ -10789,30 +10808,7 @@ async function semanticProjectionForWrite(memoryRoot) {
   if (await semanticMemoryStoreExists(memoryRoot)) {
     return readSemanticMemoriesFromRoot(memoryRoot);
   }
-  const [active, pending] = await Promise.all([
-    readJsonLines(join4(memoryRoot, INDEX_FILE)),
-    readJsonLines(join4(memoryRoot, PENDING_FILE))
-  ]);
-  return [
-    ...active.filter((memory) => memory.status === "active").map(activeMemoryToSemanticMemory),
-    ...pending.filter((memory) => memory.status === "pending").map(pendingMemoryToSemanticMemory)
-  ];
-}
-async function orderActiveForLegacyProjection(memoryRoot, active) {
-  const previous = (await readJsonLines(join4(memoryRoot, INDEX_FILE))).filter((memory) => memory.status === "active");
-  if (previous.length === 0 || active.length <= 1) {
-    return active;
-  }
-  const previousOrder = new Map(previous.map((memory, index) => [memory.id, index]));
-  const incomingOrder = new Map(active.map((memory, index) => [memory.id, index]));
-  return [...active].sort((left, right) => {
-    const leftPrevious = previousOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER;
-    const rightPrevious = previousOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER;
-    if (leftPrevious !== rightPrevious) {
-      return leftPrevious - rightPrevious;
-    }
-    return (incomingOrder.get(left.id) ?? 0) - (incomingOrder.get(right.id) ?? 0);
-  });
+  return (await readJsonLines(join4(memoryRoot, REVIEW_QUEUE_FILE))).filter((memory) => memory.status === "pending").map(pendingMemoryToSemanticMemory);
 }
 function replaceSemanticMemoriesByStatus(current, status, replacements) {
   return upsertSemanticMemories(current.filter((memory) => memory.status !== status), replacements);
@@ -10911,6 +10907,13 @@ async function writeJsonLinesAtomic(filePath, values) {
   await writeFile(tempPath, content === "" ? "" : `${content}
 `, "utf8");
   await rename(tempPath, filePath);
+}
+async function writeReviewQueueProjectionFromRoot(memoryRoot, memories) {
+  await writeJsonLinesAtomic(join4(memoryRoot, REVIEW_QUEUE_FILE), memories);
+}
+async function removeMemoryDataFileIfExists(filePath) {
+  await assertSafeMemoryDataFileTarget(filePath);
+  await rm(filePath, { force: true });
 }
 async function appendJsonLine(filePath, value) {
   await assertSafeMemoryDataFileTarget(filePath);
@@ -12556,7 +12559,7 @@ async function syncCurrentCodexMemoryIndex(input) {
 }
 
 // src/codex/codex-memory-index-status.ts
-var INDEXED_SOURCE_FILES = ["index.jsonl", "pending.jsonl"];
+var INDEXED_SOURCE_FILES = ["semantic_memories.jsonl", "review_queue.jsonl"];
 async function readCodexMemoryIndexStatus(memoryRoots) {
   const diagnostics = await readStatusIndexDiagnostics();
   return readIndexStatus(diagnostics, memoryRoots);
@@ -12947,12 +12950,12 @@ async function formatCodexMemoryStatus(input) {
     `  project root health: ${formatRootHealth(status.roots.project)}`,
     "",
     "memory:",
-    `  global active: ${status.roots.global.counts.active}`,
-    `  global pending: ${status.roots.global.counts.pending}`,
+    `  global core/runtime memory: ${status.roots.global.counts.active}`,
+    `  global review queue: ${status.roots.global.counts.pending}`,
     `  global tombstones: ${status.roots.global.counts.tombstones}`,
     `  global profile candidates: ${status.roots.global.counts.profileCandidates}`,
-    `  project active: ${status.roots.project.counts.active}`,
-    `  project pending: ${status.roots.project.counts.pending}`,
+    `  project trial/validated/core memory: ${status.roots.project.counts.active}`,
+    `  project review queue: ${status.roots.project.counts.pending}`,
     `  project tombstones: ${status.roots.project.counts.tombstones}`,
     `  project profile candidates: ${status.roots.project.counts.profileCandidates}`,
     status.roots.global.counts.reason === void 0 ? void 0 : `  global counts reason: ${status.roots.global.counts.reason}`,
@@ -13400,9 +13403,9 @@ async function formatCodexDoctor(input) {
     "",
     "memory:",
     `  global profile: ${memoryState.globalProfilePresent ? "present" : "missing"}`,
-    `  global pending: ${memoryState.globalPendingCount}`,
+    `  global review queue: ${memoryState.globalPendingCount}`,
     `  project profile: ${memoryState.projectProfilePresent ? "present" : "missing"}`,
-    `  project pending: ${memoryState.projectPendingCount}`,
+    `  project review queue: ${memoryState.projectPendingCount}`,
     `  profile candidates: ${memoryState.profileCandidates}`,
     `  memory index: ${memoryIndex.available ? "available" : "unavailable"}`,
     `  memory db: ${memoryIndex.dbPath}`,
@@ -14025,7 +14028,7 @@ function runProfilePollutionEval(proposedChanges, pending, profilePreview) {
   );
   for (const candidate of pending) {
     if (!promotedCandidateIds.has(candidate.id) && profilePreview.includes(candidate.content)) {
-      findings.push({ memoryId: candidate.id, reason: "profile preview contains pending-only content" });
+      findings.push({ memoryId: candidate.id, reason: "profile preview contains manual review queue content" });
     }
   }
   return result("profile_pollution_eval", findings);
@@ -14186,13 +14189,13 @@ function rewriteHintForReasons(reasons) {
 
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { lstat as lstat10, mkdir as mkdir8, readFile as readFile10, rm as rm2, writeFile as writeFile6 } from "node:fs/promises";
+import { lstat as lstat10, mkdir as mkdir8, readFile as readFile10, rm as rm3, writeFile as writeFile6 } from "node:fs/promises";
 import { join as join15 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 // src/memory/memory-exporter.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
-import { lstat as lstat8, open, readdir as readdir4, readFile as readFile8, realpath as realpath5, rename as rename3, rm, rmdir } from "node:fs/promises";
+import { lstat as lstat8, open, readdir as readdir4, readFile as readFile8, realpath as realpath5, rename as rename3, rm as rm2, rmdir } from "node:fs/promises";
 import { dirname as dirname8, isAbsolute as isAbsolute3, join as join13, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
@@ -14595,14 +14598,14 @@ async function writeSafeGeneratedFile(root, parentDir, filename, content) {
     await file.writeFile(content, "utf8");
   } catch (error2) {
     await file.close();
-    await rm(tempPath, { force: true });
+    await rm2(tempPath, { force: true });
     throw error2;
   }
   await file.close();
   try {
     await rename3(tempPath, targetPath);
   } catch (error2) {
-    await rm(tempPath, { force: true });
+    await rm2(tempPath, { force: true });
     throw error2;
   }
 }
@@ -14692,7 +14695,7 @@ async function removeLegacyGeneratedProjectionFile(root, legacyFile) {
   if (!hasGeneratedProjectionHeader(content)) {
     return;
   }
-  await rm(targetPath).catch((error2) => {
+  await rm2(targetPath).catch((error2) => {
     if (!isFileErrorCode6(error2, "ENOENT")) {
       throw error2;
     }
@@ -15077,7 +15080,7 @@ async function withMemoryMaintenanceLockFromRoot(memoryRoot, task, options = {})
     } catch (error2) {
       if (!isFileErrorCode8(error2, "EEXIST")) {
         if (acquired) {
-          await rm2(lockDir, { recursive: true, force: true }).catch(() => void 0);
+          await rm3(lockDir, { recursive: true, force: true }).catch(() => void 0);
         }
         throw error2;
       }
@@ -15093,7 +15096,7 @@ async function withMemoryMaintenanceLockFromRoot(memoryRoot, task, options = {})
   try {
     return await task(root);
   } finally {
-    await rm2(lockDir, { recursive: true, force: true });
+    await rm3(lockDir, { recursive: true, force: true });
   }
 }
 async function writeMaintenanceLockOwner(lockDir, token) {
@@ -15119,7 +15122,7 @@ async function removeStaleMaintenanceLock(lockDir, nowMs, staleMs) {
   if (!isSameMaintenanceLockState(current, state) || !isMaintenanceLockStale(current, nowMs, staleMs)) {
     return false;
   }
-  await rm2(lockDir, { recursive: true, force: true });
+  await rm3(lockDir, { recursive: true, force: true });
   return true;
 }
 async function readMaintenanceLockState(lockDir) {
@@ -15397,13 +15400,13 @@ function isProcessErrorCode(error2, code) {
 // src/codex/project-registry.ts
 import { randomUUID as randomUUID6 } from "node:crypto";
 import { execFile as execFile2 } from "node:child_process";
-import { mkdir as mkdir9, readFile as readFile11, rename as rename4, rm as rm3, writeFile as writeFile7 } from "node:fs/promises";
+import { mkdir as mkdir9, readFile as readFile11, rename as rename4, rm as rm4, writeFile as writeFile7 } from "node:fs/promises";
 import { basename as basename5, dirname as dirname9, join as join16 } from "node:path";
 import { promisify as promisify2 } from "node:util";
 var PROJECT_METADATA_FILE = "project.json";
 var MERGE_JSONL_FILES = [
-  "index.jsonl",
-  "pending.jsonl",
+  "semantic_memories.jsonl",
+  "review_queue.jsonl",
   "tombstones.jsonl",
   "events.jsonl",
   "profile_candidates.jsonl",
@@ -15632,7 +15635,7 @@ function cleanDisplayName(value) {
 }
 async function rmDirectoryIfExists(path) {
   try {
-    await rm3(path, { recursive: true });
+    await rm4(path, { recursive: true });
     return true;
   } catch (error2) {
     if (isFileErrorCode9(error2, "ENOENT")) {
@@ -15678,7 +15681,7 @@ async function writeJsonLinesAtomic2(filePath, values) {
     renamed = true;
   } finally {
     if (!renamed) {
-      await rm3(tempPath, { force: true });
+      await rm4(tempPath, { force: true });
     }
   }
 }
@@ -18572,12 +18575,12 @@ var PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL = {
   ],
   doNotUseWhen: [
     "The hash comes from an active memory record rather than pending review.",
-    "The code already reads the current pending.jsonl record as the canonical source.",
+    "The code already reads the current review_queue.jsonl record as the review-queue source.",
     "The task is unrelated to pending review hashes, semantic projection, or cache-derived review data."
   ],
   reasons: [
     "The content describes a known pitfall with a mitigation.",
-    "It identifies semantic projection and cache-derived data as false-conflict sources and pending.jsonl as the canonical data source."
+    "It identifies semantic projection and cache-derived data as false-conflict sources and review_queue.jsonl as the review-queue source."
   ]
 };
 function deriveSemanticBoundaries(input) {
@@ -18724,7 +18727,7 @@ function normalizeContent(content) {
 
 // src/codex/semantic-content-builder.ts
 var PENDING_MEMORY_REJECTION_WORKFLOW_CONTENT = "Pending-memory rejection workflows must validate each candidate review hash before mutation and verify the queue state after rejection.";
-var PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL_CONTENT = "Pending-review hashes must be read from canonical pending.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.";
+var PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL_CONTENT = "Pending-review hashes must be read from review_queue.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.";
 function shapePendingCandidateContent(input) {
   const originalContent = contentOf2(input);
   const shapedContent = rewriteContentFor(input) ?? originalContent;
@@ -18800,6 +18803,25 @@ async function proposeCodexMemoryCandidate(input) {
       };
     }
     const pendingCandidate = decision2.action === "pending" ? decision2.candidate : candidate;
+    const activeConflict = existingMemories.find((memory) => memory.normalizedKey === pendingCandidate.normalizedKey);
+    if (activeConflict !== void 0) {
+      const reason2 = "normalizedKey conflict with active memory";
+      if (input.recordRejectedCandidate !== false) {
+        await appendMemoryEventFromRoot(lockedMemoryRoot, {
+          id: randomUUID10(),
+          action: "reject",
+          at: now,
+          reason: reason2,
+          memoryId: activeConflict.id,
+          candidateId: pendingCandidate.id
+        });
+      }
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: { action: "reject", reason: reason2 },
+        memoryRoot: lockedMemoryRoot
+      };
+    }
     const existingPending = lockedPending.find((item) => item.normalizedKey === pendingCandidate.normalizedKey);
     const mergedCandidateBase = existingPending === void 0 ? pendingCandidate : mergePendingMemory(existingPending, pendingCandidate);
     const mergedCandidate = withMergedSourceBoundary(mergedCandidateBase, pendingCandidate);
@@ -18833,6 +18855,41 @@ async function proposeCodexMemoryCandidate(input) {
       usedToday: promotionsUsedToday,
       dailyCap
     }) : void 0;
+    if (input.allowAutoPromote !== false && isProjectTrialEligible({
+      candidate: mergedCandidate,
+      activeReadinessReady: activeReadiness.ready
+    })) {
+      const trial = trialSemanticMemoryFromCandidate(mergedCandidate, now);
+      await upsertSemanticMemoriesFromRoot(lockedMemoryRoot, [trial]);
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID10(),
+        action: "create",
+        at: now,
+        reason: "v1.5 admitted low-risk project memory to trial",
+        memoryId: trial.id,
+        candidateId: mergedCandidate.id,
+        details: {
+          decision: "admit_to_trial",
+          policyId: "v15_project_trial_admission_v1",
+          confidenceTier: "trial",
+          activationPolicy: trial.activationPolicy,
+          scoreSnapshot: mergedCandidate.scores,
+          evidenceCount: mergedCandidate.evidence.length
+        }
+      });
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: {
+          action: "trial",
+          candidateId: mergedCandidate.id,
+          memoryId: trial.id,
+          policyId: "v15_project_trial_admission_v1",
+          reason: "v1.5 admitted low-risk project memory to trial"
+        },
+        memoryRoot: lockedMemoryRoot
+      };
+    }
     if (autoPromotion.allowed && autoPromotionEval?.passed === true && activeReadiness.ready && input.allowAutoPromote !== false) {
       const promoted = activateCandidate({ ...mergedCandidate, userConfirmed: true }, now);
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
@@ -18928,6 +18985,40 @@ async function proposeCodexMemoryCandidate(input) {
       memoryRoot: lockedMemoryRoot
     };
   });
+}
+function isProjectTrialEligible(input) {
+  const candidate = input.candidate;
+  const kind = deriveMemoryCandidateKind(candidate);
+  if (!input.activeReadinessReady) return false;
+  if (candidate.scope !== "project") return false;
+  if (!["project", "procedural", "system"].includes(candidate.domain)) return false;
+  if (!["project_fact", "project_decision", "workflow_rule", "known_pitfall", "rejected_approach"].includes(kind)) {
+    return false;
+  }
+  if (candidate.source === "assistant_observed") return false;
+  if (candidate.evidence.some((entry) => entry.sourceKind === "assistant_observed")) return false;
+  if (candidate.scores.evidenceStrength < 0.55) return false;
+  if (candidate.scores.usefulness < 0.55) return false;
+  if (candidate.scores.safety < 0.8) return false;
+  if (candidate.scores.sensitivity > 0.35) return false;
+  return true;
+}
+function trialSemanticMemoryFromCandidate(candidate, now) {
+  const semantic = pendingMemoryToSemanticMemory(candidate);
+  return {
+    ...semantic,
+    status: "active",
+    routing: {
+      module: semantic.module,
+      updatePolicy: "strict_auto_promote",
+      risk: "low",
+      reasons: ["v1.5 low-risk project memory admitted to trial"]
+    },
+    reviewPolicy: "strict_auto_promote",
+    confidenceTier: "trial",
+    activationPolicy: activationPolicyForConfidenceTier("trial"),
+    updatedAt: now
+  };
 }
 function runAutoPromotionEvalGate(input) {
   const item = {
@@ -20264,6 +20355,8 @@ async function runCodexProjectMemoryHarvest(input) {
     return { action: "preview", candidates, signals, warnings };
   }
   const candidateIds = [];
+  const pendingCandidateIds = [];
+  const trialMemoryIds = [];
   let memoryRoot;
   for (const candidate of candidates) {
     const result2 = await runCodexAdmissionPipeline({
@@ -20277,12 +20370,26 @@ async function runCodexProjectMemoryHarvest(input) {
     memoryRoot = result2.memoryRoot;
     if (result2.action === "pending" && result2.result.action === "pending") {
       candidateIds.push(result2.result.candidateId);
+      pendingCandidateIds.push(result2.result.candidateId);
+    } else if (result2.action === "trial" && result2.result.action === "trial") {
+      candidateIds.push(result2.result.candidateId);
+      trialMemoryIds.push(result2.result.memoryId);
     }
   }
   if (candidateIds.length === 0) {
     return { action: "noop", reason: "No project memory candidates survived admission.", signals, warnings };
   }
-  return { action: "pending", candidateIds, memoryRoot: memoryRoot ?? "", signals, warnings };
+  if (trialMemoryIds.length > 0 && trialMemoryIds.length === candidateIds.length) {
+    return { action: "trial", candidateIds, memoryIds: trialMemoryIds, memoryRoot: memoryRoot ?? "", signals, warnings };
+  }
+  return {
+    action: "pending",
+    candidateIds: pendingCandidateIds,
+    trialMemoryIds,
+    memoryRoot: memoryRoot ?? "",
+    signals,
+    warnings
+  };
 }
 function buildCodexProjectMemoryHarvestPrompt(signals) {
   return [
@@ -21053,6 +21160,8 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   const explicitPending = explicitResult?.action === "pending" && explicitResult.result.action === "pending" ? explicitResult.result : void 0;
   const explicitCandidateId = explicitPending?.candidateId;
   const harvestCandidateIds = harvest?.action === "pending" ? harvest.candidateIds : [];
+  const harvestTrialMemoryIds = harvest?.action === "trial" ? harvest.memoryIds : harvest?.action === "pending" ? harvest.trialMemoryIds ?? [] : [];
+  const harvestTrialCandidateIds = harvest?.action === "trial" ? harvest.candidateIds : [];
   const proposedCandidateIds = [
     ...reviewCandidateIds,
     ...explicitCandidateId === void 0 ? [] : [explicitCandidateId],
@@ -21071,6 +21180,15 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
         hasHarvestCandidates: confirmedHarvestCandidateIds.length > 0,
         explicitReason: confirmedExplicitCandidateId === void 0 ? void 0 : explicitPending?.reason
       }),
+      summaryId
+    };
+  }
+  if (harvestTrialMemoryIds.length > 0) {
+    return {
+      action: "trial",
+      candidateIds: harvestTrialCandidateIds,
+      memoryIds: harvestTrialMemoryIds,
+      reason: "Codex project memory harvest admitted trial memories.",
       summaryId
     };
   }
@@ -21164,7 +21282,8 @@ function pendingReason(input) {
 function visibleHookMessage(result2) {
   const summary = result2.action === "summary_failed" ? "failed" : result2.action === "noop" ? "none" : "ok";
   const candidateIds = "candidateIds" in result2 && Array.isArray(result2.candidateIds) ? result2.candidateIds : "candidateId" in result2 && typeof result2.candidateId === "string" ? [result2.candidateId] : [];
-  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder3(candidateIds).length}. Review: cyrene-continuity codex memory review`;
+  const memoryIds = "memoryIds" in result2 && Array.isArray(result2.memoryIds) ? result2.memoryIds : [];
+  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder3(candidateIds).length}, trial=${uniqueInOrder3(memoryIds).length}. Review: cyrene-continuity codex memory review`;
 }
 async function recordStopHookFailureSummary(cwd, payload, error2) {
   try {
@@ -21583,7 +21702,7 @@ function isRecord6(value) {
 }
 
 // src/codex/codex-install.ts
-import { lstat as lstat13, mkdir as mkdir10, rm as rm4, symlink, writeFile as writeFile8 } from "node:fs/promises";
+import { lstat as lstat13, mkdir as mkdir10, rm as rm5, symlink, writeFile as writeFile8 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
 import { dirname as dirname10, join as join21, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -21644,7 +21763,7 @@ async function removeExistingSkillSymlink(path) {
     if (!stats.isSymbolicLink()) {
       throw new Error(`Refusing to replace existing non-symlink skill path: ${path}`);
     }
-    await rm4(path);
+    await rm5(path);
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return;
@@ -22051,8 +22170,8 @@ async function formatCodexMemoryDashboard(input) {
     `  displayName: ${status.project.displayName}`,
     "",
     "counts:",
-    `  active memories: ${status.roots.global.counts.active + status.roots.project.counts.active}`,
-    `  pending memories: ${status.roots.global.counts.pending + status.roots.project.counts.pending}`,
+    `  lifecycle memories: ${status.roots.global.counts.active + status.roots.project.counts.active}`,
+    `  review queue: ${status.roots.global.counts.pending + status.roots.project.counts.pending}`,
     `  rejected/tombstoned: ${status.roots.global.counts.tombstones + status.roots.project.counts.tombstones}`,
     `  profile candidates: ${status.roots.global.counts.profileCandidates + status.roots.project.counts.profileCandidates}`,
     "",
@@ -22116,7 +22235,7 @@ async function readDashboardDreamState(root) {
   }
 }
 function formatTopActiveMemories(memories) {
-  const lines2 = ["top active project memories:"];
+  const lines2 = ["top lifecycle project memories:"];
   const top = [...memories].sort(compareActiveMemory).slice(0, 5);
   if (top.length === 0) {
     lines2.push("- none");
@@ -22128,7 +22247,7 @@ function formatTopActiveMemories(memories) {
   return lines2;
 }
 function formatPendingReview(pending) {
-  const lines2 = ["pending review:"];
+  const lines2 = ["manual review queue:"];
   const top = [...pending].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt)).slice(0, 5);
   if (top.length === 0) {
     lines2.push("- none");
@@ -22789,11 +22908,12 @@ function needsMigrationEvent(state, memory, findings) {
 
 // src/codex/codex-memory-lifecycle-migrate-v1-5.ts
 import { randomUUID as randomUUID18 } from "node:crypto";
-import { lstat as lstat14, readFile as readFile17, realpath as realpath7, rename as rename5, writeFile as writeFile9 } from "node:fs/promises";
+import { lstat as lstat14, readFile as readFile17, realpath as realpath7, rename as rename5, rm as rm6, writeFile as writeFile9 } from "node:fs/promises";
 import { join as join24 } from "node:path";
-var INDEX_FILE2 = "index.jsonl";
-var PENDING_FILE2 = "pending.jsonl";
+var LEGACY_INDEX_FILE2 = "index.jsonl";
+var LEGACY_PENDING_FILE2 = "pending.jsonl";
 var SEMANTIC_MEMORIES_FILE3 = "semantic_memories.jsonl";
+var REVIEW_QUEUE_FILE2 = "review_queue.jsonl";
 var HIGH_RISK_DOMAINS = /* @__PURE__ */ new Set(["personal", "relationship", "affective"]);
 var LOW_RISK_DOMAINS2 = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
 var REVIEW_SUMMARY_NOISE_PHRASES = [
@@ -22840,7 +22960,15 @@ async function runCodexMemoryLifecycleMigrateV15(input) {
       results.push(skippedRootResult(root, readable.reason));
       continue;
     }
-    results.push(await migrateReadableRoot({ ...root, memoryRoot: readable.memoryRoot }, { dryRun, now }));
+    const readableRoot = { ...root, memoryRoot: readable.memoryRoot };
+    if (dryRun) {
+      results.push(await migrateReadableRoot(readableRoot, { dryRun, now }));
+      continue;
+    }
+    results.push(await withMemoryMaintenanceLockFromRoot(
+      readableRoot.memoryRoot,
+      (lockedMemoryRoot) => migrateReadableRoot({ ...readableRoot, memoryRoot: lockedMemoryRoot }, { dryRun, now })
+    ));
   }
   if (registryFailure !== void 0) {
     results.push(registryFailure);
@@ -22853,8 +22981,8 @@ async function runCodexMemoryLifecycleMigrateV15(input) {
 }
 async function migrateReadableRoot(root, input) {
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
-    readJsonLinesWithMalformed(join24(root.memoryRoot, INDEX_FILE2), isValidLegacyActiveMemory),
-    readJsonLinesWithMalformed(join24(root.memoryRoot, PENDING_FILE2), isValidPendingMemory),
+    readJsonLinesWithMalformed(join24(root.memoryRoot, LEGACY_INDEX_FILE2), isValidLegacyActiveMemory),
+    readJsonLinesWithMalformed(join24(root.memoryRoot, LEGACY_PENDING_FILE2), isValidPendingMemory),
     readJsonLinesWithMalformed(join24(root.memoryRoot, SEMANTIC_MEMORIES_FILE3), isValidSemanticMemory)
   ]);
   const legacyActive = legacyActiveRead.records;
@@ -23070,11 +23198,9 @@ async function migrateReadableRoot(root, input) {
       await appendMemoryEventFromRoot(root.memoryRoot, dropAuditEvent(root, audit, input.now));
     }
     await writeSemanticMemoriesFromRoot(root.memoryRoot, nextSemantic);
-    await writeJsonLinesAtomic3(join24(root.memoryRoot, PENDING_FILE2), []);
-    await writeJsonLinesAtomic3(
-      join24(root.memoryRoot, INDEX_FILE2),
-      nextSemantic.filter((memory) => memory.status === "active").map(semanticMemoryToActiveMemory)
-    );
+    await writeJsonLinesAtomic3(join24(root.memoryRoot, REVIEW_QUEUE_FILE2), []);
+    await removeMemoryDataFileIfExists2(join24(root.memoryRoot, LEGACY_INDEX_FILE2));
+    await removeMemoryDataFileIfExists2(join24(root.memoryRoot, LEGACY_PENDING_FILE2));
     await appendMemoryEventFromRoot(root.memoryRoot, completionEvent(result2, input.now));
   }
   return result2;
@@ -23509,6 +23635,10 @@ async function writeJsonLinesAtomic3(filePath, values) {
 `, "utf8");
   await rename5(tempPath, filePath);
 }
+async function removeMemoryDataFileIfExists2(filePath) {
+  await assertSafeMemoryDataFileTarget(filePath);
+  await rm6(filePath, { force: true });
+}
 function isFileErrorCode12(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
@@ -23523,7 +23653,7 @@ import { join as join26 } from "node:path";
 
 // src/codex/memory-lifecycle-profile.ts
 import { randomUUID as randomUUID19 } from "node:crypto";
-import { open as open4, rename as rename6, rm as rm5 } from "node:fs/promises";
+import { open as open4, rename as rename6, rm as rm7 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 var GENERATED_HEADER2 = "<!-- Generated by Cyrene Continuity v1.5. Do not edit manually. -->";
 var MODEL_PROFILE_FILE3 = "MODEL_PROFILE.md";
@@ -23572,7 +23702,7 @@ async function writeSafeGeneratedProfile(memoryRoot, content) {
     await file.writeFile(content, "utf8");
   } catch (error2) {
     await file.close();
-    await rm5(tempPath, { force: true });
+    await rm7(tempPath, { force: true });
     throw error2;
   }
   await file.close();
@@ -23580,12 +23710,12 @@ async function writeSafeGeneratedProfile(memoryRoot, content) {
   try {
     await rename6(tempPath, targetPath);
   } catch (error2) {
-    await rm5(tempPath, { force: true });
+    await rm7(tempPath, { force: true });
     throw error2;
   }
 }
 function sanitizeProfileContent2(content) {
-  const sanitized = content.replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}\b/g, "$1[REDACTED]").replace(/\b(password|passwd|credential|secret|api[_ -]?key|token|private key|ssh key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]").replace(/\b[A-Fa-f0-9]{32,}\b/g, "[REDACTED]").replace(/\s+/g, " ").trim();
+  const sanitized = redactReviewText(content).text.replace(/\s+/g, " ").trim();
   return sanitized === "" ? null : sanitized;
 }
 
@@ -25414,27 +25544,8 @@ function buildOrphanAdmissionReasons(normalizedKey, draft, admission, hasActiveO
 
 // src/codex/codex-ui-api.ts
 var REVIEW_SUMMARIES_FILE5 = "review-summaries.jsonl";
-var PROJECT_MEMORY_LABELS = [
-  "Project Facts",
-  "Project Decisions",
-  "Workflow Rules",
-  "Known Pitfalls",
-  "Rejected Approaches",
-  "Open Questions",
-  "Other Project Memory"
-];
-var GLOBAL_MEMORY_LABELS = [
-  "User Preferences",
-  "Interaction Style",
-  "Relationship Boundaries",
-  "Affective Patterns",
-  "Workflow Rules",
-  "System Policies",
-  "References",
-  "Episodes",
-  "Project Facts",
-  "Other Global Memory"
-];
+var PROJECT_LIFECYCLE_LABELS = ["Trial", "Validated", "Project Core", "Needs Tier Review"];
+var GLOBAL_LIFECYCLE_LABELS = ["Global Core", "Needs Tier Review"];
 async function handleCodexUiApiRequest(input) {
   try {
     if (input.pathname === "/api/session") {
@@ -26404,71 +26515,36 @@ async function readReviewSummaryRecordsForUi(memoryRoot) {
 }
 function groupProjectMemories(memories) {
   const groups = /* @__PURE__ */ new Map();
-  for (const label of PROJECT_MEMORY_LABELS) {
+  for (const label of PROJECT_LIFECYCLE_LABELS) {
     groups.set(label, []);
   }
   for (const memory of memories) {
-    groups.get(labelForProjectMemory(memory))?.push(memory);
+    groups.get(labelForProjectLifecycleMemory(memory))?.push(memory);
   }
-  return PROJECT_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
+  return PROJECT_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
 }
 function groupGlobalMemories(memories) {
   const groups = /* @__PURE__ */ new Map();
-  for (const label of GLOBAL_MEMORY_LABELS) {
+  for (const label of GLOBAL_LIFECYCLE_LABELS) {
     groups.set(label, []);
   }
   for (const memory of memories) {
-    groups.get(labelForGlobalMemory(memory))?.push(memory);
+    groups.get(labelForGlobalLifecycleMemory(memory))?.push(memory);
   }
-  return GLOBAL_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
+  return GLOBAL_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
 }
 function groupMemoriesForSelection(memories, scope) {
   return scope === "global" ? groupGlobalMemories(memories) : groupProjectMemories(memories);
 }
-function labelForProjectMemory(memory) {
-  const classifications = memoryClassifications(memory);
-  if (classifications.includes("project_decision")) return "Project Decisions";
-  if (classifications.includes("workflow_rule") || classifications.includes("procedural_rule")) return "Workflow Rules";
-  if (classifications.includes("known_pitfall")) return "Known Pitfalls";
-  if (classifications.includes("rejected_approach")) return "Rejected Approaches";
-  if (classifications.includes("open_question")) return "Open Questions";
-  if (classifications.includes("project_fact")) return "Project Facts";
-  if (hasTag(memory, "project_decision")) return "Project Decisions";
-  if (hasTag(memory, "workflow_rule")) return "Workflow Rules";
-  if (hasTag(memory, "known_pitfall")) return "Known Pitfalls";
-  if (hasTag(memory, "rejected_approach")) return "Rejected Approaches";
-  if (hasTag(memory, "open_question")) return "Open Questions";
-  if (hasTag(memory, "project_fact")) return "Project Facts";
-  return "Other Project Memory";
+function labelForProjectLifecycleMemory(memory) {
+  if (memory.confidenceTier === "trial") return "Trial";
+  if (memory.confidenceTier === "validated") return "Validated";
+  if (memory.confidenceTier === "project_core") return "Project Core";
+  return "Needs Tier Review";
 }
-function labelForGlobalMemory(memory) {
-  const classifications = memoryClassifications(memory);
-  if (classifications.includes("user_preference")) return "User Preferences";
-  if (classifications.includes("interaction_style")) return "Interaction Style";
-  if (classifications.includes("relationship_boundary")) return "Relationship Boundaries";
-  if (classifications.includes("affective_pattern")) return "Affective Patterns";
-  if (classifications.includes("workflow_rule") || classifications.includes("procedural_rule")) return "Workflow Rules";
-  if (classifications.includes("system_policy")) return "System Policies";
-  if (classifications.includes("reference")) return "References";
-  if (classifications.includes("episode")) return "Episodes";
-  if (classifications.includes("project_fact")) return "Project Facts";
-  if (hasTag(memory, "user_preference")) return "User Preferences";
-  if (hasTag(memory, "interaction_style")) return "Interaction Style";
-  if (hasTag(memory, "relationship_boundary")) return "Relationship Boundaries";
-  if (hasTag(memory, "affective_pattern")) return "Affective Patterns";
-  if (hasTag(memory, "workflow_rule")) return "Workflow Rules";
-  if (hasTag(memory, "system_policy")) return "System Policies";
-  if (hasTag(memory, "reference")) return "References";
-  if (hasTag(memory, "episode")) return "Episodes";
-  if (hasTag(memory, "project_fact")) return "Project Facts";
-  return "Other Global Memory";
-}
-function memoryClassifications(memory) {
-  const classifications = [memory.candidateKind, memory.candidate_kind, memory.type];
-  return classifications.filter((value) => typeof value === "string" && value.trim() !== "");
-}
-function hasTag(memory, expected) {
-  return memory.tags.includes(expected);
+function labelForGlobalLifecycleMemory(memory) {
+  if (memory.confidenceTier === "global_core") return "Global Core";
+  return "Needs Tier Review";
 }
 function isReviewSummaryRecord2(value) {
   if (!isRecord8(value)) return false;
@@ -26520,7 +26596,7 @@ var CODEX_UI_STATIC_ASSETS = {
   },
   "/app.js": {
     "contentType": "text/javascript; charset=utf-8",
-    "body": `const WRITE_ACTION_COPY = 'Write actions require confirmation and review hash.'
+    "body": `const WRITE_ACTION_COPY = 'Manual review actions require confirmation and review hash.'
 const SESSION_ENDPOINT = '/api/session'
 const DRY_RUN_ENDPOINT = '/api/memory/harvest-project/dry-run'
 const TRIAGE_DRY_RUN_ENDPOINT = '/api/memory/triage/dry-run'
@@ -26546,14 +26622,11 @@ const EMPTY_DASHBOARD = {
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'inbox', label: 'Inbox' },
+  { id: 'manual-review', label: 'Manual Review' },
   { id: 'timeline', label: 'Timeline' },
-  { id: 'project-memory', label: 'Project Memory' },
-  { id: 'triage', label: 'Triage' },
-  { id: 'prepare', label: 'Prepare' },
-  { id: 'distillation', label: 'Distillation' },
-  { id: 'harvester', label: 'Harvester' },
-  { id: 'dream', label: 'Dream' },
+  { id: 'lifecycle-memory', label: 'Lifecycle Memory' },
+  { id: 'automation', label: 'Automation' },
+  { id: 'tools', label: 'Tools' },
   { id: 'profile', label: 'Profile' }
 ]
 
@@ -26726,7 +26799,7 @@ function renderTopbar() {
           ? statusChip('Scope', 'Global', 'muted')
           : statusChip('Project ID', shortHash(selection.projectId || 'unknown'), 'muted')}
         \${statusChip('Stop Hook', stopHook, stopHook === 'failed' ? 'error' : 'ok')}
-        \${statusChip('Pending', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
+        \${statusChip('Manual Review', String(pendingCount), pendingCount > 0 ? 'warn' : 'ok')}
         \${statusChip('SQLite', sqliteStatus, sqliteStatus === 'stale' ? 'warn' : 'muted')}
         \${statusChip('Model', modelStatus, modelStatus === 'configured' ? 'ok' : 'warn')}
       </div>
@@ -26794,7 +26867,7 @@ function selectionInfo(dashboard) {
       return { scope: 'project', label: candidate.displayName, projectId: candidate.projectId }
     }
   }
-  return { scope: 'project', label: 'Project Memory', projectId: '' }
+  return { scope: 'project', label: 'Lifecycle Memory', projectId: '' }
 }
 
 function modelLabel(status) {
@@ -26827,7 +26900,7 @@ function renderWorkspace() {
   }
   workspace.querySelectorAll('[data-pending-id]').forEach((row) => {
     row.addEventListener('click', () => {
-      state.activeTab = 'inbox'
+      state.activeTab = 'manual-review'
       state.selectedPendingId = row.dataset.pendingId || ''
       state.pendingAction = null
       state.receipt = null
@@ -26879,9 +26952,11 @@ function renderWorkspace() {
 }
 
 function pageHtml(tabId) {
-  if (tabId === 'inbox') return renderInbox()
+  if (tabId === 'manual-review' || tabId === 'inbox') return renderInbox()
   if (tabId === 'timeline') return renderTimeline()
-  if (tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'lifecycle-memory' || tabId === 'project-memory') return renderProjectMemory()
+  if (tabId === 'automation') return renderAutomation()
+  if (tabId === 'tools') return renderTools()
   if (tabId === 'triage') return renderTriage()
   if (tabId === 'prepare') return renderMemoryPrepare()
   if (tabId === 'distillation') return renderDistillPanel()
@@ -26901,8 +26976,8 @@ function renderOverview() {
     <section class="page-stack">
       \${sectionHeader('Overview', 'Visibility for the memory pipeline.')}
       <div class="metric-grid">
-        \${metric('Pending', pending.length, 'Awaiting review')}
-        \${metric('Active', active.length, \`\${selection.label || 'Selected'} memories\`)}
+        \${metric('Manual Review', pending.length, 'Awaiting review')}
+        \${renderLifecycleMetrics(active, selection.scope)}
         \${metric('Summaries', summaries.length, 'Stop Hook records')}
         \${metric('Signals', signals.length, 'Current workspace inputs')}
       </div>
@@ -26910,8 +26985,8 @@ function renderOverview() {
       \${renderTimelineDiagnostic()}
       \${renderRetrievalExplainPanel()}
       <div class="soft-panel">
-        <h3>Recent pending candidates</h3>
-        \${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+        <h3>Recent manual review</h3>
+        \${pending.slice(0, 3).map(renderCandidateRow).join('') || emptyState('No manual review candidates.')}
       </div>
       <div class="soft-panel">
         <h3>Recent timeline</h3>
@@ -26921,23 +26996,43 @@ function renderOverview() {
   \`
 }
 
+function renderLifecycleMetrics(memories, scope) {
+  const needsTier = memories.filter((memory) => !memory.confidenceTier).length
+  if (scope === 'global') {
+    return [
+      metric('Global Core', countTier(memories, 'global_core'), 'Core memory'),
+      needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+    ].join('')
+  }
+  return [
+    metric('Trial', countTier(memories, 'trial'), 'Workflow hints'),
+    metric('Validated', countTier(memories, 'validated'), 'Planning constraints'),
+    metric('Project Core', countTier(memories, 'project_core'), 'Profile candidates'),
+    needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+  ].join('')
+}
+
+function countTier(memories, tier) {
+  return memories.filter((memory) => memory.confidenceTier === tier).length
+}
+
 function renderInbox() {
   const pending = listPending()
   const selectedCount = pending.filter((candidate) => state.selectedPendingIds.includes(candidate.id)).length
   return \`
     <section class="page-stack">
-      \${sectionHeader('Inbox', 'Pending hypotheses stay provisional until explicit review.')}
+      \${sectionHeader('Manual Review', 'Candidates stay provisional until explicit review.')}
       <div class="soft-inset boundary-copy">\${escapeHtml(WRITE_ACTION_COPY)}</div>
       <div class="soft-panel">
         <div class="section-toolbar">
-          <h3>Pending candidates</h3>
+          <h3>Manual candidates</h3>
           <div class="detail-actions">
             <button class="soft-button compact" type="button" data-reject-selected-pending \${selectedCount === 0 ? 'disabled' : ''}>Reject selected</button>
             <button class="soft-button compact" type="button" data-reject-all-pending \${pending.length === 0 ? 'disabled' : ''}>Reject all in view</button>
           </div>
         </div>
         <p class="muted-copy">\${escapeHtml(String(selectedCount))} selected</p>
-        \${pending.map(renderCandidateRow).join('') || emptyState('No pending candidates.')}
+        \${pending.map(renderCandidateRow).join('') || emptyState('No manual review candidates.')}
       </div>
     </section>
   \`
@@ -26966,14 +27061,14 @@ function renderSemanticReviewCard(candidate, options = {}) {
   return \`
     <article class="memory-review-card selectable-row \${selected ? 'selected' : ''}" data-pending-id="\${escapeHtml(candidate.id)}">
       <header class="memory-review-header">
-        \${state.activeTab === 'inbox' ? \`
+        \${state.activeTab === 'manual-review' || state.activeTab === 'inbox' ? \`
           <label class="pending-select" aria-label="Select pending candidate">
             <input type="checkbox" data-pending-select="\${escapeHtml(candidate.id)}" \${state.selectedPendingIds.includes(candidate.id) ? 'checked' : ''}>
           </label>
         \` : ''}
         <div>
-          <p class="eyebrow">\${escapeHtml(memory.module || 'semantic memory')} \xB7 \${escapeHtml(memory.status || 'pending')}</p>
-          <h3>\${escapeHtml(memory.content || candidate.content || candidate.id || 'Pending candidate')}</h3>
+          <p class="eyebrow">\${escapeHtml(memory.module || 'semantic memory')} \xB7 \${escapeHtml(reviewQueueStatusLabel(memory.status))}</p>
+          <h3>\${escapeHtml(memory.content || candidate.content || candidate.id || 'Review candidate')}</h3>
         </div>
         <div class="row-actions">
           \${statusChip('Readiness', \`\${readinessStatus} \xB7 \${targetShape}\`, readinessTone(readinessStatus))}
@@ -26984,7 +27079,7 @@ function renderSemanticReviewCard(candidate, options = {}) {
       <div class="memory-review-sections \${compact ? 'compact' : ''}">
         \${reviewSection('What will be remembered', [
           ['Content', memory.content || candidate.content || ''],
-          ['Why it matters', evidencePreview.whyImportant || candidate.episodeEvidence?.whyImportant || 'Review before this becomes active memory.']
+          ['Why it matters', evidencePreview.whyImportant || candidate.episodeEvidence?.whyImportant || 'Review before this becomes trial/validated/core memory.']
         ])}
         \${reviewSection('Identity', [
           ['Kind', memory.kind || candidate.candidateKind || candidate.type || 'memory'],
@@ -27061,7 +27156,7 @@ function renderTimeline() {
   const summaries = listSummaries()
   return \`
     <section class="page-stack">
-      \${sectionHeader('Timeline', 'Stop Hook review summaries and linked pending ids.')}
+      \${sectionHeader('Timeline', 'Stop Hook review summaries and linked review ids.')}
       \${renderTimelineDiagnostic()}
       <div class="soft-panel">
         <h3>Review summaries</h3>
@@ -27089,15 +27184,15 @@ function renderProjectMemory() {
   const selection = selectionInfo(state.dashboard)
   return \`
     <section class="page-stack">
-      \${sectionHeader('Project Memory', \`Active memory for \${selection.label || 'selected scope'}.\`)}
+      \${sectionHeader('Lifecycle Memory', \`Tiered memory for \${selection.label || 'selected scope'}.\`)}
       \${state.activeReceipt ? renderActiveReceipt(state.activeReceipt) : ''}
       \${state.activeAction ? renderActiveActionForm() : ''}
       \${groups.length > 0 ? groups.map((group) => \`
         <div class="soft-panel">
-          <h3>\${escapeHtml(group.label || 'Project memory')}</h3>
-          \${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No active memories in this group.')}
+          <h3>\${escapeHtml(group.label || 'Lifecycle memory')}</h3>
+          \${(group.memories || []).map(renderMemoryRow).join('') || emptyState('No lifecycle memories in this group.')}
         </div>
-      \`).join('') : panel('Project memory unavailable', 'No grouped project memory returned yet.', 'muted')}
+      \`).join('') : panel('Lifecycle memory unavailable', 'No grouped lifecycle memory returned yet.', 'muted')}
     </section>
   \`
 }
@@ -27110,7 +27205,7 @@ function renderMemoryRow(memory) {
         <div class="row-meta">\${escapeHtml(memory.candidateKind || memory.type || 'memory')} \xB7 \${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
       </div>
       <div class="row-actions">
-        \${statusChip('active', memory.status || 'active', 'ok')}
+        \${statusChip('tier', memoryTierLabel(memory), 'ok')}
         <button class="soft-button compact" type="button" data-active-action="archive" data-memory-id="\${escapeHtml(memory.id)}">Archive</button>
         <button class="soft-button compact" type="button" data-active-action="tombstone" data-memory-id="\${escapeHtml(memory.id)}">Tombstone</button>
         <button class="soft-button compact" type="button" data-active-action="propose-edit" data-memory-id="\${escapeHtml(memory.id)}">Propose edit</button>
@@ -27121,7 +27216,7 @@ function renderMemoryRow(memory) {
 
 function renderActiveActionForm() {
   const memory = findActiveMemoryById(state.activeAction.id)
-  if (!memory) return panel('Active memory unavailable', 'Refresh the dashboard and try again.', 'error')
+  if (!memory) return panel('Lifecycle memory unavailable', 'Refresh the dashboard and try again.', 'error')
   const action = state.activeAction.action
   const editField = action === 'propose-edit'
     ? \`
@@ -27167,9 +27262,9 @@ function renderActiveActionForm() {
 function renderActiveReceipt(receipt) {
   return \`
     <div class="soft-panel receipt-panel">
-      <p class="eyebrow">active memory receipt</p>
+      <p class="eyebrow">lifecycle memory receipt</p>
       <h3>\${escapeHtml(activeActionLabel(receipt.action || 'archive'))}</h3>
-      <div class="soft-inset rail-item"><strong>\${escapeHtml(receipt.id || 'memory')}</strong><span>\${escapeHtml(receipt.summary || 'Active memory action applied.')}</span></div>
+      <div class="soft-inset rail-item"><strong>\${escapeHtml(receipt.id || 'memory')}</strong><span>\${escapeHtml(receipt.summary || 'Lifecycle memory action applied.')}</span></div>
     </div>
   \`
 }
@@ -27201,10 +27296,10 @@ async function submitActiveAction(formData) {
     })
     const payload = await response.json()
     if (!payload.ok) {
-      throw new Error(payload.error?.message || 'Active memory action failed.')
+      throw new Error(payload.error?.message || 'Lifecycle memory action failed.')
     }
     await loadDashboard({ renderAfter: false })
-    state.activeReceipt = payload.data?.receipt || { id: activeAction.id, action: activeAction.action, summary: 'Active memory action applied.' }
+    state.activeReceipt = payload.data?.receipt || { id: activeAction.id, action: activeAction.action, summary: 'Lifecycle memory action applied.' }
     state.activeAction = null
     state.activeActionError = ''
   } catch (error) {
@@ -27231,7 +27326,7 @@ function renderHarvester() {
     ? panel('Harvester dry-run failed', escapeHtml(state.harvester.error), 'error')
     : result
       ? renderHarvesterResult(result)
-      : panel('Dry-run ready', 'Preview project-scope candidates without writing pending memory.', 'muted')
+      : panel('Dry-run ready', 'Preview project-scope candidates without writing manual review memory.', 'muted')
 
   return \`
     <section class="page-stack">
@@ -27239,7 +27334,7 @@ function renderHarvester() {
       <div class="soft-panel action-panel">
         <div>
           <h3>Project harvester</h3>
-          <p>Uses the current workspace, not the selected review scope. No pending memory was written.</p>
+          <p>Uses the current workspace, not the selected memory scope. No manual review memory was written.</p>
         </div>
         <button class="soft-button primary" type="button" data-harvest-dry-run \${state.harvester.loading ? 'disabled' : ''}>
           \${state.harvester.loading ? 'Running dry-run' : 'Run dry-run'}
@@ -27281,7 +27376,7 @@ function renderHarvesterResult(result) {
   return \`
     <div class="soft-panel">
       <h3>Dry-run result</h3>
-      <div class="soft-inset">Action: \${escapeHtml(result.action || 'preview')} \xB7 No pending memory was written.</div>
+      <div class="soft-inset">Action: \${escapeHtml(result.action || 'preview')} \xB7 No manual review memory was written.</div>
       \${reason}
       \${warnings.map((warning) => \`<p class="notice warn">\${escapeHtml(warning)}</p>\`).join('')}
       \${candidates.map(renderPreviewCandidateRow).join('') || emptyState(emptyCopy)}
@@ -27295,15 +27390,15 @@ function renderTriage() {
     ? panel('Triage failed', escapeHtml(state.triage.error), 'error')
     : result
       ? renderTriageResult(result)
-      : panel('Triage ready', 'Preview pending-memory cleanup and review recommendations for the selected scope.', 'muted')
+      : panel('Triage ready', 'Preview manual review cleanup and recommendations for the selected scope.', 'muted')
 
   return \`
     <section class="page-stack">
-      \${sectionHeader('Triage', 'Cluster and rank pending memory for review.')}
+      \${sectionHeader('Triage', 'Cluster and rank manual review candidates.')}
       <div class="soft-panel action-panel">
         <div>
-          <h3>Pending triage</h3>
-          <p>Preview duplicate, defer, drop, and review recommendations. Safe apply only drops transient noise, merges duplicate pending items, and defers weak candidates.</p>
+          <h3>Manual review triage</h3>
+          <p>Preview duplicate, defer, drop, and review recommendations. Safe apply only drops transient noise, merges duplicate review candidates, and defers weak candidates.</p>
         </div>
         <div class="detail-actions">
           <button class="soft-button primary" type="button" data-triage-mode="dry-run" \${state.triage.loading ? 'disabled' : ''}>
@@ -27403,15 +27498,15 @@ function renderMemoryPrepare() {
     ? panel('Prepare failed', escapeHtml(state.prepare.error), 'error')
     : result
       ? renderMemoryPrepareResult(result)
-      : panel('Prepare ready', 'Preview or apply semantic cleanup for pending candidates in the selected scope.', 'muted')
+      : panel('Prepare ready', 'Preview or apply semantic cleanup for review candidates in the selected scope.', 'muted')
 
   return \`
     <section class="page-stack">
-      \${sectionHeader('Prepare', 'Rewrite pending candidates into reviewable semantic memory shape.')}
+      \${sectionHeader('Prepare', 'Rewrite review candidates into reviewable semantic memory shape.')}
       <div class="soft-panel action-panel">
         <div>
           <h3>Semantic prepare</h3>
-          <p>Dry-run previews content replacements and boundary enrichment. Apply writes pending records and rewrite receipts; active memory is not changed.</p>
+          <p>Dry-run previews content replacements and boundary enrichment. Apply writes manual review records and rewrite receipts; lifecycle memory is not changed.</p>
         </div>
         <div class="detail-actions">
           <button class="soft-button primary" type="button" data-prepare-mode="dry-run" \${state.prepare.loading ? 'disabled' : ''}>
@@ -27456,13 +27551,13 @@ function renderMemoryPrepareResult(result) {
     <div class="soft-panel">
       <h3>\${escapeHtml(title)}</h3>
       <div class="triage-grid">
-        \${metric('Pending', result.pendingBeforeCount ?? 0, \`\${result.pendingAfterCount ?? 0} after prepare\`)}
+        \${metric('Manual Review', result.pendingBeforeCount ?? 0, \`\${result.pendingAfterCount ?? 0} after prepare\`)}
         \${metric('Changed', changed, 'replace/enrich/fail actions')}
         \${metric('Receipts', receipts.length, result.dryRun ? 'preview only' : 'written')}
-        \${metric('Active', result.activeAfterCount ?? 0, \`\${result.activeBeforeCount ?? 0} before prepare\`)}
+        \${metric('Lifecycle', result.activeAfterCount ?? 0, \`\${result.activeBeforeCount ?? 0} before prepare\`)}
       </div>
-      <div class="soft-inset">Scope: \${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} \xB7 \${result.dryRun ? 'preview only' : 'pending updated'}</div>
-      \${results.slice(0, 8).map(renderMemoryPrepareRow).join('') || emptyState('No pending candidates needed prepare.')}
+      <div class="soft-inset">Scope: \${escapeHtml(result.selection?.label || selectionInfo(state.dashboard).label || 'selected scope')} \xB7 \${result.dryRun ? 'preview only' : 'manual review updated'}</div>
+      \${results.slice(0, 8).map(renderMemoryPrepareRow).join('') || emptyState('No review candidates needed prepare.')}
     </div>
   \`
 }
@@ -27498,11 +27593,11 @@ function renderDistillPanel() {
     ? panel('Distillation dry-run failed', escapeHtml(state.distill.error), 'error')
     : result
       ? renderDistillCandidates(result)
-      : panel('Distillation ready', 'Duplicate pending-memory preview.', 'muted')
+      : panel('Distillation ready', 'Duplicate manual review preview.', 'muted')
 
   return \`
     <section class="page-stack">
-      \${sectionHeader('Distillation', 'Pending duplicate dry-run.')}
+      \${sectionHeader('Distillation', 'Manual review duplicate dry-run.')}
       <div class="soft-panel action-panel">
         <div>
           <h3>Memory distillation</h3>
@@ -27569,6 +27664,40 @@ function renderDistillCandidate(candidate) {
   \`
 }
 
+function renderAutomation() {
+  const dream = state.dashboard.dream.dream || {}
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Automation', 'Scheduled lifecycle maintenance.')}
+      <div class="metric-grid">
+        \${metric('Daily 15:00', 'Trial -> Validated', 'Project lifecycle')}
+        \${metric('Weekly Sun 15:00', 'Validated -> Core', 'Core consolidation')}
+        \${metric('Manual Review', listPending().length, 'High-risk recommendations')}
+      </div>
+      <div class="soft-panel">
+        <h3>Dream status</h3>
+        <div class="soft-inset">
+          Due: \${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
+          Last run: \${escapeHtml(dream.lastDreamAt || 'never')}<br>
+          Status: \${escapeHtml(dream.lastDreamStatus || 'unknown')}
+        </div>
+      </div>
+    </section>
+  \`
+}
+
+function renderTools() {
+  return \`
+    <section class="page-stack">
+      \${sectionHeader('Tools', 'Maintenance tools for manual review and project signal previews.')}
+      \${renderTriage()}
+      \${renderMemoryPrepare()}
+      \${renderDistillPanel()}
+      \${renderHarvester()}
+    </section>
+  \`
+}
+
 function renderDream() {
   const dream = state.dashboard.dream.dream || {}
   return \`
@@ -27601,12 +27730,12 @@ function renderProfile() {
 
 function renderDetailRail() {
   const selected = selectedPending()
-  if (state.activeTab === 'inbox' && state.receipt) {
+  if ((state.activeTab === 'manual-review' || state.activeTab === 'inbox') && state.receipt) {
     detailRail.innerHTML = renderReceipt()
     bindDetailRailActions(selected)
     return
   }
-  if (state.activeTab === 'inbox' && selected) {
+  if ((state.activeTab === 'manual-review' || state.activeTab === 'inbox') && selected) {
     detailRail.innerHTML = renderPendingDetail(selected)
     bindDetailRailActions(selected)
     return
@@ -27633,8 +27762,8 @@ function renderDetailRail() {
         \`).join('') || emptyState('No signals found.')}
       </div>
       <div class="soft-panel">
-        <h3>Review queue</h3>
-        <p>\${escapeHtml(String(pending.length))} pending candidates in this scope</p>
+        <h3>Manual Review</h3>
+        <p>\${escapeHtml(String(pending.length))} manual review candidates in this scope</p>
       </div>
     </div>
   \`
@@ -27645,7 +27774,7 @@ function renderSelectionRail() {
   const selection = selectionInfo(state.dashboard)
   return \`
     <div class="soft-panel">
-      <h3>Review scope</h3>
+      <h3>Memory scope</h3>
       <div class="soft-inset rail-item">
         <strong>\${escapeHtml(selection.label || 'Selected memory')}</strong>
         <span>\${escapeHtml(selectionMeta(selection))}</span>
@@ -27813,7 +27942,7 @@ function readinessReasonItems(readiness, activeReadiness) {
   if (Array.isArray(activeReadiness?.reasons) && activeReadiness.reasons.length > 0) {
     return activeReadiness.reasons.map((reason) => ({ code: reason, text: reason }))
   }
-  return [{ code: 'reviewable_candidate_shape', text: 'Candidate has no blocking active-memory rewrite signals.' }]
+  return [{ code: 'reviewable_candidate_shape', text: 'Candidate has no blocking lifecycle-memory rewrite signals.' }]
 }
 
 function formatReadinessReason(reason) {
@@ -28062,7 +28191,7 @@ function renderReceipt() {
         <h3>\${escapeHtml(actionLabel(receipt.action || 'review'))}</h3>
         <div class="soft-inset rail-item"><strong>\${escapeHtml(receipt.id || 'memory')}</strong><span>\${escapeHtml(receipt.summary || 'Action completed.')}</span></div>
         <div class="soft-inset rail-item"><strong>reviewHash</strong><span>\${escapeHtml(shortHash(receipt.reviewHash || ''))}</span></div>
-        <button class="soft-button compact" type="button" data-clear-receipt>Back to queue</button>
+        <button class="soft-button compact" type="button" data-clear-receipt>Back to Manual Review</button>
       </div>
     </div>
   \`
@@ -28161,7 +28290,7 @@ async function submitBatchPendingReject(candidates) {
   try {
     const response = await apiFetch(\`\${BATCH_REJECT_ENDPOINT}\${selectionQuery()}\`, {
       method: 'POST',
-      body: JSON.stringify({ candidates: candidatesWithHashes, reason: 'Rejected by Codex pending memory bulk review.' })
+      body: JSON.stringify({ candidates: candidatesWithHashes, reason: 'Rejected by Codex manual review bulk review.' })
     })
     const payload = await response.json()
     if (!payload.ok) {
@@ -28225,6 +28354,19 @@ function selectedPending() {
 
 function findActiveMemoryById(id) {
   return listActive().find((memory) => memory.id === id)
+}
+
+function memoryTierLabel(memory) {
+  if (memory?.confidenceTier === 'trial') return 'Trial'
+  if (memory?.confidenceTier === 'validated') return 'Validated'
+  if (memory?.confidenceTier === 'project_core') return 'Project Core'
+  if (memory?.confidenceTier === 'global_core') return 'Global Core'
+  return 'Needs Tier Review'
+}
+
+function reviewQueueStatusLabel(status) {
+  if (status === 'pending') return 'manual review'
+  return status || 'manual review'
 }
 
 function selectedProjectOption() {
@@ -28882,7 +29024,7 @@ function isFileErrorCode15(error2, code) {
 
 // src/codex/memory-dream.ts
 import { randomUUID as randomUUID25 } from "node:crypto";
-import { lstat as lstat18, mkdir as mkdir12, readFile as readFile21, rm as rm6, writeFile as writeFile11 } from "node:fs/promises";
+import { lstat as lstat18, mkdir as mkdir12, readFile as readFile21, rm as rm8, writeFile as writeFile11 } from "node:fs/promises";
 import { join as join29 } from "node:path";
 
 // src/codex/dream-proposal.ts
@@ -29567,7 +29709,7 @@ async function removeDreamLockIfOwner(lockDir, expectedOwner) {
   if (!isSameDreamLockOwner(owner, expectedOwner)) {
     return false;
   }
-  await rm6(lockDir, { recursive: true, force: true });
+  await rm8(lockDir, { recursive: true, force: true });
   return true;
 }
 async function isDreamLockDirStale(lockDir, now, ttlMs) {
@@ -29582,7 +29724,7 @@ async function removeDreamLockIfUnowned(lockDir) {
   if (owner !== void 0) {
     return false;
   }
-  await rm6(lockDir, { recursive: true, force: true });
+  await rm8(lockDir, { recursive: true, force: true });
   return true;
 }
 function isSameDreamLockOwner(owner, expectedOwner) {
@@ -29594,7 +29736,7 @@ function isSameDreamLockOwner(owner, expectedOwner) {
 async function releaseDreamLock(lock) {
   const owner = await readDreamLockOwner(lock.lockDir);
   if (owner !== void 0 && owner.token === lock.token) {
-    await rm6(lock.lockDir, { recursive: true, force: true });
+    await rm8(lock.lockDir, { recursive: true, force: true });
   }
 }
 function isFileErrorCode17(error2, code) {
@@ -45347,7 +45489,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_propose",
     {
-      description: "Propose a structured Cyrene memory candidate for pending-only review.",
+      description: "Propose a structured Cyrene memory candidate for trial admission or manual review.",
       inputSchema: memoryProposeInputSchema
     },
     async (input) => handleMemoryPropose(input, options.cwd)
@@ -45355,7 +45497,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_harvest_project",
     {
-      description: "Harvest active project signals into pending-only Cyrene memory candidates; use dryRun to preview candidates without writing pending review items.",
+      description: "Harvest project signals into low-risk trial memories or manual review candidates; use dryRun to preview candidates without writing memory.",
       inputSchema: memoryHarvestProjectInputSchema
     },
     async (input) => handleMemoryHarvestProject(input, options.cwd)

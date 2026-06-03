@@ -67,8 +67,8 @@ export interface CodexProjectDeleteMemoryResult {
 
 const PROJECT_METADATA_FILE = 'project.json'
 const MERGE_JSONL_FILES = [
-  'index.jsonl',
-  'pending.jsonl',
+  'semantic_memories.jsonl',
+  'review_queue.jsonl',
   'tombstones.jsonl',
   'events.jsonl',
   'profile_candidates.jsonl',

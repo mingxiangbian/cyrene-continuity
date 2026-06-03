@@ -106,31 +106,11 @@ interface ProjectMemoryGroup {
 }
 
 const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
-const PROJECT_MEMORY_LABELS = [
-  'Project Facts',
-  'Project Decisions',
-  'Workflow Rules',
-  'Known Pitfalls',
-  'Rejected Approaches',
-  'Open Questions',
-  'Other Project Memory'
-] as const
+const PROJECT_LIFECYCLE_LABELS = ['Trial', 'Validated', 'Project Core', 'Needs Tier Review'] as const
+const GLOBAL_LIFECYCLE_LABELS = ['Global Core', 'Needs Tier Review'] as const
 
-const GLOBAL_MEMORY_LABELS = [
-  'User Preferences',
-  'Interaction Style',
-  'Relationship Boundaries',
-  'Affective Patterns',
-  'Workflow Rules',
-  'System Policies',
-  'References',
-  'Episodes',
-  'Project Facts',
-  'Other Global Memory'
-] as const
-
-type ProjectMemoryLabel = typeof PROJECT_MEMORY_LABELS[number]
-type GlobalMemoryLabel = typeof GLOBAL_MEMORY_LABELS[number]
+type ProjectLifecycleLabel = typeof PROJECT_LIFECYCLE_LABELS[number]
+type GlobalLifecycleLabel = typeof GLOBAL_LIFECYCLE_LABELS[number]
 type CodexUiMemoryScope = 'project' | 'global' | 'all'
 type MemoryWriteAction = 'approve' | 'reject' | 'defer' | 'edit'
 type ActiveMemoryWriteAction = 'archive' | 'tombstone' | 'propose-edit' | 'supersede'
@@ -1434,83 +1414,45 @@ async function readReviewSummaryRecordsForUi(memoryRoot: string): Promise<CodexR
 }
 
 function groupProjectMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
-  const groups = new Map<ProjectMemoryLabel, CyreneMemory[]>()
-  for (const label of PROJECT_MEMORY_LABELS) {
+  const groups = new Map<ProjectLifecycleLabel, CyreneMemory[]>()
+  for (const label of PROJECT_LIFECYCLE_LABELS) {
     groups.set(label, [])
   }
 
   for (const memory of memories) {
-    groups.get(labelForProjectMemory(memory))?.push(memory)
+    groups.get(labelForProjectLifecycleMemory(memory))?.push(memory)
   }
 
-  return PROJECT_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
+  return PROJECT_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
 }
 
 function groupGlobalMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
-  const groups = new Map<GlobalMemoryLabel, CyreneMemory[]>()
-  for (const label of GLOBAL_MEMORY_LABELS) {
+  const groups = new Map<GlobalLifecycleLabel, CyreneMemory[]>()
+  for (const label of GLOBAL_LIFECYCLE_LABELS) {
     groups.set(label, [])
   }
 
   for (const memory of memories) {
-    groups.get(labelForGlobalMemory(memory))?.push(memory)
+    groups.get(labelForGlobalLifecycleMemory(memory))?.push(memory)
   }
 
-  return GLOBAL_MEMORY_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
+  return GLOBAL_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
 }
 
 function groupMemoriesForSelection(memories: CyreneMemory[], scope: CodexUiMemoryScope): ProjectMemoryGroup[] {
   return scope === 'global' ? groupGlobalMemories(memories) : groupProjectMemories(memories)
 }
 
-function labelForProjectMemory(memory: CyreneMemory): ProjectMemoryLabel {
-  const classifications = memoryClassifications(memory)
-  if (classifications.includes('project_decision')) return 'Project Decisions'
-  if (classifications.includes('workflow_rule') || classifications.includes('procedural_rule')) return 'Workflow Rules'
-  if (classifications.includes('known_pitfall')) return 'Known Pitfalls'
-  if (classifications.includes('rejected_approach')) return 'Rejected Approaches'
-  if (classifications.includes('open_question')) return 'Open Questions'
-  if (classifications.includes('project_fact')) return 'Project Facts'
-  if (hasTag(memory, 'project_decision')) return 'Project Decisions'
-  if (hasTag(memory, 'workflow_rule')) return 'Workflow Rules'
-  if (hasTag(memory, 'known_pitfall')) return 'Known Pitfalls'
-  if (hasTag(memory, 'rejected_approach')) return 'Rejected Approaches'
-  if (hasTag(memory, 'open_question')) return 'Open Questions'
-  if (hasTag(memory, 'project_fact')) return 'Project Facts'
-  return 'Other Project Memory'
+function labelForProjectLifecycleMemory(memory: CyreneMemory): ProjectLifecycleLabel {
+  if (memory.confidenceTier === 'trial') return 'Trial'
+  if (memory.confidenceTier === 'validated') return 'Validated'
+  if (memory.confidenceTier === 'project_core') return 'Project Core'
+  return 'Needs Tier Review'
 }
 
-function labelForGlobalMemory(memory: CyreneMemory): GlobalMemoryLabel {
-  const classifications = memoryClassifications(memory)
-  if (classifications.includes('user_preference')) return 'User Preferences'
-  if (classifications.includes('interaction_style')) return 'Interaction Style'
-  if (classifications.includes('relationship_boundary')) return 'Relationship Boundaries'
-  if (classifications.includes('affective_pattern')) return 'Affective Patterns'
-  if (classifications.includes('workflow_rule') || classifications.includes('procedural_rule')) return 'Workflow Rules'
-  if (classifications.includes('system_policy')) return 'System Policies'
-  if (classifications.includes('reference')) return 'References'
-  if (classifications.includes('episode')) return 'Episodes'
-  if (classifications.includes('project_fact')) return 'Project Facts'
-  if (hasTag(memory, 'user_preference')) return 'User Preferences'
-  if (hasTag(memory, 'interaction_style')) return 'Interaction Style'
-  if (hasTag(memory, 'relationship_boundary')) return 'Relationship Boundaries'
-  if (hasTag(memory, 'affective_pattern')) return 'Affective Patterns'
-  if (hasTag(memory, 'workflow_rule')) return 'Workflow Rules'
-  if (hasTag(memory, 'system_policy')) return 'System Policies'
-  if (hasTag(memory, 'reference')) return 'References'
-  if (hasTag(memory, 'episode')) return 'Episodes'
-  if (hasTag(memory, 'project_fact')) return 'Project Facts'
-  return 'Other Global Memory'
-}
-
-function memoryClassifications(memory: CyreneMemory): string[] {
-  const classifications: unknown[] = [memory.candidateKind, memory.candidate_kind, memory.type]
-  return classifications
-    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
-}
-
-function hasTag(memory: CyreneMemory, expected: MemoryCandidateKind | string): boolean {
-  return memory.tags.includes(expected)
+function labelForGlobalLifecycleMemory(memory: CyreneMemory): GlobalLifecycleLabel {
+  if (memory.confidenceTier === 'global_core') return 'Global Core'
+  return 'Needs Tier Review'
 }
 
 function isReviewSummaryRecord(value: unknown): value is CodexReviewSummaryRecord {

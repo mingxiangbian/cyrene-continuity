@@ -38,7 +38,7 @@ describe('Codex memory v1.4 pending creation shaping', () => {
       allowAutoPromote: false
     })
 
-    const pending = parseJsonLines<PendingMemory>(await readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8'))
+    const pending = parseJsonLines<PendingMemory>(await readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8'))
     expect(pending).toHaveLength(1)
     expect(pending[0]?.content).toBe(
       'Pending-memory rejection workflows must validate each candidate review hash before mutation and verify the queue state after rejection.'
@@ -72,6 +72,6 @@ describe('Codex memory v1.4 pending creation shaping', () => {
     })
 
     expect(result.action).toBe('admit_to_distillation')
-    await expect(readFile(join(result.memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

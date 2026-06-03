@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { lstat, readFile, realpath, rename, writeFile } from 'node:fs/promises'
+import { lstat, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   activationPolicyForConfidenceTier,
@@ -16,6 +16,7 @@ import {
   assertSafeMemoryDataFileTarget,
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
+import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
 import {
   ACTIVATION_MODES,
   ADMISSION_ACTIONS,
@@ -48,9 +49,10 @@ import {
 import { identifyCodexProject } from './project-id.js'
 import { listCodexProjects } from './project-registry.js'
 
-const INDEX_FILE = 'index.jsonl'
-const PENDING_FILE = 'pending.jsonl'
+const LEGACY_INDEX_FILE = 'index.jsonl'
+const LEGACY_PENDING_FILE = 'pending.jsonl'
 const SEMANTIC_MEMORIES_FILE = 'semantic_memories.jsonl'
+const REVIEW_QUEUE_FILE = 'review_queue.jsonl'
 const HIGH_RISK_DOMAINS = new Set<MemoryDomain>(['personal', 'relationship', 'affective'])
 const LOW_RISK_DOMAINS = new Set<MemoryDomain>(['project', 'procedural', 'system'])
 const REVIEW_SUMMARY_NOISE_PHRASES = [
@@ -185,7 +187,14 @@ export async function runCodexMemoryLifecycleMigrateV15(
       results.push(skippedRootResult(root, readable.reason))
       continue
     }
-    results.push(await migrateReadableRoot({ ...root, memoryRoot: readable.memoryRoot }, { dryRun, now }))
+    const readableRoot = { ...root, memoryRoot: readable.memoryRoot }
+    if (dryRun) {
+      results.push(await migrateReadableRoot(readableRoot, { dryRun, now }))
+      continue
+    }
+    results.push(await withMemoryMaintenanceLockFromRoot(readableRoot.memoryRoot, (lockedMemoryRoot) =>
+      migrateReadableRoot({ ...readableRoot, memoryRoot: lockedMemoryRoot }, { dryRun, now })
+    ))
   }
   if (registryFailure !== undefined) {
     results.push(registryFailure)
@@ -203,8 +212,8 @@ async function migrateReadableRoot(
   input: { dryRun: boolean; now: string }
 ): Promise<CodexMemoryLifecycleMigrateV15RootResult> {
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
-    readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, INDEX_FILE), isValidLegacyActiveMemory),
-    readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, PENDING_FILE), isValidPendingMemory),
+    readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, LEGACY_INDEX_FILE), isValidLegacyActiveMemory),
+    readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, LEGACY_PENDING_FILE), isValidPendingMemory),
     readJsonLinesWithMalformed<SemanticMemory>(join(root.memoryRoot, SEMANTIC_MEMORIES_FILE), isValidSemanticMemory)
   ])
   const legacyActive = legacyActiveRead.records
@@ -433,11 +442,9 @@ async function migrateReadableRoot(
       await appendMemoryEventFromRoot(root.memoryRoot, dropAuditEvent(root, audit, input.now))
     }
     await writeSemanticMemoriesFromRoot(root.memoryRoot, nextSemantic)
-    await writeJsonLinesAtomic(join(root.memoryRoot, PENDING_FILE), [])
-    await writeJsonLinesAtomic(
-      join(root.memoryRoot, INDEX_FILE),
-      nextSemantic.filter((memory) => memory.status === 'active').map(semanticMemoryToActiveMemory)
-    )
+    await writeJsonLinesAtomic(join(root.memoryRoot, REVIEW_QUEUE_FILE), [])
+    await removeMemoryDataFileIfExists(join(root.memoryRoot, LEGACY_INDEX_FILE))
+    await removeMemoryDataFileIfExists(join(root.memoryRoot, LEGACY_PENDING_FILE))
     await appendMemoryEventFromRoot(root.memoryRoot, completionEvent(result, input.now))
   }
 
@@ -1096,6 +1103,11 @@ async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promis
   const content = values.map((value) => JSON.stringify(value)).join('\n')
   await writeFile(tempPath, content === '' ? '' : `${content}\n`, 'utf8')
   await rename(tempPath, filePath)
+}
+
+async function removeMemoryDataFileIfExists(filePath: string): Promise<void> {
+  await assertSafeMemoryDataFileTarget(filePath)
+  await rm(filePath, { force: true })
 }
 
 function isFileErrorCode(error: unknown, code: string): boolean {

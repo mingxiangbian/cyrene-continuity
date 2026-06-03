@@ -540,7 +540,7 @@ function runProfilePollutionEval(
   )
   for (const candidate of pending) {
     if (!promotedCandidateIds.has(candidate.id) && profilePreview.includes(candidate.content)) {
-      findings.push({ memoryId: candidate.id, reason: 'profile preview contains pending-only content' })
+      findings.push({ memoryId: candidate.id, reason: 'profile preview contains manual review queue content' })
     }
   }
 

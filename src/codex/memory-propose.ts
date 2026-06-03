@@ -10,6 +10,8 @@ import { evaluateAutoPromotionPolicy } from './memory-triage.js'
 import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import { shapePendingCandidateContent } from './semantic-content-builder.js'
+import { activationPolicyForConfidenceTier } from '../memory/memory-lifecycle.js'
+import { pendingMemoryToSemanticMemory } from '../memory/semantic-memory-adapter.js'
 import {
   combineEvalGateResults,
   runV5AutoPromotionEvalGate,
@@ -28,6 +30,7 @@ import {
   readMemoryEventsFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot,
+  upsertSemanticMemoriesFromRoot,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../memory/memory-store.js'
@@ -45,7 +48,8 @@ import type {
   MemorySource,
   MemoryStrength,
   MemoryType,
-  PendingMemory
+  PendingMemory,
+  SemanticMemory
 } from '../memory/types.js'
 import type { CodexPendingMemorySummary } from './memory-review.js'
 
@@ -100,6 +104,13 @@ export interface CodexMemoryProposeResult {
         candidateId: string
         memoryId: string
         policyId: string
+        reason: string
+      }
+    | {
+        action: 'trial'
+        candidateId: string
+        memoryId: string
+        policyId: 'v15_project_trial_admission_v1'
         reason: string
       }
   memoryRoot: string
@@ -168,6 +179,25 @@ export async function proposeCodexMemoryCandidate(input: {
     }
 
     const pendingCandidate = decision.action === 'pending' ? decision.candidate : candidate
+    const activeConflict = existingMemories.find((memory) => memory.normalizedKey === pendingCandidate.normalizedKey)
+    if (activeConflict !== undefined) {
+      const reason = 'normalizedKey conflict with active memory'
+      if (input.recordRejectedCandidate !== false) {
+        await appendMemoryEventFromRoot(lockedMemoryRoot, {
+          id: randomUUID(),
+          action: 'reject',
+          at: now,
+          reason,
+          memoryId: activeConflict.id,
+          candidateId: pendingCandidate.id
+        })
+      }
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: { action: 'reject', reason },
+        memoryRoot: lockedMemoryRoot
+      }
+    }
     const existingPending = lockedPending.find((item) => item.normalizedKey === pendingCandidate.normalizedKey)
     const mergedCandidateBase = existingPending === undefined
       ? pendingCandidate
@@ -207,6 +237,45 @@ export async function proposeCodexMemoryCandidate(input: {
           dailyCap
         })
       : undefined
+
+    if (
+      input.allowAutoPromote !== false &&
+      isProjectTrialEligible({
+        candidate: mergedCandidate,
+        activeReadinessReady: activeReadiness.ready
+      })
+    ) {
+      const trial = trialSemanticMemoryFromCandidate(mergedCandidate, now)
+      await upsertSemanticMemoriesFromRoot(lockedMemoryRoot, [trial])
+      await appendMemoryEventFromRoot(lockedMemoryRoot, {
+        id: randomUUID(),
+        action: 'create',
+        at: now,
+        reason: 'v1.5 admitted low-risk project memory to trial',
+        memoryId: trial.id,
+        candidateId: mergedCandidate.id,
+        details: {
+          decision: 'admit_to_trial',
+          policyId: 'v15_project_trial_admission_v1',
+          confidenceTier: 'trial',
+          activationPolicy: trial.activationPolicy,
+          scoreSnapshot: mergedCandidate.scores,
+          evidenceCount: mergedCandidate.evidence.length
+        }
+      })
+      await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+      return {
+        project: { projectId: project.projectId, displayName: project.displayName },
+        result: {
+          action: 'trial',
+          candidateId: mergedCandidate.id,
+          memoryId: trial.id,
+          policyId: 'v15_project_trial_admission_v1',
+          reason: 'v1.5 admitted low-risk project memory to trial'
+        },
+        memoryRoot: lockedMemoryRoot
+      }
+    }
 
     if (
       autoPromotion.allowed &&
@@ -314,6 +383,45 @@ export async function proposeCodexMemoryCandidate(input: {
   })
 }
 
+function isProjectTrialEligible(input: {
+  candidate: PendingMemory
+  activeReadinessReady: boolean
+}): boolean {
+  const candidate = input.candidate
+  const kind = deriveMemoryCandidateKind(candidate)
+  if (!input.activeReadinessReady) return false
+  if (candidate.scope !== 'project') return false
+  if (!['project', 'procedural', 'system'].includes(candidate.domain)) return false
+  if (!['project_fact', 'project_decision', 'workflow_rule', 'known_pitfall', 'rejected_approach'].includes(kind)) {
+    return false
+  }
+  if (candidate.source === 'assistant_observed') return false
+  if (candidate.evidence.some((entry) => entry.sourceKind === 'assistant_observed')) return false
+  if (candidate.scores.evidenceStrength < 0.55) return false
+  if (candidate.scores.usefulness < 0.55) return false
+  if (candidate.scores.safety < 0.8) return false
+  if (candidate.scores.sensitivity > 0.35) return false
+  return true
+}
+
+function trialSemanticMemoryFromCandidate(candidate: PendingMemory, now: string): SemanticMemory {
+  const semantic = pendingMemoryToSemanticMemory(candidate)
+  return {
+    ...semantic,
+    status: 'active',
+    routing: {
+      module: semantic.module,
+      updatePolicy: 'strict_auto_promote',
+      risk: 'low',
+      reasons: ['v1.5 low-risk project memory admitted to trial']
+    },
+    reviewPolicy: 'strict_auto_promote',
+    confidenceTier: 'trial',
+    activationPolicy: activationPolicyForConfidenceTier('trial'),
+    updatedAt: now
+  }
+}
+
 function runAutoPromotionEvalGate(input: {
   candidate: PendingMemory
   policyId: string
@@ -389,7 +497,7 @@ async function markDreamDueFailOpen(memoryRoot: string, now: string): Promise<vo
   try {
     await markCodexMemoryDreamDue(memoryRoot, now)
   } catch {
-    // Dream scheduling must never make pending-only memory proposal fail.
+    // Dream scheduling must never make review queue proposal handling fail.
   }
 }
 

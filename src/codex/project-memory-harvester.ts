@@ -36,7 +36,8 @@ export type CodexProjectMemoryHarvestResult =
   | { action: 'noop'; reason: string; signals: ProjectMemorySignal[]; warnings: string[] }
   | { action: 'needs_model_config'; reason: string; signals: ProjectMemorySignal[]; warnings: string[] }
   | { action: 'preview'; candidates: CodexMemoryCandidateInput[]; signals: ProjectMemorySignal[]; warnings: string[] }
-  | { action: 'pending'; candidateIds: string[]; memoryRoot: string; signals: ProjectMemorySignal[]; warnings: string[] }
+  | { action: 'pending'; candidateIds: string[]; trialMemoryIds?: string[]; memoryRoot: string; signals: ProjectMemorySignal[]; warnings: string[] }
+  | { action: 'trial'; candidateIds: string[]; memoryIds: string[]; memoryRoot: string; signals: ProjectMemorySignal[]; warnings: string[] }
 
 interface ParsedProjectMemoryHarvestResponse {
   candidates: unknown[]
@@ -104,6 +105,8 @@ export async function runCodexProjectMemoryHarvest(
   }
 
   const candidateIds: string[] = []
+  const pendingCandidateIds: string[] = []
+  const trialMemoryIds: string[] = []
   let memoryRoot: string | undefined
   for (const candidate of candidates) {
     const result = await runCodexAdmissionPipeline({
@@ -121,6 +124,10 @@ export async function runCodexProjectMemoryHarvest(
     memoryRoot = result.memoryRoot
     if (result.action === 'pending' && result.result.action === 'pending') {
       candidateIds.push(result.result.candidateId)
+      pendingCandidateIds.push(result.result.candidateId)
+    } else if (result.action === 'trial' && result.result.action === 'trial') {
+      candidateIds.push(result.result.candidateId)
+      trialMemoryIds.push(result.result.memoryId)
     }
   }
 
@@ -128,7 +135,18 @@ export async function runCodexProjectMemoryHarvest(
     return { action: 'noop', reason: 'No project memory candidates survived admission.', signals, warnings }
   }
 
-  return { action: 'pending', candidateIds, memoryRoot: memoryRoot ?? '', signals, warnings }
+  if (trialMemoryIds.length > 0 && trialMemoryIds.length === candidateIds.length) {
+    return { action: 'trial', candidateIds, memoryIds: trialMemoryIds, memoryRoot: memoryRoot ?? '', signals, warnings }
+  }
+
+  return {
+    action: 'pending',
+    candidateIds: pendingCandidateIds,
+    trialMemoryIds,
+    memoryRoot: memoryRoot ?? '',
+    signals,
+    warnings
+  }
 }
 
 export function buildCodexProjectMemoryHarvestPrompt(signals: ProjectMemorySignal[]): string {

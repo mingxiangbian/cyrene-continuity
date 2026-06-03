@@ -49,12 +49,12 @@ const PENDING_REVIEW_HASH_FALSE_CONFLICT_PITFALL: SemanticBoundaries = {
   ],
   doNotUseWhen: [
     'The hash comes from an active memory record rather than pending review.',
-    'The code already reads the current pending.jsonl record as the canonical source.',
+    'The code already reads the current review_queue.jsonl record as the review-queue source.',
     'The task is unrelated to pending review hashes, semantic projection, or cache-derived review data.'
   ],
   reasons: [
     'The content describes a known pitfall with a mitigation.',
-    'It identifies semantic projection and cache-derived data as false-conflict sources and pending.jsonl as the canonical data source.'
+    'It identifies semantic projection and cache-derived data as false-conflict sources and review_queue.jsonl as the review-queue source.'
   ]
 }
 

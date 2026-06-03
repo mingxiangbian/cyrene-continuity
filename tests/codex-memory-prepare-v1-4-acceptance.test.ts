@@ -36,9 +36,9 @@ const PENDING_REJECTION_WORKFLOW_INPUT =
 const PENDING_REJECTION_WORKFLOW_EXPECTED =
   'Pending-memory rejection workflows must validate each candidate review hash before mutation and verify the queue state after rejection.'
 const PENDING_HASH_FALSE_CONFLICT_INPUT =
-  'pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 pending.jsonl 直接读取 pending review，而非依赖缓存推导。'
+  'pending review 哈希因 semantic projection 改写导致假冲突。修复方案：调整优先从 review_queue.jsonl 直接读取 pending review，而非依赖缓存推导。'
 const PENDING_HASH_FALSE_CONFLICT_EXPECTED =
-  'Pending-review hashes must be read from canonical pending.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.'
+  'Pending-review hashes must be read from review_queue.jsonl records rather than semantic projection or cache-derived data; projection rewrites can cause false review-hash conflicts.'
 
 const tempDirs: string[] = []
 
@@ -123,7 +123,7 @@ function createDistillationInput(overrides: Partial<DistillationInput> = {}): Di
     domain: 'procedural',
     sourceKinds: ['review_summary'],
     rawContents: [PENDING_HASH_FALSE_CONFLICT_INPUT],
-    evidenceRefs: ['pending.jsonl', 'semantic projection'],
+    evidenceRefs: ['review_queue.jsonl', 'semantic projection'],
     sourceOfTruth: 'review_summary:task-6',
     createdAt: NOW,
     ...overrides
@@ -505,7 +505,7 @@ describe('Codex memory v1.4 acceptance outcomes', () => {
     expect(byKey.get('pending-review-hash-canonical-records')).toMatchObject({
       content: PENDING_HASH_FALSE_CONFLICT_EXPECTED,
       doNotUseWhen: expect.arrayContaining([
-        'The code already reads the current pending.jsonl record as the canonical source.'
+        'The code already reads the current review_queue.jsonl record as the review-queue source.'
       ])
     })
   })

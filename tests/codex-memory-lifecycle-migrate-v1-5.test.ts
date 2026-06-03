@@ -14,6 +14,7 @@ import {
   readSemanticMemoriesFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../src/memory/memory-store.js'
+import { withMemoryMaintenanceLockFromRoot } from '../src/memory/memory-maintenance.js'
 import { validateSemanticMemoryLifecycle } from '../src/memory/memory-lifecycle.js'
 import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
@@ -226,6 +227,29 @@ describe('Codex memory lifecycle v1.5 migration', () => {
       }
     })
     expect(semantic.find((memory) => memory.id === 'review-summary-noise')).toBeUndefined()
+  })
+
+  it('does not apply migration while the memory root maintenance lock is held', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-lock-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_MEMORY_MAINTENANCE_LOCK_TIMEOUT_MS', '1')
+    const repo = await createTempDir('cyrene-v15-migrate-lock-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [
+      createPending({ id: 'pending-locked' })
+    ])
+
+    await expect(withMemoryMaintenanceLockFromRoot(memoryRoot, async () =>
+      runCodexMemoryLifecycleMigrateV15({
+        cwd: repo,
+        apply: true,
+        now: '2026-06-03T00:00:00.000Z'
+      })
+    )).rejects.toThrow('Timed out waiting for memory maintenance lock')
+    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('pending-locked')
   })
 
   it('converts low-risk global active memory into global_core and recommends high-risk global memory', async () => {

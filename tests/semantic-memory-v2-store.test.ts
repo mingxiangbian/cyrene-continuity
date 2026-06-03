@@ -314,7 +314,8 @@ describe('Semantic memory v2 store', () => {
       }
     ])
     await expect(readPendingMemoriesFromRoot(root)).resolves.toEqual([])
-    await expect(readFile(join(root, 'pending.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readFile(join(root, 'review_queue.jsonl'), 'utf8')).resolves.toBe('')
+    await expect(readFile(join(root, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     const events = await readMemoryEventsFromRoot(root)
     expect(events.map((event: MemoryEvent) => event.action)).toEqual(['audit', 'audit'])
     expect(events.map((event) => event.details)).toEqual([

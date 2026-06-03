@@ -12,7 +12,8 @@ import {
 import { readRecentCodexHookTrace } from '../src/codex/hook-trace-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
-import type { PendingMemory } from '../src/memory/types.js'
+import { readActiveMemoriesFromRoot, readSemanticMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
+import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -91,7 +92,7 @@ describe('Codex Stop hook runtime', () => {
 
     expect(result.action).toBe('noop')
     const identity = await identifyCodexProject(cwd)
-    await expect(readFile(join(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl'), 'utf8')).rejects.toMatchObject({
+    await expect(readFile(join(codexProjectMemoryRoot(identity.projectId), 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT'
     })
   })
@@ -116,7 +117,7 @@ describe('Codex Stop hook runtime', () => {
     expect(callModel).not.toHaveBeenCalled()
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'review-summaries.jsonl')
   })
 
@@ -152,7 +153,7 @@ describe('Codex Stop hook runtime', () => {
       summary: 'Codex Stop hook failed; no transcript content persisted.'
     })
     expect(summary.failureReason).toContain('Transcript path is not a regular file.')
-    await expectMemoryFileMissing(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl')
+    await expectMemoryFileMissing(codexProjectMemoryRoot(identity.projectId), 'review_queue.jsonl')
   })
 
   it('rejects symlinked transcript files without reading the target content', async () => {
@@ -175,7 +176,7 @@ describe('Codex Stop hook runtime', () => {
     expect(result.action).toBe('summary_failed')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain('Transcript path is a symlink.')
   })
 
@@ -211,7 +212,7 @@ describe('Codex Stop hook runtime', () => {
     expect(callModel).toHaveBeenCalledTimes(1)
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
       'Oversized transcript tail was summarized.'
     )
@@ -275,7 +276,7 @@ describe('Codex Stop hook runtime', () => {
     })
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await expectMemoryFileMissing(memoryRoot, 'hook-trace.jsonl')
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'review-summaries.jsonl')
   })
 
@@ -299,7 +300,7 @@ describe('Codex Stop hook runtime', () => {
     expect(callModel).not.toHaveBeenCalled()
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
       'Transcript path must be inside the project cwd or Codex home.'
     )
@@ -355,7 +356,7 @@ describe('Codex Stop hook runtime', () => {
 
     expect(result.action).toBe('pending')
     const identity = await identifyCodexProject(cwd)
-    const pending = await readFile(join(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(codexProjectMemoryRoot(identity.projectId), 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('以后默认 Cyrene 的 spec 和 plan 用中文写。')
     const [pendingRecord] = pending.trim().split('\n').map((line) => JSON.parse(line) as {
       evidence: Array<{ sessionId?: string; evidenceGroupId?: string; sourceKind?: string }>
@@ -390,7 +391,7 @@ describe('Codex Stop hook runtime', () => {
     expect(result.action).toBe('pending')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     const [pendingRecord] = pending.trim().split('\n').map((line) => JSON.parse(line) as {
       sourceEpisodeIds?: string[]
     })
@@ -424,7 +425,7 @@ describe('Codex Stop hook runtime', () => {
     })
 
     expect(result.action).toBe('pending')
-    const globalPending = await readFile(join(home, '.cyrene', 'codex', 'global', 'memory', 'pending.jsonl'), 'utf8')
+    const globalPending = await readFile(join(home, '.cyrene', 'codex', 'global', 'memory', 'review_queue.jsonl'), 'utf8')
     expect(globalPending).toContain('"scope":"global"')
     expect(globalPending).toContain('以后在所有项目里，所有 spec 和 plan 默认用中文写。')
     const [globalPendingRecord] = globalPending.trim().split('\n').map((line) => JSON.parse(line) as PendingMemory)
@@ -432,7 +433,7 @@ describe('Codex Stop hook runtime', () => {
     expect(globalEpisodes).toContain(`"id":"${globalPendingRecord.sourceEpisodeIds?.[0]}"`)
 
     const identity = await identifyCodexProject(cwd)
-    await expect(readFile(join(codexProjectMemoryRoot(identity.projectId), 'pending.jsonl'), 'utf8')).rejects.toMatchObject({
+    await expect(readFile(join(codexProjectMemoryRoot(identity.projectId), 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT'
     })
   })
@@ -462,7 +463,7 @@ describe('Codex Stop hook runtime', () => {
 
     expect(result.action).toBe('pending')
     const globalMemoryRoot = join(home, '.cyrene', 'codex', 'global', 'memory')
-    const globalPending = (await readFile(join(globalMemoryRoot, 'pending.jsonl'), 'utf8')).trim().split('\n')
+    const globalPending = (await readFile(join(globalMemoryRoot, 'review_queue.jsonl'), 'utf8')).trim().split('\n')
     const globalDrafts = (await readFile(join(globalMemoryRoot, 'candidate_drafts.jsonl'), 'utf8')).trim().split('\n')
     expect(globalPending).toHaveLength(1)
     expect(globalDrafts).toHaveLength(1)
@@ -500,7 +501,7 @@ describe('Codex Stop hook runtime', () => {
 
     expect(result.action).toBe('pending')
     const globalMemoryRoot = join(home, '.cyrene', 'codex', 'global', 'memory')
-    const globalPending = (await readFile(join(globalMemoryRoot, 'pending.jsonl'), 'utf8')).trim().split('\n')
+    const globalPending = (await readFile(join(globalMemoryRoot, 'review_queue.jsonl'), 'utf8')).trim().split('\n')
     expect(globalPending).toHaveLength(1)
     expect(globalPending[0]).toContain('以后在所有项目里，所有 spec 和 plan 默认用中文写。')
   })
@@ -541,7 +542,7 @@ describe('Codex Stop hook runtime', () => {
     expect(parsed).toEqual({
       continue: true,
       suppressOutput: false,
-      systemMessage: 'Cyrene captured this session: summary=ok, pending=3. Review: cyrene-continuity codex memory review'
+      systemMessage: 'Cyrene captured this session: summary=ok, pending=3, trial=0. Review: cyrene-continuity codex memory review'
     })
     expect(output).not.toContain('candidate-1')
   })
@@ -569,7 +570,7 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
       'User asked to remember a sensitive self-description.'
     )
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'index.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'tombstones.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'events.jsonl')
@@ -608,7 +609,7 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
       'Summary contains a rejected candidate.'
     )
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'index.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'tombstones.jsonl')
     await expectMemoryFileMissing(memoryRoot, 'events.jsonl')
@@ -620,8 +621,7 @@ describe('Codex Stop hook runtime', () => {
     const cwd = await createTempDir('cyrene-codex-stop-pipeline-project-')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify({
+    const active: CyreneMemory = {
       id: 'active-1',
       domain: 'project',
       type: 'project_fact',
@@ -636,7 +636,8 @@ describe('Codex Stop hook runtime', () => {
       createdAt: '2026-05-28T00:00:00.000Z',
       updatedAt: '2026-05-28T00:00:00.000Z',
       tags: ['seed']
-    })}\n`)
+    }
+    await writeActiveMemoriesFromRoot(memoryRoot, [active])
     await writeFile(join(memoryRoot, 'MODEL_PROFILE.md'), '# Existing Profile\n')
     const transcript = join(cwd, 'transcript.jsonl')
     await writeFile(transcript, [
@@ -671,7 +672,7 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
       '用户要求项目 memory 审批使用 review hash。'
     )
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
+    const pending = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
     expect(pending).toContain('项目 memory 审批必须使用 review hash。')
     const [pendingRecord] = pending.trim().split('\n').map((line) => JSON.parse(line) as {
       sourceEpisodeIds?: string[]
@@ -680,11 +681,11 @@ describe('Codex Stop hook runtime', () => {
       id: string
     })
     expect(pendingRecord.sourceEpisodeIds).toEqual([episode.id])
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.toContain(
-      'Existing active memory must remain unchanged.'
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: 'Existing active memory must remain unchanged.' })])
     )
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).resolves.not.toContain(
-      '项目 memory 审批必须使用 review hash。'
+    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: '项目 memory 审批必须使用 review hash。' })])
     )
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toBe('# Existing Profile\n')
     await expectMemoryFileMissing(memoryRoot, 'tombstones.jsonl')
@@ -739,7 +740,7 @@ describe('Codex Stop hook runtime', () => {
     await expect(readFile(join(memoryRoot, 'review-summaries.jsonl'), 'utf8')).resolves.toContain(
       '用户要求 Stop hook review summary 能生成 pending memory。'
     )
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain(
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(
       'Stop hook review summaries should be able to create pending project memory.'
     )
   })
@@ -763,7 +764,7 @@ describe('Codex Stop hook runtime', () => {
     expect(result.action).toBe('pending')
   })
 
-  it('appends stop trace and confirms pending project harvest candidates', async () => {
+  it('appends stop trace and records trial project harvest memories', async () => {
     const home = await createTempDir('cyrene-codex-stop-harvest-home-')
     vi.stubEnv('HOME', home)
     vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
@@ -801,24 +802,26 @@ describe('Codex Stop hook runtime', () => {
     )
 
     expect(callModel).toHaveBeenCalledTimes(2)
-    expect(result.action).toBe('pending')
+    expect(result.action).toBe('trial')
     expect(result.reason).toContain('project memory harvest')
-    expect(result).toMatchObject({ candidateIds: [expect.any(String)] })
+    expect(result).toMatchObject({ memoryIds: [expect.any(String)] })
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    const pending = await readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')
-    expect(pending).toContain('The plugin hook lifecycle config lives at plugin/hooks/hooks.json.')
-    const pendingRecords = pending.trim().split('\n').map((line) => JSON.parse(line) as {
-      content: string
-      sourceEpisodeIds?: string[]
-    })
-    const harvestPending = pendingRecords.find((record) =>
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    const harvestTrial = semantic.find((record) =>
       record.content.includes('The plugin hook lifecycle config lives at plugin/hooks/hooks.json.')
     )
     const [episode] = (await readFile(join(memoryRoot, 'episodes.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as {
       id: string
     })
-    expect(harvestPending?.sourceEpisodeIds).toEqual([episode.id])
+    expect(harvestTrial).toMatchObject({
+      status: 'active',
+      confidenceTier: 'trial',
+      reviewState: {
+        sourceEpisodeIds: [episode.id]
+      }
+    })
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe('')
     const trace = await readRecentCodexHookTrace({ cwd })
     expect(trace.records.some((record) => record.event === 'stop' && record.sessionId === 's-harvest')).toBe(true)
   })
@@ -873,7 +876,7 @@ describe('Codex Stop hook runtime', () => {
     expect(callCount).toBe(2)
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
   })
 
   it('keeps pending proposal fail-open when the dream due marker fails', async () => {
@@ -896,7 +899,7 @@ describe('Codex Stop hook runtime', () => {
     )
 
     expect(result.action).toBe('pending')
-    await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).resolves.toContain('以后默认 spec 和 plan 用中文写。')
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain('以后默认 spec 和 plan 用中文写。')
     await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(JSON.parse(formatCodexStopHookCommandOutput(result))).toEqual({ continue: true, suppressOutput: true })
   })
@@ -924,7 +927,7 @@ describe('Codex Stop hook runtime', () => {
     const episodes = await readFile(join(memoryRoot, 'episodes.jsonl'), 'utf8')
     expect(episodes).toContain('"sessionId":"s-episode"')
     expect(episodes).toContain('Codex Stop hook wrote review summary.')
-    await expectMemoryFileMissing(memoryRoot, 'pending.jsonl')
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
   })
 
   it('uses recent user context for Stop hook episode titles', async () => {
@@ -1026,7 +1029,7 @@ describe('Codex Stop hook runtime', () => {
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), `${JSON.stringify(createPending('pending-1'))}\n`)
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(createPending('pending-1'))}\n`)
 
     await expect(filterExistingPendingCandidateIds(cwd, ['pending-1', 'missing-1', 'pending-1'])).resolves.toEqual([
       'pending-1'

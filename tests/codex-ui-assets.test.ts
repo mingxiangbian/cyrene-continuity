@@ -29,7 +29,8 @@ describe('Codex UI source assets', () => {
       readFile(new URL('../src/ui/static/styles.css', import.meta.url), 'utf8')
     ])
 
-    expect(source).toContain("{ id: 'triage', label: 'Triage' }")
+    expect(source).toContain("{ id: 'tools', label: 'Tools' }")
+    expect(source).toContain('renderTools')
     expect(source).toContain('Run triage dry-run')
     expect(source).toContain('preview only')
     expect(source).toContain('Retrieval Explain')
@@ -136,11 +137,17 @@ describe('Codex UI source assets', () => {
 
     expect(html).toContain('Cyrene Memory Console')
 
-    for (const label of ['Overview', 'Inbox', 'Timeline', 'Project Memory', 'Harvester', 'Dream', 'Profile']) {
+    for (const label of ['Overview', 'Manual Review', 'Timeline', 'Lifecycle Memory', 'Automation', 'Tools', 'Profile']) {
       expect(js).toContain(label)
     }
-    expect(js).toContain('Write actions require confirmation and review hash')
-    expect(js).toContain('No pending memory was written')
+    expect(js).toContain('Manual review actions require confirmation and review hash')
+    expect(js).toContain('No manual review memory was written')
+    expect(js).toContain('Trial')
+    expect(js).toContain('Validated')
+    expect(js).toContain('Project Core')
+    expect(js).toContain('Global Core')
+    expect(js).toContain('Daily 15:00')
+    expect(js).toContain('Weekly Sun 15:00')
     expect(js).toContain('/api/session')
     expect(js).toContain('x-cyrene-ui-token')
     expect(js).toContain('selectedPendingId')
@@ -162,7 +169,7 @@ describe('Codex UI source assets', () => {
     expect(js).toContain('data-active-action="tombstone"')
     expect(js).toContain('data-active-action="propose-edit"')
     expect(js).toContain('confirmText')
-    expect(js).toContain('active memory receipt')
+    expect(js).toContain('lifecycle memory receipt')
     expect(js).toContain('/delete-memory')
     expect(js).toContain('Delete & disable project memory')
     expect(js).toContain('confirmProjectId')
@@ -176,6 +183,8 @@ describe('Codex UI source assets', () => {
     expect(js).toContain('dry-run preview')
     expect(js).toContain('preview · dry-run only')
     expect(js).toContain("['project', 'global']")
+    expect(js).not.toContain("{ id: 'inbox', label: 'Review Queue' }")
+    expect(js).not.toContain("{ id: 'project-memory', label: 'Project Memory' }")
 
     for (const unsafeRoute of [
       'deep-apply',

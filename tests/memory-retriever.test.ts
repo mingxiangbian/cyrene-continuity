@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { retrieveMemories } from '../src/memory/memory-retriever.js'
+import { writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -18,6 +19,10 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 async function writeJsonLines(filePath: string, values: unknown[]): Promise<void> {
+  if (filePath.endsWith('/index.jsonl')) {
+    await writeActiveMemoriesFromRoot(filePath.slice(0, -'/index.jsonl'.length), values as CyreneMemory[])
+    return
+  }
   await writeFile(filePath, values.map((value) => JSON.stringify(value)).join('\n') + '\n', 'utf8')
 }
 

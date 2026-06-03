@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +10,7 @@ import {
   type ProfileCandidate
 } from '../src/codex/profile-candidates.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -30,8 +31,7 @@ async function createTempDir(prefix: string): Promise<string> {
 async function seedProjectActive(cwd: string, active: CyreneMemory[]): Promise<string> {
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-  await mkdir(memoryRoot, { recursive: true })
-  await writeFile(join(memoryRoot, 'index.jsonl'), active.map((item) => JSON.stringify(item)).join('\n') + '\n')
+  await writeActiveMemoriesFromRoot(memoryRoot, active)
   return realpath(memoryRoot)
 }
 
@@ -152,7 +152,7 @@ describe('Codex profile candidates', () => {
     })
 
     expect(result.result.action).toBe('apply')
-    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    const active = await readActiveMemoriesFromRoot(memoryRoot)
     expect(active.find((item) => item.id === `profile-memory-${candidate?.id}`)).toMatchObject({
       content: 'The user prefers short status updates.',
       profileVisibility: 'safe_summary'
@@ -202,7 +202,7 @@ describe('Codex profile candidates', () => {
     expect(result.result).toMatchObject({
       action: 'blocked_by_gate',
       candidateId: candidate.id,
-      failedChecks: ['affective_boundary_eval']
+      failedChecks: expect.arrayContaining(['affective_boundary_eval'])
     })
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     const stored = parseJsonLines<ProfileCandidate>(await readFile(join(memoryRoot, 'profile_candidates.jsonl'), 'utf8'))
@@ -266,16 +266,15 @@ describe('Codex profile candidates', () => {
     await expect(readFile(join(memoryRoot, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain('Use Chinese for Cyrene specs and plans.')
     const stored = parseJsonLines<ProfileCandidate>(await readFile(join(memoryRoot, 'profile_candidates.jsonl'), 'utf8'))
     expect(stored[0]).toMatchObject({ status: 'applied', appliedMemoryId: expect.any(String) })
-    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    const active = await readActiveMemoriesFromRoot(memoryRoot)
     expect(active.find((item) => item.id === stored[0]?.appliedMemoryId)).toMatchObject({
       domain: 'system',
       type: 'system_policy',
       evidence: [expect.objectContaining({
-        runId: candidate?.id,
+        sourceKind: 'tool_trace',
         summary: candidate?.evidenceSummary,
-        traceRefs: expect.arrayContaining(['active-1']),
-        taskHash: candidate?.reviewHash,
-        evidenceGroupId: 'Always Apply'
+        evidenceGroupId: 'Always Apply',
+        traceRefs: ['Always Apply']
       })]
     })
     const events = parseJsonLines<{ action: string; details?: Record<string, unknown> }>(
@@ -339,7 +338,7 @@ describe('Codex profile candidates', () => {
       })
     }
 
-    const active = parseJsonLines<CyreneMemory>(await readFile(join(memoryRoot, 'index.jsonl'), 'utf8'))
+    const active = await readActiveMemoriesFromRoot(memoryRoot)
     expect(active.find((item) => item.id === 'profile-memory-profile-project')).toMatchObject({
       domain: 'project',
       type: 'project_fact'

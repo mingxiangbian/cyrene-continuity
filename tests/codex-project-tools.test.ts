@@ -10,6 +10,7 @@ import {
   listCodexProjects,
   mergeCodexProjects
 } from '../src/codex/project-registry.js'
+import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const originalHome = process.env.HOME
@@ -89,7 +90,7 @@ describe('Codex project tools', () => {
         signals: []
       })}\n`
     )
-    await writeFile(join(memoryRoot, 'index.jsonl'), `${JSON.stringify(createActive())}\n`)
+    await writeActiveMemoriesFromRoot(memoryRoot, [createActive()])
 
     const result = await deleteCodexProjectMemory({
       projectId,
@@ -103,7 +104,7 @@ describe('Codex project tools', () => {
       memoryDeleted: true
     })
     expect(await isCodexProjectMemoryDisabled(projectId)).toBe(true)
-    await expect(readFile(join(memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(memoryRoot, 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await listCodexProjects()).toEqual([
       expect.objectContaining({
         projectId,
@@ -134,20 +135,16 @@ describe('Codex project tools', () => {
     const fromRoot = await ensureCodexProjectMemoryRoot('from-project')
     const toRoot = await ensureCodexProjectMemoryRoot('to-project')
     await mkdir(codexProjectMemoryRoot('from-project'), { recursive: true })
-    await writeFile(
-      join(fromRoot, 'index.jsonl'),
-      `${JSON.stringify(createActive({ id: 'from-active', content: 'From project memory.' }))}\n`
-    )
-    await writeFile(
-      join(toRoot, 'index.jsonl'),
-      `${JSON.stringify(createActive({ id: 'to-active', content: 'To project memory.' }))}\n`
-    )
+    await writeActiveMemoriesFromRoot(fromRoot, [createActive({ id: 'from-active', content: 'From project memory.' })])
+    await writeActiveMemoriesFromRoot(toRoot, [createActive({ id: 'to-active', content: 'To project memory.' })])
     await writeFile(join(fromRoot, 'MODEL_PROFILE.md'), '# Source Profile\n')
 
     const result = await mergeCodexProjects({ fromProjectId: 'from-project', toProjectId: 'to-project' })
 
-    expect(result.mergedFiles).toContain('index.jsonl')
-    await expect(readFile(join(toRoot, 'index.jsonl'), 'utf8')).resolves.toContain('From project memory.')
+    expect(result.mergedFiles).toContain('semantic_memories.jsonl')
+    await expect(readActiveMemoriesFromRoot(toRoot)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: 'From project memory.' })])
+    )
     await expect(readFile(join(toRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -159,26 +156,25 @@ describe('Codex project tools', () => {
     const initialTarget = createActive({ id: 'to-active', content: 'Initial target memory.' })
     const concurrentTarget = createActive({ id: 'to-concurrent', content: 'Concurrent target memory.' })
 
-    await writeFile(
-      join(fromRoot, 'index.jsonl'),
-      `${JSON.stringify(createActive({ id: 'from-active', content: 'From project memory.' }))}\n`
-    )
-    await writeFile(join(toRoot, 'index.jsonl'), `${JSON.stringify(initialTarget)}\n`)
+    await writeActiveMemoriesFromRoot(fromRoot, [createActive({ id: 'from-active', content: 'From project memory.' })])
+    await writeActiveMemoriesFromRoot(toRoot, [initialTarget])
     const lockDir = join(toRoot, '.maintenance.lock')
     await mkdir(lockDir)
 
     const mergePromise = mergeCodexProjects({ fromProjectId: 'from-project', toProjectId: 'to-project' })
     await new Promise((resolve) => setTimeout(resolve, 20))
-    await writeFile(join(toRoot, 'index.jsonl'), [initialTarget, concurrentTarget].map((memory) => JSON.stringify(memory)).join('\n') + '\n')
+    await writeActiveMemoriesFromRoot(toRoot, [initialTarget, concurrentTarget])
     await rm(lockDir, { recursive: true, force: true })
 
     const result = await mergePromise
 
-    expect(result.mergedFiles).toContain('index.jsonl')
-    const merged = await readFile(join(toRoot, 'index.jsonl'), 'utf8')
-    expect(merged).toContain('Initial target memory.')
-    expect(merged).toContain('Concurrent target memory.')
-    expect(merged).toContain('From project memory.')
+    expect(result.mergedFiles).toContain('semantic_memories.jsonl')
+    const merged = await readActiveMemoriesFromRoot(toRoot)
+    expect(merged).toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: 'Initial target memory.' }),
+      expect.objectContaining({ content: 'Concurrent target memory.' }),
+      expect.objectContaining({ content: 'From project memory.' })
+    ]))
   })
 
   it('rejects source JSONL symlinks during project merge', async () => {
@@ -186,9 +182,9 @@ describe('Codex project tools', () => {
     vi.stubEnv('HOME', home)
     const fromRoot = await ensureCodexProjectMemoryRoot('from-project')
     await ensureCodexProjectMemoryRoot('to-project')
-    const outsideFile = join(home, 'source-index.jsonl')
+    const outsideFile = join(home, 'source-semantic-memories.jsonl')
     await writeFile(outsideFile, `${JSON.stringify(createActive({ id: 'from-active', content: 'Symlinked source memory.' }))}\n`)
-    await symlink(outsideFile, join(fromRoot, 'index.jsonl'))
+    await symlink(outsideFile, join(fromRoot, 'semantic_memories.jsonl'))
 
     await expect(mergeCodexProjects({ fromProjectId: 'from-project', toProjectId: 'to-project' })).rejects.toThrow(
       /Unsafe project merge source JSONL file/
@@ -200,13 +196,10 @@ describe('Codex project tools', () => {
     vi.stubEnv('HOME', home)
     const fromRoot = await ensureCodexProjectMemoryRoot('from-project')
     const toRoot = await ensureCodexProjectMemoryRoot('to-project')
-    const outsideFile = join(home, 'target-index.jsonl')
-    await writeFile(
-      join(fromRoot, 'index.jsonl'),
-      `${JSON.stringify(createActive({ id: 'from-active', content: 'From project memory.' }))}\n`
-    )
+    const outsideFile = join(home, 'target-semantic-memories.jsonl')
+    await writeActiveMemoriesFromRoot(fromRoot, [createActive({ id: 'from-active', content: 'From project memory.' })])
     await writeFile(outsideFile, `${JSON.stringify(createActive({ id: 'outside-active', content: 'Outside target memory.' }))}\n`)
-    await symlink(outsideFile, join(toRoot, 'index.jsonl'))
+    await symlink(outsideFile, join(toRoot, 'semantic_memories.jsonl'))
 
     await expect(mergeCodexProjects({ fromProjectId: 'from-project', toProjectId: 'to-project' })).rejects.toThrow(
       /Unsafe project merge target JSONL file/
@@ -219,14 +212,11 @@ describe('Codex project tools', () => {
     vi.stubEnv('HOME', home)
     const fromRoot = await ensureCodexProjectMemoryRoot('from-project')
     await ensureCodexProjectMemoryRoot('to-project')
-    await writeFile(
-      join(fromRoot, 'index.jsonl'),
-      [
-        createActive({ id: 'personal-memory', domain: 'personal', type: 'user_preference' }),
-        createActive({ id: 'relationship-memory', domain: 'relationship', type: 'relationship_boundary' }),
-        createActive({ id: 'affective-memory', domain: 'affective', type: 'affective_pattern' })
-      ].map((memory) => JSON.stringify(memory)).join('\n') + '\n'
-    )
+    await writeActiveMemoriesFromRoot(fromRoot, [
+      createActive({ id: 'personal-memory', domain: 'personal', type: 'user_preference' }),
+      createActive({ id: 'relationship-memory', domain: 'relationship', type: 'relationship_boundary' }),
+      createActive({ id: 'affective-memory', domain: 'affective', type: 'affective_pattern' })
+    ])
 
     await expect(mergeCodexProjects({
       fromProjectId: 'from-project',

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile as fsWriteFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -9,7 +9,12 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
-import { readActivationEventsFromRoot, readReflectionCandidatesFromRoot } from '../src/memory/memory-store.js'
+import {
+  readActivationEventsFromRoot,
+  readReflectionCandidatesFromRoot,
+  writeActiveMemoriesFromRoot,
+  writePendingMemoriesFromRoot
+} from '../src/memory/memory-store.js'
 import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -26,6 +31,26 @@ async function createTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix))
   tempDirs.push(dir)
   return dir
+}
+
+async function writeFile(filePath: string, data: string | Uint8Array, options?: BufferEncoding): Promise<void> {
+  if (filePath.endsWith('/index.jsonl')) {
+    await writeActiveMemoriesFromRoot(filePath.slice(0, -'/index.jsonl'.length), parseJsonLines<CyreneMemory>(data))
+    return
+  }
+  if (filePath.endsWith('/review_queue.jsonl')) {
+    await writePendingMemoriesFromRoot(filePath.slice(0, -'/review_queue.jsonl'.length), parseJsonLines<PendingMemory>(data))
+    return
+  }
+  await fsWriteFile(filePath, data, options)
+}
+
+function parseJsonLines<T>(data: string | Uint8Array): T[] {
+  return String(data)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as T)
 }
 
 describe('Codex continuity context', () => {
@@ -344,7 +369,7 @@ describe('Codex continuity context', () => {
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     const pending = createPendingMemory()
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), JSON.stringify(pending) + '\n')
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), JSON.stringify(pending) + '\n')
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -374,7 +399,7 @@ describe('Codex continuity context', () => {
       content: 'Global pending memory should show only as pending review notice.'
     }
     await mkdir(globalMemoryRoot, { recursive: true })
-    await writeFile(join(globalMemoryRoot, 'pending.jsonl'), JSON.stringify(pending) + '\n')
+    await writeFile(join(globalMemoryRoot, 'review_queue.jsonl'), JSON.stringify(pending) + '\n')
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -400,7 +425,7 @@ describe('Codex continuity context', () => {
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     const pending = createPendingMemory()
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), JSON.stringify({
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), JSON.stringify({
       ...pending,
       domain: 'procedural',
       type: 'procedural_rule',
@@ -486,7 +511,6 @@ describe('Codex continuity context', () => {
       content: 'Memory review UI route implementation must keep delete button actions explicit.',
       normalizedKey: 'memory-review-ui-route-delete-button-actions',
       evidence: [{
-        runId: 'run-route',
         summary: 'Route implementation evidence.',
         traceRefs: ['src/codex/codex-ui-api.ts']
       }]
@@ -517,7 +541,7 @@ describe('Codex continuity context', () => {
     ])
   })
 
-  it('explains pending-only memory as excluded from confirmed retrieval context', async () => {
+  it('explains review queue memory as excluded from confirmed retrieval context', async () => {
     const home = await createTempDir('cyrene-codex-continuity-retrieval-excluded-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-continuity-retrieval-excluded-repo-')
@@ -525,33 +549,33 @@ describe('Codex continuity context', () => {
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(projectMemoryRoot, { recursive: true })
     await writeFile(join(projectMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
-      id: 'active-route-memory',
+      id: 'lifecycle-route-memory',
       domain: 'procedural',
       type: 'procedural_rule',
       candidateKind: 'workflow_rule',
-      content: 'Active memory delete button route guidance is confirmed project context.',
-      normalizedKey: 'active-memory-delete-button-route-guidance'
+      content: 'Lifecycle memory delete button route guidance is confirmed project context.',
+      normalizedKey: 'lifecycle-memory-delete-button-route-guidance'
     })) + '\n')
-    await writeFile(join(projectMemoryRoot, 'pending.jsonl'), JSON.stringify({
+    await writeFile(join(projectMemoryRoot, 'review_queue.jsonl'), JSON.stringify({
       ...createPendingMemory(),
-      id: 'pending-route-memory',
+      id: 'review-queue-route-memory',
       scope: 'project',
-      content: 'Pending route guidance must not be treated as confirmed memory.',
-      normalizedKey: 'pending-route-guidance-not-confirmed'
+      content: 'Review queue route guidance must not be treated as confirmed memory.',
+      normalizedKey: 'review-queue-route-guidance-not-confirmed'
     }) + '\n')
 
     const context = await getCodexContinuityContext({
       cwd: repo,
-      userMessage: 'active memory delete button does not work in Web UI route',
+      userMessage: 'lifecycle memory delete button does not work in Web UI route',
       task: 'memory'
     })
 
-    expect(context.projectMemory.map((item) => item.id)).toContain('active-route-memory')
-    expect(context.memory.items.map((item) => item.id)).not.toContain('pending-route-memory')
+    expect(context.projectMemory.map((item) => item.id)).toContain('lifecycle-route-memory')
+    expect(context.memory.items.map((item) => item.id)).not.toContain('review-queue-route-memory')
     expect(context.diagnostics?.retrievalExcluded).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'pending-route-memory',
+          id: 'review-queue-route-memory',
           reason: 'pending_review_required'
         })
       ])
@@ -723,7 +747,7 @@ describe('Codex continuity context', () => {
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     const pending = createPendingMemory()
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), JSON.stringify({
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), JSON.stringify({
       ...pending,
       content: 'Pending router candidate can guide clarification only.',
       normalizedKey: 'pending-router-clarification-only'
@@ -754,7 +778,7 @@ describe('Codex continuity context', () => {
     const pending = createPendingMemory()
     await mkdir(memoryRoot, { recursive: true })
     await mkdir(join(home, '.cyrene', 'codex', 'memory.db'), { recursive: true })
-    await writeFile(join(memoryRoot, 'pending.jsonl'), JSON.stringify({
+    await writeFile(join(memoryRoot, 'review_queue.jsonl'), JSON.stringify({
       ...pending,
       content: 'Fallback pending router candidate remains visible.',
       normalizedKey: 'fallback-pending-router-candidate'
@@ -784,15 +808,15 @@ describe('Codex continuity context', () => {
     const identity = await identifyCodexProject(repo)
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
     const dbPath = join(home, '.cyrene', 'codex', 'memory.db')
-    const sourcePath = join(projectMemoryRoot, 'index.jsonl')
+    const sourcePath = join(projectMemoryRoot, 'semantic_memories.jsonl')
     await mkdir(projectMemoryRoot, { recursive: true })
     await mkdir(join(home, '.cyrene', 'codex'), { recursive: true })
     await writeFile(dbPath, '')
-    await writeFile(sourcePath, JSON.stringify(createMemory({
+    await writeActiveMemoriesFromRoot(projectMemoryRoot, [createMemory({
       id: 'stale-readonly-memory',
       content: 'Stale readonly memory should be returned through JSONL fallback.',
       normalizedKey: 'stale-readonly-memory'
-    })) + '\n')
+    })])
     await utimes(dbPath, new Date('2026-01-01T00:00:00.000Z'), new Date('2026-01-01T00:00:00.000Z'))
     await utimes(sourcePath, new Date('2026-01-02T00:00:00.000Z'), new Date('2026-01-02T00:00:00.000Z'))
     const before = await stat(dbPath)
@@ -823,7 +847,7 @@ describe('Codex continuity context', () => {
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
     const pending = createPendingMemory()
     await mkdir(projectMemoryRoot, { recursive: true })
-    await writeFile(join(projectMemoryRoot, 'pending.jsonl'), JSON.stringify({
+    await writeFile(join(projectMemoryRoot, 'review_queue.jsonl'), JSON.stringify({
       ...pending,
       content: 'Pending fallback candidate must remain provisional.',
       normalizedKey: 'pending-fallback-provisional'
