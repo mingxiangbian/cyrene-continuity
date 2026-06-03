@@ -10,6 +10,10 @@ import {
   type MemoryQualityFixture
 } from '../src/codex/memory-quality-contract.js'
 
+function fixturesWithReplacement(replacement: MemoryQualityFixture): MemoryQualityFixture[] {
+  return MEMORY_QUALITY_FIXTURES.map((fixture) => fixture.id === replacement.id ? replacement : fixture)
+}
+
 describe('memory quality contract fixtures', () => {
   it('covers every required fixture category exactly once', () => {
     expect(MEMORY_QUALITY_FIXTURES.map((fixture) => fixture.id)).toEqual(REQUIRED_MEMORY_QUALITY_FIXTURE_IDS)
@@ -41,7 +45,17 @@ describe('memory quality contract fixtures', () => {
       'source_of_truth_rule_excerpt',
       'preference_relationship_affective',
       'contradicted_active_memory',
-      'repeated_failure'
+      'repeated_failure',
+      'valuable_old_pending_workflow_rule',
+      'trial_applied_twice',
+      'trial_with_corrected_event',
+      'validated_distinct_sessions',
+      'validated_with_violated_event',
+      'repeated_project_core_global_candidate',
+      'explicit_all_projects_instruction',
+      'affective_inferred_pattern_v1_5',
+      'project_specific_global_candidate',
+      'core_profile_generation'
     ])
 
     for (const fixture of durableFixtures) {
@@ -51,12 +65,15 @@ describe('memory quality contract fixtures', () => {
   })
 
   it('keeps high-risk fixtures on manual-review paths', () => {
-    for (const id of ['raw_emotion_event', 'preference_relationship_affective'] as const) {
+    for (const id of ['raw_emotion_event', 'preference_relationship_affective', 'affective_inferred_pattern_v1_5'] as const) {
       const fixture = fixtureById(id)
       expect(fixture.highRisk).toBe(true)
       expect(['manual_review', 'manual_only']).toContain(fixture.expectedPolicy)
       expect(fixture.mustNotOutcome).toContain('auto_active')
       expect(fixture.mustNotOutcome).toContain('silent_drop')
+      expect(fixture.mustNotOutcome).toContain('project_core')
+      expect(fixture.mustNotOutcome).toContain('global_core')
+      expect(fixture.mustNotOutcome).toContain('profile')
     }
 
     const rawEmotion = fixtureById('raw_emotion_event')
@@ -75,6 +92,74 @@ describe('memory quality contract fixtures', () => {
     expect(fixture.expectedPolicy).toBe('review_first')
     expect(fixture.mustNotOutcome).toContain('direct_supersede')
     expect(fixture.mustNotOutcome).toContain('direct_active_mutation')
+  })
+
+  it('covers v1.5 lifecycle output quality fixtures', () => {
+    expect(MEMORY_QUALITY_FIXTURES.map((fixture) => fixture.id)).toEqual(expect.arrayContaining([
+      'old_review_summary_noise',
+      'valuable_old_pending_workflow_rule',
+      'trial_applied_twice',
+      'trial_with_corrected_event',
+      'validated_distinct_sessions',
+      'validated_with_violated_event',
+      'repeated_project_core_global_candidate',
+      'explicit_all_projects_instruction',
+      'affective_inferred_pattern_v1_5',
+      'project_specific_global_candidate',
+      'core_profile_generation'
+    ]))
+
+    expect(fixtureById('old_review_summary_noise').mustNotOutcome).toEqual(expect.arrayContaining([
+      'project_trial',
+      'active',
+      'profile'
+    ]))
+    expect(fixtureById('trial_applied_twice').expectedOutput).toContain('validated')
+    expect(fixtureById('explicit_all_projects_instruction').expectedOutput).toContain('global_core')
+    expect(fixtureById('affective_inferred_pattern_v1_5').expectedPolicy).toBe('manual_only')
+    expect(fixtureById('project_specific_global_candidate').mustNotOutcome).toContain('global_core')
+    expect(fixtureById('core_profile_generation').expectedOutput).toContain('profile contains only core memory')
+  })
+
+  it('reports v1.5 lifecycle fixture drift', () => {
+    expect(validateMemoryQualityFixtures(fixturesWithReplacement({
+      ...fixtureById('old_review_summary_noise'),
+      mustNotOutcome: ['active', 'pending', 'direct_pending']
+    }))).toEqual([
+      'fixture old_review_summary_noise must forbid project_trial',
+      'fixture old_review_summary_noise must forbid profile'
+    ])
+
+    expect(validateMemoryQualityFixtures(fixturesWithReplacement({
+      ...fixtureById('trial_applied_twice'),
+      expectedOutput: 'Promote project trial after repeated use.'
+    }))).toEqual([
+      'trial fixture trial_applied_twice expectedOutput must mention validated or recommendation'
+    ])
+
+    const globalCoreFixture = fixtureById('repeated_project_core_global_candidate')
+    expect(validateMemoryQualityFixtures(fixturesWithReplacement({
+      ...globalCoreFixture,
+      mustNotOutcome: globalCoreFixture.mustNotOutcome.filter((outcome) => outcome !== 'project_detail_global_core')
+    }))).toEqual([
+      'global_core fixture repeated_project_core_global_candidate must forbid project_detail_global_core'
+    ])
+
+    expect(validateMemoryQualityFixtures(fixturesWithReplacement({
+      ...fixtureById('affective_inferred_pattern_v1_5'),
+      mustNotOutcome: ['auto_active', 'silent_drop']
+    }))).toEqual([
+      'high-risk fixture affective_inferred_pattern_v1_5 must forbid project_core',
+      'high-risk fixture affective_inferred_pattern_v1_5 must forbid global_core',
+      'high-risk fixture affective_inferred_pattern_v1_5 must forbid profile'
+    ])
+
+    expect(validateMemoryQualityFixtures(fixturesWithReplacement({
+      ...fixtureById('core_profile_generation'),
+      expectedOutput: 'Generated profile excludes trial and validated memory.'
+    }))).toEqual([
+      'fixture core_profile_generation expectedOutput must contain profile contains only core memory'
+    ])
   })
 
   it('exports a coordinator rubric and memory delta report template', () => {
@@ -182,6 +267,17 @@ Why pending / active stayed clean: transient checkpoint state remained episode-o
       'missing required fixture: preference_relationship_affective',
       'missing required fixture: contradicted_active_memory',
       'missing required fixture: repeated_failure',
+      'missing required fixture: old_review_summary_noise',
+      'missing required fixture: valuable_old_pending_workflow_rule',
+      'missing required fixture: trial_applied_twice',
+      'missing required fixture: trial_with_corrected_event',
+      'missing required fixture: validated_distinct_sessions',
+      'missing required fixture: validated_with_violated_event',
+      'missing required fixture: repeated_project_core_global_candidate',
+      'missing required fixture: explicit_all_projects_instruction',
+      'missing required fixture: affective_inferred_pattern_v1_5',
+      'missing required fixture: project_specific_global_candidate',
+      'missing required fixture: core_profile_generation',
       'fixture durable_workflow_rule has empty expectedOutput',
       'durable fixture durable_workflow_rule must forbid silent_drop'
     ])
@@ -206,5 +302,8 @@ Why pending / active stayed clean: transient checkpoint state remained episode-o
     expect(validateMemoryQualityFixtures([invalid])).toContain('manual-review evidence fixture raw_emotion_event must forbid active')
     expect(validateMemoryQualityFixtures([invalid])).toContain('manual-review evidence fixture raw_emotion_event must forbid pending')
     expect(validateMemoryQualityFixtures([invalid])).toContain('manual-review evidence fixture raw_emotion_event must forbid direct_pending')
+    expect(validateMemoryQualityFixtures([invalid])).toContain('high-risk fixture raw_emotion_event must forbid project_core')
+    expect(validateMemoryQualityFixtures([invalid])).toContain('high-risk fixture raw_emotion_event must forbid global_core')
+    expect(validateMemoryQualityFixtures([invalid])).toContain('high-risk fixture raw_emotion_event must forbid profile')
   })
 })

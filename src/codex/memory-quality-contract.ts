@@ -9,7 +9,18 @@ export const REQUIRED_MEMORY_QUALITY_FIXTURE_IDS = [
   'source_of_truth_rule_excerpt',
   'preference_relationship_affective',
   'contradicted_active_memory',
-  'repeated_failure'
+  'repeated_failure',
+  'old_review_summary_noise',
+  'valuable_old_pending_workflow_rule',
+  'trial_applied_twice',
+  'trial_with_corrected_event',
+  'validated_distinct_sessions',
+  'validated_with_violated_event',
+  'repeated_project_core_global_candidate',
+  'explicit_all_projects_instruction',
+  'affective_inferred_pattern_v1_5',
+  'project_specific_global_candidate',
+  'core_profile_generation'
 ] as const
 
 export type MemoryQualityFixtureId = typeof REQUIRED_MEMORY_QUALITY_FIXTURE_IDS[number]
@@ -22,6 +33,11 @@ export type MemoryQualityClassification =
   | 'semantic_candidate'
   | 'manual_review_candidate'
   | 'reflection_candidate'
+  | 'project_trial'
+  | 'validated_memory'
+  | 'project_core'
+  | 'global_core'
+  | 'lifecycle_recommendation'
 
 export type MemoryQualityModule =
   | 'episode'
@@ -32,6 +48,9 @@ export type MemoryQualityModule =
   | 'preference'
   | 'relationship_affective'
   | 'reflection'
+  | 'lifecycle'
+  | 'global_core'
+  | 'profile'
 
 export type MemoryQualityPolicy =
   | 'no_memory_candidate'
@@ -44,6 +63,9 @@ export type MemoryQualityPolicy =
   | 'distill_then_pending_review'
   | 'manual_only'
   | 'review_first'
+  | 'daily_trial_validation'
+  | 'weekly_project_core'
+  | 'weekly_global_consolidation'
 
 export type MemoryQualityForbiddenOutcome =
   | 'pending'
@@ -57,6 +79,15 @@ export type MemoryQualityForbiddenOutcome =
   | 'raw_emotion_active'
   | 'pitfall_without_mitigation'
   | 'silent_drop'
+  | 'project_trial'
+  | 'validated'
+  | 'project_core'
+  | 'global_core'
+  | 'profile'
+  | 'trial_checklist'
+  | 'high_risk_core'
+  | 'core_without_evidence'
+  | 'project_detail_global_core'
 
 export interface MemoryQualityFixture {
   id: MemoryQualityFixtureId
@@ -155,7 +186,17 @@ export const MEMORY_QUALITY_FIXTURES: MemoryQualityFixture[] = [
     expectedModule: 'episode',
     expectedPolicy: 'manual_review',
     expectedOutput: 'Use as evidence for a workflow rule about verifying acceptance criteria before completion claims.',
-    mustNotOutcome: ['active', 'pending', 'direct_pending', 'raw_emotion_active', 'auto_active', 'silent_drop'],
+    mustNotOutcome: [
+      'active',
+      'pending',
+      'direct_pending',
+      'raw_emotion_active',
+      'auto_active',
+      'silent_drop',
+      'project_core',
+      'global_core',
+      'profile'
+    ],
     reviewNotes: 'The durable memory is the workflow rule, not the emotion event itself.',
     durableSignal: false,
     highRisk: true
@@ -215,7 +256,7 @@ export const MEMORY_QUALITY_FIXTURES: MemoryQualityFixture[] = [
     expectedModule: 'relationship_affective',
     expectedPolicy: 'manual_only',
     expectedOutput: 'Preserve evidence for explicit manual review or keep as episode evidence.',
-    mustNotOutcome: ['auto_active', 'silent_drop'],
+    mustNotOutcome: ['auto_active', 'silent_drop', 'project_core', 'global_core', 'profile'],
     reviewNotes: 'High-risk memory must not be automatic, but durable signals should remain reviewable.',
     durableSignal: true,
     highRisk: true
@@ -241,6 +282,138 @@ export const MEMORY_QUALITY_FIXTURES: MemoryQualityFixture[] = [
     expectedOutput: 'Create a known-pitfall or workflow-rule candidate with repeated evidence and mitigation.',
     mustNotOutcome: ['silent_drop', 'pitfall_without_mitigation'],
     reviewNotes: 'Repeated failures are durable signals and should not disappear into episode-only traces.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'old_review_summary_noise',
+    inputSignal: 'review summary ok: merged branch and deleted local branch',
+    expectedClassification: 'episode_only',
+    expectedModule: 'episode',
+    expectedPolicy: 'no_memory_candidate',
+    expectedOutput: 'Drop or archive as audit noise during v1.5 migration.',
+    mustNotOutcome: ['project_trial', 'active', 'pending', 'direct_pending', 'profile'],
+    reviewNotes: 'Review-summary status text is not future-facing memory.',
+    durableSignal: false,
+    highRisk: false
+  },
+  {
+    id: 'valuable_old_pending_workflow_rule',
+    inputSignal: 'Review-summary generation should chunk long summaries before retrying.',
+    expectedClassification: 'project_trial',
+    expectedModule: 'lifecycle',
+    expectedPolicy: 'risk_based_review',
+    expectedOutput: 'Convert valuable old pending workflow memory into project trial with workflow_hint activation only.',
+    mustNotOutcome: ['active', 'profile', 'trial_checklist', 'silent_drop'],
+    reviewNotes: 'Trial is active runtime tier but not pending review and not hard checklist.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'trial_applied_twice',
+    inputSignal: 'Project trial memory has two explicit applied usage events and no negative feedback.',
+    expectedClassification: 'validated_memory',
+    expectedModule: 'lifecycle',
+    expectedPolicy: 'daily_trial_validation',
+    expectedOutput: 'Promote project trial to validated with MemoryEvent receipt.',
+    mustNotOutcome: ['global_core', 'profile', 'silent_drop'],
+    reviewNotes: 'Validated can generate constraints/checklists but remains project-scoped.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'trial_with_corrected_event',
+    inputSignal: 'Project trial memory has applied events plus a corrected event.',
+    expectedClassification: 'lifecycle_recommendation',
+    expectedModule: 'lifecycle',
+    expectedPolicy: 'review_first',
+    expectedOutput: 'Do not validate; generate review recommendation with negative feedback evidence.',
+    mustNotOutcome: ['validated', 'project_core', 'global_core', 'silent_drop'],
+    reviewNotes: 'Negative feedback blocks promotion until resolved.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'validated_distinct_sessions',
+    inputSignal: 'Validated memory has applied events across two distinct sessions.',
+    expectedClassification: 'project_core',
+    expectedModule: 'lifecycle',
+    expectedPolicy: 'weekly_project_core',
+    expectedOutput: 'Promote validated project memory to project_core and include it in project profile if low risk.',
+    mustNotOutcome: ['global_core', 'silent_drop'],
+    reviewNotes: 'Project core remains project scoped until global consolidation finds cross-project evidence.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'validated_with_violated_event',
+    inputSignal: 'Validated memory has a violated event after activation.',
+    expectedClassification: 'lifecycle_recommendation',
+    expectedModule: 'lifecycle',
+    expectedPolicy: 'review_first',
+    expectedOutput: 'Do not promote to project_core; generate correction/deprecation recommendation.',
+    mustNotOutcome: ['project_core', 'global_core', 'profile', 'silent_drop'],
+    reviewNotes: 'Violation means the rule may be unclear, stale, or not enforced.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'repeated_project_core_global_candidate',
+    inputSignal: 'The same low-risk project_core workflow rule appears across multiple projects.',
+    expectedClassification: 'global_core',
+    expectedModule: 'global_core',
+    expectedPolicy: 'weekly_global_consolidation',
+    expectedOutput: 'Create low-risk procedural/system global_core with cross-project evidence.',
+    mustNotOutcome: ['project_detail_global_core', 'high_risk_core', 'silent_drop'],
+    reviewNotes: 'Global core must remove project-specific implementation detail.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'explicit_all_projects_instruction',
+    inputSignal: 'User says all projects should write specs and plans in Chinese by default.',
+    expectedClassification: 'global_core',
+    expectedModule: 'global_core',
+    expectedPolicy: 'strict_low_risk_path',
+    expectedOutput: 'Create low-risk explicit global_core with receipt.',
+    mustNotOutcome: ['silent_drop', 'project_detail_global_core'],
+    reviewNotes: 'Explicit global instruction can bypass project trial when low risk.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'affective_inferred_pattern_v1_5',
+    inputSignal: 'Assistant infers an affective pattern from user tone across tasks.',
+    expectedClassification: 'lifecycle_recommendation',
+    expectedModule: 'relationship_affective',
+    expectedPolicy: 'manual_only',
+    expectedOutput: 'Generate high-risk recommendation only; do not write core/profile.',
+    mustNotOutcome: ['global_core', 'project_core', 'profile', 'auto_active', 'silent_drop'],
+    reviewNotes: 'Affective inference must remain manual review evidence.',
+    durableSignal: true,
+    highRisk: true
+  },
+  {
+    id: 'project_specific_global_candidate',
+    inputSignal: 'Project core says this repository must run plugin validation after SKILL.md changes.',
+    expectedClassification: 'lifecycle_recommendation',
+    expectedModule: 'lifecycle',
+    expectedPolicy: 'review_first',
+    expectedOutput: 'Keep project-specific detail out of global_core; recommend only if generalized safely.',
+    mustNotOutcome: ['global_core', 'project_detail_global_core', 'silent_drop'],
+    reviewNotes: 'Cross-project consolidation must not leak repo-specific commands into global policy.',
+    durableSignal: true,
+    highRisk: false
+  },
+  {
+    id: 'core_profile_generation',
+    inputSignal: 'Profile generation runs after project_core/global_core promotion.',
+    expectedClassification: 'project_core',
+    expectedModule: 'profile',
+    expectedPolicy: 'risk_based_review',
+    expectedOutput: 'Generated profile contains only core memory and excludes trial/validated/high-risk recommendations.',
+    mustNotOutcome: ['trial_checklist', 'high_risk_core', 'core_without_evidence', 'silent_drop'],
+    reviewNotes: 'Profile output is a release gate, not just a formatting artifact.',
     durableSignal: true,
     highRisk: false
   }
@@ -435,6 +608,23 @@ export function validateMemoryQualityFixtures(fixtures: MemoryQualityFixture[] =
     if (fixture.durableSignal && !fixture.mustNotOutcome.includes('silent_drop')) {
       errors.push(`durable fixture ${fixture.id} must forbid silent_drop`)
     }
+    if (fixture.id === 'old_review_summary_noise') {
+      if (!fixture.mustNotOutcome.includes('project_trial')) {
+        errors.push('fixture old_review_summary_noise must forbid project_trial')
+      }
+      if (!fixture.mustNotOutcome.includes('profile')) {
+        errors.push('fixture old_review_summary_noise must forbid profile')
+      }
+    }
+    if (fixture.id.startsWith('trial_')) {
+      const expectedOutput = fixture.expectedOutput.toLowerCase()
+      if (!expectedOutput.includes('validated') && !expectedOutput.includes('recommendation')) {
+        errors.push(`trial fixture ${fixture.id} expectedOutput must mention validated or recommendation`)
+      }
+    }
+    if (fixture.expectedClassification === 'global_core' && !fixture.mustNotOutcome.includes('project_detail_global_core')) {
+      errors.push(`global_core fixture ${fixture.id} must forbid project_detail_global_core`)
+    }
     if (fixture.highRisk && !['manual_review', 'manual_only'].includes(fixture.expectedPolicy)) {
       errors.push(`high-risk fixture ${fixture.id} must use manual review policy`)
     }
@@ -443,6 +633,19 @@ export function validateMemoryQualityFixtures(fixtures: MemoryQualityFixture[] =
     }
     if (fixture.highRisk && !fixture.mustNotOutcome.includes('silent_drop')) {
       errors.push(`high-risk fixture ${fixture.id} must forbid silent_drop`)
+    }
+    if (fixture.highRisk) {
+      for (const outcome of ['project_core', 'global_core', 'profile'] as const) {
+        if (!fixture.mustNotOutcome.includes(outcome)) {
+          errors.push(`high-risk fixture ${fixture.id} must forbid ${outcome}`)
+        }
+      }
+    }
+    if (
+      fixture.id === 'core_profile_generation'
+      && !fixture.expectedOutput.includes('profile contains only core memory')
+    ) {
+      errors.push('fixture core_profile_generation expectedOutput must contain profile contains only core memory')
     }
   }
 
