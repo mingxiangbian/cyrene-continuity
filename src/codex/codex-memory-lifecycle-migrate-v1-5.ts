@@ -5,7 +5,8 @@ import { activationPolicyForConfidenceTier } from '../memory/memory-lifecycle.js
 import {
   activeMemoryToSemanticMemory,
   pendingMemoryToSemanticMemory,
-  semanticMemoryToActiveMemory
+  semanticMemoryToActiveMemory,
+  semanticMemoryToPendingMemory
 } from '../memory/semantic-memory-adapter.js'
 import {
   appendMemoryEventFromRoot,
@@ -137,6 +138,7 @@ async function migrateReadableRoot(
   ])
   const active = legacyActive.filter((memory) => memory.status === 'active')
   const pending = legacyPending.filter((memory) => memory.status === 'pending')
+  const semanticPending = existingSemantic.filter((memory) => memory.status === 'pending')
   const processedIds = new Set<string>()
   const converted: SemanticMemory[] = []
   const recommendations: Recommendation[] = []
@@ -148,11 +150,11 @@ async function migrateReadableRoot(
 
   for (const memory of pending) {
     processedIds.add(memory.id)
-    const recommendationReason = recommendationReasonForPending(root.scope, memory)
-    if (isReviewSummaryNoise(memory) || (isLowValueNoise(memory) && recommendationReason === undefined)) {
+    if (isReviewSummaryNoise(memory) || isLowValueNoise(memory)) {
       result.droppedPending += 1
       continue
     }
+    const recommendationReason = recommendationReasonForPending(root.scope, memory)
     if (recommendationReason !== undefined || root.scope === 'global') {
       result.recommendations += 1
       recommendations.push(recommendationForPending(memory, recommendationReason ?? 'global pending memory requires manual review'))
@@ -163,7 +165,34 @@ async function migrateReadableRoot(
     result.convertedPendingToTrial += 1
   }
 
+  for (const memory of semanticPending) {
+    if (processedIds.has(memory.id)) {
+      continue
+    }
+    processedIds.add(memory.id)
+    const pendingMemory = semanticMemoryToPendingMemory(memory)
+    if (isReviewSummaryNoise(pendingMemory) || isLowValueNoise(pendingMemory)) {
+      result.droppedPending += 1
+      continue
+    }
+    const recommendationReason = recommendationReasonForPending(root.scope, pendingMemory)
+    if (recommendationReason !== undefined || root.scope === 'global') {
+      result.recommendations += 1
+      recommendations.push(recommendationForPending(
+        pendingMemory,
+        recommendationReason ?? 'global pending memory requires manual review'
+      ))
+      continue
+    }
+
+    converted.push(withLifecycle(memory, 'trial', input.now))
+    result.convertedPendingToTrial += 1
+  }
+
   for (const memory of active) {
+    if (processedIds.has(memory.id)) {
+      continue
+    }
     processedIds.add(memory.id)
     if (isLowValueNoise(memory)) {
       result.droppedActive += 1

@@ -11,9 +11,10 @@ import { identifyCodexProject } from '../src/codex/project-id.js'
 import {
   readMemoryEventsFromRoot,
   readPendingMemoriesFromRoot,
-  readSemanticMemoriesFromRoot
+  readSemanticMemoriesFromRoot,
+  writeSemanticMemoriesFromRoot
 } from '../src/memory/memory-store.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
 const tempDirs: string[] = []
@@ -85,6 +86,53 @@ function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
     updatedAt: '2026-06-01T00:00:00.000Z',
     candidateKind: 'workflow_rule',
     tags: ['workflow_rule'],
+    ...overrides
+  }
+}
+
+function createSemanticPending(overrides: Partial<SemanticMemory> = {}): SemanticMemory {
+  return {
+    id: 'semantic-pending-1',
+    status: 'pending',
+    module: 'procedural',
+    kind: 'workflow_rule',
+    scope: 'project',
+    domain: 'procedural',
+    content: 'Semantic pending workflow rules should be normalized into explicit trial memory during v1.5 migration.',
+    useWhen: ['Planning memory lifecycle migration work'],
+    doNotUseWhen: ['The task is unrelated to memory lifecycle behavior'],
+    sourceOfTruth: 'semantic-pending-fixture',
+    evidence: [
+      {
+        id: 'semantic-pending-evidence-1',
+        sourceKind: 'file',
+        sourceRef: 'semantic_memories.jsonl',
+        when: '2026-06-02T00:00:00.000Z',
+        whatHappened: 'Semantic pending memory existed before v1.5 migration.',
+        whyImportant: 'Pending memory must not remain implicit after migration.'
+      }
+    ],
+    reviewPolicy: 'pending_review',
+    reviewState: {
+      normalizedKey: 'semantic-pending-fixture',
+      type: 'procedural_rule',
+      strength: 'soft',
+      source: 'file',
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.85,
+        usefulness: 0.85,
+        safety: 0.95,
+        sensitivity: 0.1
+      },
+      seenCount: 1,
+      firstSeenAt: '2026-06-02T00:00:00.000Z',
+      lastSeenAt: '2026-06-02T00:00:00.000Z',
+      tags: ['workflow_rule']
+    },
+    supersedes: [],
+    createdAt: '2026-06-02T00:00:00.000Z',
+    updatedAt: '2026-06-02T00:00:00.000Z',
     ...overrides
   }
 }
@@ -246,6 +294,61 @@ describe('Codex memory lifecycle v1.5 migration', () => {
       event.memoryId === 'project-low-value-active' &&
       event.reason === 'v1.5 migration recommended manual review for high-risk memory'
     )).toBeUndefined()
+  })
+
+  it('normalizes semantic-only project pending and drops low-value semantic pending', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-semantic-pending-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-semantic-pending-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(memoryRoot, [
+      createSemanticPending({ id: 'semantic-pending-trial' }),
+      createSemanticPending({
+        id: 'semantic-pending-low-value',
+        content: 'FYI.',
+        reviewState: {
+          normalizedKey: 'semantic-pending-low-value',
+          type: 'procedural_rule',
+          strength: 'soft',
+          source: 'file',
+          scores: {
+            evidenceStrength: 0.2,
+            stability: 0.6,
+            usefulness: 0.1,
+            safety: 0.95,
+            sensitivity: 0.1
+          },
+          seenCount: 1,
+          firstSeenAt: '2026-06-02T00:00:00.000Z',
+          lastSeenAt: '2026-06-02T00:00:00.000Z',
+          tags: ['workflow_rule']
+        }
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({ convertedPendingToTrial: 1, droppedPending: 1 })
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    expect(semantic.find((memory) => memory.id === 'semantic-pending-trial')).toMatchObject({
+      id: 'semantic-pending-trial',
+      status: 'active',
+      confidenceTier: 'trial',
+      activationPolicy: {
+        allowedModes: ['workflow_hint'],
+        maxRuntimeStrength: 'hint'
+      }
+    })
+    expect(semantic.find((memory) => memory.id === 'semantic-pending-low-value')).toBeUndefined()
+    expect(semantic.filter((memory) => memory.status === 'pending')).toEqual([])
   })
 
   it('outputs JSON for the CLI dry-run route', async () => {
