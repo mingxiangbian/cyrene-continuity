@@ -357,6 +357,186 @@ describe('weekly core and global consolidation job', () => {
     expect(events.some((event) => event.action === 'promote')).toBe(false)
   })
 
+  it('emits an audit receipt when regenerating profile from existing core memory', async () => {
+    const project = await createTempDir('cyrene-weekly-profile-receipt-project-')
+    const globalRoot = await createTempDir('cyrene-weekly-profile-receipt-global-')
+    await writeSemanticMemoriesFromRoot(project, [
+      semanticMemory({
+        id: 'existing-project-core',
+        confidenceTier: 'project_core',
+        content: 'Existing project core should regenerate the profile with an audit receipt.'
+      })
+    ])
+
+    await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: project }],
+      globalRoot,
+      apply: true,
+      now: NOW
+    })
+
+    await expect(readFile(join(project, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain(
+      'Existing project core should regenerate the profile with an audit receipt.'
+    )
+    const events = await readMemoryEventsFromRoot(project)
+    expect(events).toContainEqual(expect.objectContaining({
+      action: 'audit',
+      reason: 'v1.5 weekly regenerated core memory profile',
+      details: expect.objectContaining({
+        lifecyclePolicyId: 'weekly_project_core_v1',
+        scope: 'project',
+        coreMemoryCount: 1
+      })
+    }))
+  })
+
+  it('does not consolidate same-project duplicate project_core rows into global_core', async () => {
+    const project = await createTempDir('cyrene-weekly-same-project-')
+    const globalRoot = await createTempDir('cyrene-weekly-same-project-global-')
+    const content = 'Run runtime verification before declaring implementation complete.'
+    await writeSemanticMemoriesFromRoot(project, [
+      semanticMemory({ id: 'core-a', confidenceTier: 'project_core', content }),
+      semanticMemory({
+        id: 'core-b',
+        confidenceTier: 'project_core',
+        content,
+        evidence: [
+          {
+            id: 'evidence-core-b',
+            sourceKind: 'review_event',
+            sourceRef: 'review:core-b',
+            whatHappened: 'The workflow rule was applied again in the same project.',
+            whyImportant: 'Same-project repetition is not enough for global consolidation.'
+          }
+        ]
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'same-project', memoryRoot: project }],
+      globalRoot,
+      apply: true,
+      now: NOW
+    })
+
+    expect(result.global).toMatchObject({ promotedToGlobalCore: 0, recommendations: 0 })
+    await expect(readSemanticMemoriesFromRoot(globalRoot)).resolves.toEqual([])
+    await expect(readFile(join(globalRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reports existing invalid global active memory as needs_migration', async () => {
+    const project = await createTempDir('cyrene-weekly-invalid-global-project-')
+    const globalRoot = await createTempDir('cyrene-weekly-invalid-global-')
+    await writeSemanticMemoriesFromRoot(project, [])
+    await writeSemanticMemoriesFromRoot(globalRoot, [
+      semanticMemory({
+        id: 'invalid-global-validated',
+        scope: 'global',
+        confidenceTier: 'validated',
+        content: 'Invalid global memory must be reported.'
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-a', memoryRoot: project }],
+      globalRoot,
+      apply: true,
+      now: NOW
+    })
+
+    expect(result.global).toMatchObject({ promotedToGlobalCore: 0, invalidMemories: 1, recommendations: 1 })
+    await expect(readSemanticMemoriesFromRoot(globalRoot)).resolves.toEqual([
+      expect.objectContaining({ id: 'invalid-global-validated', confidenceTier: 'validated' })
+    ])
+    const events = await readMemoryEventsFromRoot(globalRoot)
+    expect(events).toContainEqual(expect.objectContaining({
+      action: 'audit',
+      memoryId: 'invalid-global-validated',
+      reason: 'v1.5 weekly recommended manual review for global consolidation',
+      details: expect.objectContaining({
+        lifecyclePolicyId: 'weekly_global_consolidation_v1',
+        reason: 'invalid/needs_migration'
+      })
+    }))
+  })
+
+  it('does not rewrite semantic memory or profile when promotion receipt cannot be appended', async () => {
+    const root = await createTempDir('cyrene-weekly-receipt-failure-')
+    await writeSemanticMemoriesFromRoot(root, [semanticMemory({ id: 'validated-1' })])
+    await appendAppliedContexts(root, 'validated-1')
+    await writeFile(join(root, 'MODEL_PROFILE.md'), 'existing profile\n', 'utf8')
+    await mkdir(join(root, 'events.jsonl'))
+    const beforeSemantic = await readFile(join(root, 'semantic_memories.jsonl'), 'utf8')
+
+    await expect(runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      apply: true,
+      now: NOW
+    })).rejects.toThrow(/non-file memory data path/)
+
+    await expect(readFile(join(root, 'semantic_memories.jsonl'), 'utf8')).resolves.toBe(beforeSemantic)
+    await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.toBe('existing profile\n')
+  })
+
+  it('skips malformed semantic JSONL apply and leaves file bytes unchanged', async () => {
+    const root = await createTempDir('cyrene-weekly-malformed-project-')
+    const globalRoot = await createTempDir('cyrene-weekly-malformed-global-')
+    const malformed = `${JSON.stringify(semanticMemory({ id: 'validated-1' }))}\n{not-json}\n`
+    await writeFile(join(root, 'semantic_memories.jsonl'), malformed, 'utf8')
+    await appendAppliedContexts(root, 'validated-1')
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      globalRoot,
+      apply: true,
+      now: NOW
+    })
+
+    expect(result.projectRoots[0]).toMatchObject({
+      promotedValidatedToProjectCore: 0,
+      invalidMemories: 1,
+      recommendations: 1,
+      malformedSemanticMemories: 1
+    })
+    await expect(readFile(join(root, 'semantic_memories.jsonl'), 'utf8')).resolves.toBe(malformed)
+    await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    const events = await readMemoryEventsFromRoot(root)
+    expect(events).toContainEqual(expect.objectContaining({
+      action: 'audit',
+      reason: 'v1.5 weekly recommended manual review for project memory',
+      details: expect.objectContaining({ reason: 'malformed semantic_memories.jsonl' })
+    }))
+  })
+
+  it('does not globalize repeated named project-specific command details', async () => {
+    const projectA = await createTempDir('cyrene-weekly-project-command-a-')
+    const projectB = await createTempDir('cyrene-weekly-project-command-b-')
+    const globalRoot = await createTempDir('cyrene-weekly-project-command-global-')
+    const content = 'For cyrene-continuity, run npm run build:plugin after SKILL.md changes.'
+    await writeSemanticMemoriesFromRoot(projectA, [
+      semanticMemory({ id: 'core-a', confidenceTier: 'project_core', content })
+    ])
+    await writeSemanticMemoriesFromRoot(projectB, [
+      semanticMemory({ id: 'core-b', confidenceTier: 'project_core', content })
+    ])
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [
+        { projectId: 'project-a', memoryRoot: projectA },
+        { projectId: 'project-b', memoryRoot: projectB }
+      ],
+      globalRoot,
+      apply: true,
+      now: NOW
+    })
+
+    expect(result.global).toMatchObject({ promotedToGlobalCore: 0, recommendations: 2 })
+    await expect(readSemanticMemoriesFromRoot(globalRoot)).resolves.toEqual([])
+    const events = await readMemoryEventsFromRoot(globalRoot)
+    expect(events).toHaveLength(2)
+    expect(events.every((event) => event.details?.reason === 'project-specific global candidate')).toBe(true)
+  })
+
   it('dry-run leaves semantic files events and profile untouched', async () => {
     const root = await createTempDir('cyrene-weekly-dry-run-project-')
     const globalRoot = await createTempDir('cyrene-weekly-dry-run-global-')

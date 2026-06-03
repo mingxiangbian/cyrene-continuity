@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { createDefaultConfig } from '../config.js'
 import {
   combineEvalGateResults,
@@ -12,11 +14,12 @@ import {
   isNegativeActivationEventType,
   validateSemanticMemoryLifecycle
 } from '../memory/memory-lifecycle.js'
+import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
 import {
   appendMemoryEventFromRoot,
+  assertSafeMemoryDataFileTarget,
   readActivationEventsFromRoot,
   readMemoryEventsFromRoot,
-  readSemanticMemoriesFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
 import type {
@@ -42,6 +45,7 @@ const PROJECT_LIFECYCLE_POLICY_ID = 'weekly_project_core_v1'
 const GLOBAL_PROMOTION_POLICY_ID = 'review_derived_global_preference_v1'
 const GLOBAL_LIFECYCLE_POLICY_ID = 'weekly_global_consolidation_v1'
 const PROMOTION_DECISION = 'auto_promote'
+const SEMANTIC_MEMORIES_FILE = 'semantic_memories.jsonl'
 
 const GLOBAL_DOMAINS = new Set(['procedural', 'system'])
 
@@ -54,6 +58,7 @@ export interface WeeklyProjectRootResult {
   invalidMemories: number
   evalFailures: number
   capExhausted: number
+  malformedSemanticMemories: number
 }
 export interface WeeklyGlobalResult {
   memoryRoot: string
@@ -62,6 +67,7 @@ export interface WeeklyGlobalResult {
   invalidMemories: number
   evalFailures: number
   capExhausted: number
+  malformedSemanticMemories: number
 }
 export interface WeeklyLifecycleResult {
   action: 'memory_lifecycle_weekly'
@@ -140,8 +146,40 @@ async function runProjectWeekly(input: {
   now: string
   dailyCap: number
 }): Promise<{ result: WeeklyProjectRootResult; coreMemories: ProjectCoreMemory[] }> {
+  if (!input.dryRun) {
+    return withMemoryMaintenanceLockFromRoot(input.root.memoryRoot, async (lockedMemoryRoot) =>
+      runProjectWeeklyLocked({
+        ...input,
+        root: { ...input.root, memoryRoot: lockedMemoryRoot }
+      })
+    )
+  }
+  return runProjectWeeklyLocked(input)
+}
+
+async function runProjectWeeklyLocked(input: {
+  root: WeeklyProjectRootInput
+  dryRun: boolean
+  now: string
+  dailyCap: number
+}): Promise<{ result: WeeklyProjectRootResult; coreMemories: ProjectCoreMemory[] }> {
+  const strictSemantic = await readSemanticMemoriesStrictFromRoot(input.root.memoryRoot)
+  if (strictSemantic.malformedLines > 0) {
+    const result = malformedProjectResult(input.root, strictSemantic.malformedLines)
+    if (!input.dryRun) {
+      await appendMemoryEventFromRoot(input.root.memoryRoot, malformedSemanticMemoryEvent({
+        root: input.root,
+        now: input.now,
+        scope: 'project',
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
+        malformedLines: strictSemantic.malformedLines
+      }))
+    }
+    return { result, coreMemories: [] }
+  }
+
   const [memories, activationEvents, memoryEvents] = await Promise.all([
-    readSemanticMemoriesFromRoot(input.root.memoryRoot),
+    Promise.resolve(strictSemantic.memories),
     readActivationEventsFromRoot(input.root.memoryRoot),
     readMemoryEventsFromRoot(input.root.memoryRoot)
   ])
@@ -151,6 +189,7 @@ async function runProjectWeekly(input: {
   let invalidMemories = 0
   let evalFailures = 0
   let capExhausted = 0
+  const malformedSemanticMemories = 0
   let usedToday = countAutoPromotionsForDay(memoryEvents, input.now)
 
   for (const [index, memory] of memories.entries()) {
@@ -258,16 +297,7 @@ async function runProjectWeekly(input: {
     if (coreMemories.length > 0) {
       await assertLifecycleProfileTargetSafe(input.root.memoryRoot)
     }
-    if (promotions.length > 0) {
-      await writeSemanticMemoriesFromRoot(input.root.memoryRoot, next)
-    }
-    if (coreMemories.length > 0) {
-      await writeLifecycleProfileFromCoreMemory({
-        memoryRoot: input.root.memoryRoot,
-        scope: 'project',
-        memories: next
-      })
-    }
+    // Receipts are intentionally written before semantic/profile rewrites so a failed receipt append cannot leave un-audited promoted state.
     for (const promotion of promotions) {
       await appendMemoryEventFromRoot(input.root.memoryRoot, projectPromotionEvent({
         root: input.root,
@@ -283,6 +313,25 @@ async function runProjectWeekly(input: {
         scope: 'project'
       }))
     }
+    if (coreMemories.length > 0) {
+      await appendMemoryEventFromRoot(input.root.memoryRoot, profileRegenerationEvent({
+        root: input.root,
+        now: input.now,
+        scope: 'project',
+        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
+        coreMemoryCount: coreMemories.length
+      }))
+    }
+    if (promotions.length > 0) {
+      await writeSemanticMemoriesFromRoot(input.root.memoryRoot, next)
+    }
+    if (coreMemories.length > 0) {
+      await writeLifecycleProfileFromCoreMemory({
+        memoryRoot: input.root.memoryRoot,
+        scope: 'project',
+        memories: next
+      })
+    }
   }
 
   return {
@@ -293,7 +342,8 @@ async function runProjectWeekly(input: {
       recommendations: recommendations.length,
       invalidMemories,
       evalFailures,
-      capExhausted
+      capExhausted,
+      malformedSemanticMemories
     },
     coreMemories
   }
@@ -315,8 +365,41 @@ async function runGlobalWeekly(input: {
   now: string
   dailyCap: number
 }): Promise<WeeklyGlobalResult> {
+  if (!input.dryRun) {
+    return withMemoryMaintenanceLockFromRoot(input.memoryRoot, async (lockedMemoryRoot) =>
+      runGlobalWeeklyLocked({
+        ...input,
+        memoryRoot: lockedMemoryRoot
+      })
+    )
+  }
+  return runGlobalWeeklyLocked(input)
+}
+
+async function runGlobalWeeklyLocked(input: {
+  memoryRoot: string
+  projectCoreMemories: ProjectCoreMemory[]
+  dryRun: boolean
+  now: string
+  dailyCap: number
+}): Promise<WeeklyGlobalResult> {
+  const strictSemantic = await readSemanticMemoriesStrictFromRoot(input.memoryRoot)
+  if (strictSemantic.malformedLines > 0) {
+    const result = malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines)
+    if (!input.dryRun) {
+      await appendMemoryEventFromRoot(input.memoryRoot, malformedSemanticMemoryEvent({
+        root: { memoryRoot: input.memoryRoot },
+        now: input.now,
+        scope: 'global',
+        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
+        malformedLines: strictSemantic.malformedLines
+      }))
+    }
+    return result
+  }
+
   const [existing, memoryEvents] = await Promise.all([
-    readSemanticMemoriesFromRoot(input.memoryRoot),
+    Promise.resolve(strictSemantic.memories),
     readMemoryEventsFromRoot(input.memoryRoot)
   ])
   const existingContent = new Set(
@@ -328,8 +411,25 @@ async function runGlobalWeekly(input: {
   let invalidMemories = 0
   let evalFailures = 0
   let capExhausted = 0
+  const malformedSemanticMemories = 0
   let usedToday = countAutoPromotionsForDay(memoryEvents, input.now)
   const eligibleProjectCoreMemories: ProjectCoreMemory[] = []
+
+  for (const memory of existing) {
+    if (memory.status !== 'active') {
+      continue
+    }
+    const validationFindings = validateSemanticMemoryLifecycle(memory)
+    if (validationFindings.length === 0) {
+      continue
+    }
+    invalidMemories += 1
+    recommendations.push({
+      memory,
+      reason: 'invalid/needs_migration',
+      lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID
+    })
+  }
 
   for (const source of input.projectCoreMemories) {
     const ineligible = globalSourceIneligibilityReason(source)
@@ -434,16 +534,7 @@ async function runGlobalWeekly(input: {
     if (hasGlobalProfileContent) {
       await assertLifecycleProfileTargetSafe(input.memoryRoot)
     }
-    if (candidates.length > 0) {
-      await writeSemanticMemoriesFromRoot(input.memoryRoot, next)
-    }
-    if (hasGlobalProfileContent) {
-      await writeLifecycleProfileFromCoreMemory({
-        memoryRoot: input.memoryRoot,
-        scope: 'global',
-        memories: next
-      })
-    }
+    // Receipts are intentionally written before semantic/profile rewrites so global_core never appears without an audit receipt.
     for (const candidate of candidates) {
       await appendMemoryEventFromRoot(input.memoryRoot, globalPromotionEvent({
         memoryRoot: input.memoryRoot,
@@ -459,6 +550,30 @@ async function runGlobalWeekly(input: {
         scope: 'global'
       }))
     }
+    if (hasGlobalProfileContent) {
+      await appendMemoryEventFromRoot(input.memoryRoot, profileRegenerationEvent({
+        root: { memoryRoot: input.memoryRoot },
+        now: input.now,
+        scope: 'global',
+        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
+        coreMemoryCount: next.filter((memory) =>
+          memory.status === 'active' &&
+          memory.confidenceTier === 'global_core' &&
+          isLowRiskLifecycleMemory(memory) &&
+          validateSemanticMemoryLifecycle(memory).length === 0
+        ).length
+      }))
+    }
+    if (candidates.length > 0) {
+      await writeSemanticMemoriesFromRoot(input.memoryRoot, next)
+    }
+    if (hasGlobalProfileContent) {
+      await writeLifecycleProfileFromCoreMemory({
+        memoryRoot: input.memoryRoot,
+        scope: 'global',
+        memories: next
+      })
+    }
   }
 
   return {
@@ -467,7 +582,8 @@ async function runGlobalWeekly(input: {
     recommendations: recommendations.length,
     invalidMemories,
     evalFailures,
-    capExhausted
+    capExhausted,
+    malformedSemanticMemories
   }
 }
 
@@ -547,10 +663,7 @@ function globalCandidateGroups(projectCoreMemories: ProjectCoreMemory[]): Global
 
   return Array.from(groups.entries())
     .map(([key, sources]) => ({ key, sources }))
-    .filter((group) =>
-      distinctProjectCount(group.sources) >= 2 ||
-      distinctGlobalEvidenceCount(group.sources) >= 2
-    )
+    .filter((group) => distinctProjectCount(group.sources) >= 2)
 }
 
 function globalSourceIneligibilityReason(source: ProjectCoreMemory): string | null {
@@ -628,10 +741,16 @@ function distinctGlobalEvidenceCount(sources: ProjectCoreMemory[]): number {
 
 function containsProjectSpecificDetail(content: string): boolean {
   const normalized = content.toLowerCase()
+  const buildToolCommand = /\b(?:npm|pnpm|yarn|bun|node|tsx|tsc|vite|vitest|jest|pytest|python3?|pip|cargo|go|make)\s+(?:run\s+)?[a-z0-9:_@./-]+/i
+  const namedProjectPrefix = /\bfor\s+[`'"]?[a-z0-9][a-z0-9._-]*-[a-z0-9._-]+[`'"]?\s*,/i
+  const namedRepository = /\b(?:repo|repository|project|workspace)\s+[`'"]?[a-z0-9][a-z0-9._-]*-[a-z0-9._-]+[`'"]?/i
   return (
     /(^|[\s`'"([{<:=,;])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-][^\s`'")\]}>]*/.test(content) ||
     /(^|[\s`'"([{<:=,;])[A-Za-z]:\\(?:[^\\\s`'")\]}>]+\\)+[^\\\s`'")\]}>]+/.test(content) ||
-    /\b(this|current)\s+(repo|repository|project|workspace)\b/.test(normalized)
+    /\b(this|current)\s+(repo|repository|project|workspace)\b/.test(normalized) ||
+    namedProjectPrefix.test(content) ||
+    namedRepository.test(content) ||
+    buildToolCommand.test(content)
   )
 }
 
@@ -724,6 +843,108 @@ function recommendationEvent(input: {
   }
 }
 
+function profileRegenerationEvent(input: {
+  root: WeeklyProjectRootInput
+  now: string
+  scope: 'project' | 'global'
+  lifecyclePolicyId: string
+  coreMemoryCount: number
+}): MemoryEvent {
+  return {
+    id: randomUUID(),
+    action: 'audit',
+    at: input.now,
+    reason: 'v1.5 weekly regenerated core memory profile',
+    details: {
+      lifecyclePolicyId: input.lifecyclePolicyId,
+      scope: input.scope,
+      projectId: input.root.projectId,
+      coreMemoryCount: input.coreMemoryCount
+    }
+  }
+}
+
+function malformedSemanticMemoryEvent(input: {
+  root: WeeklyProjectRootInput
+  now: string
+  scope: 'project' | 'global'
+  lifecyclePolicyId: string
+  malformedLines: number
+}): MemoryEvent {
+  return {
+    id: randomUUID(),
+    action: 'audit',
+    at: input.now,
+    reason: input.scope === 'global'
+      ? 'v1.5 weekly recommended manual review for global consolidation'
+      : 'v1.5 weekly recommended manual review for project memory',
+    details: {
+      lifecyclePolicyId: input.lifecyclePolicyId,
+      scope: input.scope,
+      projectId: input.root.projectId,
+      reason: 'malformed semantic_memories.jsonl',
+      malformedLines: input.malformedLines
+    }
+  }
+}
+
+function malformedProjectResult(root: WeeklyProjectRootInput, malformedSemanticMemories: number): WeeklyProjectRootResult {
+  return {
+    memoryRoot: root.memoryRoot,
+    projectId: root.projectId,
+    promotedValidatedToProjectCore: 0,
+    recommendations: 1,
+    invalidMemories: malformedSemanticMemories,
+    evalFailures: 0,
+    capExhausted: 0,
+    malformedSemanticMemories
+  }
+}
+
+function malformedGlobalResult(memoryRoot: string, malformedSemanticMemories: number): WeeklyGlobalResult {
+  return {
+    memoryRoot,
+    promotedToGlobalCore: 0,
+    recommendations: 1,
+    invalidMemories: malformedSemanticMemories,
+    evalFailures: 0,
+    capExhausted: 0,
+    malformedSemanticMemories
+  }
+}
+
+async function readSemanticMemoriesStrictFromRoot(memoryRoot: string): Promise<{
+  memories: SemanticMemory[]
+  malformedLines: number
+}> {
+  const filePath = join(memoryRoot, SEMANTIC_MEMORIES_FILE)
+  let content: string
+  try {
+    await assertSafeMemoryDataFileTarget(filePath)
+    content = await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return { memories: [], malformedLines: 0 }
+    }
+    throw error
+  }
+
+  const memories: SemanticMemory[] = []
+  let malformedLines = 0
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (line === '') {
+      continue
+    }
+    try {
+      memories.push(JSON.parse(line) as SemanticMemory)
+    } catch {
+      malformedLines += 1
+    }
+  }
+  return { memories, malformedLines }
+}
+
 function countAutoPromotionsForDay(events: MemoryEvent[], now: string): number {
   const day = now.slice(0, 10)
   return events.filter((event) =>
@@ -743,4 +964,8 @@ async function defaultProjectRoots(cwd: string | undefined): Promise<WeeklyProje
     return [{ projectId: project.projectId, memoryRoot: codexProjectMemoryRoot(project.projectId) }]
   }
   return (await getReadableCodexProjectMemoryRoots()).map((memoryRoot) => ({ memoryRoot }))
+}
+
+function isFileErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code
 }
