@@ -165,11 +165,11 @@ async function migrateReadableRoot(
 
   for (const memory of active) {
     processedIds.add(memory.id)
-    const recommendationReason = recommendationReasonForActive(root.scope, memory)
-    if (isLowValueNoise(memory) && recommendationReason === undefined) {
+    if (isLowValueNoise(memory)) {
       result.droppedActive += 1
       continue
     }
+    const recommendationReason = recommendationReasonForActive(root.scope, memory)
     if (recommendationReason !== undefined) {
       result.recommendations += 1
       recommendations.push(recommendationForActive(memory, recommendationReason))

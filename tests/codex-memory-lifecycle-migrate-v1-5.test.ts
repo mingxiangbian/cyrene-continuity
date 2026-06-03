@@ -202,6 +202,52 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     )
   })
 
+  it('drops low-value project active memory without recommending manual review', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-low-value-active-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-low-value-active-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createActive({
+        id: 'project-low-value-active',
+        scope: 'project',
+        content: 'FYI.',
+        normalizedKey: 'project-low-value-active',
+        scores: {
+          evidenceStrength: 0.2,
+          stability: 0.6,
+          usefulness: 0.1,
+          safety: 0.95,
+          sensitivity: 0.1
+        }
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({
+      droppedActive: 1,
+      recommendations: 0,
+      convertedActiveToValidated: 0,
+      convertedActiveToCore: 0
+    })
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    expect(semantic.find((memory) => memory.id === 'project-low-value-active')).toBeUndefined()
+    const events = await readMemoryEventsFromRoot(memoryRoot)
+    expect(events.find((event) =>
+      event.memoryId === 'project-low-value-active' &&
+      event.reason === 'v1.5 migration recommended manual review for high-risk memory'
+    )).toBeUndefined()
+  })
+
   it('outputs JSON for the CLI dry-run route', async () => {
     const home = await createTempDir('cyrene-v15-migrate-cli-home-')
     vi.stubEnv('HOME', home)
