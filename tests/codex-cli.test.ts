@@ -31,17 +31,6 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir
 }
 
-async function readOptionalText(filePath: string): Promise<string> {
-  try {
-    return await readFile(filePath, 'utf8')
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-      return ''
-    }
-    throw error
-  }
-}
-
 function readChildStdoutUntil(
   child: ChildProcess,
   predicate: (stdout: string) => boolean,
