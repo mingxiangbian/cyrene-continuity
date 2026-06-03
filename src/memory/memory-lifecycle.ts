@@ -6,7 +6,13 @@ import type {
 
 const LOW_RISK_DOMAINS = new Set<string>(['project', 'procedural', 'system'])
 const LOW_RISK_MODULES = new Set<string>(['project_semantic', 'procedural', 'system', 'global_policy'])
-const NEGATIVE_EVENT_TYPES = new Set<string>(['corrected', 'violated'])
+const NEGATIVE_EVENT_TYPES = new Set<string>(['corrected', 'violated', 'contradicted'])
+
+export type RuntimeActivatableSemanticMemory = SemanticMemory & {
+  status: 'active'
+  confidenceTier: ConfidenceTier
+  activationPolicy: ActivationPolicy
+}
 
 export function activationPolicyForConfidenceTier(tier: ConfidenceTier): ActivationPolicy {
   if (tier === 'trial') {
@@ -29,6 +35,13 @@ export function validateSemanticMemoryLifecycle(memory: SemanticMemory): string[
   if (memory.activationPolicy === undefined) {
     findings.push('active memory is missing activationPolicy')
   }
+  if (
+    memory.confidenceTier !== undefined &&
+    memory.activationPolicy !== undefined &&
+    !activationPolicyMatchesConfidenceTier(memory.confidenceTier, memory.activationPolicy)
+  ) {
+    findings.push(`activationPolicy does not match confidenceTier ${memory.confidenceTier}`)
+  }
   if (memory.scope === 'global' && memory.confidenceTier !== undefined && memory.confidenceTier !== 'global_core') {
     findings.push('global memory must use confidenceTier global_core')
   }
@@ -47,7 +60,7 @@ export function validateSemanticMemoryLifecycle(memory: SemanticMemory): string[
   return findings
 }
 
-export function isRuntimeActivatableSemanticMemory(memory: SemanticMemory): boolean {
+export function isRuntimeActivatableSemanticMemory(memory: SemanticMemory): memory is RuntimeActivatableSemanticMemory {
   return memory.status === 'active' && validateSemanticMemoryLifecycle(memory).length === 0
 }
 
@@ -65,4 +78,13 @@ export function isLowRiskLifecycleMemory(memory: SemanticMemory): boolean {
 
 export function isNegativeActivationEventType(event: string): boolean {
   return NEGATIVE_EVENT_TYPES.has(event)
+}
+
+function activationPolicyMatchesConfidenceTier(tier: ConfidenceTier, policy: ActivationPolicy): boolean {
+  const expected = activationPolicyForConfidenceTier(tier)
+  return (
+    policy.maxRuntimeStrength === expected.maxRuntimeStrength &&
+    policy.allowedModes.length === expected.allowedModes.length &&
+    policy.allowedModes.every((mode, index) => mode === expected.allowedModes[index])
+  )
 }

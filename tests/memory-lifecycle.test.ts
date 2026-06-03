@@ -6,7 +6,7 @@ import {
   isLowRiskLifecycleMemory,
   validateSemanticMemoryLifecycle
 } from '../src/memory/memory-lifecycle.js'
-import type { SemanticMemory } from '../src/memory/types.js'
+import type { ConfidenceTier, SemanticMemory } from '../src/memory/types.js'
 
 function semanticMemory(overrides: Partial<SemanticMemory> = {}): SemanticMemory {
   return {
@@ -118,6 +118,53 @@ describe('v1.5 semantic memory lifecycle contract', () => {
     }))).toContain('trial memory can only allow workflow_hint activation')
   })
 
+  it('rejects trial policy with overpowered runtime strength', () => {
+    expect(validateSemanticMemoryLifecycle(semanticMemory({
+      confidenceTier: 'trial',
+      activationPolicy: {
+        allowedModes: ['workflow_hint'],
+        maxRuntimeStrength: 'profile'
+      }
+    }))).toContain('activationPolicy does not match confidenceTier trial')
+  })
+
+  it('rejects validated policy with extra modes or overpowered runtime strength', () => {
+    expect(validateSemanticMemoryLifecycle(semanticMemory({
+      confidenceTier: 'validated',
+      activationPolicy: {
+        allowedModes: ['workflow_hint', 'plan_constraint', 'checklist_item', 'workflow_selection'],
+        maxRuntimeStrength: 'checklist'
+      }
+    }))).toContain('activationPolicy does not match confidenceTier validated')
+
+    expect(validateSemanticMemoryLifecycle(semanticMemory({
+      confidenceTier: 'validated',
+      activationPolicy: {
+        allowedModes: ['workflow_hint', 'plan_constraint', 'checklist_item'],
+        maxRuntimeStrength: 'profile'
+      }
+    }))).toContain('activationPolicy does not match confidenceTier validated')
+  })
+
+  it('rejects core policy drift from canonical profile-strength modes', () => {
+    expect(validateSemanticMemoryLifecycle(semanticMemory({
+      confidenceTier: 'project_core',
+      activationPolicy: {
+        allowedModes: ['workflow_hint', 'plan_constraint', 'checklist_item'],
+        maxRuntimeStrength: 'checklist'
+      }
+    }))).toContain('activationPolicy does not match confidenceTier project_core')
+
+    expect(validateSemanticMemoryLifecycle(semanticMemory({
+      scope: 'global',
+      confidenceTier: 'global_core',
+      activationPolicy: {
+        allowedModes: ['workflow_hint', 'plan_constraint', 'checklist_item', 'workflow_selection'],
+        maxRuntimeStrength: 'profile'
+      }
+    }))).toContain('activationPolicy does not match confidenceTier global_core')
+  })
+
   it('rejects high-risk global_core memory', () => {
     expect(validateSemanticMemoryLifecycle(semanticMemory({
       scope: 'global',
@@ -142,6 +189,18 @@ describe('v1.5 semantic memory lifecycle contract', () => {
     expect(isRuntimeActivatableSemanticMemory(memory)).toBe(false)
   })
 
+  it('narrows runtime activatable memory lifecycle fields', () => {
+    const memory = semanticMemory()
+
+    if (isRuntimeActivatableSemanticMemory(memory)) {
+      const tier: ConfidenceTier = memory.confidenceTier
+      expect(tier).toBe('trial')
+      expect(memory.activationPolicy.maxRuntimeStrength).toBe('hint')
+    } else {
+      expect.fail('expected fixture to be runtime activatable')
+    }
+  })
+
   it('classifies low-risk lifecycle memory conservatively', () => {
     expect(isLowRiskLifecycleMemory(semanticMemory())).toBe(true)
     expect(isLowRiskLifecycleMemory(semanticMemory({ domain: 'relationship', module: 'relationship_affective' }))).toBe(false)
@@ -156,6 +215,8 @@ describe('v1.5 semantic memory lifecycle contract', () => {
   it('recognizes negative activation event types', () => {
     expect(isNegativeActivationEventType('corrected')).toBe(true)
     expect(isNegativeActivationEventType('violated')).toBe(true)
+    expect(isNegativeActivationEventType('contradicted')).toBe(true)
     expect(isNegativeActivationEventType('applied')).toBe(false)
+    expect(isNegativeActivationEventType('used')).toBe(false)
   })
 })
