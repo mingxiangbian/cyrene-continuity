@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { createDefaultConfig } from '../config.js'
 import {
   activationPolicyForConfidenceTier,
   isLowRiskLifecycleMemory,
@@ -6,11 +9,12 @@ import {
 } from '../memory/memory-lifecycle.js'
 import {
   appendMemoryEventFromRoot,
+  assertSafeMemoryDataFileTarget,
   readActivationEventsFromRoot,
   readMemoryEventsFromRoot,
-  readSemanticMemoriesFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
+import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
 import type {
   ActivationEvent,
   MemoryEvent,
@@ -30,14 +34,11 @@ import {
 } from './codex-memory-root.js'
 import { identifyCodexProject } from './project-id.js'
 
-const PROJECT_DAILY_PROMOTION_CAP = 10
-const GLOBAL_DAILY_PROMOTION_CAP = 10
 const PROJECT_AUTO_PROMOTION_POLICY_ID = 'low_risk_project_memory_v1'
 const GLOBAL_AUTO_PROMOTION_POLICY_ID = 'low_risk_global_procedural_v1'
 const DAILY_TRIAL_VALIDATION_POLICY_ID = 'daily_trial_validation_v1'
 const DAILY_EXPLICIT_GLOBAL_CORE_POLICY_ID = 'daily_explicit_global_core_v1'
 const GLOBAL_AUTO_PROMOTION_DOMAINS = new Set(['procedural', 'system'])
-const EXPLICIT_GLOBAL_SOURCES = new Set(['user_explicit', 'review_event'])
 const MEMORY_SOURCES = new Set<MemorySource>([
   'user_explicit',
   'user_implicit',
@@ -47,6 +48,7 @@ const MEMORY_SOURCES = new Set<MemorySource>([
   'legacy_markdown',
   'review_event'
 ])
+const SEMANTIC_MEMORIES_FILE = 'semantic_memories.jsonl'
 
 export interface LifecycleRootInput { projectId?: string; memoryRoot: string }
 
@@ -60,8 +62,11 @@ export interface DailyLifecycleRootResult {
   staleTrials: number
   invalidMemories: number
   needsMigration: number
+  malformedJsonLines?: number
   evalFailures: number
   capExhausted: number
+  skipped?: boolean
+  reason?: string
 }
 
 export interface DailyLifecycleResult {
@@ -89,9 +94,20 @@ interface RootRunState {
   dryRun: boolean
   result: DailyLifecycleRootResult
   events: MemoryEvent[]
-  existingMemoryEvents: MemoryEvent[]
   usedToday: number
+  dailyCap: number
 }
+
+interface DailyLifecycleRunInput {
+  dryRun: boolean
+  now: string
+  projectDailyCap: number
+  globalDailyCap: number
+}
+
+type StrictSemanticReadResult =
+  | { ok: true; records: SemanticMemory[] }
+  | { ok: false; malformedJsonLines: number; reason: string }
 
 export async function runCodexMemoryLifecycleDaily(input: {
   cwd?: string
@@ -102,6 +118,7 @@ export async function runCodexMemoryLifecycleDaily(input: {
 }): Promise<DailyLifecycleResult> {
   const dryRun = input.apply !== true
   const now = input.now ?? new Date().toISOString()
+  const config = createDefaultConfig(input.cwd ?? process.cwd())
   const roots: LifecycleRootSpec[] = (input.projectRoots ?? await defaultProjectRoots(input.cwd)).map((root) => ({
     ...root,
     scope: 'project'
@@ -113,7 +130,12 @@ export async function runCodexMemoryLifecycleDaily(input: {
 
   const results: DailyLifecycleRootResult[] = []
   for (const root of roots) {
-    results.push(await runDailyForRoot(root, { dryRun, now }))
+    results.push(await runDailyForRoot(root, {
+      dryRun,
+      now,
+      projectDailyCap: config.memoryAutoReviewProjectPromotePerDay,
+      globalDailyCap: config.memoryAutoReviewGlobalPromotePerDay
+    }))
   }
 
   return {
@@ -125,10 +147,26 @@ export async function runCodexMemoryLifecycleDaily(input: {
 
 async function runDailyForRoot(
   root: LifecycleRootSpec,
-  input: { dryRun: boolean; now: string }
+  input: DailyLifecycleRunInput
 ): Promise<DailyLifecycleRootResult> {
+  if (input.dryRun) {
+    return runDailyForReadableRoot(root, input)
+  }
+  return withMemoryMaintenanceLockFromRoot(root.memoryRoot, (lockedMemoryRoot) =>
+    runDailyForReadableRoot({ ...root, memoryRoot: lockedMemoryRoot }, input)
+  )
+}
+
+async function runDailyForReadableRoot(
+  root: LifecycleRootSpec,
+  input: DailyLifecycleRunInput
+): Promise<DailyLifecycleRootResult> {
+  const semanticRead = await readSemanticMemoriesStrictFromRoot(root.memoryRoot)
+  if (!semanticRead.ok) {
+    return malformedRootResult(root, semanticRead)
+  }
   const [memories, activationEvents, memoryEvents] = await Promise.all([
-    readSemanticMemoriesFromRoot(root.memoryRoot),
+    Promise.resolve(semanticRead.records),
     readActivationEventsFromRoot(root.memoryRoot),
     readMemoryEventsFromRoot(root.memoryRoot)
   ])
@@ -138,8 +176,8 @@ async function runDailyForRoot(
     dryRun: input.dryRun,
     result: baseRootResult(root),
     events: [],
-    existingMemoryEvents: memoryEvents,
-    usedToday: countSameDayAutoPromotions(memoryEvents, input.now)
+    usedToday: countSameDayAutoPromotions(memoryEvents, input.now),
+    dailyCap: root.scope === 'project' ? input.projectDailyCap : input.globalDailyCap
   }
   const next: SemanticMemory[] = []
 
@@ -162,11 +200,11 @@ async function runDailyForRoot(
 
   const changed = memories.some((memory, index) => memory !== next[index])
   if (!input.dryRun) {
-    if (changed) {
-      await writeSemanticMemoriesFromRoot(root.memoryRoot, next)
-    }
     for (const event of state.events) {
       await appendMemoryEventFromRoot(root.memoryRoot, event)
+    }
+    if (changed) {
+      await writeSemanticMemoriesFromRoot(root.memoryRoot, next)
     }
   }
 
@@ -237,7 +275,7 @@ function processProjectMemory(
     scope: 'project',
     policyId: PROJECT_AUTO_PROMOTION_POLICY_ID,
     usedToday: state.usedToday,
-    dailyCap: PROJECT_DAILY_PROMOTION_CAP,
+    dailyCap: state.dailyCap,
     evidenceCount,
     distinctEvidenceCount
   })
@@ -285,7 +323,7 @@ function processGlobalMemory(state: RootRunState, memory: SemanticMemory): Seman
     scope: 'global',
     policyId: GLOBAL_AUTO_PROMOTION_POLICY_ID,
     usedToday: state.usedToday,
-    dailyCap: GLOBAL_DAILY_PROMOTION_CAP,
+    dailyCap: state.dailyCap,
     evidenceCount,
     distinctEvidenceCount
   })
@@ -349,6 +387,20 @@ function baseRootResult(root: LifecycleRootSpec): DailyLifecycleRootResult {
   }
 }
 
+function malformedRootResult(
+  root: LifecycleRootSpec,
+  readResult: Extract<StrictSemanticReadResult, { ok: false }>
+): DailyLifecycleRootResult {
+  return {
+    ...baseRootResult(root),
+    invalidMemories: readResult.malformedJsonLines,
+    needsMigration: readResult.malformedJsonLines,
+    malformedJsonLines: readResult.malformedJsonLines,
+    skipped: true,
+    reason: readResult.reason
+  }
+}
+
 function activationStats(memoryId: string, events: ActivationEvent[]): PromotionStats {
   const applied = events.filter((event) => event.memoryId === memoryId && event.event === 'applied')
   const corrected = events.filter((event) => event.memoryId === memoryId && event.event === 'corrected')
@@ -389,23 +441,31 @@ function autoPromotionEvalItem(input: {
 function isExplicitLowRiskGlobalCandidate(memory: SemanticMemory): boolean {
   return (
     GLOBAL_AUTO_PROMOTION_DOMAINS.has(memory.domain) &&
-    EXPLICIT_GLOBAL_SOURCES.has(sourceForEval(memory)) &&
+    sourceForEval(memory) === 'user_explicit' &&
+    hasExplicitUserEvidence(memory) &&
     isLowRiskLifecycleMemory(memory)
   )
 }
 
 function sourceForEval(memory: SemanticMemory): string {
-  if (memory.reviewState?.source !== undefined) {
-    return memory.reviewState.source
+  if (hasExplicitUserEvidence(memory)) {
+    return 'user_explicit'
   }
   const evidenceSource = firstEvidenceSource(memory.evidence)
   if (evidenceSource !== undefined) {
     return evidenceSource
   }
-  if (memory.sourceOfTruth?.startsWith('user_prompt:') === true) {
-    return 'user_explicit'
+  if (memory.reviewState?.source !== undefined) {
+    return memory.reviewState.source
   }
   return 'unknown'
+}
+
+function hasExplicitUserEvidence(memory: SemanticMemory): boolean {
+  return (
+    memory.evidence.some((entry) => entry.sourceKind === 'user_explicit') ||
+    memory.sourceOfTruth?.startsWith('user_prompt:') === true
+  )
 }
 
 function firstEvidenceSource(evidence: StructuredEvidence[]): MemorySource | undefined {
@@ -491,7 +551,7 @@ function addProjectRecommendation(
       capStatus: {
         scope: 'project',
         usedToday: state.usedToday,
-        dailyCap: PROJECT_DAILY_PROMOTION_CAP
+        dailyCap: state.dailyCap
       },
       ...(evalGate === undefined ? {} : { evalGate })
     }
@@ -522,7 +582,7 @@ function addGlobalRecommendation(
       capStatus: {
         scope: 'global',
         usedToday: state.usedToday,
-        dailyCap: GLOBAL_DAILY_PROMOTION_CAP
+        dailyCap: state.dailyCap
       },
       ...(lifecycleFindings.length === 0 ? {} : { lifecycleFindings }),
       ...(evalGate === undefined ? {} : { evalGate })
@@ -563,7 +623,7 @@ function promoteTrialEvent(
       capStatus: {
         scope: 'project',
         usedToday: state.usedToday,
-        dailyCap: PROJECT_DAILY_PROMOTION_CAP
+        dailyCap: state.dailyCap
       },
       evalGate
     }
@@ -594,11 +654,52 @@ function promoteGlobalEvent(
       capStatus: {
         scope: 'global',
         usedToday: state.usedToday,
-        dailyCap: GLOBAL_DAILY_PROMOTION_CAP
+        dailyCap: state.dailyCap
       },
       evalGate
     }
   }
+}
+
+async function readSemanticMemoriesStrictFromRoot(memoryRoot: string): Promise<StrictSemanticReadResult> {
+  const filePath = join(memoryRoot, SEMANTIC_MEMORIES_FILE)
+  let content: string
+  try {
+    await assertSafeMemoryDataFileTarget(filePath)
+    content = await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (isFileErrorCode(error, 'ENOENT')) {
+      return { ok: true, records: [] }
+    }
+    throw error
+  }
+
+  const records: SemanticMemory[] = []
+  let malformedJsonLines = 0
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed === '') {
+      continue
+    }
+    try {
+      records.push(JSON.parse(trimmed) as SemanticMemory)
+    } catch {
+      malformedJsonLines += 1
+    }
+  }
+
+  if (malformedJsonLines > 0) {
+    return {
+      ok: false,
+      malformedJsonLines,
+      reason: 'semantic memory store contains malformed JSONL'
+    }
+  }
+  return { ok: true, records }
+}
+
+function isFileErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code
 }
 
 function expireTrialEvent(state: RootRunState, memory: SemanticMemory): MemoryEvent {

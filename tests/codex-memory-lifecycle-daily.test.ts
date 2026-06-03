@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { codexGlobalMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { runCodexMemoryLifecycleDaily } from '../src/codex/codex-memory-lifecycle-daily.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
@@ -15,6 +15,11 @@ import {
 import type { ActivationEvent, MemoryEvent, SemanticMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
+
+beforeEach(() => {
+  vi.stubEnv('CYRENE_AUTO_REVIEW_PROJECT_PROMOTE_PER_DAY', '')
+  vi.stubEnv('CYRENE_AUTO_REVIEW_GLOBAL_PROMOTE_PER_DAY', '')
+})
 
 afterEach(async () => {
   vi.unstubAllEnvs()
@@ -218,7 +223,7 @@ describe('daily memory lifecycle automation', () => {
         capStatus: {
           scope: 'project',
           usedToday: 0,
-          dailyCap: 10
+          dailyCap: 5
         },
         evalGate: {
           passed: true,
@@ -295,7 +300,7 @@ describe('daily memory lifecycle automation', () => {
     const root = await createTempDir('cyrene-daily-cap-root-')
     await writeSemanticMemoriesFromRoot(root, [trialMemory()])
     await appendAppliedEvents(root)
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       await appendMemoryEventFromRoot(root, promoteEvent({ id: `existing-promote-${index}` }))
     }
 
@@ -313,14 +318,14 @@ describe('daily memory lifecycle automation', () => {
     })
     expect((await readSemanticMemoriesFromRoot(root))[0]).toMatchObject({ confidenceTier: 'trial' })
     const events = await readMemoryEventsFromRoot(root)
-    expect(events.filter((event) => event.action === 'promote')).toHaveLength(10)
+    expect(events.filter((event) => event.action === 'promote')).toHaveLength(5)
     expect(events.find((event) => event.action === 'audit' && event.memoryId === 'trial-1')).toMatchObject({
       details: {
         reason: 'daily auto-promotion cap exhausted',
         capStatus: {
           scope: 'project',
-          usedToday: 10,
-          dailyCap: 10
+          usedToday: 5,
+          dailyCap: 5
         }
       }
     })
@@ -376,6 +381,163 @@ describe('daily memory lifecycle automation', () => {
         policyId: 'low_risk_global_procedural_v1',
         lifecyclePolicyId: 'daily_explicit_global_core_v1',
         confidenceTier: 'global_core'
+      }
+    })
+  })
+
+  it('recommends review-derived global candidates instead of auto-promoting them during daily processing', async () => {
+    const home = await createTempDir('cyrene-daily-review-global-home-')
+    vi.stubEnv('HOME', home)
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(globalRoot, [
+      globalCandidate({
+        id: 'global-review-derived',
+        sourceOfTruth: 'review_summary:task-1',
+        reviewState: {
+          ...globalCandidate().reviewState,
+          normalizedKey: 'global-review-derived',
+          source: 'review_event'
+        },
+        evidence: [
+          {
+            id: 'review-evidence-1',
+            sourceKind: 'review_event',
+            sourceRef: 'review:1',
+            when: '2026-06-03T00:00:00.000Z',
+            whatHappened: 'A review summary suggested a global procedural pattern.',
+            whyImportant: 'Review-derived candidates must remain recommendation-only in daily processing.'
+          },
+          {
+            id: 'review-evidence-2',
+            sourceKind: 'review_event',
+            sourceRef: 'review:2',
+            when: '2026-06-03T01:00:00.000Z',
+            whatHappened: 'Another review event repeated the same global procedural pattern.',
+            whyImportant: 'Repeated review events are still not explicit user evidence.'
+          }
+        ]
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [],
+      includeGlobalRoot: true,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    expect(result.roots.find((rootResult) => rootResult.scope === 'global')).toMatchObject({
+      promotedExplicitGlobalToCore: 0,
+      recommendations: 1
+    })
+    expect((await readSemanticMemoriesFromRoot(globalRoot))[0]).toMatchObject({
+      id: 'global-review-derived',
+      status: 'pending'
+    })
+    expect((await readMemoryEventsFromRoot(globalRoot)).find((event) => event.action === 'audit')).toMatchObject({
+      candidateId: 'global-review-derived',
+      details: {
+        reason: 'high-risk or ambiguous global candidate requires manual review',
+        source: 'review_event'
+      }
+    })
+  })
+
+  it('does not let reviewState.source spoof explicit global user evidence', async () => {
+    const home = await createTempDir('cyrene-daily-spoof-global-home-')
+    vi.stubEnv('HOME', home)
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(globalRoot, [
+      globalCandidate({
+        id: 'global-spoofed-explicit',
+        sourceOfTruth: 'review_summary:task-1',
+        reviewState: {
+          ...globalCandidate().reviewState,
+          normalizedKey: 'global-spoofed-explicit',
+          source: 'user_explicit'
+        },
+        evidence: [
+          {
+            id: 'review-evidence-1',
+            sourceKind: 'review_event',
+            sourceRef: 'review:1',
+            when: '2026-06-03T00:00:00.000Z',
+            whatHappened: 'A review summary carried this candidate.',
+            whyImportant: 'The evidence is not an explicit user instruction.'
+          },
+          {
+            id: 'review-evidence-2',
+            sourceKind: 'review_event',
+            sourceRef: 'review:2',
+            when: '2026-06-03T01:00:00.000Z',
+            whatHappened: 'A second review event repeated the candidate.',
+            whyImportant: 'reviewState.source alone must not prove explicitness.'
+          }
+        ]
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [],
+      includeGlobalRoot: true,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    expect(result.roots.find((rootResult) => rootResult.scope === 'global')).toMatchObject({
+      promotedExplicitGlobalToCore: 0,
+      recommendations: 1
+    })
+    expect((await readSemanticMemoriesFromRoot(globalRoot))[0]).toMatchObject({
+      id: 'global-spoofed-explicit',
+      status: 'pending'
+    })
+    expect((await readMemoryEventsFromRoot(globalRoot)).some((event) => event.action === 'promote')).toBe(false)
+  })
+
+  it('uses the configured global cap so the default cap blocks a second same-day global promotion', async () => {
+    const home = await createTempDir('cyrene-daily-global-cap-home-')
+    vi.stubEnv('HOME', home)
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(globalRoot, [globalCandidate({ id: 'global-after-cap' })])
+    await appendMemoryEventFromRoot(globalRoot, promoteEvent({
+      id: 'existing-global-promote',
+      details: {
+        decision: 'auto_promote',
+        policyId: 'low_risk_global_procedural_v1'
+      }
+    }))
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [],
+      includeGlobalRoot: true,
+      apply: true,
+      now: '2026-06-03T12:00:00.000Z'
+    })
+
+    expect(result.roots.find((rootResult) => rootResult.scope === 'global')).toMatchObject({
+      promotedExplicitGlobalToCore: 0,
+      recommendations: 1,
+      evalFailures: 1,
+      capExhausted: 1
+    })
+    expect((await readSemanticMemoriesFromRoot(globalRoot))[0]).toMatchObject({
+      id: 'global-after-cap',
+      status: 'pending'
+    })
+    expect((await readMemoryEventsFromRoot(globalRoot)).find((event) =>
+      event.action === 'audit' && event.candidateId === 'global-after-cap'
+    )).toMatchObject({
+      details: {
+        reason: 'daily auto-promotion cap exhausted',
+        capStatus: {
+          scope: 'global',
+          usedToday: 1,
+          dailyCap: 1
+        }
       }
     })
   })
@@ -486,6 +648,46 @@ describe('daily memory lifecycle automation', () => {
           'active memory is missing activationPolicy'
         ]
       }
+    })
+  })
+
+  it('skips malformed semantic JSONL during apply and leaves file bytes unchanged', async () => {
+    const root = await createTempDir('cyrene-daily-malformed-root-')
+    const semanticPath = join(root, 'semantic_memories.jsonl')
+    const original = `${JSON.stringify(trialMemory())}\n{bad json}\n`
+    await writeFile(semanticPath, original, 'utf8')
+    await appendAppliedEvents(root)
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    expect(result.roots[0]).toMatchObject({
+      promotedTrialToValidated: 0,
+      invalidMemories: 1,
+      needsMigration: 1
+    })
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(original)
+    expect(await readMemoryEventsFromRoot(root)).toEqual([])
+  })
+
+  it('does not write promoted state when the promotion receipt cannot be written', async () => {
+    const root = await createTempDir('cyrene-daily-receipt-failure-root-')
+    await writeSemanticMemoriesFromRoot(root, [trialMemory()])
+    await appendAppliedEvents(root)
+    await mkdir(join(root, 'events.jsonl'))
+
+    await expect(runCodexMemoryLifecycleDaily({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })).rejects.toThrow('Refusing to use non-file memory data path')
+
+    expect((await readSemanticMemoriesFromRoot(root))[0]).toMatchObject({
+      id: 'trial-1',
+      confidenceTier: 'trial'
     })
   })
 })
