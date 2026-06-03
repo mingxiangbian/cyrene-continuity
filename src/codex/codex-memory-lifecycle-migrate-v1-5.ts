@@ -16,6 +16,17 @@ import {
   assertSafeMemoryDataFileTarget,
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
+import {
+  MEMORY_CANDIDATE_KINDS,
+  MEMORY_DOMAINS,
+  MEMORY_MODULES,
+  MEMORY_SCOPES,
+  MEMORY_SOURCES,
+  MEMORY_STRENGTHS,
+  MEMORY_TYPES,
+  SEMANTIC_MEMORY_STATUSES,
+  UPDATE_POLICIES
+} from '../memory/types.js'
 import type {
   ConfidenceTier,
   CyreneMemory,
@@ -69,6 +80,7 @@ export interface CodexMemoryLifecycleMigrateV15RootResult {
   droppedPending: number
   droppedActive: number
   recommendations: number
+  duplicateRecordsDropped: number
 }
 
 export interface CodexMemoryLifecycleMigrateV15Result {
@@ -181,9 +193,9 @@ async function migrateReadableRoot(
   input: { dryRun: boolean; now: string }
 ): Promise<CodexMemoryLifecycleMigrateV15RootResult> {
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
-    readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, INDEX_FILE)),
-    readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, PENDING_FILE)),
-    readJsonLinesWithMalformed<SemanticMemory>(join(root.memoryRoot, SEMANTIC_MEMORIES_FILE))
+    readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, INDEX_FILE), isValidLegacyActiveMemory),
+    readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, PENDING_FILE), isValidPendingMemory),
+    readJsonLinesWithMalformed<SemanticMemory>(join(root.memoryRoot, SEMANTIC_MEMORIES_FILE), isValidSemanticMemory)
   ])
   const legacyActive = legacyActiveRead.records
   const legacyPending = legacyPendingRead.records
@@ -193,8 +205,8 @@ async function migrateReadableRoot(
   const semanticActive = existingSemantic.filter((memory) => memory.status === 'active')
   const semanticPending = existingSemantic.filter((memory) => memory.status === 'pending')
   const malformedJsonLines = legacyActiveRead.malformedLines + legacyPendingRead.malformedLines + semanticRead.malformedLines
-  const activeIds = new Set([...active, ...semanticActive].map((memory) => memory.id))
   const processedIds = new Set<string>()
+  const semanticRowsToRemove = new Set<SemanticMemory>()
   const converted: SemanticMemory[] = []
   const recommendations: Recommendation[] = []
   const dropAudits: DropAudit[] = []
@@ -214,34 +226,76 @@ async function migrateReadableRoot(
     }
   }
 
-  for (const memory of active) {
-    if (processedIds.has(memory.id)) {
+  const semanticOwnedIds = new Set(existingSemantic.map((memory) => memory.id))
+  const selectedSemanticIds = new Set<string>()
+  const selectedSemanticActive: SemanticMemory[] = []
+  const selectedSemanticPending: SemanticMemory[] = []
+  for (const memory of semanticActive) {
+    if (selectedSemanticIds.has(memory.id)) {
+      semanticRowsToRemove.add(memory)
+      recordDuplicateDrop(result, dropAudits, dropAuditForSemantic(
+        memory,
+        'active',
+        semanticMemoryToActiveMemory(memory),
+        'duplicate semantic active id shadowed by selected semantic memory'
+      ))
       continue
     }
-    processedIds.add(memory.id)
-    if (isLowValueNoise(memory)) {
-      result.droppedActive += 1
-      dropAudits.push(dropAuditForActive(memory, 'low-value memory'))
+    selectedSemanticIds.add(memory.id)
+    selectedSemanticActive.push(memory)
+  }
+  for (const memory of semanticPending) {
+    const pendingMemory = semanticMemoryToPendingMemory(memory)
+    if (selectedSemanticIds.has(memory.id)) {
+      semanticRowsToRemove.add(memory)
+      recordDuplicateDrop(result, dropAudits, dropAuditForSemantic(
+        memory,
+        'pending',
+        pendingMemory,
+        'duplicate semantic pending id shadowed by selected semantic memory'
+      ))
       continue
     }
-    const recommendationReason = recommendationReasonForActive(root.scope, memory)
-    if (recommendationReason !== undefined) {
-      result.recommendations += 1
-      recommendations.push(recommendationForActive(memory, recommendationReason))
-      continue
-    }
-
-    const tier = root.scope === 'global' ? 'global_core' : projectTierForActive(memory)
-    converted.push(withLifecycle(activeMemoryToSemanticMemory(memory), tier, input.now))
-    if (tier === 'validated') {
-      result.convertedActiveToValidated += 1
-    } else {
-      result.convertedActiveToCore += 1
-    }
+    selectedSemanticIds.add(memory.id)
+    selectedSemanticPending.push(memory)
   }
 
-  for (const memory of semanticActive) {
-    if (processedIds.has(memory.id) || validateSemanticMemoryLifecycle(memory).length === 0) {
+  const selectedLegacyActive: CyreneMemory[] = []
+  const legacyActiveIds = new Set<string>()
+  for (const memory of active) {
+    if (semanticOwnedIds.has(memory.id)) {
+      recordDuplicateDrop(result, dropAudits, dropAuditForActive(memory, 'duplicate legacy active id shadowed by semantic memory'))
+      continue
+    }
+    if (legacyActiveIds.has(memory.id)) {
+      recordDuplicateDrop(result, dropAudits, dropAuditForActive(memory, 'duplicate legacy active id shadowed by earlier active memory'))
+      continue
+    }
+    legacyActiveIds.add(memory.id)
+    selectedLegacyActive.push(memory)
+  }
+
+  const selectedLegacyPending: PendingMemory[] = []
+  const legacyPendingIds = new Set<string>()
+  for (const memory of pending) {
+    if (semanticOwnedIds.has(memory.id)) {
+      recordDuplicateDrop(result, dropAudits, dropAuditForPending(memory, 'duplicate legacy pending id shadowed by semantic memory'))
+      continue
+    }
+    if (legacyActiveIds.has(memory.id)) {
+      recordDuplicateDrop(result, dropAudits, dropAuditForPending(memory, 'duplicate pending id shadowed by active memory'))
+      continue
+    }
+    if (legacyPendingIds.has(memory.id)) {
+      recordDuplicateDrop(result, dropAudits, dropAuditForPending(memory, 'duplicate legacy pending id shadowed by earlier pending memory'))
+      continue
+    }
+    legacyPendingIds.add(memory.id)
+    selectedLegacyPending.push(memory)
+  }
+
+  for (const memory of selectedSemanticActive) {
+    if (validateSemanticMemoryLifecycle(memory).length === 0) {
       continue
     }
     processedIds.add(memory.id)
@@ -258,7 +312,17 @@ async function migrateReadableRoot(
       continue
     }
 
-    const tier = root.scope === 'global' ? 'global_core' : projectTierForActive(activeMemory)
+    const tier = semanticLifecycleTierForActive(root.scope, memory, activeMemory, input.now)
+    if (tier === undefined) {
+      result.recommendations += 1
+      recommendations.push(recommendationForSemantic(
+        memory,
+        'active',
+        activeMemory,
+        'semantic active memory cannot be migrated to a valid v1.5 lifecycle tier'
+      ))
+      continue
+    }
     converted.push(withLifecycle(memory, tier, input.now))
     if (tier === 'validated') {
       result.convertedActiveToValidated += 1
@@ -267,48 +331,12 @@ async function migrateReadableRoot(
     }
   }
 
-  for (const memory of pending) {
-    if (activeIds.has(memory.id)) {
-      result.droppedPending += 1
-      dropAudits.push(dropAuditForPending(memory, 'duplicate pending id shadowed by active memory'))
-      continue
-    }
+  for (const memory of selectedSemanticPending) {
     if (processedIds.has(memory.id)) {
       continue
     }
     processedIds.add(memory.id)
-    if (isReviewSummaryNoise(memory)) {
-      result.droppedPending += 1
-      dropAudits.push(dropAuditForPending(memory, 'review-summary noise'))
-      continue
-    }
-    if (isLowValueNoise(memory)) {
-      result.droppedPending += 1
-      dropAudits.push(dropAuditForPending(memory, 'low-value memory'))
-      continue
-    }
-    const recommendationReason = recommendationReasonForPending(root.scope, memory)
-    if (recommendationReason !== undefined || root.scope === 'global') {
-      result.recommendations += 1
-      recommendations.push(recommendationForPending(memory, recommendationReason ?? 'global pending memory requires manual review'))
-      continue
-    }
-
-    converted.push(withLifecycle(pendingMemoryToSemanticMemory(memory), 'trial', input.now))
-    result.convertedPendingToTrial += 1
-  }
-
-  for (const memory of semanticPending) {
     const pendingMemory = semanticMemoryToPendingMemory(memory)
-    if (activeIds.has(memory.id)) {
-      result.droppedPending += 1
-      dropAudits.push(dropAuditForSemantic(memory, 'pending', pendingMemory, 'duplicate pending id shadowed by active memory'))
-      continue
-    }
-    if (processedIds.has(memory.id)) {
-      continue
-    }
-    processedIds.add(memory.id)
     if (isReviewSummaryNoise(pendingMemory)) {
       result.droppedPending += 1
       dropAudits.push(dropAuditForSemantic(memory, 'pending', pendingMemory, 'review-summary noise'))
@@ -335,8 +363,54 @@ async function migrateReadableRoot(
     result.convertedPendingToTrial += 1
   }
 
+  for (const memory of selectedLegacyActive) {
+    processedIds.add(memory.id)
+    if (isLowValueNoise(memory)) {
+      result.droppedActive += 1
+      dropAudits.push(dropAuditForActive(memory, 'low-value memory'))
+      continue
+    }
+    const recommendationReason = recommendationReasonForActive(root.scope, memory)
+    if (recommendationReason !== undefined) {
+      result.recommendations += 1
+      recommendations.push(recommendationForActive(memory, recommendationReason))
+      continue
+    }
+
+    const tier = root.scope === 'global' ? 'global_core' : projectTierForActive(memory)
+    converted.push(withLifecycle(activeMemoryToSemanticMemory(memory), tier, input.now))
+    if (tier === 'validated') {
+      result.convertedActiveToValidated += 1
+    } else {
+      result.convertedActiveToCore += 1
+    }
+  }
+
+  for (const memory of selectedLegacyPending) {
+    processedIds.add(memory.id)
+    if (isReviewSummaryNoise(memory)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForPending(memory, 'review-summary noise'))
+      continue
+    }
+    if (isLowValueNoise(memory)) {
+      result.droppedPending += 1
+      dropAudits.push(dropAuditForPending(memory, 'low-value memory'))
+      continue
+    }
+    const recommendationReason = recommendationReasonForPending(root.scope, memory)
+    if (recommendationReason !== undefined || root.scope === 'global') {
+      result.recommendations += 1
+      recommendations.push(recommendationForPending(memory, recommendationReason ?? 'global pending memory requires manual review'))
+      continue
+    }
+
+    converted.push(withLifecycle(pendingMemoryToSemanticMemory(memory), 'trial', input.now))
+    result.convertedPendingToTrial += 1
+  }
+
   const nextSemantic = upsertSemanticMemories(
-    existingSemantic.filter((memory) => !processedIds.has(memory.id)),
+    existingSemantic.filter((memory) => !processedIds.has(memory.id) && !semanticRowsToRemove.has(memory)),
     converted
   )
   result.semanticAfter = nextSemantic.length
@@ -381,6 +455,26 @@ function projectTierForActive(memory: CyreneMemory): ConfidenceTier {
     return 'project_core'
   }
   return 'validated'
+}
+
+function semanticLifecycleTierForActive(
+  scope: 'global' | 'project',
+  memory: SemanticMemory,
+  activeMemory: CyreneMemory,
+  now: string
+): ConfidenceTier | undefined {
+  const preferredTier = scope === 'global' ? 'global_core' : projectTierForActive(activeMemory)
+  if (validateSemanticMemoryLifecycle(withLifecycle(memory, preferredTier, now)).length === 0) {
+    return preferredTier
+  }
+  if (
+    scope === 'project' &&
+    preferredTier === 'project_core' &&
+    validateSemanticMemoryLifecycle(withLifecycle(memory, 'validated', now)).length === 0
+  ) {
+    return 'validated'
+  }
+  return undefined
 }
 
 function recommendationReasonForPending(scope: 'global' | 'project', memory: PendingMemory): string | undefined {
@@ -481,6 +575,20 @@ function hasEvidence(evidence: Array<{ summary?: string; quote?: string; runId?:
   return evidence.some((entry) =>
     [entry.summary, entry.quote, entry.runId, entry.evidenceGroupId].some((value) => value !== undefined && value.trim() !== '')
   )
+}
+
+function recordDuplicateDrop(
+  result: CodexMemoryLifecycleMigrateV15RootResult,
+  dropAudits: DropAudit[],
+  audit: DropAudit
+): void {
+  result.duplicateRecordsDropped += 1
+  if (audit.sourceStatus === 'active') {
+    result.droppedActive += 1
+  } else {
+    result.droppedPending += 1
+  }
+  dropAudits.push(audit)
 }
 
 function recommendationForPending(memory: PendingMemory, reason: string): Recommendation {
@@ -678,7 +786,8 @@ function completionEvent(result: CodexMemoryLifecycleMigrateV15RootResult, now: 
       convertedActiveToCore: result.convertedActiveToCore,
       droppedPending: result.droppedPending,
       droppedActive: result.droppedActive,
-      recommendations: result.recommendations
+      recommendations: result.recommendations,
+      duplicateRecordsDropped: result.duplicateRecordsDropped
     }
   }
 }
@@ -750,11 +859,15 @@ function baseRootResult(
     convertedActiveToCore: 0,
     droppedPending: 0,
     droppedActive: 0,
-    recommendations: 0
+    recommendations: 0,
+    duplicateRecordsDropped: 0
   }
 }
 
-async function readJsonLinesWithMalformed<T>(filePath: string): Promise<JsonLinesReadResult<T>> {
+async function readJsonLinesWithMalformed<T>(
+  filePath: string,
+  isValidRecord: (value: unknown) => value is T
+): Promise<JsonLinesReadResult<T>> {
   let content: string
   try {
     await assertSafeMemoryDataFileTarget(filePath)
@@ -774,12 +887,128 @@ async function readJsonLinesWithMalformed<T>(filePath: string): Promise<JsonLine
       continue
     }
     try {
-      records.push(JSON.parse(trimmed) as T)
+      const parsed = JSON.parse(trimmed) as unknown
+      if (isValidRecord(parsed)) {
+        records.push(parsed)
+      } else {
+        malformedLines += 1
+      }
     } catch {
       malformedLines += 1
     }
   }
   return { records, malformedLines }
+}
+
+function isValidLegacyActiveMemory(value: unknown): value is CyreneMemory {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    value.status === 'active' &&
+    oneOf(MEMORY_DOMAINS, value.domain) &&
+    oneOf(MEMORY_TYPES, value.type) &&
+    oneOf(MEMORY_STRENGTHS, value.strength) &&
+    oneOf(MEMORY_SCOPES, value.scope) &&
+    isNonEmptyString(value.content) &&
+    isNonEmptyString(value.normalizedKey) &&
+    oneOf(MEMORY_SOURCES, value.source) &&
+    isEvidenceArray(value.evidence) &&
+    isMemoryScores(value.scores) &&
+    isNonEmptyString(value.createdAt) &&
+    isNonEmptyString(value.updatedAt) &&
+    isStringArray(value.tags)
+  )
+}
+
+function isValidPendingMemory(value: unknown): value is PendingMemory {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    value.status === 'pending' &&
+    oneOf(MEMORY_DOMAINS, value.domain) &&
+    oneOf(MEMORY_TYPES, value.type) &&
+    oneOf(MEMORY_STRENGTHS, value.strength) &&
+    oneOf(MEMORY_SCOPES, value.scope) &&
+    isNonEmptyString(value.content) &&
+    isStringArray(value.useWhen, true) &&
+    isStringArray(value.doNotUseWhen, true) &&
+    isNonEmptyString(value.normalizedKey) &&
+    oneOf(MEMORY_SOURCES, value.source) &&
+    isEvidenceArray(value.evidence) &&
+    isMemoryScores(value.scores) &&
+    typeof value.seenCount === 'number' &&
+    isNonEmptyString(value.firstSeenAt) &&
+    isNonEmptyString(value.lastSeenAt) &&
+    isNonEmptyString(value.expiresAt) &&
+    isStringArray(value.tags)
+  )
+}
+
+function isValidSemanticMemory(value: unknown): value is SemanticMemory {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    oneOf(SEMANTIC_MEMORY_STATUSES, value.status) &&
+    oneOf(MEMORY_MODULES, value.module) &&
+    oneOf(MEMORY_CANDIDATE_KINDS, value.kind) &&
+    oneOf(MEMORY_SCOPES, value.scope) &&
+    oneOf(MEMORY_DOMAINS, value.domain) &&
+    isNonEmptyString(value.content) &&
+    isStringArray(value.useWhen) &&
+    isStringArray(value.doNotUseWhen) &&
+    isStructuredEvidenceArray(value.evidence) &&
+    oneOf(UPDATE_POLICIES, value.reviewPolicy) &&
+    (value.reviewState === undefined || isRecord(value.reviewState)) &&
+    isStringArray(value.supersedes) &&
+    isNonEmptyString(value.createdAt) &&
+    isNonEmptyString(value.updatedAt)
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function isStringArray(value: unknown, optional = false): value is string[] | undefined {
+  return (optional && value === undefined) || (Array.isArray(value) && value.every((entry) => typeof entry === 'string'))
+}
+
+function oneOf<T extends readonly string[]>(values: T, value: unknown): value is T[number] {
+  return typeof value === 'string' && values.includes(value as T[number])
+}
+
+function isEvidenceArray(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.every(isRecord)
+}
+
+function isStructuredEvidenceArray(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.every((entry) =>
+    isRecord(entry) &&
+    isNonEmptyString(entry.id) &&
+    isNonEmptyString(entry.sourceKind) &&
+    isNonEmptyString(entry.sourceRef) &&
+    isNonEmptyString(entry.whatHappened) &&
+    isNonEmptyString(entry.whyImportant)
+  )
+}
+
+function isMemoryScores(value: unknown): value is MemoryScores {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.evidenceStrength) &&
+    isFiniteNumber(value.stability) &&
+    isFiniteNumber(value.usefulness) &&
+    isFiniteNumber(value.safety) &&
+    isFiniteNumber(value.sensitivity)
+  )
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
 }
 
 async function writeJsonLinesAtomic(filePath: string, values: unknown[]): Promise<void> {

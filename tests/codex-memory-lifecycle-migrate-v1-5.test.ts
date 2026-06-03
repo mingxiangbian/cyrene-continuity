@@ -14,6 +14,7 @@ import {
   readSemanticMemoriesFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../src/memory/memory-store.js'
+import { validateSemanticMemoryLifecycle } from '../src/memory/memory-lifecycle.js'
 import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -384,6 +385,130 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     expect(['validated', 'project_core']).toContain(semantic.find((memory) => memory.id === 'dup-memory')?.confidenceTier)
   })
 
+  it('uses semantic active memory as source of truth over same-id legacy active projection', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-semantic-priority-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-semantic-priority-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createActive({
+        id: 'semantic-source-wins',
+        scope: 'project',
+        normalizedKey: 'legacy-projection-key',
+        content: 'Legacy projection should not overwrite the richer semantic memory source record.'
+      })
+    ])
+    await writeSemanticMemoriesFromRoot(memoryRoot, [
+      createSemanticActive({
+        id: 'semantic-source-wins',
+        content: 'Richer semantic memory content should survive migration and receive lifecycle fields.',
+        useWhen: ['Use this richer semantic source record when testing source priority.'],
+        doNotUseWhen: ['Do not use the legacy projection for this id.'],
+        sourceOfTruth: 'semantic-source-of-truth',
+        reviewState: {
+          normalizedKey: 'semantic-source-key',
+          type: 'procedural_rule',
+          strength: 'soft',
+          source: 'file',
+          scores: {
+            evidenceStrength: 0.9,
+            stability: 0.85,
+            usefulness: 0.85,
+            safety: 0.95,
+            sensitivity: 0.1
+          },
+          tags: ['semantic-source']
+        }
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({ duplicateRecordsDropped: 1, convertedActiveToValidated: 1 })
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    expect(semantic.find((memory) => memory.id === 'semantic-source-wins')).toMatchObject({
+      id: 'semantic-source-wins',
+      content: 'Richer semantic memory content should survive migration and receive lifecycle fields.',
+      useWhen: ['Use this richer semantic source record when testing source priority.'],
+      doNotUseWhen: ['Do not use the legacy projection for this id.'],
+      sourceOfTruth: 'semantic-source-of-truth',
+      confidenceTier: 'validated'
+    })
+    const events = await readMemoryEventsFromRoot(memoryRoot)
+    expect(events.find((event) =>
+      event.memoryId === 'semantic-source-wins' &&
+      event.details?.dropReason === 'duplicate legacy active id shadowed by semantic memory'
+    )).toBeDefined()
+  })
+
+  it('audits duplicate ids within legacy active, legacy pending, and semantic sources', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-source-duplicates-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-source-duplicates-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createActive({ id: 'legacy-active-dup', scope: 'project', normalizedKey: 'legacy-active-first' }),
+      createActive({
+        id: 'legacy-active-dup',
+        scope: 'project',
+        normalizedKey: 'legacy-active-second',
+        content: 'Second duplicate legacy active record should be audited before rewrite.'
+      })
+    ])
+    await writeJsonLines(join(memoryRoot, 'pending.jsonl'), [
+      createPending({ id: 'legacy-pending-dup', normalizedKey: 'legacy-pending-first' }),
+      createPending({
+        id: 'legacy-pending-dup',
+        normalizedKey: 'legacy-pending-second',
+        content: 'Second duplicate legacy pending record should be audited before rewrite.'
+      })
+    ])
+    await writeSemanticMemoriesFromRoot(memoryRoot, [
+      createSemanticPending({ id: 'semantic-source-dup', sourceOfTruth: 'semantic-first' }),
+      createSemanticPending({
+        id: 'semantic-source-dup',
+        sourceOfTruth: 'semantic-second',
+        content: 'Second duplicate semantic record should be audited before rewrite.'
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({
+      duplicateRecordsDropped: 3,
+      droppedActive: 1,
+      droppedPending: 2
+    })
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    expect(semantic.filter((memory) => memory.id === 'legacy-active-dup')).toHaveLength(1)
+    expect(semantic.filter((memory) => memory.id === 'legacy-pending-dup')).toHaveLength(1)
+    expect(semantic.filter((memory) => memory.id === 'semantic-source-dup')).toHaveLength(1)
+    const events = await readMemoryEventsFromRoot(memoryRoot)
+    const duplicateEvents = events.filter((event) => event.details?.dropReason !== undefined &&
+      String(event.details.dropReason).includes('duplicate')
+    )
+    expect(duplicateEvents).toHaveLength(3)
+    expect(duplicateEvents.map((event) => event.details?.normalizedKey)).toEqual(
+      expect.arrayContaining(['legacy-active-second', 'legacy-pending-second', 'semantic-pending-fixture'])
+    )
+  })
+
   it('normalizes semantic-only project pending and drops low-value semantic pending', async () => {
     const home = await createTempDir('cyrene-v15-migrate-semantic-pending-home-')
     vi.stubEnv('HOME', home)
@@ -601,6 +726,136 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     await expect(readFile(semanticPath, 'utf8')).resolves.toBe(originalSemantic)
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
     await expect(readFile(indexPath, 'utf8')).resolves.toBe(originalIndex)
+  })
+
+  it('blocks apply without mutating roots that contain schema-invalid JSONL records', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-invalid-schema-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-invalid-schema-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    const indexPath = join(memoryRoot, 'index.jsonl')
+    const pendingPath = join(memoryRoot, 'pending.jsonl')
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+    const invalidIndex = '{}\n'
+    const invalidPending = `${JSON.stringify({ id: 'invalid-pending-without-status' })}\n`
+    const invalidSemantic = `${JSON.stringify({ id: 'invalid-semantic-without-status' })}\n`
+    await writeFile(indexPath, invalidIndex, 'utf8')
+    await writeFile(pendingPath, invalidPending, 'utf8')
+    await writeFile(semanticPath, invalidSemantic, 'utf8')
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const projectResult = result.roots.find((root) => root.scope === 'project' && root.projectId === project.projectId)
+    expect(projectResult).toMatchObject({
+      skipped: true,
+      reason: expect.stringContaining('malformed JSONL'),
+      malformedJsonLines: 3
+    })
+    await expect(readFile(indexPath, 'utf8')).resolves.toBe(invalidIndex)
+    await expect(readFile(pendingPath, 'utf8')).resolves.toBe(invalidPending)
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(invalidSemantic)
+  })
+
+  it('does not promote empty-evidence project semantic active memory to invalid project_core', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-empty-evidence-project-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-empty-evidence-project-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const project = await identifyCodexProject(repo)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    await mkdir(memoryRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(memoryRoot, [
+      createSemanticActive({
+        id: 'empty-evidence-project-active',
+        evidence: [],
+        reviewState: {
+          normalizedKey: 'empty-evidence-project-active',
+          type: 'procedural_rule',
+          strength: 'hard',
+          source: 'file',
+          scores: {
+            evidenceStrength: 0.95,
+            stability: 0.9,
+            usefulness: 0.9,
+            safety: 0.95,
+            sensitivity: 0.1
+          },
+          tags: ['workflow_rule']
+        }
+      })
+    ])
+
+    await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
+    const migrated = semantic.find((memory) => memory.id === 'empty-evidence-project-active')
+    expect(migrated?.confidenceTier).toBe('validated')
+    expect(migrated === undefined ? ['missing migrated memory'] : validateSemanticMemoryLifecycle(migrated)).toEqual([])
+  })
+
+  it('recommends empty-evidence global semantic active memory instead of writing invalid global_core', async () => {
+    const home = await createTempDir('cyrene-v15-migrate-empty-evidence-global-home-')
+    vi.stubEnv('HOME', home)
+    const repo = await createTempDir('cyrene-v15-migrate-empty-evidence-global-repo-')
+    await execFileAsync('git', ['init'], { cwd: repo })
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(globalRoot, [
+      createSemanticActive({
+        id: 'empty-evidence-global-active',
+        scope: 'global',
+        evidence: [],
+        sourceOfTruth: 'empty-evidence-global-active',
+        reviewState: {
+          normalizedKey: 'empty-evidence-global-active',
+          type: 'procedural_rule',
+          strength: 'hard',
+          source: 'file',
+          scores: {
+            evidenceStrength: 0.95,
+            stability: 0.9,
+            usefulness: 0.9,
+            safety: 0.95,
+            sensitivity: 0.1
+          },
+          tags: ['workflow_rule']
+        }
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleMigrateV15({
+      cwd: repo,
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    const globalResult = result.roots.find((root) => root.scope === 'global')
+    expect(globalResult).toMatchObject({ recommendations: 1, convertedActiveToCore: 0 })
+    const semantic = await readSemanticMemoriesFromRoot(globalRoot)
+    expect(semantic.find((memory) => memory.id === 'empty-evidence-global-active')).toBeUndefined()
+    const events = await readMemoryEventsFromRoot(globalRoot)
+    expect(events.find((event) => event.memoryId === 'empty-evidence-global-active')).toMatchObject({
+      details: {
+        reviewPackage: {
+          source: 'semantic_memory',
+          originalRecord: {
+            id: 'empty-evidence-global-active',
+            evidence: []
+          }
+        }
+      }
+    })
   })
 
   it('does not rewrite memory files when recommendation event append fails', async () => {
