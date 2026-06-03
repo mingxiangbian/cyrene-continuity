@@ -106,8 +106,8 @@ interface ProjectMemoryGroup {
 }
 
 const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
-const PROJECT_LIFECYCLE_LABELS = ['Trial', 'Validated', 'Project Core', 'Needs Tier Review'] as const
-const GLOBAL_LIFECYCLE_LABELS = ['Global Core', 'Needs Tier Review'] as const
+const PROJECT_LIFECYCLE_LABELS = ['Trial', 'Validated', 'Project Core'] as const
+const GLOBAL_LIFECYCLE_LABELS = ['Global Core'] as const
 
 type ProjectLifecycleLabel = typeof PROJECT_LIFECYCLE_LABELS[number]
 type GlobalLifecycleLabel = typeof GLOBAL_LIFECYCLE_LABELS[number]
@@ -1420,7 +1420,10 @@ function groupProjectMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
   }
 
   for (const memory of memories) {
-    groups.get(labelForProjectLifecycleMemory(memory))?.push(memory)
+    const label = labelForProjectLifecycleMemory(memory)
+    if (label !== undefined) {
+      groups.get(label)?.push(memory)
+    }
   }
 
   return PROJECT_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
@@ -1433,7 +1436,10 @@ function groupGlobalMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
   }
 
   for (const memory of memories) {
-    groups.get(labelForGlobalLifecycleMemory(memory))?.push(memory)
+    const label = labelForGlobalLifecycleMemory(memory)
+    if (label !== undefined) {
+      groups.get(label)?.push(memory)
+    }
   }
 
   return GLOBAL_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
@@ -1443,16 +1449,16 @@ function groupMemoriesForSelection(memories: CyreneMemory[], scope: CodexUiMemor
   return scope === 'global' ? groupGlobalMemories(memories) : groupProjectMemories(memories)
 }
 
-function labelForProjectLifecycleMemory(memory: CyreneMemory): ProjectLifecycleLabel {
+function labelForProjectLifecycleMemory(memory: CyreneMemory): ProjectLifecycleLabel | undefined {
   if (memory.confidenceTier === 'trial') return 'Trial'
   if (memory.confidenceTier === 'validated') return 'Validated'
   if (memory.confidenceTier === 'project_core') return 'Project Core'
-  return 'Needs Tier Review'
+  return undefined
 }
 
-function labelForGlobalLifecycleMemory(memory: CyreneMemory): GlobalLifecycleLabel {
+function labelForGlobalLifecycleMemory(memory: CyreneMemory): GlobalLifecycleLabel | undefined {
   if (memory.confidenceTier === 'global_core') return 'Global Core'
-  return 'Needs Tier Review'
+  return undefined
 }
 
 function isReviewSummaryRecord(value: unknown): value is CodexReviewSummaryRecord {

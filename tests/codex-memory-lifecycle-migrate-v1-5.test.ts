@@ -369,6 +369,7 @@ describe('Codex memory lifecycle v1.5 migration', () => {
       createActive({
         id: 'dup-memory',
         scope: 'project',
+        strength: 'soft',
         normalizedKey: 'dup-memory-active',
         content: 'Duplicate ids must preserve the active project memory when a stale pending row has the same id.'
       })
@@ -404,9 +405,9 @@ describe('Codex memory lifecycle v1.5 migration', () => {
     const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
     expect(semantic.find((memory) => memory.id === 'dup-memory')).toMatchObject({
       id: 'dup-memory',
-      status: 'active'
+      status: 'active',
+      confidenceTier: 'project_core'
     })
-    expect(['validated', 'project_core']).toContain(semantic.find((memory) => memory.id === 'dup-memory')?.confidenceTier)
   })
 
   it('uses semantic active memory as source of truth over same-id legacy active projection', async () => {

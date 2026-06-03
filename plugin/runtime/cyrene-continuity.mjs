@@ -23156,13 +23156,9 @@ async function migrateReadableRoot(root, input) {
       recommendations.push(recommendationForActive(memory, recommendationReason));
       continue;
     }
-    const tier = root.scope === "global" ? "global_core" : projectTierForActive(memory);
+    const tier = root.scope === "global" ? "global_core" : "project_core";
     converted.push(withLifecycle(activeMemoryToSemanticMemory(memory), tier, input.now));
-    if (tier === "validated") {
-      result2.convertedActiveToValidated += 1;
-    } else {
-      result2.convertedActiveToCore += 1;
-    }
+    result2.convertedActiveToCore += 1;
   }
   for (const memory of selectedLegacyPending) {
     processedIds.add(memory.id);
@@ -25544,8 +25540,8 @@ function buildOrphanAdmissionReasons(normalizedKey, draft, admission, hasActiveO
 
 // src/codex/codex-ui-api.ts
 var REVIEW_SUMMARIES_FILE5 = "review-summaries.jsonl";
-var PROJECT_LIFECYCLE_LABELS = ["Trial", "Validated", "Project Core", "Needs Tier Review"];
-var GLOBAL_LIFECYCLE_LABELS = ["Global Core", "Needs Tier Review"];
+var PROJECT_LIFECYCLE_LABELS = ["Trial", "Validated", "Project Core"];
+var GLOBAL_LIFECYCLE_LABELS = ["Global Core"];
 async function handleCodexUiApiRequest(input) {
   try {
     if (input.pathname === "/api/session") {
@@ -26519,7 +26515,10 @@ function groupProjectMemories(memories) {
     groups.set(label, []);
   }
   for (const memory of memories) {
-    groups.get(labelForProjectLifecycleMemory(memory))?.push(memory);
+    const label = labelForProjectLifecycleMemory(memory);
+    if (label !== void 0) {
+      groups.get(label)?.push(memory);
+    }
   }
   return PROJECT_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
 }
@@ -26529,7 +26528,10 @@ function groupGlobalMemories(memories) {
     groups.set(label, []);
   }
   for (const memory of memories) {
-    groups.get(labelForGlobalLifecycleMemory(memory))?.push(memory);
+    const label = labelForGlobalLifecycleMemory(memory);
+    if (label !== void 0) {
+      groups.get(label)?.push(memory);
+    }
   }
   return GLOBAL_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
 }
@@ -26540,11 +26542,11 @@ function labelForProjectLifecycleMemory(memory) {
   if (memory.confidenceTier === "trial") return "Trial";
   if (memory.confidenceTier === "validated") return "Validated";
   if (memory.confidenceTier === "project_core") return "Project Core";
-  return "Needs Tier Review";
+  return void 0;
 }
 function labelForGlobalLifecycleMemory(memory) {
   if (memory.confidenceTier === "global_core") return "Global Core";
-  return "Needs Tier Review";
+  return void 0;
 }
 function isReviewSummaryRecord2(value) {
   if (!isRecord8(value)) return false;
@@ -26997,18 +26999,15 @@ function renderOverview() {
 }
 
 function renderLifecycleMetrics(memories, scope) {
-  const needsTier = memories.filter((memory) => !memory.confidenceTier).length
   if (scope === 'global') {
     return [
-      metric('Global Core', countTier(memories, 'global_core'), 'Core memory'),
-      needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+      metric('Global Core', countTier(memories, 'global_core'), 'Core memory')
     ].join('')
   }
   return [
     metric('Trial', countTier(memories, 'trial'), 'Workflow hints'),
     metric('Validated', countTier(memories, 'validated'), 'Planning constraints'),
-    metric('Project Core', countTier(memories, 'project_core'), 'Profile candidates'),
-    needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+    metric('Project Core', countTier(memories, 'project_core'), 'Profile candidates')
   ].join('')
 }
 
@@ -28361,7 +28360,7 @@ function memoryTierLabel(memory) {
   if (memory?.confidenceTier === 'validated') return 'Validated'
   if (memory?.confidenceTier === 'project_core') return 'Project Core'
   if (memory?.confidenceTier === 'global_core') return 'Global Core'
-  return 'Needs Tier Review'
+  return 'Invalid Tier'
 }
 
 function reviewQueueStatusLabel(status) {

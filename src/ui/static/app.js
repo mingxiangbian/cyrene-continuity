@@ -399,18 +399,15 @@ function renderOverview() {
 }
 
 function renderLifecycleMetrics(memories, scope) {
-  const needsTier = memories.filter((memory) => !memory.confidenceTier).length
   if (scope === 'global') {
     return [
-      metric('Global Core', countTier(memories, 'global_core'), 'Core memory'),
-      needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+      metric('Global Core', countTier(memories, 'global_core'), 'Core memory')
     ].join('')
   }
   return [
     metric('Trial', countTier(memories, 'trial'), 'Workflow hints'),
     metric('Validated', countTier(memories, 'validated'), 'Planning constraints'),
-    metric('Project Core', countTier(memories, 'project_core'), 'Profile candidates'),
-    needsTier > 0 ? metric('Needs Tier', needsTier, 'Review required') : ''
+    metric('Project Core', countTier(memories, 'project_core'), 'Profile candidates')
   ].join('')
 }
 
@@ -1763,7 +1760,7 @@ function memoryTierLabel(memory) {
   if (memory?.confidenceTier === 'validated') return 'Validated'
   if (memory?.confidenceTier === 'project_core') return 'Project Core'
   if (memory?.confidenceTier === 'global_core') return 'Global Core'
-  return 'Needs Tier Review'
+  return 'Invalid Tier'
 }
 
 function reviewQueueStatusLabel(status) {

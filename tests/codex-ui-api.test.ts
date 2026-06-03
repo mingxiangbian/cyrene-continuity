@@ -573,8 +573,7 @@ describe('handleCodexUiApiRequest', () => {
       expect(groupIds(data.groups)).toEqual({
         Trial: ['trial-1'],
         Validated: ['validated-1'],
-        'Project Core': ['core-1'],
-        'Needs Tier Review': ['untiered-1']
+        'Project Core': ['core-1']
       })
     }
   })
@@ -606,8 +605,7 @@ describe('handleCodexUiApiRequest', () => {
     if (result.body.ok) {
       const data = result.body.data as { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
       expect(groupIds(data.groups)).toEqual({
-        'Global Core': ['global-core-1'],
-        'Needs Tier Review': ['global-untiered-1']
+        'Global Core': ['global-core-1']
       })
     }
   })
@@ -683,7 +681,7 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
-  it('keeps empty lifecycle memory groups for UI empty states', async () => {
+  it('omits untiered lifecycle memory from UI groups', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd, memoryRoot } = await seedProject()
@@ -698,8 +696,7 @@ describe('handleCodexUiApiRequest', () => {
       expect(groupIds(data.groups)).toEqual({
         Trial: [],
         Validated: [],
-        'Project Core': [],
-        'Needs Tier Review': ['only-fact']
+        'Project Core': []
       })
     }
   })
