@@ -111,6 +111,7 @@ type StrictSemanticReadResult =
 
 export async function runCodexMemoryLifecycleDaily(input: {
   cwd?: string
+  allProjects?: boolean
   projectRoots?: LifecycleRootInput[]
   includeGlobalRoot?: boolean
   apply?: boolean
@@ -119,7 +120,9 @@ export async function runCodexMemoryLifecycleDaily(input: {
   const dryRun = input.apply !== true
   const now = input.now ?? new Date().toISOString()
   const config = createDefaultConfig(input.cwd ?? process.cwd())
-  const roots: LifecycleRootSpec[] = (input.projectRoots ?? await defaultProjectRoots(input.cwd)).map((root) => ({
+  const roots: LifecycleRootSpec[] = (input.projectRoots ?? await defaultProjectRoots(
+    input.allProjects === true ? undefined : input.cwd
+  )).map((root) => ({
     ...root,
     scope: 'project'
   }))

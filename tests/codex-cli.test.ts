@@ -705,8 +705,8 @@ describe('cyrene-continuity codex CLI', () => {
     } catch (error) {
       const stderr = String((error as { stderr?: string }).stderr ?? '')
       expect(stderr).toContain('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
-      expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply]')
-      expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply]')
+      expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply] [--all-projects]')
+      expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply] [--all-projects]')
       expect(stderr).toContain('ui [--port <n>]')
     }
   })
@@ -992,6 +992,62 @@ describe('cyrene-continuity codex CLI', () => {
     expect(JSON.parse(daily.stdout).action).toBe('memory_lifecycle_daily')
     expect(weekly.stderr).toBe('')
     expect(JSON.parse(weekly.stdout).action).toBe('memory_lifecycle_weekly')
+  })
+
+  it('memory lifecycle --all-projects includes registered non-current project roots', async () => {
+    const home = await createTempDir('cyrene-codex-cli-lifecycle-all-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-lifecycle-all-repo-')
+    const identity = await identifyCodexProject(repo)
+    const currentMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const otherMemoryRoot = codexProjectMemoryRoot('cli-lifecycle-other-project')
+    await mkdir(codexGlobalMemoryRoot(), { recursive: true })
+    await mkdir(currentMemoryRoot, { recursive: true })
+    await mkdir(otherMemoryRoot, { recursive: true })
+    const otherMemoryRootReal = await realpath(otherMemoryRoot)
+
+    const daily = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'lifecycle',
+        'daily',
+        '--dry-run',
+        '--all-projects'
+      ],
+      { env: cliEnv(home) }
+    )
+    const weekly = await execFileAsync(
+      process.execPath,
+      [
+        'node_modules/tsx/dist/cli.mjs',
+        'src/main.ts',
+        '--cwd',
+        repo,
+        'codex',
+        'memory',
+        'lifecycle',
+        'weekly',
+        '--dry-run',
+        '--all-projects'
+      ],
+      { env: cliEnv(home) }
+    )
+
+    expect(daily.stderr).toBe('')
+    const dailyParsed = JSON.parse(daily.stdout) as { roots: Array<{ memoryRoot: string; scope: string }> }
+    expect(dailyParsed.roots.filter((root) => root.scope === 'project').map((root) => root.memoryRoot)).toContain(
+      otherMemoryRootReal
+    )
+
+    expect(weekly.stderr).toBe('')
+    const weeklyParsed = JSON.parse(weekly.stdout) as { projectRoots: Array<{ memoryRoot: string }> }
+    expect(weeklyParsed.projectRoots.map((root) => root.memoryRoot)).toContain(otherMemoryRootReal)
   })
 
   it('memory migrate-v2 --all-projects includes registered non-current project roots', async () => {

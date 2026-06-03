@@ -1863,6 +1863,8 @@ git commit -m "feat: add weekly memory core consolidation"
 **Files:**
 
 - Modify: `src/codex/codex-cli.ts`
+- Modify: `src/codex/codex-memory-lifecycle-daily.ts`
+- Modify: `src/codex/codex-memory-lifecycle-weekly.ts`
 - Modify: `tests/codex-cli.test.ts`
 
 - [ ] **Step 1: Add failing CLI usage and route tests**
@@ -1870,8 +1872,8 @@ git commit -m "feat: add weekly memory core consolidation"
 Extend the existing usage test in `tests/codex-cli.test.ts` with:
 
 ```ts
-expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply]')
-expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply]')
+expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply] [--all-projects]')
+expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply] [--all-projects]')
 ```
 
 Add a route smoke test near the existing `memory migrate-v2` CLI tests:
@@ -1927,6 +1929,7 @@ Add both routes before `memory status`:
     }
     process.stdout.write(`${JSON.stringify(await runCodexMemoryLifecycleDaily({
       cwd: input.cwd,
+      allProjects: input.args.includes('--all-projects'),
       includeGlobalRoot: true,
       apply: input.args.includes('--apply')
     }), null, 2)}\n`)
@@ -1939,6 +1942,7 @@ Add both routes before `memory status`:
     }
     process.stdout.write(`${JSON.stringify(await runCodexMemoryLifecycleWeekly({
       cwd: input.cwd,
+      allProjects: input.args.includes('--all-projects'),
       apply: input.args.includes('--apply')
     }), null, 2)}\n`)
     return
@@ -1948,7 +1952,7 @@ Add both routes before `memory status`:
 Update the usage string to include:
 
 ```txt
-memory lifecycle daily [--dry-run|--apply]|memory lifecycle weekly [--dry-run|--apply]
+memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]
 ```
 
 - [ ] **Step 4: Run CLI and automation tests**

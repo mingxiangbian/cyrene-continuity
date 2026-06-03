@@ -78,6 +78,7 @@ export interface WeeklyLifecycleResult {
 
 export async function runCodexMemoryLifecycleWeekly(input: {
   cwd?: string
+  allProjects?: boolean
   projectRoots?: WeeklyProjectRootInput[]
   globalRoot?: string
   apply?: boolean
@@ -87,7 +88,9 @@ export async function runCodexMemoryLifecycleWeekly(input: {
   const dryRun = input.apply !== true
   const now = input.now ?? new Date().toISOString()
   const config = createDefaultConfig(cwd)
-  const projectRoots = input.projectRoots ?? await defaultProjectRoots(input.cwd)
+  const projectRoots = input.projectRoots ?? await defaultProjectRoots(
+    input.allProjects === true ? undefined : input.cwd
+  )
   const projectResults: WeeklyProjectRootResult[] = []
   const projectCoreMemories: ProjectCoreMemory[] = []
 
