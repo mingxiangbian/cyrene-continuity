@@ -79,6 +79,43 @@ describe('buildMemoryActivations', () => {
     expect(output).toEqual(emptyOutput())
   })
 
+  it('does not activate on common generic token overlap', () => {
+    const output = buildMemoryActivations({
+      query: 'write the test plan',
+      projectMemories: [
+        createSemanticMemory({
+          id: 'generic-memory',
+          confidenceTier: 'validated',
+          activationPolicy: activationPolicyForConfidenceTier('validated'),
+          content: 'The plan should include test notes.',
+          useWhen: ['Writing a plan or test outline.']
+        })
+      ],
+      globalMemories: []
+    })
+
+    expect(output).toEqual(emptyOutput())
+  })
+
+  it('suppresses activation when doNotUseWhen matches the query strongly', () => {
+    const output = buildMemoryActivations({
+      query: 'documentation-only runtime validator review',
+      projectMemories: [
+        createSemanticMemory({
+          id: 'suppressed-memory',
+          confidenceTier: 'validated',
+          activationPolicy: activationPolicyForConfidenceTier('validated'),
+          content: 'Runtime validator changes require lifecycle checks.',
+          useWhen: ['Changing runtime validator behavior.'],
+          doNotUseWhen: ['Documentation-only runtime validator review']
+        })
+      ],
+      globalMemories: []
+    })
+
+    expect(output).toEqual(emptyOutput())
+  })
+
   it('ignores invalid high-risk global_core memory and lifecycle policy drift', () => {
     const output = buildMemoryActivations({
       query: 'global validator workflow',

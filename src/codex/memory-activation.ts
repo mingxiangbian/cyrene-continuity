@@ -22,6 +22,77 @@ export interface MemoryActivationOutput {
 
 type ActivationSource = MemoryActivation['source']
 
+const STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'been',
+  'being',
+  'but',
+  'by',
+  'can',
+  'could',
+  'for',
+  'from',
+  'if',
+  'in',
+  'include',
+  'into',
+  'is',
+  'it',
+  'its',
+  'may',
+  'must',
+  'note',
+  'notes',
+  'of',
+  'on',
+  'or',
+  'outline',
+  'plan',
+  'should',
+  'test',
+  'that',
+  'the',
+  'then',
+  'these',
+  'this',
+  'those',
+  'to',
+  'was',
+  'were',
+  'when',
+  'while',
+  'will',
+  'with',
+  'without',
+  'would',
+  'write',
+  'writing'
+])
+const DISTINCTIVE_TOKEN_LENGTH = 8
+const DO_NOT_USE_BOUNDARY_TOKENS = new Set([
+  'avoid',
+  'contradict',
+  'contradicted',
+  'contradicts',
+  'doc',
+  'docs',
+  'documentation',
+  'except',
+  'never',
+  'not',
+  'only',
+  'outside',
+  'stale',
+  'unless',
+  'unrelated'
+])
+
 interface ActivationCandidate {
   memory: SemanticMemory | CyreneMemory
   source: ActivationSource
@@ -129,12 +200,37 @@ function pushLimited(items: MemoryActivation[], item: MemoryActivation, maxItems
 }
 
 function matchTriggerReason(memory: SemanticMemory, queryTokens: string[]): string | null {
-  const memoryTokens = new Set(tokenize([memory.content, ...memory.useWhen].join(' ')))
-  const matchedTokens = queryTokens.filter((token) => memoryTokens.has(token))
-  if (matchedTokens.length === 0) {
+  if (memory.doNotUseWhen.some((boundary) => doNotUseWhenSuppresses(queryTokens, boundary))) {
     return null
   }
-  return `matched query tokens: ${matchedTokens.join(', ')}`
+
+  const memoryTokens = new Set(tokenize([memory.content, ...memory.useWhen].join(' ')))
+  const matchedTokens = matchingTokens(queryTokens, memoryTokens)
+  if (!isStrongMatch(matchedTokens)) {
+    return null
+  }
+  return `matched distinctive query tokens: ${matchedTokens.join(', ')}`
+}
+
+function doNotUseWhenSuppresses(queryTokens: string[], boundary: string): boolean {
+  const boundaryTokens = new Set(tokenize(boundary))
+  if (!isStrongTokenOverlap(queryTokens, boundaryTokens)) {
+    return false
+  }
+  const boundaryMarkers = matchingTokens([...boundaryTokens], DO_NOT_USE_BOUNDARY_TOKENS)
+  return boundaryMarkers.length === 0 || boundaryMarkers.some((token) => queryTokens.includes(token))
+}
+
+function isStrongTokenOverlap(queryTokens: string[], candidateTokens: Set<string>): boolean {
+  return isStrongMatch(matchingTokens(queryTokens, candidateTokens))
+}
+
+function isStrongMatch(tokens: string[]): boolean {
+  return tokens.length >= 2 || tokens.some((token) => token.length >= DISTINCTIVE_TOKEN_LENGTH)
+}
+
+function matchingTokens(queryTokens: string[], candidateTokens: Set<string>): string[] {
+  return queryTokens.filter((token) => candidateTokens.has(token))
 }
 
 function riskForMemory(memory: SemanticMemory): MemoryActivation['risk'] {
@@ -167,6 +263,6 @@ function tokenize(text: string): string[] {
   return Array.from(new Set(
     (text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])
       .map((token) => token.trim())
-      .filter(Boolean)
+      .filter((token) => token !== '' && !STOP_WORDS.has(token))
   ))
 }
