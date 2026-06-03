@@ -396,13 +396,9 @@ async function migrateReadableRoot(
       continue
     }
 
-    const tier = root.scope === 'global' ? 'global_core' : projectTierForActive(memory)
+    const tier = root.scope === 'global' ? 'global_core' : 'project_core'
     converted.push(withLifecycle(activeMemoryToSemanticMemory(memory), tier, input.now))
-    if (tier === 'validated') {
-      result.convertedActiveToValidated += 1
-    } else {
-      result.convertedActiveToCore += 1
-    }
+    result.convertedActiveToCore += 1
   }
 
   for (const memory of selectedLegacyPending) {
