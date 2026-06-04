@@ -409,6 +409,46 @@ describe('memory SQLite index', () => {
     expect(secondQuery.map((item) => item.memory.id)).toEqual(['project-a-z', 'project-a-a'])
   })
 
+  it('caps long-query relevance so full matches do not inflate SQLite scores', async () => {
+    const root = await createTempDir('cyrene-memory-index-score-cap-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'project-a-long-full-match',
+        type: 'reference',
+        content: 'alpha beta gamma delta epsilon zeta eta theta iota kappa',
+        normalizedKey: 'alpha-beta-gamma-delta-epsilon-zeta-eta-theta-iota-kappa',
+        scores: {
+          evidenceStrength: 0,
+          stability: 0,
+          usefulness: 0,
+          safety: 0,
+          sensitivity: 0
+        },
+        tags: []
+      })
+    ])
+
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const result = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'alpha beta gamma delta epsilon zeta eta theta iota kappa',
+      route: 'project',
+      task: 'memory',
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(result[0]?.memory.id).toBe('project-a-long-full-match')
+    expect(result[0]?.score).toBeGreaterThan(0.44)
+    expect(result[0]?.score).toBeLessThanOrEqual(0.66)
+  })
+
   it('stores project metadata and project similarity rows across rebuilds', async () => {
     const root = await createTempDir('cyrene-memory-index-projects-')
     const projectRoot = join(root, 'projects', 'project-a', 'memory')

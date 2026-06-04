@@ -11404,7 +11404,8 @@ function relevanceScore(memory, queryTokens) {
     ...memory.tags
   ].join(" "));
   const matches2 = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches2.length / Math.min(queryTokens.length, 8);
+  const denominator = Math.min(queryTokens.length, 8);
+  return Math.min(matches2.length, denominator) / denominator;
 }
 function compareRetrievedMemories(left, right) {
   const scoreDiff = right.score - left.score;
@@ -12358,7 +12359,8 @@ function relevanceScore2(row, queryTokens) {
     ...row.tags
   ].join(" "));
   const matches2 = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches2.length / Math.min(queryTokens.length, 8);
+  const denominator = Math.min(queryTokens.length, 8);
+  return Math.min(matches2.length, denominator) / denominator;
 }
 function compareIndexedItems(left, right) {
   const scoreDiff = right.score - left.score;

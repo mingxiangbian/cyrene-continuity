@@ -1212,7 +1212,8 @@ function relevanceScore(row: MemoryIndexRow, queryTokens: string[]): number {
     ...row.tags
   ].join(' '))
   const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)))
-  return matches.length / Math.min(queryTokens.length, 8)
+  const denominator = Math.min(queryTokens.length, 8)
+  return Math.min(matches.length, denominator) / denominator
 }
 
 function compareIndexedItems<T extends { score: number; memory: { id: string } }>(left: T, right: T): number {

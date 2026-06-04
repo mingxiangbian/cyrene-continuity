@@ -188,7 +188,8 @@ function relevanceScore(memory: CyreneMemory, queryTokens: string[]): number {
     ...memory.tags
   ].join(' '))
   const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)))
-  return matches.length / Math.min(queryTokens.length, 8)
+  const denominator = Math.min(queryTokens.length, 8)
+  return Math.min(matches.length, denominator) / denominator
 }
 
 function compareRetrievedMemories(left: RetrievedMemory, right: RetrievedMemory): number {

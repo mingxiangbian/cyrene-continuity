@@ -149,6 +149,40 @@ describe('memory retriever', () => {
     expect(result.map((item) => item.memory.id)).toEqual(expect.arrayContaining(['multi-agent-review']))
     expect(result[0]?.memory.id).toBe('multi-agent-review')
   })
+
+  it('caps long-query relevance so full matches do not inflate JSONL scores', async () => {
+    const memoryRoot = await createTempDir('cyrene-memory-retriever-score-cap-root-')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'long-full-match',
+        type: 'reference',
+        content: 'alpha beta gamma delta epsilon zeta eta theta iota kappa',
+        normalizedKey: 'alpha-beta-gamma-delta-epsilon-zeta-eta-theta-iota-kappa',
+        scores: {
+          evidenceStrength: 0,
+          stability: 0,
+          usefulness: 0,
+          safety: 0,
+          sensitivity: 0
+        },
+        tags: []
+      })
+    ])
+
+    const result = await retrieveMemories({
+      cwd: memoryRoot,
+      userCyreneDir: memoryRoot,
+      memoryRoot,
+      query: 'alpha beta gamma delta epsilon zeta eta theta iota kappa',
+      task: 'memory',
+      maxItems: 10,
+      maxTokens: 100
+    })
+
+    expect(result[0]?.memory.id).toBe('long-full-match')
+    expect(result[0]?.score).toBeCloseTo(0.6, 5)
+  })
 })
 
 function createMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
