@@ -397,7 +397,7 @@ describe('Codex memory v1.4 acceptance outcomes', () => {
     await expect(readPendingMemoriesFromRoot(memoryRoot)).resolves.toEqual(pendingBefore)
   })
 
-  it('keeps distillation-only admissions out of pending memory', async () => {
+  it('drops implementation changelog admissions without writing pending or distillation inputs', async () => {
     const home = await createTempDir('cyrene-v14-admission-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-v14-admission-project-')
@@ -420,11 +420,11 @@ describe('Codex memory v1.4 acceptance outcomes', () => {
       now: NOW
     })
 
-    expect(result.action).toBe('admit_to_distillation')
+    expect(result.action).toBe('auto_drop')
+    expect(result.admission.reasons).toContain('implementation_changelog')
     await expect(readPendingMemoriesFromRoot(result.memoryRoot)).resolves.toEqual([])
     const distillationInputs = await readDistillationInputsFromRoot(result.memoryRoot)
-    expect(distillationInputs).toHaveLength(1)
-    expect(distillationInputs[0]?.rawContents).toEqual([IMPLEMENTATION_NOTE_INPUT])
+    expect(distillationInputs).toEqual([])
   })
 
   it('rejects invalid rewrite output through the validator', () => {

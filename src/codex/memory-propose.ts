@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { createDefaultConfig } from '../config.js'
 import { evaluateActiveMemoryReadiness } from './active-memory-readiness.js'
 import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
@@ -36,6 +36,7 @@ import {
 } from '../memory/memory-store.js'
 import { activateCandidate, validateMemoryCandidate } from '../memory/memory-validator.js'
 import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
+import { normalizeMemoryKey } from '../memory/tokenizer.js'
 import type {
   AdmissionAction,
   CandidateTaskState,
@@ -80,7 +81,7 @@ export interface CodexMemoryCandidateInput {
 export function normalizedKeyForCodexMemoryCandidate(
   input: Pick<CodexMemoryCandidateInput, 'content' | 'domain' | 'normalizedKey' | 'type'>
 ): string {
-  return input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`)
+  return input.normalizedKey ?? normalizeMemoryKey(`${input.domain}:${input.type}:${input.content}`)
 }
 
 export interface CodexMemoryProposeResult {
@@ -569,15 +570,6 @@ function evidenceRefsForCandidate(evidence: MemoryEvidence[]): string[] {
     entry.evidenceGroupId,
     entry.summary
   ]).flatMap((value) => value === undefined ? [] : [value])
-}
-
-function normalizeKey(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80)
-  return slug.length > 0 ? slug : createHash('sha256').update(value).digest('hex').slice(0, 16)
 }
 
 function addDays(iso: string, days: number): string {

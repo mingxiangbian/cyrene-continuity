@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runCodexAdmissionPipeline } from '../src/codex/admission-pipeline.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
-import { proposeCodexMemoryCandidate } from '../src/codex/memory-propose.js'
+import { normalizedKeyForCodexMemoryCandidate, proposeCodexMemoryCandidate } from '../src/codex/memory-propose.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { deleteCodexProjectMemory } from '../src/codex/project-registry.js'
 import {
@@ -251,7 +251,7 @@ describe('runCodexAdmissionPipeline', () => {
     expect(review[0]?.reasons).toEqual(routing[0]?.target.reasons)
   })
 
-  it('keeps source-of-truth raw excerpts reference-only without pending or distillation writes', async () => {
+  it('drops source-of-truth raw excerpts without pending, routing, review, or distillation writes', async () => {
     const home = await createTempDir('cyrene-admission-pipeline-reference-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-admission-pipeline-reference-project-')
@@ -272,13 +272,11 @@ describe('runCodexAdmissionPipeline', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('reference_only')
+    expect(result.action).toBe('auto_drop')
+    expect(result.admission.reasons).toContain('source_of_truth_excerpt')
     const routing = await readRoutingDecisionsFromRoot(result.memoryRoot)
-    expect(routing[0]?.target).toMatchObject({
-      module: 'procedural',
-      updatePolicy: 'drop',
-      risk: 'low'
-    })
+    expect(routing).toEqual([])
+    await expect(readReviewDecisionsFromRoot(result.memoryRoot)).resolves.toEqual([])
     await expect(readDistillationInputsFromRoot(result.memoryRoot)).resolves.toEqual([])
     await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
@@ -303,9 +301,11 @@ describe('runCodexAdmissionPipeline', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('admit_to_distillation')
+    expect(result.action).toBe('auto_drop')
     expect(result.admission.reasons).toContain('raw_file_rule_excerpt')
     expect(result.admission.reasons).not.toContain('source_of_truth_duplicate')
+    await expect(readDistillationInputsFromRoot(result.memoryRoot)).resolves.toEqual([])
+    await expect(readRoutingDecisionsFromRoot(result.memoryRoot)).resolves.toEqual([])
   })
 
   it('routes task state sidecars without pending writes', async () => {
@@ -530,7 +530,12 @@ describe('runCodexAdmissionPipeline', () => {
     const cwd = await createTempDir('cyrene-admission-pipeline-derived-duplicate-project-')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await writeActiveMemoriesFromRoot(memoryRoot, [activeMemory('project-project-fact-duplicate-active-memory')])
+    const normalizedKey = normalizedKeyForCodexMemoryCandidate({
+      domain: 'project',
+      type: 'project_fact',
+      content: 'Duplicate active memory'
+    })
+    await writeActiveMemoriesFromRoot(memoryRoot, [activeMemory(normalizedKey)])
 
     const result = await runCodexAdmissionPipeline({
       cwd,
@@ -548,7 +553,7 @@ describe('runCodexAdmissionPipeline', () => {
     expect(result.action).toBe('reject_duplicate')
     expect(result.admission.reasons).toContain('duplicate_active')
     const drafts = await readFile(join(memoryRoot, 'candidate_drafts.jsonl'), 'utf8')
-    expect(drafts).toContain('"normalizedKey":"project-project-fact-duplicate-active-memory"')
+    expect(drafts).toContain(`"normalizedKey":"${normalizedKey}"`)
     await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -559,7 +564,12 @@ describe('runCodexAdmissionPipeline', () => {
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'tombstones.jsonl'), `${JSON.stringify(tombstone('project-project-fact-archived-memory'))}\n`)
+    const normalizedKey = normalizedKeyForCodexMemoryCandidate({
+      domain: 'project',
+      type: 'project_fact',
+      content: 'Archived memory'
+    })
+    await writeFile(join(memoryRoot, 'tombstones.jsonl'), `${JSON.stringify(tombstone(normalizedKey))}\n`)
 
     const result = await runCodexAdmissionPipeline({
       cwd,

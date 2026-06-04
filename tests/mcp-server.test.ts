@@ -16,7 +16,8 @@ import {
   handleMemoryPromote,
   handleMemoryReject
 } from '../src/mcp/tools/memory-review.js'
-import { handleMemoryDreamRun, handleMemoryProfileGet } from '../src/mcp/tools/memory-dream.js'
+import { handleMemoryAutomationRun } from '../src/mcp/tools/memory-automation.js'
+import { handleMemoryProfileGet } from '../src/mcp/tools/memory-dream.js'
 import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from '../src/mcp/tools/memory-harvest-project.js'
 import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
@@ -299,16 +300,16 @@ describe('Cyrene MCP server', () => {
     )
   })
 
-  it('handles memory dream and profile MCP tools as JSON text', async () => {
-    const home = await createTempDir('cyrene-mcp-memory-dream-home-')
+  it('handles memory automation and profile MCP tools as JSON text', async () => {
+    const home = await createTempDir('cyrene-mcp-memory-automation-home-')
     vi.stubEnv('HOME', home)
-    const cwd = await createTempDir('cyrene-mcp-memory-dream-project-')
+    const cwd = await createTempDir('cyrene-mcp-memory-automation-project-')
 
-    const dreamJson = JSON.parse((await handleMemoryDreamRun({ cwd, stage: 'light' }, process.cwd())).content[0]?.text ?? '{}')
-    expect(dreamJson.roots[0]).toMatchObject({ stage: 'light' })
+    const dailyJson = JSON.parse((await handleMemoryAutomationRun({ cwd, job: 'daily' }, process.cwd())).content[0]?.text ?? '{}')
+    expect(dailyJson).toMatchObject({ job: 'daily', action: 'memory_lifecycle_daily', dryRun: true })
 
-    const previewJson = JSON.parse((await handleMemoryDreamRun({ cwd, stage: 'deep-preview' }, process.cwd())).content[0]?.text ?? '{}')
-    expect(previewJson.roots[0]).toMatchObject({ stage: 'deep-preview' })
+    const weeklyJson = JSON.parse((await handleMemoryAutomationRun({ cwd, job: 'weekly' }, process.cwd())).content[0]?.text ?? '{}')
+    expect(weeklyJson).toMatchObject({ job: 'weekly', action: 'memory_lifecycle_weekly', dryRun: true })
 
     const profileJson = JSON.parse((await handleMemoryProfileGet({ cwd }, process.cwd())).content[0]?.text ?? '{}')
     expect(profileJson.project).toBeDefined()
@@ -342,14 +343,13 @@ describe('Cyrene MCP server', () => {
     expect(source).toContain('reject only after explicit user rejection')
   })
 
-  it('documents strict dream preview and apply MCP schema', async () => {
-    const source = await readFile(new URL('../src/mcp/tools/memory-dream.ts', import.meta.url), 'utf8')
+  it('documents daily and weekly memory automation MCP schema', async () => {
+    const source = await readFile(new URL('../src/mcp/tools/memory-automation.ts', import.meta.url), 'utf8')
     const serverSource = await readFile(new URL('../src/mcp/mcp-server.ts', import.meta.url), 'utf8')
 
-    expect(source).toContain("z.enum(['light', 'rem', 'deep-preview', 'deep-apply'])")
-    expect(source).not.toContain("z.enum(['light', 'rem', 'deep'])")
-    expect(serverSource).toContain('deep-apply can reject or expire gated unsafe pending memory')
-    expect(serverSource).toContain('never promotes unapproved pending memory')
+    expect(source).toContain("z.enum(['daily', 'weekly'])")
+    expect(serverSource).toContain('Run Cyrene memory lifecycle automation')
+    expect(serverSource).not.toContain('cyrene_memory_dream_run')
   })
 
   it('exposes Codex pending review tools through a fresh MCP server', async () => {
@@ -372,7 +372,8 @@ describe('Cyrene MCP server', () => {
       expect(names).toContain('cyrene_memory_reject')
       expect(names).toContain('cyrene_memory_edit')
       expect(names).toContain('cyrene_memory_defer')
-      expect(names).toContain('cyrene_memory_dream_run')
+      expect(names).toContain('cyrene_memory_automation_run')
+      expect(names).not.toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
       expect(names).toContain('cyrene_memory_harvest_project')
       const schemasByName = new Map(result.tools.map((tool) => [tool.name, tool.inputSchema as { properties?: Record<string, unknown> }]))
@@ -385,7 +386,7 @@ describe('Cyrene MCP server', () => {
         'cyrene_memory_reject',
         'cyrene_memory_edit',
         'cyrene_memory_defer',
-        'cyrene_memory_dream_run',
+        'cyrene_memory_automation_run',
         'cyrene_memory_profile_get',
         'cyrene_memory_harvest_project',
         'cyrene_project_identify'
@@ -463,7 +464,8 @@ describe('Cyrene MCP server', () => {
       expect(names).toContain('cyrene_memory_pending_list')
       expect(names).toContain('cyrene_memory_edit')
       expect(names).toContain('cyrene_memory_defer')
-      expect(names).toContain('cyrene_memory_dream_run')
+      expect(names).toContain('cyrene_memory_automation_run')
+      expect(names).not.toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
     } finally {
       await client.close()
@@ -483,8 +485,9 @@ describe('Cyrene MCP server', () => {
     expect(source).toContain('cyrene_memory_edit')
     expect(source).toContain('cyrene_memory_defer')
     expect(source).toContain('cyrene_memory_profile_get')
-    expect(source).toContain('cyrene_memory_dream_run')
-    expect(source).toContain('Dream Deep')
+    expect(source).toContain('cyrene_memory_automation_run')
+    expect(source).not.toContain('cyrene_memory_dream_run')
+    expect(source).not.toContain('Dream Deep')
     expect(source).toContain('recommend repeated independent evidence for review')
     expect(source).not.toContain(['auto', 'promote'].join('-'))
     expect(source).toContain('show pending items as manual review candidates')

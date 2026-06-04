@@ -227,7 +227,9 @@ export const ADMISSION_REASONS = [
   'low_actionability',
   'too_vague',
   'implementation_note',
+  'implementation_changelog',
   'raw_file_rule_excerpt',
+  'source_of_truth_excerpt',
   'overbroad_workflow_rule',
   'needs_active_memory_rewrite',
   'duplicate_pending',
@@ -480,7 +482,16 @@ export interface MemoryTombstone {
   type: MemoryType
   strength?: MemoryStrength
   scope: MemoryScope
-  reason: 'rejected' | 'expired' | 'archived' | 'superseded' | 'deleted'
+  reason:
+    | 'rejected'
+    | 'expired'
+    | 'archived'
+    | 'superseded'
+    | 'deleted'
+    | 'wrong_abstraction'
+    | 'obsolete'
+    | 'user_rejected'
+    | 'repeated_duplicate'
   createdAt: string
   expiresAt?: string
   replacementMemoryId?: string

@@ -218,6 +218,7 @@ describe('handleCodexUiApiRequest', () => {
           }>
         }
         profile: { profile: string }
+        automation: { automation: { dreamDue?: boolean; lastDreamStatus?: string } }
         signals: { signals: Array<{ kind: string; files?: string[] }> }
       }
       expect(data.pending.pending[0]).toMatchObject({ id: 'pending-1' })
@@ -228,10 +229,34 @@ describe('handleCodexUiApiRequest', () => {
         evidence: expect.any(Array)
       })
       expect(data.profile.profile).toBe('Project profile text for UI.')
+      expect(data.automation.automation).toMatchObject({
+        dreamDue: true,
+        lastDreamStatus: 'success'
+      })
       expect(data.signals.signals).toContainEqual(expect.objectContaining({
         kind: 'project_manifest',
         files: ['package.json']
       }))
+    }
+  })
+
+  it('serves automation state from the public automation route', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/automation' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        automation: { dreamDue?: boolean; lastDreamStatus?: string }
+      }
+      expect(data.automation).toMatchObject({
+        dreamDue: true,
+        lastDreamStatus: 'success'
+      })
     }
   })
 

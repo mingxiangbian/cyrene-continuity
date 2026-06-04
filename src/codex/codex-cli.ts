@@ -27,13 +27,12 @@ import {
   runCodexMemoryReject
 } from './codex-memory-review-cli.js'
 import { formatCodexMemoryStatus } from './codex-memory-status.js'
-import { readDreamReport } from './dream-artifacts.js'
 import {
   getCodexMemoryProfile,
-  runCodexMemoryDream,
-  runCodexMemoryMaintenance,
-  type CodexMemoryDreamStage
+  runCodexMemoryMaintenance
 } from './memory-dream.js'
+import { runCodexMemoryAutomation, type CodexMemoryAutomationJob } from './memory-automation.js'
+import { runCodexMemoryContextPreview, type CodexMemoryContextPreviewTask } from './memory-context-preview.js'
 import { runCodexMemoryDistill } from './memory-distill.js'
 import {
   applyCodexProfileCandidate,
@@ -160,15 +159,15 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  if (command === 'memory' && input.args[1] === 'dream') {
-    if (input.args[2] === 'report') {
-      const report = await readDreamReport({ cwd: input.cwd, root: parseDreamReportRoot(input.args) })
-      process.stdout.write(report.report)
-      return
+  if (command === 'memory' && input.args[1] === 'automation') {
+    if (input.args.includes('--dry-run') && input.args.includes('--apply')) {
+      throw new Error('memory automation accepts only one of --dry-run or --apply')
     }
-    process.stdout.write(`${JSON.stringify(await runCodexMemoryDream({
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryAutomation({
       cwd: input.cwd,
-      stage: parseDreamStage(input.args)
+      job: parseMemoryAutomationJob(input.args),
+      allProjects: input.args.includes('--all-projects'),
+      apply: input.args.includes('--apply')
     }), null, 2)}\n`)
     return
   }
@@ -183,6 +182,15 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
       mode: parseHarvestProjectMode(input.args)
     })
     process.stdout.write(`${JSON.stringify(addHarvestProjectCompatibilityWarnings(result, sinceWarning), null, 2)}\n`)
+    return
+  }
+
+  if (command === 'memory' && input.args[1] === 'context-preview') {
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryContextPreview({
+      cwd: input.cwd,
+      userMessage: parseRequiredOption(input.args, '--message', 'context preview message'),
+      task: parseContextPreviewTask(input.args)
+    }), null, 2)}\n`)
     return
   }
 
@@ -423,7 +431,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -497,50 +505,37 @@ function parseConfigPath(args: string[]): string | undefined {
   return value
 }
 
-function parseDreamStage(args: string[]): CodexMemoryDreamStage | undefined {
-  const index = args.indexOf('--stage')
-  const inline = args.find((arg) => arg.startsWith('--stage='))
-  const value = index >= 0 ? args[index + 1] : inline?.slice('--stage='.length)
-  if (value === undefined) {
-    if (index >= 0 || inline !== undefined) {
-      throw new Error('Invalid memory dream stage: missing value')
-    }
-    return undefined
-  }
-  if (value === '' || value.startsWith('--')) {
-    throw new Error('Invalid memory dream stage: missing value')
-  }
-  if (value === 'light' || value === 'rem' || value === 'deep-preview' || value === 'deep-apply') {
-    return value
-  }
-  if (value === 'deep') {
-    throw new Error('Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.')
-  }
-  throw new Error(`Invalid memory dream stage: ${value}`)
-}
-
-function parseDreamReportRoot(args: string[]): 'global' | 'project' {
-  const index = args.indexOf('--root')
-  const inline = args.find((arg) => arg.startsWith('--root='))
-  const value = index >= 0 ? args[index + 1] : inline?.slice('--root='.length)
-  if (value === undefined) {
-    return 'project'
-  }
-  if (value === '' || value.startsWith('--')) {
-    throw new Error('Invalid memory dream report root: missing value')
-  }
-  if (value === 'global' || value === 'project') {
-    return value
-  }
-  throw new Error(`Invalid memory dream report root: ${value}`)
-}
-
 function parseProfileReflectionSource(args: string[]): 'daily-interview' {
   const value = parseRequiredOption(args, '--source', 'profile reflection source')
   if (value === 'daily-interview') {
     return value
   }
   throw new Error(`Invalid profile reflection source: ${value}`)
+}
+
+function parseMemoryAutomationJob(args: string[]): CodexMemoryAutomationJob {
+  const value = parseRequiredOption(args, '--job', 'memory automation job')
+  if (value === 'daily' || value === 'weekly') {
+    return value
+  }
+  throw new Error(`Invalid memory automation job: ${value}. Expected daily or weekly`)
+}
+
+function parseContextPreviewTask(args: string[]): CodexMemoryContextPreviewTask | undefined {
+  const value = parseOptionalOption(args, '--task')
+  if (value === undefined) {
+    return undefined
+  }
+  if (
+    value === 'coding' ||
+    value === 'planning' ||
+    value === 'debugging' ||
+    value === 'conversation' ||
+    value === 'memory'
+  ) {
+    return value
+  }
+  throw new Error(`Invalid --task: ${value}. Expected coding, planning, debugging, conversation, or memory`)
 }
 
 function parseRequiredPositional(args: string[], index: number, label: string): string {

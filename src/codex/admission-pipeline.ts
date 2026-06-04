@@ -81,11 +81,13 @@ export async function runCodexAdmissionPipeline(
   }
 
   if (admission.action !== 'admit_to_pending' && admission.action !== 'merge_with_existing') {
-    await appendRoutingAndReviewDecisions(memoryRoot, {
-      admission,
-      route,
-      semanticMemoryId: semanticCandidate.id
-    })
+    if (admission.action !== 'auto_drop') {
+      await appendRoutingAndReviewDecisions(memoryRoot, {
+        admission,
+        route,
+        semanticMemoryId: semanticCandidate.id
+      })
+    }
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
       memoryRoot,

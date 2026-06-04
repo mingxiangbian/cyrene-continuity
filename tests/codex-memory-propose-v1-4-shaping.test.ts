@@ -48,7 +48,7 @@ describe('Codex memory v1.4 pending creation shaping', () => {
     expect(pending[0]?.doNotUseWhen).toContain('The task does not mutate pending memory review state.')
   })
 
-  it('does not materialize distillation admissions as pending during shaping', async () => {
+  it('drops implementation changelog admissions during shaping', async () => {
     const home = await createTempDir('cyrene-v14-no-materialize-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-v14-no-materialize-project-')
@@ -71,7 +71,8 @@ describe('Codex memory v1.4 pending creation shaping', () => {
       now: '2026-06-02T00:00:00.000Z'
     })
 
-    expect(result.action).toBe('admit_to_distillation')
+    expect(result.action).toBe('auto_drop')
+    expect(result.admission.reasons).toContain('implementation_changelog')
     await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

@@ -108,6 +108,47 @@ describe('memory retriever', () => {
 
     expect(result.map((item) => item.memory.id)).toEqual(['small'])
   })
+
+  it('retrieves English technical memory from Chinese query aliases', async () => {
+    const memoryRoot = await createTempDir('cyrene-memory-retriever-cjk-root-')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'irrelevant-high-score',
+        content: 'Project dashboard layout prefers dense tabular views.',
+        normalizedKey: 'project-dashboard-layout-dense-tables',
+        scores: {
+          evidenceStrength: 0.99,
+          stability: 0.99,
+          usefulness: 0.99,
+          safety: 0.99,
+          sensitivity: 0.01
+        }
+      }),
+      createMemory({
+        id: 'multi-agent-review',
+        content: 'Use multi-agent review before high-risk repo update verification.',
+        normalizedKey: 'multi-agent-review-repo-update-verification',
+        type: 'procedural_rule',
+        domain: 'procedural',
+        candidateKind: 'workflow_rule',
+        tags: ['multi-agent', 'review', 'repo']
+      })
+    ])
+
+    const result = await retrieveMemories({
+      cwd: memoryRoot,
+      userCyreneDir: memoryRoot,
+      memoryRoot,
+      query: '多智能体审查 仓库更新验证',
+      task: 'memory',
+      maxItems: 10,
+      maxTokens: 100
+    })
+
+    expect(result.map((item) => item.memory.id)).toEqual(expect.arrayContaining(['multi-agent-review']))
+    expect(result[0]?.memory.id).toBe('multi-agent-review')
+  })
 })
 
 function createMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {

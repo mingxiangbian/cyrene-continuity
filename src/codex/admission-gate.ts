@@ -25,6 +25,8 @@ const NUMERIC_SNAPSHOT_PATTERN =
 const TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i
 const REVIEW_SUMMARY_STATUS_PATTERN =
   /(?:修复|完成|清理|归零|通过|merge|push|merged|pushed|typecheck|plugin validation|review summary failed|测试|pending)/i
+const IMPLEMENTATION_CHANGELOG_PATTERN =
+  /(?:更新(?:了)?|新增(?:了)?|修复(?:了)?|实现(?:了)?|完成(?:了)?|迁移(?:了)?|改造(?:了)?|重构(?:了)?|清理(?:了)?|renamed|refactored|implemented|migrated|updated|added|fixed|removed|completed).{0,120}(?:CLI|UI|MCP|tests?|测试|runtime|plugin|pending|active|trial|validated|core|automation|自动化|lifecycle|memory|记忆|工作区|worktree)/i
 const TEST_COUNT_PATTERN = /(?:tests?|测试).{0,16}\d+|\d+.{0,16}(?:tests?|测试)/i
 const VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i
 const PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i
@@ -37,14 +39,11 @@ export function evaluateCandidateAdmission(input: EvaluateCandidateAdmissionInpu
   if (reasons.includes('task_state')) {
     return decision(input.draft, 'task_state', reasons, scores, now)
   }
-
-  const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey)
-  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
-    return decision(input.draft, 'reference_only', ['source_of_truth_duplicate', ...reasons], scores, now, {
-      ...(duplicateActive === undefined ? {} : { targetMemoryId: duplicateActive.id })
-    })
+  if (isDropOnlyAdmission(reasons)) {
+    return decision(input.draft, 'auto_drop', reasons, scores, now)
   }
 
+  const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey)
   if (duplicateActive !== undefined) {
     return decision(
       input.draft,
@@ -87,6 +86,8 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   const reasons: AdmissionReason[] = []
   const durableGuidance = isDurablePrescriptiveGuidance(draft)
   const readiness = evaluateActiveMemoryReadiness(draft)
+  const sourceOfTruthExcerpt = isSourceOfTruthPolicyExcerpt(draft, readiness.reasons.includes('raw_file_rule_excerpt'))
+  const implementationChangelog = isImplementationChangelog(draft, readiness.reasons.includes('implementation_note'), durableGuidance)
   if (draft.candidateKind === 'user_instruction' || draft.sourceKind === 'user_explicit') {
     reasons.push('explicit_user_instruction')
   }
@@ -114,11 +115,14 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
   if (isReviewSummaryStatusNoise(draft)) {
     reasons.push('temporary_status', 'low_future_usefulness')
   }
+  if (implementationChangelog) {
+    reasons.push('implementation_changelog')
+  }
   if (TEST_COUNT_PATTERN.test(draft.content)) {
     reasons.push('stale_numeric_snapshot', 'low_actionability')
   }
-  if (isSourceOfTruthPolicyExcerpt(draft)) {
-    reasons.push('raw_file_rule_excerpt')
+  if (sourceOfTruthExcerpt) {
+    reasons.push('source_of_truth_excerpt', 'raw_file_rule_excerpt')
   }
   if (draft.taskState !== undefined) {
     reasons.push('task_state')
@@ -127,7 +131,12 @@ function reasonsForDraft(draft: CandidateDraft): AdmissionReason[] {
     reasons.push('too_vague')
   }
   if (!readiness.ready) {
-    reasons.push(...readiness.reasons)
+    reasons.push(...readiness.reasons.filter((reason) => {
+      if (reason === 'needs_active_memory_rewrite') {
+        return !implementationChangelog && !sourceOfTruthExcerpt && !readiness.reasons.includes('raw_file_rule_excerpt')
+      }
+      return true
+    }))
   }
   return Array.from(new Set(reasons))
 }
@@ -153,13 +162,27 @@ function isReviewSummaryStatusNoise(draft: CandidateDraft): boolean {
     REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content)
 }
 
-function isSourceOfTruthPolicyExcerpt(draft: CandidateDraft): boolean {
+function isImplementationChangelog(
+  draft: CandidateDraft,
+  readinessImplementationNote: boolean,
+  durableGuidance: boolean
+): boolean {
+  if (durableGuidance) return false
+  const projectLike =
+    draft.candidateKind === 'project_fact' ||
+    draft.candidateKind === 'project_decision' ||
+    draft.domain === 'project'
+  return projectLike && (readinessImplementationNote || IMPLEMENTATION_CHANGELOG_PATTERN.test(draft.content))
+}
+
+function isSourceOfTruthPolicyExcerpt(draft: CandidateDraft, readinessRawFileExcerpt: boolean): boolean {
   if (draft.sourceOfTruth === undefined) return false
   if (!/(?:^|\/)(?:AGENTS\.md|README\.md|CONTRIBUTING\.md)$/i.test(draft.sourceOfTruth.trim())) {
     return false
   }
   if (draft.sourceKind !== 'file') return false
-  return /(?:仓库工作规则|仓库政策|repository policy|working rules|agent guidance)/i.test(draft.content)
+  return readinessRawFileExcerpt ||
+    /(?:仓库工作规则|仓库政策|中规定|定义|要求|states?|says?|requires?|repository policy|working rules|agent guidance)/i.test(draft.content)
 }
 
 function scoreOverridesForReasons(reasons: AdmissionReason[]): Partial<AdmissionScores> {
@@ -257,6 +280,7 @@ function admissionScoreFor(scores: AdmissionScores): number {
 
 function actionFor(draft: CandidateDraft, reasons: AdmissionReason[], score: number): AdmissionDecision['action'] {
   if (reasons.includes('task_state')) return 'task_state'
+  if (isDropOnlyAdmission(reasons)) return 'auto_drop'
   if (reasons.includes('explicit_user_instruction')) return 'admit_to_pending'
   if (reasons.includes('needs_active_memory_rewrite')) return 'admit_to_distillation'
   if (
@@ -275,18 +299,12 @@ function actionFor(draft: CandidateDraft, reasons: AdmissionReason[], score: num
   return draft.candidateKind === 'project_fact' ? 'admit_to_distillation' : 'admit_to_pending'
 }
 
-function isSourceOfTruthReferenceOnly(draft: CandidateDraft, reasons: AdmissionReason[]): boolean {
-  if (draft.sourceOfTruth === undefined || draft.sourceOfTruth.trim() === '') {
-    return false
-  }
-  if (!reasons.includes('raw_file_rule_excerpt')) {
-    return false
-  }
-  return !hasOperationalInterpretationSignal(draft.content)
-}
-
-function hasOperationalInterpretationSignal(content: string): boolean {
-  return /because|exception|applies when|mitigation|\buse\b|non-trivial|keep each|避免|例外|适用|边界|改写|使用|非琐碎|非平凡/i.test(content)
+function isDropOnlyAdmission(reasons: AdmissionReason[]): boolean {
+  return (
+    reasons.includes('implementation_changelog') ||
+    reasons.includes('source_of_truth_excerpt') ||
+    reasons.includes('raw_file_rule_excerpt')
+  )
 }
 
 function decision(
