@@ -179,7 +179,7 @@ export async function tombstoneCodexActiveMemory(input: {
       return { project, memoryRoot: lockedMemoryRoot, result: confirmation }
     }
     const tombstone = tombstoneForActiveMemory(memory, {
-      reason: 'deleted',
+      reason: tombstoneReasonForActiveMemoryReview(input.reason),
       now,
       ...(input.indefinite === true ? {} : { expiresAt: addDays(now, input.days ?? 180) })
     })
@@ -498,6 +498,56 @@ function tombstoneForActiveMemory(
     ...(input.replacementMemoryId === undefined ? {} : { replacementMemoryId: input.replacementMemoryId }),
     evidence: memory.evidence
   }
+}
+
+function tombstoneReasonForActiveMemoryReview(reason: string): MemoryTombstone['reason'] {
+  const normalized = normalizeReviewReason(reason)
+  if (
+    normalized.includes('source_of_truth_excerpt') ||
+    normalized.includes('source_of_truth_quote') ||
+    normalized.includes('raw_source_of_truth') ||
+    normalized.includes('raw_file_rule_excerpt') ||
+    normalized.includes('excerpt') ||
+    normalized.includes('摘抄')
+  ) {
+    return 'source_of_truth_excerpt'
+  }
+  if (
+    normalized.includes('implementation_changelog') ||
+    normalized.includes('implementation_note') ||
+    normalized.includes('changelog') ||
+    normalized.includes('实现变更') ||
+    normalized.includes('变更日志')
+  ) {
+    return 'implementation_changelog'
+  }
+  if (
+    normalized.includes('wrong_abstraction') ||
+    normalized.includes('wrong_memory') ||
+    normalized.includes('错误抽象')
+  ) {
+    return 'wrong_abstraction'
+  }
+  if (normalized.includes('obsolete') || normalized.includes('stale') || normalized.includes('过时')) {
+    return 'obsolete'
+  }
+  if (normalized.includes('duplicate') || normalized.includes('重复')) {
+    return 'repeated_duplicate'
+  }
+  if (normalized.includes('superseded')) {
+    return 'superseded'
+  }
+  if (normalized.includes('expired')) {
+    return 'expired'
+  }
+  if (normalized.includes('archived')) {
+    return 'archived'
+  }
+  return 'user_rejected'
+}
+
+function normalizeReviewReason(reason: string): string {
+  return reason.trim().toLowerCase().replace(/[\s-]+/g, '_')
 }
 
 function requireDestructiveConfirmation(memory: CyreneMemory, confirmText: string | undefined): ActiveMemoryNotFoundOrConflict | undefined {

@@ -17108,7 +17108,7 @@ async function tombstoneCodexActiveMemory(input) {
       return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
     }
     const tombstone = tombstoneForActiveMemory(memory, {
-      reason: "deleted",
+      reason: tombstoneReasonForActiveMemoryReview(input.reason),
       now,
       ...input.indefinite === true ? {} : { expiresAt: addDays3(now, input.days ?? 180) }
     });
@@ -17375,6 +17375,37 @@ function tombstoneForActiveMemory(memory, input) {
     ...input.replacementMemoryId === void 0 ? {} : { replacementMemoryId: input.replacementMemoryId },
     evidence: memory.evidence
   };
+}
+function tombstoneReasonForActiveMemoryReview(reason) {
+  const normalized = normalizeReviewReason(reason);
+  if (normalized.includes("source_of_truth_excerpt") || normalized.includes("source_of_truth_quote") || normalized.includes("raw_source_of_truth") || normalized.includes("raw_file_rule_excerpt") || normalized.includes("excerpt") || normalized.includes("\u6458\u6284")) {
+    return "source_of_truth_excerpt";
+  }
+  if (normalized.includes("implementation_changelog") || normalized.includes("implementation_note") || normalized.includes("changelog") || normalized.includes("\u5B9E\u73B0\u53D8\u66F4") || normalized.includes("\u53D8\u66F4\u65E5\u5FD7")) {
+    return "implementation_changelog";
+  }
+  if (normalized.includes("wrong_abstraction") || normalized.includes("wrong_memory") || normalized.includes("\u9519\u8BEF\u62BD\u8C61")) {
+    return "wrong_abstraction";
+  }
+  if (normalized.includes("obsolete") || normalized.includes("stale") || normalized.includes("\u8FC7\u65F6")) {
+    return "obsolete";
+  }
+  if (normalized.includes("duplicate") || normalized.includes("\u91CD\u590D")) {
+    return "repeated_duplicate";
+  }
+  if (normalized.includes("superseded")) {
+    return "superseded";
+  }
+  if (normalized.includes("expired")) {
+    return "expired";
+  }
+  if (normalized.includes("archived")) {
+    return "archived";
+  }
+  return "user_rejected";
+}
+function normalizeReviewReason(reason) {
+  return reason.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 function requireDestructiveConfirmation(memory, confirmText) {
   if (!activeMemoryRequiresDestructiveConfirmation(memory)) return void 0;
@@ -17946,10 +17977,12 @@ async function getCodexContinuityContext(input) {
     retrievalPlan,
     fallback: legacyRetrievalInput
   });
+  const modelVisibleGlobalMemory = routedMemory.globalMemory.filter(isModelVisibleRoutedMemory);
+  const modelVisibleProjectMemory = routedMemory.projectMemory.filter(isModelVisibleRoutedMemory);
   const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot);
   const [projectActivationMemories, globalActivationMemories] = await Promise.all([
-    runtimeActivationMemoriesForRoute(projectMemoryRoot, routedMemory.projectMemory),
-    runtimeActivationMemoriesForRoute(globalMemoryRoot, routedMemory.globalMemory)
+    runtimeActivationMemoriesForRoute(projectMemoryRoot, modelVisibleProjectMemory),
+    runtimeActivationMemoriesForRoute(globalMemoryRoot, modelVisibleGlobalMemory)
   ]);
   const activation = buildMemoryActivations({
     query: input.userMessage,
@@ -17960,21 +17993,21 @@ async function getCodexContinuityContext(input) {
     await Promise.all([
       appendActivationEventsFailOpen({
         memoryRoot: globalMemoryRoot,
-        memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
+        memoryIds: canonicalGlobalActivationMemoryIds(modelVisibleGlobalMemory, canonicalGlobalMemorySignatures),
         projectId: project.projectId,
         query: input.userMessage,
         event: "retrieved"
       }),
       appendActivationEventsFailOpen({
         memoryRoot: projectMemoryRoot,
-        memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
+        memoryIds: modelVisibleProjectMemory.map((item) => item.memory.id),
         projectId: project.projectId,
         query: input.userMessage,
         event: "retrieved"
       })
     ]);
   }
-  const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
+  const activeMemory = [...modelVisibleGlobalMemory, ...modelVisibleProjectMemory];
   const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory);
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join("\n\n");
   const snapshot = await buildContinuitySnapshot({
@@ -18001,12 +18034,12 @@ async function getCodexContinuityContext(input) {
         content: memory.content
       }))
     },
-    globalMemory: routedMemory.globalMemory.map((item) => toRoutedMemoryDigestItem(item, {
+    globalMemory: modelVisibleGlobalMemory.map((item) => toRoutedMemoryDigestItem(item, {
       exactProject: false,
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
-    projectMemory: routedMemory.projectMemory.map((item) => toRoutedMemoryDigestItem(item, {
+    projectMemory: modelVisibleProjectMemory.map((item) => toRoutedMemoryDigestItem(item, {
       exactProject: true,
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
@@ -18222,6 +18255,9 @@ async function retrieveRoutedMemory(input) {
 }
 function isQueryableIndexStatus(status) {
   return status.available && (status.freshness === "fresh" || status.freshness === "empty" && status.lastSyncAt !== void 0);
+}
+function isModelVisibleRoutedMemory(item) {
+  return item.memory.confidenceTier !== "trial";
 }
 async function fallbackRoutedMemory(input, diagnostics, projectId) {
   const memories = await retrieveMemories(input);
@@ -18780,6 +18816,7 @@ var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候
 var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
 var REVIEW_SUMMARY_STATUS_PATTERN = /(?:修复|完成|清理|归零|通过|merge|push|merged|pushed|typecheck|plugin validation|review summary failed|测试|pending)/i;
 var IMPLEMENTATION_CHANGELOG_PATTERN = /(?:更新(?:了)?|新增(?:了)?|修复(?:了)?|实现(?:了)?|完成(?:了)?|迁移(?:了)?|改造(?:了)?|重构(?:了)?|清理(?:了)?|renamed|refactored|implemented|migrated|updated|added|fixed|removed|completed).{0,120}(?:CLI|UI|MCP|tests?|测试|runtime|plugin|pending|active|trial|validated|core|automation|自动化|lifecycle|memory|记忆|工作区|worktree)/i;
+var REVIEW_SUMMARY_OUTPUT_ARTIFACT_PATTERN = /(?:导出|生成|创建|写入|保存|产出|整理|exported|generated|created|wrote|saved|produced).{0,120}(?:report_materials|REPORT_[A-Z0-9_]+\.md|RESULTS_[A-Z0-9_]+\.md|[A-Za-z0-9_-]+\.(?:md|m|py|ts|tsx|js|json)|目录|文件|路线图|报告材料|artifacts?|outputs?|files?|directory)/i;
 var TEST_COUNT_PATTERN = /(?:tests?|测试).{0,16}\d+|\d+.{0,16}(?:tests?|测试)/i;
 var VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i;
 var PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i;
@@ -18895,12 +18932,15 @@ function isDurablePrescriptiveGuidance(draft) {
   return durableKind && PRESCRIPTIVE_PATTERN.test(draft.content);
 }
 function isReviewSummaryStatusNoise(draft) {
-  return draft.sourceKind === "review_summary" && !isDurablePrescriptiveGuidance(draft) && REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content);
+  return draft.sourceKind === "review_summary" && !isDurablePrescriptiveGuidance(draft) && (REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content) || isReviewSummaryOutputChangelog(draft));
 }
 function isImplementationChangelog(draft, readinessImplementationNote, durableGuidance) {
   if (durableGuidance) return false;
   const projectLike = draft.candidateKind === "project_fact" || draft.candidateKind === "project_decision" || draft.domain === "project";
-  return projectLike && (readinessImplementationNote || IMPLEMENTATION_CHANGELOG_PATTERN.test(draft.content));
+  return projectLike && (readinessImplementationNote || IMPLEMENTATION_CHANGELOG_PATTERN.test(draft.content)) || isReviewSummaryOutputChangelog(draft);
+}
+function isReviewSummaryOutputChangelog(draft) {
+  return draft.sourceKind === "review_summary" && REVIEW_SUMMARY_OUTPUT_ARTIFACT_PATTERN.test(draft.content);
 }
 function isSourceOfTruthPolicyExcerpt(draft, readinessRawFileExcerpt) {
   if (draft.sourceOfTruth === void 0) return false;

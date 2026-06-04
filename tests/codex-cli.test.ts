@@ -364,20 +364,8 @@ describe('cyrene-continuity codex CLI', () => {
     const preview = JSON.parse(result.stdout)
 
     expect(preview.input).toEqual({ task: 'coding', userMessage: 'context preview trial review' })
-    expect(preview.activeContext.projectMemory).toEqual([
-      expect.objectContaining({
-        id: 'preview-trial-1',
-        content: 'Context preview trial review workflow memory must stay a workflow hint.'
-      })
-    ])
-    expect(preview.activation.workflowHints).toEqual([
-      expect.objectContaining({
-        memoryId: 'preview-trial-1',
-        confidenceTier: 'trial',
-        activationMode: 'workflow_hint',
-        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/)
-      })
-    ])
+    expect(preview.activeContext.projectMemory).toEqual([])
+    expect(preview.activation.workflowHints).toEqual([])
     expect(preview.activation.planConstraints).toEqual([])
     expect(preview.activation.checklistItems).toEqual([])
     expect(preview.exclusions.pendingReview).toMatchObject({

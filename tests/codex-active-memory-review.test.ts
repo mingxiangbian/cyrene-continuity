@@ -192,7 +192,7 @@ describe('Codex active memory lifecycle', () => {
       cwd,
       id: memory.id,
       contentHash: contentHashForActiveMemory(memory),
-      reason: 'Wrong memory.',
+      reason: 'Wrong abstraction.',
       days: 180,
       now: '2026-05-30T01:00:00.000Z'
     })
@@ -202,20 +202,46 @@ describe('Codex active memory lifecycle', () => {
     expect(tombstones[0]).toMatchObject({
       memoryId: memory.id,
       normalizedKey: memory.normalizedKey,
-      reason: 'deleted'
+      reason: 'wrong_abstraction'
     })
     expect(tombstones[0]?.expiresAt).toBe('2026-11-26T01:00:00.000Z')
     const events = jsonl<MemoryEvent>(await readFile(join(root, 'events.jsonl'), 'utf8'))
     expect(events[0]).toMatchObject({
       action: 'tombstone',
       memoryId: memory.id,
-      reason: 'Wrong memory.',
+      reason: 'Wrong abstraction.',
       details: expect.objectContaining({ reviewAction: 'tombstone' })
     })
     expect(events[0]?.details?.previousMemory).toMatchObject({
       id: memory.id,
       content: memory.content,
       status: 'archived'
+    })
+  })
+
+  it.each([
+    ['source_of_truth_excerpt: copied raw source-of-truth text.', 'source_of_truth_excerpt'],
+    ['implementation_changelog: copied raw implementation changelog.', 'implementation_changelog']
+  ])('uses structured tombstone reason %s for active memory review', async (reviewReason, tombstoneReason) => {
+    const home = await createTempDir('cyrene-structured-tombstone-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-structured-tombstone-project-')
+    const memory = active()
+    const root = await seed(cwd, [memory])
+
+    const result = await tombstoneCodexActiveMemory({
+      cwd,
+      id: memory.id,
+      contentHash: contentHashForActiveMemory(memory),
+      reason: reviewReason,
+      now: '2026-05-30T01:00:00.000Z'
+    })
+
+    expect(result.result.action).toBe('tombstone')
+    const tombstones = jsonl<MemoryTombstone>(await readFile(join(root, 'tombstones.jsonl'), 'utf8'))
+    expect(tombstones[0]).toMatchObject({
+      memoryId: memory.id,
+      reason: tombstoneReason
     })
   })
 

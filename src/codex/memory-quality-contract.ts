@@ -287,7 +287,7 @@ export const MEMORY_QUALITY_FIXTURES: MemoryQualityFixture[] = [
   },
   {
     id: 'old_review_summary_noise',
-    inputSignal: 'review summary ok: merged branch and deleted local branch',
+    inputSignal: 'review summary ok: merged branch, deleted local branch, and exported report_materials/ plus REPORT_ROADMAP.md',
     expectedClassification: 'episode_only',
     expectedModule: 'episode',
     expectedPolicy: 'no_memory_candidate',

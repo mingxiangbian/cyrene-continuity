@@ -492,6 +492,8 @@ export interface MemoryTombstone {
     | 'obsolete'
     | 'user_rejected'
     | 'repeated_duplicate'
+    | 'source_of_truth_excerpt'
+    | 'implementation_changelog'
   createdAt: string
   expiresAt?: string
   replacementMemoryId?: string

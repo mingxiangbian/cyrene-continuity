@@ -247,10 +247,12 @@ export async function getCodexContinuityContext(input: {
     retrievalPlan,
     fallback: legacyRetrievalInput
   })
+  const modelVisibleGlobalMemory = routedMemory.globalMemory.filter(isModelVisibleRoutedMemory)
+  const modelVisibleProjectMemory = routedMemory.projectMemory.filter(isModelVisibleRoutedMemory)
   const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot)
   const [projectActivationMemories, globalActivationMemories] = await Promise.all([
-    runtimeActivationMemoriesForRoute(projectMemoryRoot, routedMemory.projectMemory),
-    runtimeActivationMemoriesForRoute(globalMemoryRoot, routedMemory.globalMemory)
+    runtimeActivationMemoriesForRoute(projectMemoryRoot, modelVisibleProjectMemory),
+    runtimeActivationMemoriesForRoute(globalMemoryRoot, modelVisibleGlobalMemory)
   ])
   const activation = buildMemoryActivations({
     query: input.userMessage,
@@ -261,21 +263,21 @@ export async function getCodexContinuityContext(input: {
     await Promise.all([
       appendActivationEventsFailOpen({
         memoryRoot: globalMemoryRoot,
-        memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
+        memoryIds: canonicalGlobalActivationMemoryIds(modelVisibleGlobalMemory, canonicalGlobalMemorySignatures),
         projectId: project.projectId,
         query: input.userMessage,
         event: 'retrieved'
       }),
       appendActivationEventsFailOpen({
         memoryRoot: projectMemoryRoot,
-        memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
+        memoryIds: modelVisibleProjectMemory.map((item) => item.memory.id),
         projectId: project.projectId,
         query: input.userMessage,
         event: 'retrieved'
       })
     ])
   }
-  const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory]
+  const activeMemory = [...modelVisibleGlobalMemory, ...modelVisibleProjectMemory]
   const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory)
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join('\n\n')
   const snapshot = await buildContinuitySnapshot({
@@ -303,12 +305,12 @@ export async function getCodexContinuityContext(input: {
         content: memory.content
       }))
     },
-    globalMemory: routedMemory.globalMemory.map((item) => toRoutedMemoryDigestItem(item, {
+    globalMemory: modelVisibleGlobalMemory.map((item) => toRoutedMemoryDigestItem(item, {
       exactProject: false,
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
-    projectMemory: routedMemory.projectMemory.map((item) => toRoutedMemoryDigestItem(item, {
+    projectMemory: modelVisibleProjectMemory.map((item) => toRoutedMemoryDigestItem(item, {
       exactProject: true,
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
@@ -559,6 +561,10 @@ async function retrieveRoutedMemory(input: {
 
 function isQueryableIndexStatus(status: CodexMemoryIndexStatus): boolean {
   return status.available && (status.freshness === 'fresh' || (status.freshness === 'empty' && status.lastSyncAt !== undefined))
+}
+
+function isModelVisibleRoutedMemory(item: IndexedActiveMemory | RetrievedMemory): boolean {
+  return item.memory.confidenceTier !== 'trial'
 }
 
 async function fallbackRoutedMemory(

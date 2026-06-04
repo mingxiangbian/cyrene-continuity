@@ -194,6 +194,34 @@ describe('runCodexAdmissionPipeline', () => {
     expect(pending).toContain('"sourceDraftIds"')
   })
 
+  it('drops review-summary output artifact logs without writing review, trial, or distillation records', async () => {
+    const home = await createTempDir('cyrene-admission-pipeline-output-log-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-admission-pipeline-output-log-project-')
+
+    const result = await runCodexAdmissionPipeline({
+      cwd,
+      sourceKind: 'review_summary',
+      candidate: {
+        domain: 'procedural',
+        type: 'procedural_rule',
+        candidateKind: 'workflow_rule',
+        content: '将报告材料导出到report_materials/目录，并在根目录创建中文路线图REPORT_ROADMAP.md。',
+        normalizedKey: 'export-report-materials-roadmap',
+        evidence: [{ summary: 'Review summary recorded output artifacts.', sourceKind: 'file' }],
+        source: 'review_event',
+        sourceOfTruth: 'review_summary:output-log'
+      },
+      now: '2026-06-04T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('auto_drop')
+    expect(result.admission.reasons).toContain('implementation_changelog')
+    await expect(readFile(join(result.memoryRoot, 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readSemanticMemoriesFromRoot(result.memoryRoot)).resolves.toEqual([])
+    await expect(readDistillationInputsFromRoot(result.memoryRoot)).resolves.toEqual([])
+  })
+
   it('writes routing and review decisions for source-of-truth candidates admitted to trial', async () => {
     const home = await createTempDir('cyrene-admission-pipeline-routing-home-')
     vi.stubEnv('HOME', home)

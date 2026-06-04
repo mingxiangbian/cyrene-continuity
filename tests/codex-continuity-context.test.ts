@@ -224,7 +224,7 @@ describe('Codex continuity context', () => {
     await expect(readReflectionCandidatesFromRoot(memoryRoot)).resolves.toEqual([])
   })
 
-  it('returns workflow-hint activation for matching active project trial memory', async () => {
+  it('keeps active project trial memory out of model-visible runtime context', async () => {
     const home = await createTempDir('cyrene-codex-continuity-trial-activation-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-continuity-trial-activation-repo-')
@@ -244,15 +244,12 @@ describe('Codex continuity context', () => {
       task: 'coding'
     })
 
-    expect(context.activation.workflowHints).toEqual([
-      expect.objectContaining({
-        memoryId: 'trial-memory',
-        activationMode: 'workflow_hint',
-        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/)
-      })
-    ])
+    expect(context.memory.items).toEqual([])
+    expect(context.projectMemory).toEqual([])
+    expect(context.activation.workflowHints).toEqual([])
     expect(context.activation.planConstraints).toEqual([])
     expect(context.activation.checklistItems).toEqual([])
+    await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([])
   })
 
   it('returns constraint and checklist activation for matching active validated memory', async () => {

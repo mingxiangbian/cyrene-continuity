@@ -213,6 +213,52 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.reasons).toContain('low_future_usefulness')
   })
 
+  it.each([
+    '将报告材料导出到report_materials/目录，并在根目录创建中文路线图REPORT_ROADMAP.md。',
+    '对于UESTCHN 3007课程实验报告请求，助手需分析现有材料完整性，导出材料至report_materials/，生成REPORT_ROADMAP.md路线图，并执行结果合理性检查生成RESULTS_SANITY_CHECK.md。'
+  ])('drops review-summary output artifact logs even when typed as workflow rules: %s', (content) => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content,
+        candidateKind: 'workflow_rule',
+        domain: 'procedural',
+        normalizedKey: 'review-summary-output-artifact-log',
+        sourceKind: 'review_summary',
+        sourceOfTruth: 'review_summary:output-artifact-log'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-06-04T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('auto_drop')
+    expect(decision.reasons).toContain('implementation_changelog')
+    expect(decision.reasons).toContain('temporary_status')
+    expect(decision.reasons).toContain('low_future_usefulness')
+  })
+
+  it('keeps durable workflow rules that mention generated artifacts reviewable', () => {
+    const decision = evaluateCandidateAdmission({
+      draft: draft({
+        content: '生成报告前必须先检查材料完整性，并把可复用的缺口记录为后续路线图。',
+        candidateKind: 'workflow_rule',
+        domain: 'procedural',
+        normalizedKey: 'check-report-material-completeness-before-roadmap',
+        sourceKind: 'review_summary',
+        sourceOfTruth: 'review_summary:durable-workflow'
+      }),
+      pending: [],
+      active: [],
+      tombstones: [],
+      now: '2026-06-04T00:00:00.000Z'
+    })
+
+    expect(decision.action).toBe('admit_to_pending')
+    expect(decision.reasons).toContain('valuable_workflow_rule')
+    expect(decision.reasons).not.toContain('implementation_changelog')
+  })
+
   it('drops operational raw source-of-truth excerpts unless they are rewritten as memory', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({

@@ -27,6 +27,8 @@ const REVIEW_SUMMARY_STATUS_PATTERN =
   /(?:修复|完成|清理|归零|通过|merge|push|merged|pushed|typecheck|plugin validation|review summary failed|测试|pending)/i
 const IMPLEMENTATION_CHANGELOG_PATTERN =
   /(?:更新(?:了)?|新增(?:了)?|修复(?:了)?|实现(?:了)?|完成(?:了)?|迁移(?:了)?|改造(?:了)?|重构(?:了)?|清理(?:了)?|renamed|refactored|implemented|migrated|updated|added|fixed|removed|completed).{0,120}(?:CLI|UI|MCP|tests?|测试|runtime|plugin|pending|active|trial|validated|core|automation|自动化|lifecycle|memory|记忆|工作区|worktree)/i
+const REVIEW_SUMMARY_OUTPUT_ARTIFACT_PATTERN =
+  /(?:导出|生成|创建|写入|保存|产出|整理|exported|generated|created|wrote|saved|produced).{0,120}(?:report_materials|REPORT_[A-Z0-9_]+\.md|RESULTS_[A-Z0-9_]+\.md|[A-Za-z0-9_-]+\.(?:md|m|py|ts|tsx|js|json)|目录|文件|路线图|报告材料|artifacts?|outputs?|files?|directory)/i
 const TEST_COUNT_PATTERN = /(?:tests?|测试).{0,16}\d+|\d+.{0,16}(?:tests?|测试)/i
 const VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i
 const PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i
@@ -159,7 +161,7 @@ function isDurablePrescriptiveGuidance(draft: CandidateDraft): boolean {
 function isReviewSummaryStatusNoise(draft: CandidateDraft): boolean {
   return draft.sourceKind === 'review_summary' &&
     !isDurablePrescriptiveGuidance(draft) &&
-    REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content)
+    (REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content) || isReviewSummaryOutputChangelog(draft))
 }
 
 function isImplementationChangelog(
@@ -172,7 +174,14 @@ function isImplementationChangelog(
     draft.candidateKind === 'project_fact' ||
     draft.candidateKind === 'project_decision' ||
     draft.domain === 'project'
-  return projectLike && (readinessImplementationNote || IMPLEMENTATION_CHANGELOG_PATTERN.test(draft.content))
+  return (
+    projectLike && (readinessImplementationNote || IMPLEMENTATION_CHANGELOG_PATTERN.test(draft.content)) ||
+    isReviewSummaryOutputChangelog(draft)
+  )
+}
+
+function isReviewSummaryOutputChangelog(draft: CandidateDraft): boolean {
+  return draft.sourceKind === 'review_summary' && REVIEW_SUMMARY_OUTPUT_ARTIFACT_PATTERN.test(draft.content)
 }
 
 function isSourceOfTruthPolicyExcerpt(draft: CandidateDraft, readinessRawFileExcerpt: boolean): boolean {
