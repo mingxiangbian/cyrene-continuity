@@ -2,9 +2,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { codexGlobalMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
+import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { runCodexMemoryLifecycleDaily } from '../src/codex/codex-memory-lifecycle-daily.js'
+import { recordCodexMemoryFeedback } from '../src/codex/memory-feedback.js'
+import { identifyCodexProject } from '../src/codex/project-id.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
+import { semanticMemoryToActiveMemory } from '../src/memory/semantic-memory-adapter.js'
 import {
   appendActivationEventFromRoot,
   appendMemoryEventFromRoot,
@@ -15,6 +19,7 @@ import {
 import type { ActivationEvent, MemoryEvent, SemanticMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
+const originalHome = process.env.HOME
 
 beforeEach(() => {
   vi.stubEnv('CYRENE_AUTO_REVIEW_PROJECT_PROMOTE_PER_DAY', '')
@@ -23,6 +28,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.unstubAllEnvs()
+  process.env.HOME = originalHome
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
@@ -231,6 +237,80 @@ describe('daily memory lifecycle automation', () => {
         }
       }
     })
+  })
+
+  it('promotes trial memory from public applied feedback while ignored is neutral and corrected blocks', async () => {
+    const home = await createTempDir('cyrene-daily-feedback-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-daily-feedback-project-')
+    const project = await identifyCodexProject(cwd)
+    const root = codexProjectMemoryRoot(project.projectId)
+    const promote = trialMemory({ id: 'trial-feedback-promote' })
+    const ignored = trialMemory({ id: 'trial-feedback-ignored' })
+    const corrected = trialMemory({ id: 'trial-feedback-corrected' })
+    await writeSemanticMemoriesFromRoot(root, [promote, ignored, corrected])
+
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: promote.id,
+      contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(promote)),
+      event: 'applied',
+      evidenceRef: 'session:1',
+      now: '2026-06-03T00:00:00.000Z'
+    })
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: promote.id,
+      contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(promote)),
+      event: 'applied',
+      evidenceRef: 'session:2',
+      now: '2026-06-03T00:01:00.000Z'
+    })
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: ignored.id,
+      contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(ignored)),
+      event: 'ignored',
+      evidenceRef: 'session:3',
+      now: '2026-06-03T00:02:00.000Z'
+    })
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: corrected.id,
+      contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(corrected)),
+      event: 'applied',
+      evidenceRef: 'session:4',
+      now: '2026-06-03T00:03:00.000Z'
+    })
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: corrected.id,
+      contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(corrected)),
+      event: 'applied',
+      evidenceRef: 'session:5',
+      now: '2026-06-03T00:04:00.000Z'
+    })
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: corrected.id,
+      contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(corrected)),
+      event: 'corrected',
+      reason: 'The memory was too broad.',
+      evidenceRef: 'session:6',
+      now: '2026-06-03T00:05:00.000Z'
+    })
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [{ projectId: project.projectId, memoryRoot: root }],
+      apply: true,
+      now: '2026-06-03T12:00:00.000Z'
+    })
+
+    expect(result.roots[0]).toMatchObject({ promotedTrialToValidated: 1, recommendations: 1 })
+    const memories = await readSemanticMemoriesFromRoot(root)
+    expect(memories.find((memory) => memory.id === promote.id)).toMatchObject({ confidenceTier: 'validated' })
+    expect(memories.find((memory) => memory.id === ignored.id)).toMatchObject({ confidenceTier: 'trial' })
+    expect(memories.find((memory) => memory.id === corrected.id)).toMatchObject({ confidenceTier: 'trial' })
   })
 
   it('blocks promotion and writes recommendation audit when corrected or violated feedback exists', async () => {

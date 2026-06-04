@@ -17,12 +17,13 @@ import {
   handleMemoryReject
 } from '../src/mcp/tools/memory-review.js'
 import { handleMemoryAutomationRun } from '../src/mcp/tools/memory-automation.js'
+import { handleMemoryFeedback, memoryFeedbackInputSchema } from '../src/mcp/tools/memory-feedback.js'
 import { handleMemoryProfileGet } from '../src/mcp/tools/memory-dream.js'
 import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from '../src/mcp/tools/memory-harvest-project.js'
 import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
-import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
+import { readActivationEventsFromRoot, readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -234,6 +235,60 @@ describe('Cyrene MCP server', () => {
     await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
   })
 
+  it('handles active memory feedback with fallback cwd and no cwd schema', async () => {
+    const home = await createTempDir('cyrene-mcp-memory-feedback-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-mcp-memory-feedback-project-')
+    const project = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(project.projectId)
+    const memory: CyreneMemory = {
+      id: 'mcp-feedback-active',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      strength: 'hard',
+      scope: 'project',
+      status: 'active',
+      content: 'MCP records public active memory feedback.',
+      normalizedKey: 'mcp-records-public-active-memory-feedback',
+      evidence: [{ runId: 'mcp-feedback-run-1', summary: 'MCP feedback seed.' }],
+      source: 'review_event',
+      scores: {
+        evidenceStrength: 0.95,
+        stability: 0.9,
+        usefulness: 0.9,
+        safety: 0.95,
+        sensitivity: 0.1
+      },
+      createdAt: '2026-06-04T00:00:00.000Z',
+      updatedAt: '2026-06-04T00:00:00.000Z',
+      tags: []
+    }
+    await writeActiveMemoriesFromRoot(memoryRoot, [memory])
+    const source = await readFile(new URL('../src/mcp/tools/memory-feedback.ts', import.meta.url), 'utf8')
+
+    expect(memoryFeedbackInputSchema).not.toHaveProperty('cwd')
+    expect(source).not.toContain('input.cwd')
+
+    const feedbackJson = JSON.parse(
+      (await handleMemoryFeedback({
+        memoryId: memory.id,
+        contentHash: contentHashForActiveMemory(memory),
+        event: 'applied',
+        query: 'MCP records public active memory feedback.'
+      }, cwd)).content[0]?.text ?? '{}'
+    )
+
+    expect(feedbackJson.result.action).toBe('recorded')
+    expect(feedbackJson).not.toHaveProperty('cwd')
+    await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({
+        memoryId: memory.id,
+        event: 'applied',
+        queryHash: expect.stringMatching(/^[a-f0-9]{16}$/)
+      })
+    ])
+  })
+
   it('handles memory promote conflict resolution over MCP', async () => {
     const home = await createTempDir('cyrene-mcp-conflict-resolution-home-')
     vi.stubEnv('HOME', home)
@@ -376,10 +431,12 @@ describe('Cyrene MCP server', () => {
       expect(names).not.toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
       expect(names).toContain('cyrene_memory_harvest_project')
+      expect(names).toContain('cyrene_memory_feedback')
       const schemasByName = new Map(result.tools.map((tool) => [tool.name, tool.inputSchema as { properties?: Record<string, unknown> }]))
       for (const toolName of [
         'cyrene_continuity_get',
         'cyrene_memory_propose',
+        'cyrene_memory_feedback',
         'cyrene_memory_pending_list',
         'cyrene_memory_pending_get',
         'cyrene_memory_promote',
@@ -467,6 +524,7 @@ describe('Cyrene MCP server', () => {
       expect(names).toContain('cyrene_memory_automation_run')
       expect(names).not.toContain('cyrene_memory_dream_run')
       expect(names).toContain('cyrene_memory_profile_get')
+      expect(names).toContain('cyrene_memory_feedback')
     } finally {
       await client.close()
     }

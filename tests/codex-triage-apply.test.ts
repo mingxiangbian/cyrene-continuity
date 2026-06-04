@@ -37,7 +37,13 @@ describe('applySafeTriageDecisions', () => {
     const decisions: TriageDecision[] = [
       { action: 'recommend', candidateId: 'defer-1', priority: 'normal', reason: 'ranked for explicit review' },
       { action: 'auto_defer', candidateId: 'defer-1', days: 14, reason: 'weak single-evidence candidate' },
-      { action: 'auto_merge', candidateIds: ['merge-2', 'merge-1'], clusterId: 'cluster-merge', reason: 'duplicate cluster' },
+      {
+        action: 'auto_merge_allowed',
+        candidateIds: ['merge-2', 'merge-1'],
+        clusterId: 'cluster-merge',
+        reason: 'duplicate cluster',
+        flags: []
+      },
       { action: 'auto_drop', candidateId: 'drop-1', reason: 'transient command status noise' }
     ]
 
@@ -71,5 +77,30 @@ describe('applySafeTriageDecisions', () => {
       'triage_auto_merge',
       'triage_auto_defer'
     ])
+  })
+
+  it('does not mutate manual-review duplicate recommendations', () => {
+    const result = applySafeTriageDecisions({
+      pending: [
+        pending({ id: 'review-1', normalizedKey: 'shared-review-key', sourceOfTruth: 'AGENTS.md' }),
+        pending({ id: 'review-2', normalizedKey: 'shared-review-key', sourceOfTruth: 'README.md' })
+      ],
+      decisions: [
+        {
+          action: 'manual_review_recommended',
+          candidateIds: ['review-1', 'review-2'],
+          clusterId: 'cluster-review',
+          priority: 'high',
+          reason: 'duplicate requires manual review',
+          flags: ['same_key_mixed_metadata']
+        }
+      ],
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.counts).toEqual({ auto_drop: 0, auto_defer: 0, auto_merge: 0 })
+    expect(result.pending.map((candidate) => candidate.id)).toEqual(['review-1', 'review-2'])
+    expect(result.events).toEqual([])
+    expect(result.tombstones).toEqual([])
   })
 })

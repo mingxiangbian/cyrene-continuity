@@ -68,7 +68,7 @@ export async function readDreamReport(input: {
     return { memoryRoot, report: await readFile(reportPath, 'utf8') }
   } catch (error) {
     if (isFileErrorCode(error, 'ENOENT')) {
-      throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`)
+      throw new Error(`No automation preview report found for ${input.root} memory root. Run codex memory automation --job weekly --dry-run first.`)
     }
     throw error
   }
@@ -85,7 +85,7 @@ function renderDreamReport(input: {
   proposal: DreamRootProposal
 }): string {
   const lines = [
-    '# Cyrene Dream Preview',
+    '# Cyrene Automation Preview',
     '',
     `- proposalId: ${input.proposalId}`,
     `- createdAt: ${input.createdAt}`,
@@ -120,7 +120,7 @@ function renderDreamReport(input: {
     '',
     '## Apply',
     '',
-    'Use cyrene_memory_pending_list / cyrene_memory_pending_get and explicit cyrene_memory_promote approval to promote recommended candidates. deep-apply does not promote unapproved pending memory.'
+    'Use cyrene_memory_pending_list / cyrene_memory_pending_get and explicit cyrene_memory_promote approval to promote recommended candidates. Lifecycle automation does not promote unapproved pending memory.'
   )
   return `${lines.join('\n')}\n`
 }

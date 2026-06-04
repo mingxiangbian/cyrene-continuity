@@ -39,7 +39,7 @@ export function applySafeTriageDecisions(input: {
       continue
     }
 
-    if (decision.action === 'auto_merge') {
+    if (decision.action === 'auto_merge_allowed') {
       const memberIds = decision.candidateIds.slice().sort()
       const keeperId = memberIds.find((id) => retainedIds.has(id) && byId.has(id))
       if (keeperId === undefined) continue
@@ -58,7 +58,7 @@ export function applySafeTriageDecisions(input: {
       byId.set(keeperId, merged)
       events.push(memoryEventForTriageDecision('pending', merged, input.now, decision.reason, {
         reviewAction: 'triage_auto_merge',
-        triageDecision: 'auto_merge',
+        triageDecision: 'auto_merge_allowed',
         clusterId: decision.clusterId,
         mergedCandidateIds: mergedCandidateIds.sort()
       }))
@@ -99,7 +99,7 @@ function compareSafeTriageDecisionApplyOrder(left: TriageDecision, right: Triage
 
 function triageApplyPriority(action: TriageDecision['action']): number {
   if (action === 'auto_drop') return 0
-  if (action === 'auto_merge') return 1
+  if (action === 'auto_merge_allowed') return 1
   if (action === 'auto_defer') return 2
   return 3
 }

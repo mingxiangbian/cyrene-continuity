@@ -17059,14 +17059,623 @@ function addDays2(iso, days) {
 }
 
 // src/codex/memory-feedback.ts
+import { createHash as createHash8, randomUUID as randomUUID9 } from "node:crypto";
+
+// src/codex/active-memory-review.ts
 import { createHash as createHash7, randomUUID as randomUUID8 } from "node:crypto";
+function contentHashForActiveMemory(memory) {
+  return createHash7("sha256").update(JSON.stringify({
+    id: memory.id,
+    content: memory.content,
+    normalizedKey: memory.normalizedKey,
+    updatedAt: memory.updatedAt,
+    status: memory.status
+  })).digest("hex");
+}
+function activeMemoryRequiresDestructiveConfirmation(memory) {
+  return memory.domain === "personal" || memory.domain === "relationship" || memory.domain === "affective";
+}
+async function archiveCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID8(),
+      action: "archive",
+      at: now,
+      reason: input.reason,
+      memoryId: memory.id,
+      details: {
+        previousStatus: memory.status,
+        normalizedKey: memory.normalizedKey,
+        previousMemory: lifecycleMemorySnapshot2(memory, "archived")
+      }
+    });
+    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "archive",
+        memoryId: memory.id
+      }
+    };
+  }, input.now);
+}
+async function tombstoneCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const confirmation = requireDestructiveConfirmation(memory, input.confirmText);
+    if (confirmation !== void 0) {
+      return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
+    }
+    const tombstone = tombstoneForActiveMemory(memory, {
+      reason: "deleted",
+      now,
+      ...input.indefinite === true ? {} : { expiresAt: addDays3(now, input.days ?? 180) }
+    });
+    await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
+    await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID8(),
+      action: "tombstone",
+      at: now,
+      reason: input.reason,
+      memoryId: memory.id,
+      details: {
+        reviewAction: "tombstone",
+        tombstoneId: tombstone.id,
+        indefinite: input.indefinite === true,
+        previousMemory: lifecycleMemorySnapshot2(memory, "archived")
+      }
+    });
+    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "tombstone",
+        memoryId: memory.id,
+        tombstone
+      }
+    };
+  }, input.now);
+}
+async function proposeEditCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, memory, now }) => {
+    const candidate = {
+      id: randomUUID8(),
+      domain: memory.domain,
+      type: memory.type,
+      strength: memory.strength,
+      scope: memory.scope,
+      status: "pending",
+      content: input.content,
+      normalizedKey: memory.normalizedKey,
+      evidence: memory.evidence,
+      source: memory.source,
+      ...memory.portability === void 0 ? {} : { portability: memory.portability },
+      scores: memory.scores,
+      seenCount: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      expiresAt: addDays3(now, 30),
+      ...memory.userConfirmed === void 0 ? {} : { userConfirmed: memory.userConfirmed },
+      ...memory.profileVisibility === void 0 ? {} : { profileVisibility: memory.profileVisibility },
+      ...memory.candidateKind === void 0 ? {} : { candidateKind: memory.candidateKind },
+      ...memory.candidate_kind === void 0 ? {} : { candidate_kind: memory.candidate_kind },
+      tags: memory.tags,
+      conflictsWith: [memory.id]
+    };
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, [...lockedPending, candidate]);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID8(),
+      action: "pending",
+      at: now,
+      reason: input.reason,
+      memoryId: memory.id,
+      candidateId: candidate.id,
+      details: { reviewAction: "propose_active_edit" }
+    });
+    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "propose_edit",
+        memoryId: memory.id,
+        candidateId: candidate.id,
+        candidate,
+        reviewHash: reviewHashForPendingMemory(candidate)
+      }
+    };
+  }, input.now);
+}
+async function supersedeCodexActiveMemory(input) {
+  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
+    const confirmation = requireDestructiveConfirmation(memory, input.confirmText);
+    if (confirmation !== void 0) {
+      return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
+    }
+    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
+    const candidate = lockedPending.find((item) => item.id === input.candidateId);
+    if (candidate === void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "not_found",
+          reason: "Pending replacement candidate not found"
+        }
+      };
+    }
+    const latestReviewHash = reviewHashForPendingMemory(candidate);
+    if (latestReviewHash !== input.reviewHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Pending replacement changed since review",
+          latest: summarizePendingMemory(candidate)
+        }
+      };
+    }
+    if (!(candidate.conflictsWith ?? []).includes(memory.id)) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Pending replacement is not linked to the active memory"
+        }
+      };
+    }
+    const normalizedKeyConflict = lockedActive.find((item) => {
+      return item.id !== memory.id && item.normalizedKey === candidate.normalizedKey;
+    });
+    if (normalizedKeyConflict !== void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Replacement normalizedKey conflicts with another active memory"
+        }
+      };
+    }
+    const lockedTombstones = await readTombstonesFromRoot(lockedMemoryRoot);
+    const confirmedCandidate = { ...candidate, userConfirmed: true };
+    const decision2 = validateMemoryCandidate({
+      candidate: confirmedCandidate,
+      existingMemories: lockedActive,
+      tombstones: lockedTombstones,
+      now
+    });
+    if (decision2.action === "reject") {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "rejected_by_validator",
+          candidateId: candidate.id,
+          reason: decision2.reason,
+          tombstone: decision2.tombstone
+        }
+      };
+    }
+    const candidateForActivation = decision2.action === "pending" ? decision2.candidate : confirmedCandidate;
+    const promoted = {
+      ...activateCandidate(candidateForActivation, now),
+      supersedes: uniqueInOrder2([...candidateForActivation.conflictsWith ?? [], memory.id])
+    };
+    const tombstone = tombstoneForActiveMemory(memory, {
+      reason: "superseded",
+      now,
+      replacementMemoryId: promoted.id
+    });
+    await writeActiveMemoriesFromRoot(lockedMemoryRoot, [
+      ...lockedActive.filter((item) => item.id !== memory.id),
+      promoted
+    ]);
+    await writePendingMemoriesFromRoot(lockedMemoryRoot, lockedPending.filter((item) => item.id !== candidate.id));
+    await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
+    await appendMemoryEventFromRoot(lockedMemoryRoot, {
+      id: randomUUID8(),
+      action: "supersede",
+      at: now,
+      reason: input.reason,
+      memoryId: promoted.id,
+      candidateId: candidate.id,
+      details: {
+        supersededMemoryId: memory.id,
+        tombstoneId: tombstone.id,
+        supersededMemory: lifecycleMemorySnapshot2(memory, "superseded")
+      }
+    });
+    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    return {
+      project,
+      memoryRoot: lockedMemoryRoot,
+      result: {
+        action: "supersede",
+        memoryId: promoted.id,
+        supersededMemoryId: memory.id
+      }
+    };
+  }, input.now);
+}
+async function mutateActiveMemory(cwd, id, contentHash, fn, nowInput) {
+  const now = nowInput ?? (/* @__PURE__ */ new Date()).toISOString();
+  const { project, memoryRoot, readableRoots } = await getProjectAndReadableActiveRoots(cwd);
+  const foundMemoryRoot = await findActiveMemoryRoot(readableRoots, id);
+  const targetRoot = foundMemoryRoot ?? memoryRoot;
+  await assertMemoryMaintenanceTargetsSafeFromRoot(targetRoot);
+  return withMemoryMaintenanceLockFromRoot(targetRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+    const lockedActive = await readActiveMemoriesFromRoot(lockedMemoryRoot);
+    const memory = lockedActive.find((item) => item.id === id);
+    if (memory === void 0) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "not_found",
+          reason: "Active memory not found"
+        }
+      };
+    }
+    if (contentHashForActiveMemory(memory) !== contentHash) {
+      return {
+        project,
+        memoryRoot: lockedMemoryRoot,
+        result: {
+          action: "conflict",
+          reason: "Active memory changed since review"
+        }
+      };
+    }
+    return fn({ project, lockedMemoryRoot, lockedActive, memory, now });
+  });
+}
+async function getProjectAndReadableActiveRoots(cwd) {
+  const identity = await identifyCodexProject(cwd);
+  const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(identity.projectId) ?? codexProjectMemoryRoot(identity.projectId);
+  const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
+  return {
+    project: { projectId: identity.projectId, displayName: identity.displayName },
+    memoryRoot: projectMemoryRoot,
+    readableRoots: uniqueInOrder2([globalMemoryRoot, projectMemoryRoot])
+  };
+}
+async function findActiveMemoryRoot(roots, id) {
+  for (const root of roots) {
+    const active = await readActiveMemoriesFromRoot(root);
+    if (active.some((memory) => memory.id === id)) {
+      return root;
+    }
+  }
+  return void 0;
+}
+async function refreshModelVisibleMemory(input) {
+  await renderMemoryProjectionsFromRoot(input.memoryRoot);
+  await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+}
+function tombstoneForActiveMemory(memory, input) {
+  return {
+    id: `tombstone-${memory.id}-${createHash7("sha256").update(`${memory.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
+    memoryId: memory.id,
+    normalizedKey: memory.normalizedKey,
+    domain: memory.domain,
+    type: memory.type,
+    strength: memory.strength,
+    scope: memory.scope,
+    reason: input.reason,
+    createdAt: input.now,
+    ...input.expiresAt === void 0 ? {} : { expiresAt: input.expiresAt },
+    ...input.replacementMemoryId === void 0 ? {} : { replacementMemoryId: input.replacementMemoryId },
+    evidence: memory.evidence
+  };
+}
+function requireDestructiveConfirmation(memory, confirmText) {
+  if (!activeMemoryRequiresDestructiveConfirmation(memory)) return void 0;
+  if (confirmText?.trim() === memory.id) return void 0;
+  return {
+    action: "confirmation_required",
+    reason: `High-risk active memory requires confirmText to exactly match memory id ${memory.id}.`
+  };
+}
+function lifecycleMemorySnapshot2(memory, status) {
+  return {
+    ...memory,
+    status
+  };
+}
+function addDays3(iso, days) {
+  const date3 = new Date(iso);
+  date3.setUTCDate(date3.getUTCDate() + days);
+  return date3.toISOString();
+}
+function uniqueInOrder2(values) {
+  const seen = /* @__PURE__ */ new Set();
+  return values.filter((value) => {
+    if (seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
+}
+
+// src/codex/review-redaction.ts
+var RULES = [
+  {
+    name: "privateKey",
+    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    replacement: "[REDACTED_PRIVATE_KEY]"
+  },
+  {
+    name: "secret",
+    pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\b(?:xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{30,}|(?:sk|pk)_(?:live|test)_[0-9A-Za-z]{16,})\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\b[A-Z0-9_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)\s*=\s*["']?[^"'\s]+["']?/gi,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /(["']?[A-Z0-9_.-]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)["']?\s*:\s*)["'][^"'\s]{8,}["']/gi,
+    replacement: '$1"[REDACTED_SECRET]"'
+  },
+  {
+    name: "secret",
+    pattern: /\bsk-[A-Za-z0-9_-]{16,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/gi,
+    replacement: "Bearer [REDACTED_SECRET]"
+  },
+  {
+    name: "secret",
+    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "email",
+    pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+    replacement: "[REDACTED_EMAIL]"
+  },
+  {
+    name: "secret",
+    pattern: /\b[A-Fa-f0-9]{32,}\b/g,
+    replacement: "[REDACTED_SECRET]"
+  },
+  {
+    name: "phone",
+    pattern: /(?<!\d-)\b(?!\d{4}-\d{2}-\d{2}\b)(?:\+?\d[\d .()_-]{7,}\d)\b/g,
+    replacement: "[REDACTED_PHONE]"
+  }
+];
+function mergeRedactionCounts(left, right) {
+  const merged = { ...left };
+  for (const [name, count] of Object.entries(right)) {
+    merged[name] = (merged[name] ?? 0) + count;
+  }
+  return merged;
+}
+function redactReviewText(input) {
+  let text = input;
+  let counts = {};
+  for (const rule of RULES) {
+    let count = 0;
+    text = text.replace(rule.pattern, () => {
+      count += 1;
+      return rule.replacement;
+    });
+    if (count > 0) {
+      counts = mergeRedactionCounts(counts, { [rule.name]: count });
+    }
+  }
+  return { text, counts };
+}
+
+// src/codex/memory-feedback.ts
+var PUBLIC_ACTIVATION_FEEDBACK_EVENTS = [
+  "applied",
+  "ignored",
+  "corrected",
+  "violated"
+];
 function queryHashFor(query) {
-  return createHash7("sha256").update(query).digest("hex").slice(0, 16);
+  return createHash8("sha256").update(query).digest("hex").slice(0, 16);
+}
+async function recordCodexMemoryFeedback(input) {
+  const projectIdentity = await identifyCodexProject(input.cwd);
+  const project = { projectId: projectIdentity.projectId, displayName: projectIdentity.displayName };
+  const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(project.projectId) ?? codexProjectMemoryRoot(project.projectId);
+  const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
+  const defaultResult = (result2) => ({
+    action: "memory_feedback",
+    memoryRoot: projectMemoryRoot,
+    project,
+    result: result2
+  });
+  const validation = validatePublicFeedbackInput(input);
+  if (validation !== void 0) {
+    return defaultResult(validation);
+  }
+  const roots = uniqueInOrder3([projectMemoryRoot, globalMemoryRoot]);
+  const foundMemoryRoot = await findActiveMemoryRoot2(roots, input.memoryId);
+  if (foundMemoryRoot === void 0) {
+    return defaultResult({ action: "not_found", reason: "Active memory not found" });
+  }
+  await assertMemoryMaintenanceTargetsSafeFromRoot(foundMemoryRoot);
+  return withMemoryMaintenanceLockFromRoot(foundMemoryRoot, async (lockedMemoryRoot) => {
+    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
+    const active = await readActiveMemoriesFromRoot(lockedMemoryRoot);
+    const memory = active.find((item) => item.id === input.memoryId);
+    if (memory === void 0) {
+      return {
+        action: "memory_feedback",
+        memoryRoot: lockedMemoryRoot,
+        project,
+        result: { action: "not_found", reason: "Active memory not found" }
+      };
+    }
+    if (contentHashForActiveMemory(memory) !== input.contentHash) {
+      return {
+        action: "memory_feedback",
+        memoryRoot: lockedMemoryRoot,
+        project,
+        result: { action: "conflict", reason: "Active memory changed since review" }
+      };
+    }
+    const queryHash = input.query === void 0 ? void 0 : queryHashFor(input.query);
+    const idempotencyKey = normalizedIdempotencyKey(input, queryHash);
+    const existing = findDuplicateFeedback(
+      await readActivationEventsFromRoot(lockedMemoryRoot),
+      {
+        memoryId: input.memoryId,
+        event: input.event,
+        activationId: input.activationId,
+        evidenceRef: input.evidenceRef,
+        queryHash,
+        idempotencyKey
+      }
+    );
+    if (existing !== void 0) {
+      return {
+        action: "memory_feedback",
+        memoryRoot: lockedMemoryRoot,
+        project,
+        result: {
+          action: "duplicate",
+          eventId: existing.id,
+          memoryId: input.memoryId,
+          event: input.event,
+          idempotencyKey
+        }
+      };
+    }
+    const eventId = randomUUID9();
+    const event = {
+      id: eventId,
+      memoryId: memory.id,
+      projectId: project.projectId,
+      ...queryHash === void 0 ? {} : { queryHash },
+      event: input.event,
+      ...input.activationId === void 0 ? {} : { activationId: input.activationId },
+      ...input.reason === void 0 ? {} : { reason: sanitizeReason(input.reason) },
+      ...input.evidenceRef === void 0 ? {} : { evidenceRef: input.evidenceRef },
+      idempotencyKey,
+      createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await appendActivationEventFromRoot(lockedMemoryRoot, event);
+    return {
+      action: "memory_feedback",
+      memoryRoot: lockedMemoryRoot,
+      project,
+      result: {
+        action: "recorded",
+        eventId,
+        memoryId: memory.id,
+        event: input.event,
+        ...queryHash === void 0 ? {} : { queryHash },
+        idempotencyKey
+      }
+    };
+  });
+}
+function validatePublicFeedbackInput(input) {
+  if (!isPublicActivationFeedbackEvent(input.event)) {
+    return { action: "invalid_request", reason: "event must be applied, ignored, corrected, or violated" };
+  }
+  if (input.memoryId.trim() === "") {
+    return { action: "invalid_request", reason: "memoryId is required" };
+  }
+  if (input.contentHash.trim() === "") {
+    return { action: "invalid_request", reason: "contentHash is required" };
+  }
+  if ((input.event === "corrected" || input.event === "violated") && empty(input.reason)) {
+    return { action: "invalid_request", reason: `${input.event} feedback requires reason` };
+  }
+  if (input.event === "applied" && empty(input.query) && empty(input.evidenceRef)) {
+    return { action: "invalid_request", reason: "applied feedback requires query or evidenceRef" };
+  }
+  return void 0;
+}
+function isPublicActivationFeedbackEvent(value) {
+  return PUBLIC_ACTIVATION_FEEDBACK_EVENTS.includes(value);
+}
+async function findActiveMemoryRoot2(roots, memoryId) {
+  for (const root of roots) {
+    const active = await readActiveMemoriesFromRoot(root);
+    if (active.some((memory) => memory.id === memoryId)) {
+      return root;
+    }
+  }
+  return void 0;
+}
+function normalizedIdempotencyKey(input, queryHash) {
+  const explicit = input.idempotencyKey?.trim();
+  if (explicit !== void 0 && explicit !== "") {
+    return explicit;
+  }
+  return createHash8("sha256").update(`${input.memoryId}:${input.event}:${feedbackContextKey({
+    activationId: input.activationId,
+    evidenceRef: input.evidenceRef,
+    queryHash
+  })}`).digest("hex").slice(0, 16);
+}
+function findDuplicateFeedback(events, input) {
+  const contextKey = feedbackContextKey(input);
+  return events.find((event) => {
+    if (event.memoryId !== input.memoryId || event.event !== input.event) {
+      return false;
+    }
+    if (event.idempotencyKey === input.idempotencyKey) {
+      return true;
+    }
+    return feedbackContextKey(event) === contextKey;
+  });
+}
+function feedbackContextKey(input) {
+  return firstNonEmpty(input.evidenceRef, input.activationId, input.queryHash) ?? "none";
+}
+function sanitizeReason(reason) {
+  return redactReviewText(reason.replace(/\s+/g, " ").trim()).text.slice(0, 500);
+}
+function firstNonEmpty(...values) {
+  return values.find((value) => value !== void 0 && value.trim() !== "");
+}
+function empty(value) {
+  return value === void 0 || value.trim() === "";
+}
+function uniqueInOrder3(values) {
+  return Array.from(new Set(values));
 }
 async function appendActivationEventFailOpen(input) {
   try {
     await appendActivationEventFromRoot(input.memoryRoot, {
-      id: randomUUID8(),
+      id: randomUUID9(),
       memoryId: input.memoryId,
       ...input.projectId === void 0 ? {} : { projectId: input.projectId },
       ...input.query === void 0 ? {} : { queryHash: queryHashFor(input.query) },
@@ -17099,7 +17708,7 @@ async function appendActivationEventsFailOpen(input) {
 }
 
 // src/codex/memory-activation.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 
 // src/memory/memory-lifecycle.ts
 var LOW_RISK_DOMAINS = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
@@ -17244,6 +17853,7 @@ function activationForMemory(input) {
   return {
     id: stableActivationId(input.memory.id, input.activationMode, input.source),
     memoryId: input.memory.id,
+    contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(input.memory)),
     confidenceTier: input.memory.confidenceTier,
     activationMode: input.activationMode,
     text: input.text,
@@ -17296,7 +17906,7 @@ function riskForMemory(memory) {
   return "low";
 }
 function stableActivationId(memoryId, mode, source) {
-  return createHash8("sha256").update(`${memoryId}:${mode}:${source}`).digest("hex").slice(0, 16);
+  return createHash9("sha256").update(`${memoryId}:${mode}:${source}`).digest("hex").slice(0, 16);
 }
 function normalizeMaxPerBucket(value) {
   if (value === void 0) return 6;
@@ -18045,7 +18655,7 @@ function uniqueChecks(checks) {
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 import { lstat as lstat12, open as open3, readFile as readFile14, realpath as realpath6 } from "node:fs/promises";
 import { isAbsolute as isAbsolute5, join as join20, relative as relative5, resolve as resolve5 } from "node:path";
 
@@ -18164,7 +18774,7 @@ function mergeAbortSignals(timeoutSignal, inputSignal) {
 }
 
 // src/codex/admission-gate.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 var ONE_TIME_ACTION_PATTERN = /(?:使用|ran|run|checked|检查|修复|完成|准备|reviewed|looked at).*?(?:工具|tool|command|命令|问题|issue|review)/i;
 var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i;
 var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
@@ -18387,7 +18997,7 @@ function isDropOnlyAdmission(reasons) {
 }
 function decision(draft, action, reasons, scores, now, extras = {}) {
   return {
-    id: randomUUID9(),
+    id: randomUUID10(),
     draftId: draft.id,
     action,
     admissionScore: admissionScoreFor(scores),
@@ -18410,10 +19020,10 @@ function clamp(value) {
 }
 
 // src/codex/candidate-drafts.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 
 // src/codex/memory-propose.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -18421,7 +19031,7 @@ var HIGH_PRIORITY_RECOMMENDATION_SCORE = 1e3;
 function buildCandidateClusters(pending) {
   const byKey = /* @__PURE__ */ new Map();
   for (const candidate of pending) {
-    const key = `${candidate.normalizedKey}|${deriveMemoryCandidateKind(candidate)}|${candidate.scope}`;
+    const key = candidate.normalizedKey;
     byKey.set(key, [...byKey.get(key) ?? [], candidate]);
   }
   return [...byKey.values()].filter((items) => items.length > 1).map((items) => ({
@@ -18429,7 +19039,8 @@ function buildCandidateClusters(pending) {
     normalizedKey: items[0].normalizedKey,
     memberIds: items.map((item) => item.id).sort(),
     evidenceCount: items.reduce((sum, item) => sum + item.evidence.length, 0),
-    recommendation: "review"
+    recommendation: "review",
+    flags: []
   }));
 }
 function evaluateAutoPromotionPolicy(input) {
@@ -18500,11 +19111,27 @@ function triagePendingMemories(input) {
   const decisions = [];
   const clusters = buildCandidateClusters(input.pending);
   for (const cluster of clusters) {
-    decisions.push({
-      action: "auto_merge",
+    const members = cluster.memberIds.map((id) => input.pending.find((candidate) => candidate.id === id)).filter((candidate) => candidate !== void 0);
+    const flags = duplicateBoundaryFlags({
+      candidates: members,
+      active: input.active,
+      rootScope: input.scope,
+      memoryRoot: input.memoryRoot
+    });
+    const reason = flags.length === 0 ? "exact duplicate normalizedKey/kind/scope cluster passed conservative merge policy" : `duplicate normalizedKey cluster requires manual review: ${flags.join(", ")}`;
+    decisions.push(flags.length === 0 ? {
+      action: "auto_merge_allowed",
       candidateIds: cluster.memberIds,
       clusterId: cluster.id,
-      reason: "duplicate normalizedKey/kind/scope cluster"
+      reason,
+      flags
+    } : {
+      action: "manual_review_recommended",
+      candidateIds: cluster.memberIds,
+      clusterId: cluster.id,
+      priority: flags.some((flag) => flag !== "missing_source_boundary") ? "high" : "normal",
+      reason,
+      flags
     });
   }
   for (const candidate of input.pending) {
@@ -18588,6 +19215,73 @@ function sourceBonus(source) {
   if (source === "legacy_markdown") return 100;
   if (source === "user_implicit") return 50;
   return 0;
+}
+function duplicateBoundaryFlags(input) {
+  const flags = /* @__PURE__ */ new Set();
+  if (input.candidates.length < 2) return [];
+  const roots = new Set(input.candidates.map((candidate) => memoryRootForCandidate(candidate, input.memoryRoot)));
+  if (roots.size > 1) flags.add("cross_root_normalized_key_collision");
+  if (input.candidates.some((candidate) => isScopeRootMismatch(candidate, rootScopeForCandidate(candidate, input.rootScope)))) {
+    flags.add("scope_root_mismatch");
+  }
+  if (input.candidates.some(
+    (candidate) => rootScopeForCandidate(candidate, input.rootScope) === "project" && (candidate.domain === "personal" || candidate.domain === "relationship" || candidate.domain === "affective")
+  )) {
+    flags.add("project_personal_domain");
+  }
+  if (input.candidates.some(
+    (candidate) => rootScopeForCandidate(candidate, input.rootScope) === "global" && isProjectSpecificGlobalCandidate(candidate)
+  )) {
+    flags.add("global_project_specific_source");
+  }
+  if (input.candidates.some((candidate) => !hasSourceBoundary(candidate))) {
+    flags.add("missing_source_boundary");
+  }
+  if (input.active.some((memory) => input.candidates.some((candidate) => memory.normalizedKey === candidate.normalizedKey))) {
+    flags.add("active_pending_collision");
+  }
+  if (hasMixedDuplicateMetadata(input.candidates)) {
+    flags.add("same_key_mixed_metadata");
+  }
+  if (input.candidates.some((candidate) => candidate.conflictsWith !== void 0 && candidate.conflictsWith.length > 0)) {
+    flags.add("same_key_mixed_metadata");
+  }
+  if (input.candidates.some((candidate) => candidate.scores.sensitivity > 0.6 || candidate.scores.safety < 0.65)) {
+    flags.add("same_key_mixed_metadata");
+  }
+  return [...flags];
+}
+function memoryRootForCandidate(candidate, fallbackRoot) {
+  return candidate.memoryRoot ?? fallbackRoot ?? "";
+}
+function rootScopeForCandidate(candidate, fallbackScope) {
+  return candidate.rootScope ?? fallbackScope;
+}
+function isScopeRootMismatch(candidate, rootScope) {
+  if (rootScope === "global") return candidate.scope === "project";
+  return candidate.scope === "global";
+}
+function isProjectSpecificGlobalCandidate(candidate) {
+  const boundaryText = `${candidate.sourceOfTruth ?? ""} ${candidate.content}`.toLowerCase();
+  return candidate.scope === "project" || candidate.domain === "project" || candidate.source === "file" || candidate.source === "tool_trace" || /\b(package\.json|readme|agents\.md|src\/|tests\/|docs\/|\.\/|\.\.)\b/.test(boundaryText);
+}
+function hasSourceBoundary(candidate) {
+  if (nonEmptyString2(candidate.sourceOfTruth) !== void 0) return true;
+  return candidate.evidence.some(hasEvidenceTrace);
+}
+function hasEvidenceTrace(entry) {
+  return nonEmptyString2(entry.runId) !== void 0 || nonEmptyString2(entry.sessionId) !== void 0 || nonEmptyString2(entry.taskHash) !== void 0 || nonEmptyString2(entry.quoteHash) !== void 0 || nonEmptyString2(entry.evidenceGroupId) !== void 0 || (entry.traceRefs ?? []).some((value) => nonEmptyString2(value) !== void 0) || (entry.messageIds ?? []).some((value) => nonEmptyString2(value) !== void 0);
+}
+function hasMixedDuplicateMetadata(candidates) {
+  return distinctValues(candidates.map((candidate) => deriveMemoryCandidateKind(candidate))).length > 1 || distinctValues(candidates.map((candidate) => candidate.scope)).length > 1 || distinctValues(candidates.map((candidate) => candidate.domain)).length > 1 || distinctValues(candidates.map((candidate) => candidate.type)).length > 1 || distinctValues(candidates.map((candidate) => candidate.source)).length > 1 || distinctValues(candidates.map((candidate) => nonEmptyString2(candidate.sourceOfTruth) ?? "")).length > 1;
+}
+function distinctValues(values) {
+  return Array.from(new Set(values));
+}
+function nonEmptyString2(value) {
+  if (value === void 0) return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
 }
 
 // src/codex/memory-pending-budget.ts
@@ -18862,7 +19556,7 @@ async function proposeCodexMemoryCandidate(input) {
       if (input.recordRejectedCandidate !== false) {
         await appendTombstoneFromRoot(lockedMemoryRoot, decision2.tombstone);
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID10(),
+          id: randomUUID11(),
           action: "reject",
           at: now,
           reason: decision2.reason,
@@ -18881,7 +19575,7 @@ async function proposeCodexMemoryCandidate(input) {
       const reason2 = "normalizedKey conflict with active memory";
       if (input.recordRejectedCandidate !== false) {
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID10(),
+          id: randomUUID11(),
           action: "reject",
           at: now,
           reason: reason2,
@@ -18928,14 +19622,15 @@ async function proposeCodexMemoryCandidate(input) {
       usedToday: promotionsUsedToday,
       dailyCap
     }) : void 0;
-    if (input.allowAutoPromote !== false && isProjectTrialEligible({
+    const trialEligibility = evaluateProjectTrialEligibility({
       candidate: mergedCandidate,
       activeReadinessReady: activeReadiness.ready
-    })) {
+    });
+    if (input.allowAutoPromote !== false && trialEligibility.allowed) {
       const trial = trialSemanticMemoryFromCandidate(mergedCandidate, now);
       await upsertSemanticMemoriesFromRoot(lockedMemoryRoot, [trial]);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID10(),
+        id: randomUUID11(),
         action: "create",
         at: now,
         reason: "v1.5 admitted low-risk project memory to trial",
@@ -18968,7 +19663,7 @@ async function proposeCodexMemoryCandidate(input) {
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID10(),
+        id: randomUUID11(),
         action: "promote",
         at: now,
         reason: autoPromotion.reason,
@@ -19020,7 +19715,7 @@ async function proposeCodexMemoryCandidate(input) {
     }
     if (budgetResult.action === "evict_existing") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID10(),
+        id: randomUUID11(),
         action: "audit",
         at: now,
         reason: budgetResult.reason,
@@ -19034,6 +19729,8 @@ async function proposeCodexMemoryCandidate(input) {
     if (decision2.action === "auto_write") {
       if (input.allowAutoPromote === false) {
         reason = `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.`;
+      } else if (trialEligibility.otherwiseEligible && !trialEligibility.hasSourceBoundary) {
+        reason = "Trial admission requires explicit source boundary or evidence trace; pending for manual review.";
       } else if (!activeReadiness.ready) {
         reason = activeReadinessReason;
       } else if (autoPromotion.allowed && autoPromotionEval?.passed === false) {
@@ -19045,7 +19742,7 @@ async function proposeCodexMemoryCandidate(input) {
       reason = activeReadinessReason;
     }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID10(),
+      id: randomUUID11(),
       action: "pending",
       at: now,
       reason,
@@ -19059,22 +19756,30 @@ async function proposeCodexMemoryCandidate(input) {
     };
   });
 }
-function isProjectTrialEligible(input) {
+function evaluateProjectTrialEligibility(input) {
   const candidate = input.candidate;
   const kind = deriveMemoryCandidateKind(candidate);
-  if (!input.activeReadinessReady) return false;
-  if (candidate.scope !== "project") return false;
-  if (!["project", "procedural", "system"].includes(candidate.domain)) return false;
+  let otherwiseEligible = true;
+  if (!input.activeReadinessReady) otherwiseEligible = false;
+  if (candidate.scope !== "project") otherwiseEligible = false;
+  if (!["project", "procedural", "system"].includes(candidate.domain)) otherwiseEligible = false;
   if (!["project_fact", "project_decision", "workflow_rule", "known_pitfall", "rejected_approach"].includes(kind)) {
-    return false;
+    otherwiseEligible = false;
   }
-  if (candidate.source === "assistant_observed") return false;
-  if (candidate.evidence.some((entry) => entry.sourceKind === "assistant_observed")) return false;
-  if (candidate.scores.evidenceStrength < 0.55) return false;
-  if (candidate.scores.usefulness < 0.55) return false;
-  if (candidate.scores.safety < 0.8) return false;
-  if (candidate.scores.sensitivity > 0.35) return false;
-  return true;
+  if (candidate.source === "assistant_observed") otherwiseEligible = false;
+  if (candidate.evidence.some((entry) => entry.sourceKind === "assistant_observed")) otherwiseEligible = false;
+  if (candidate.scores.evidenceStrength < 0.55) otherwiseEligible = false;
+  if (candidate.scores.usefulness < 0.55) otherwiseEligible = false;
+  if (candidate.scores.safety < 0.8) otherwiseEligible = false;
+  if (candidate.scores.sensitivity > 0.35) otherwiseEligible = false;
+  const hasSourceBoundary2 = hasTrialSourceBoundary(candidate);
+  return { allowed: otherwiseEligible && hasSourceBoundary2, otherwiseEligible, hasSourceBoundary: hasSourceBoundary2 };
+}
+function hasTrialSourceBoundary(candidate) {
+  if (nonEmptyString3(candidate.sourceOfTruth) !== void 0) return true;
+  return candidate.evidence.some(
+    (entry) => nonEmptyString3(entry.runId) !== void 0 || nonEmptyString3(entry.sessionId) !== void 0 || nonEmptyString3(entry.taskHash) !== void 0 || nonEmptyString3(entry.quoteHash) !== void 0 || nonEmptyString3(entry.evidenceGroupId) !== void 0 || (entry.traceRefs ?? []).some((value) => nonEmptyString3(value) !== void 0) || (entry.messageIds ?? []).some((value) => nonEmptyString3(value) !== void 0)
+  );
 }
 function trialSemanticMemoryFromCandidate(candidate, now) {
   const semantic = pendingMemoryToSemanticMemory(candidate);
@@ -19132,19 +19837,19 @@ function autoPromotionThresholds(scope) {
   };
 }
 function withMergedSourceBoundary(mergedCandidate, incomingCandidate) {
-  const sourceOfTruth = nonEmptyString2(mergedCandidate.sourceOfTruth) ?? nonEmptyString2(incomingCandidate.sourceOfTruth);
+  const sourceOfTruth = nonEmptyString3(mergedCandidate.sourceOfTruth) ?? nonEmptyString3(incomingCandidate.sourceOfTruth);
   return sourceOfTruth === void 0 ? mergedCandidate : { ...mergedCandidate, sourceOfTruth };
 }
 function sourceIdsForAutoPromotion(candidate) {
-  return uniqueInOrder2([
+  return uniqueInOrder4([
     ...candidate.sourceDraftIds ?? [],
     ...candidate.sourceEpisodeIds ?? []
   ]);
 }
-function uniqueInOrder2(values) {
+function uniqueInOrder4(values) {
   return Array.from(new Set(values));
 }
-function nonEmptyString2(value) {
+function nonEmptyString3(value) {
   if (value === void 0) return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
@@ -19179,7 +19884,7 @@ function toPendingMemory(input, now) {
     tags: input.tags ?? []
   });
   return {
-    id: randomUUID10(),
+    id: randomUUID11(),
     domain: input.domain,
     type: input.type,
     strength: input.strength ?? "soft",
@@ -19196,7 +19901,7 @@ function toPendingMemory(input, now) {
     seenCount: 1,
     firstSeenAt: now,
     lastSeenAt: now,
-    expiresAt: addDays3(now, 30),
+    expiresAt: addDays4(now, 30),
     ...input.admittedBy === void 0 ? {} : { admittedBy: input.admittedBy },
     ...input.admissionAction === void 0 ? {} : { admissionAction: input.admissionAction },
     ...input.admissionScore === void 0 ? {} : { admissionScore: input.admissionScore },
@@ -19220,7 +19925,7 @@ function evidenceRefsForCandidate(evidence) {
     entry.summary
   ]).flatMap((value) => value === void 0 ? [] : [value]);
 }
-function addDays3(iso, days) {
+function addDays4(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
   return date3.toISOString();
@@ -19235,9 +19940,9 @@ function toCandidateDraft(input) {
     type: input.candidate.type
   });
   const scope = input.candidate.scope ?? "project";
-  const sourceOfTruth = nonEmptyString3(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
+  const sourceOfTruth = nonEmptyString4(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
   return {
-    id: randomUUID11(),
+    id: randomUUID12(),
     content: input.candidate.content,
     candidateKind,
     scope,
@@ -19262,7 +19967,7 @@ function sourceOfTruthFromEvidence(evidence) {
   return evidence.map(sourceBoundaryRef).find((value) => value !== void 0);
 }
 function sourceBoundaryRef(entry) {
-  return (entry.traceRefs ?? []).map(nonEmptyString3).find((value) => value !== void 0);
+  return (entry.traceRefs ?? []).map(nonEmptyString4).find((value) => value !== void 0);
 }
 function evidenceRef2(entry) {
   return [
@@ -19272,9 +19977,9 @@ function evidenceRef2(entry) {
     entry.taskHash,
     entry.summary,
     entry.quote
-  ].map(nonEmptyString3).find((value) => value !== void 0);
+  ].map(nonEmptyString4).find((value) => value !== void 0);
 }
-function nonEmptyString3(value) {
+function nonEmptyString4(value) {
   const trimmed = value?.trim();
   return trimmed === void 0 || trimmed === "" ? void 0 : trimmed;
 }
@@ -19544,100 +20249,7 @@ function disabledAdmission(input) {
 }
 
 // src/codex/episode-memory.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
-
-// src/codex/review-redaction.ts
-var RULES = [
-  {
-    name: "privateKey",
-    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-    replacement: "[REDACTED_PRIVATE_KEY]"
-  },
-  {
-    name: "secret",
-    pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\b(?:xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{30,}|(?:sk|pk)_(?:live|test)_[0-9A-Za-z]{16,})\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\b[A-Z0-9_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)\s*=\s*["']?[^"'\s]+["']?/gi,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /(["']?[A-Z0-9_.-]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)["']?\s*:\s*)["'][^"'\s]{8,}["']/gi,
-    replacement: '$1"[REDACTED_SECRET]"'
-  },
-  {
-    name: "secret",
-    pattern: /\bsk-[A-Za-z0-9_-]{16,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/gi,
-    replacement: "Bearer [REDACTED_SECRET]"
-  },
-  {
-    name: "secret",
-    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "email",
-    pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-    replacement: "[REDACTED_EMAIL]"
-  },
-  {
-    name: "secret",
-    pattern: /\b[A-Fa-f0-9]{32,}\b/g,
-    replacement: "[REDACTED_SECRET]"
-  },
-  {
-    name: "phone",
-    pattern: /(?<!\d-)\b(?!\d{4}-\d{2}-\d{2}\b)(?:\+?\d[\d .()_-]{7,}\d)\b/g,
-    replacement: "[REDACTED_PHONE]"
-  }
-];
-function mergeRedactionCounts(left, right) {
-  const merged = { ...left };
-  for (const [name, count] of Object.entries(right)) {
-    merged[name] = (merged[name] ?? 0) + count;
-  }
-  return merged;
-}
-function redactReviewText(input) {
-  let text = input;
-  let counts = {};
-  for (const rule of RULES) {
-    let count = 0;
-    text = text.replace(rule.pattern, () => {
-      count += 1;
-      return rule.replacement;
-    });
-    if (count > 0) {
-      counts = mergeRedactionCounts(counts, { [rule.name]: count });
-    }
-  }
-  return { text, counts };
-}
-
-// src/codex/episode-memory.ts
+import { randomUUID as randomUUID13 } from "node:crypto";
 var SUMMARY_MAX_LENGTH = 500;
 var ITEM_MAX_LENGTH = 240;
 async function appendStopHookEpisodeFailOpen(input) {
@@ -19662,7 +20274,7 @@ function buildStopHookEpisode(input) {
   const sourceTraceIds = [sessionId, turnId].filter((value) => value !== void 0);
   const title = lastNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
   return {
-    id: input.id ?? randomUUID12(),
+    id: input.id ?? randomUUID13(),
     projectId: input.projectId,
     title: clean(title, ITEM_MAX_LENGTH),
     summary: clean(input.summary, SUMMARY_MAX_LENGTH),
@@ -19696,7 +20308,7 @@ function asString(value) {
 }
 
 // src/codex/global-memory-capture.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|今后所有项目|所有项目|每个项目|all projects|every project|across projects|remember globally|(?:作为|写入|加入|保存到|记到).{0,8}全局记忆|全局(?:记住|保存|默认|规则|使用))/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
 var AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i;
@@ -19846,11 +20458,11 @@ function reviewActionForEvent(event) {
   return void 0;
 }
 function shortHash(value) {
-  return createHash9("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash10("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/hook-trace-store.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { appendFile as appendFile2, readFile as readFile12 } from "node:fs/promises";
 import { join as join17 } from "node:path";
 var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
@@ -19880,7 +20492,7 @@ async function appendCodexHookTrace(input) {
 }
 function createHookTraceRecord(input, cwd) {
   return {
-    id: randomUUID13(),
+    id: randomUUID14(),
     createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
     event: input.event,
     cwd: cleanString(cwd),
@@ -19999,7 +20611,7 @@ function isFileErrorCode10(error2, code) {
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile3 } from "node:child_process";
@@ -20714,7 +21326,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash10("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash11("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -20754,7 +21366,7 @@ function isRecord3(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash11, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID15 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile3 } from "node:fs/promises";
@@ -20853,7 +21465,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID14();
+  const summaryId = randomUUID15();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -21040,7 +21652,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash11("sha256").update(JSON.stringify({
+  return createHash12("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -21223,7 +21835,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (messages.length === 0) {
     return { action: "noop", reason: "No transcript messages found." };
   }
-  const stopEpisodeId = randomUUID15();
+  const stopEpisodeId = randomUUID16();
   const review = await runReviewSummaryOrSkip({
     payload,
     cwd,
@@ -21389,7 +22001,7 @@ function visibleHookMessage(result2) {
   const summary = result2.action === "summary_failed" ? "failed" : result2.action === "noop" ? "none" : "ok";
   const candidateIds = "candidateIds" in result2 && Array.isArray(result2.candidateIds) ? result2.candidateIds : "candidateId" in result2 && typeof result2.candidateId === "string" ? [result2.candidateId] : [];
   const memoryIds = "memoryIds" in result2 && Array.isArray(result2.memoryIds) ? result2.memoryIds : [];
-  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder3(candidateIds).length}, trial=${uniqueInOrder3(memoryIds).length}. Review: cyrene-continuity codex memory review`;
+  return `Cyrene captured this session: summary=${summary}, pending=${uniqueInOrder5(candidateIds).length}, trial=${uniqueInOrder5(memoryIds).length}. Review: cyrene-continuity codex memory review`;
 }
 async function recordStopHookFailureSummary(cwd, payload, error2) {
   try {
@@ -21398,7 +22010,7 @@ async function recordStopHookFailureSummary(cwd, payload, error2) {
       return { action: "noop", reason: "Project memory is disabled for this project." };
     }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID15();
+    const summaryId = randomUUID16();
     const sessionId = asString3(payload.session_id);
     const turnId = asString3(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -21433,7 +22045,7 @@ async function recordModelConfigSkippedSummary(cwd, payload) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID15();
+  const summaryId = randomUUID16();
   const sessionId = asString3(payload.session_id);
   const turnId = asString3(payload.turn_id);
   const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -21463,13 +22075,13 @@ async function confirmPendingCandidateIds(confirm, cwd, candidateIds) {
   try {
     const confirmed = await (confirm ?? filterExistingPendingCandidateIds)(cwd, candidateIds);
     const confirmedSet = new Set(confirmed);
-    return uniqueInOrder3(candidateIds).filter((id) => confirmedSet.has(id));
+    return uniqueInOrder5(candidateIds).filter((id) => confirmedSet.has(id));
   } catch {
     return [];
   }
 }
 async function filterExistingPendingCandidateIds(cwd, candidateIds) {
-  const ids = uniqueInOrder3(candidateIds);
+  const ids = uniqueInOrder5(candidateIds);
   if (ids.length === 0) {
     return [];
   }
@@ -21477,7 +22089,7 @@ async function filterExistingPendingCandidateIds(cwd, candidateIds) {
   const existing = new Set(pending.pending.map((candidate) => candidate.id));
   return ids.filter((id) => existing.has(id));
 }
-function uniqueInOrder3(values) {
+function uniqueInOrder5(values) {
   const seen = /* @__PURE__ */ new Set();
   return values.filter((value) => {
     if (seen.has(value)) {
@@ -21876,351 +22488,6 @@ async function removeExistingSkillSymlink(path) {
     }
     throw error2;
   }
-}
-
-// src/codex/active-memory-review.ts
-import { createHash as createHash12, randomUUID as randomUUID16 } from "node:crypto";
-function contentHashForActiveMemory(memory) {
-  return createHash12("sha256").update(JSON.stringify({
-    id: memory.id,
-    content: memory.content,
-    normalizedKey: memory.normalizedKey,
-    updatedAt: memory.updatedAt,
-    status: memory.status
-  })).digest("hex");
-}
-function activeMemoryRequiresDestructiveConfirmation(memory) {
-  return memory.domain === "personal" || memory.domain === "relationship" || memory.domain === "affective";
-}
-async function archiveCodexActiveMemory(input) {
-  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
-    await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
-    await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID16(),
-      action: "archive",
-      at: now,
-      reason: input.reason,
-      memoryId: memory.id,
-      details: {
-        previousStatus: memory.status,
-        normalizedKey: memory.normalizedKey,
-        previousMemory: lifecycleMemorySnapshot2(memory, "archived")
-      }
-    });
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
-    return {
-      project,
-      memoryRoot: lockedMemoryRoot,
-      result: {
-        action: "archive",
-        memoryId: memory.id
-      }
-    };
-  }, input.now);
-}
-async function tombstoneCodexActiveMemory(input) {
-  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
-    const confirmation = requireDestructiveConfirmation(memory, input.confirmText);
-    if (confirmation !== void 0) {
-      return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
-    }
-    const tombstone = tombstoneForActiveMemory(memory, {
-      reason: "deleted",
-      now,
-      ...input.indefinite === true ? {} : { expiresAt: addDays4(now, input.days ?? 180) }
-    });
-    await writeActiveMemoriesFromRoot(lockedMemoryRoot, lockedActive.filter((item) => item.id !== memory.id));
-    await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
-    await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID16(),
-      action: "tombstone",
-      at: now,
-      reason: input.reason,
-      memoryId: memory.id,
-      details: {
-        reviewAction: "tombstone",
-        tombstoneId: tombstone.id,
-        indefinite: input.indefinite === true,
-        previousMemory: lifecycleMemorySnapshot2(memory, "archived")
-      }
-    });
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
-    return {
-      project,
-      memoryRoot: lockedMemoryRoot,
-      result: {
-        action: "tombstone",
-        memoryId: memory.id,
-        tombstone
-      }
-    };
-  }, input.now);
-}
-async function proposeEditCodexActiveMemory(input) {
-  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, memory, now }) => {
-    const candidate = {
-      id: randomUUID16(),
-      domain: memory.domain,
-      type: memory.type,
-      strength: memory.strength,
-      scope: memory.scope,
-      status: "pending",
-      content: input.content,
-      normalizedKey: memory.normalizedKey,
-      evidence: memory.evidence,
-      source: memory.source,
-      ...memory.portability === void 0 ? {} : { portability: memory.portability },
-      scores: memory.scores,
-      seenCount: 1,
-      firstSeenAt: now,
-      lastSeenAt: now,
-      expiresAt: addDays4(now, 30),
-      ...memory.userConfirmed === void 0 ? {} : { userConfirmed: memory.userConfirmed },
-      ...memory.profileVisibility === void 0 ? {} : { profileVisibility: memory.profileVisibility },
-      ...memory.candidateKind === void 0 ? {} : { candidateKind: memory.candidateKind },
-      ...memory.candidate_kind === void 0 ? {} : { candidate_kind: memory.candidate_kind },
-      tags: memory.tags,
-      conflictsWith: [memory.id]
-    };
-    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
-    await writePendingMemoriesFromRoot(lockedMemoryRoot, [...lockedPending, candidate]);
-    await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID16(),
-      action: "pending",
-      at: now,
-      reason: input.reason,
-      memoryId: memory.id,
-      candidateId: candidate.id,
-      details: { reviewAction: "propose_active_edit" }
-    });
-    await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
-    return {
-      project,
-      memoryRoot: lockedMemoryRoot,
-      result: {
-        action: "propose_edit",
-        memoryId: memory.id,
-        candidateId: candidate.id,
-        candidate,
-        reviewHash: reviewHashForPendingMemory(candidate)
-      }
-    };
-  }, input.now);
-}
-async function supersedeCodexActiveMemory(input) {
-  return mutateActiveMemory(input.cwd, input.id, input.contentHash, async ({ project, lockedMemoryRoot, lockedActive, memory, now }) => {
-    const confirmation = requireDestructiveConfirmation(memory, input.confirmText);
-    if (confirmation !== void 0) {
-      return { project, memoryRoot: lockedMemoryRoot, result: confirmation };
-    }
-    const lockedPending = await readPendingMemoriesFromRoot(lockedMemoryRoot);
-    const candidate = lockedPending.find((item) => item.id === input.candidateId);
-    if (candidate === void 0) {
-      return {
-        project,
-        memoryRoot: lockedMemoryRoot,
-        result: {
-          action: "not_found",
-          reason: "Pending replacement candidate not found"
-        }
-      };
-    }
-    const latestReviewHash = reviewHashForPendingMemory(candidate);
-    if (latestReviewHash !== input.reviewHash) {
-      return {
-        project,
-        memoryRoot: lockedMemoryRoot,
-        result: {
-          action: "conflict",
-          reason: "Pending replacement changed since review",
-          latest: summarizePendingMemory(candidate)
-        }
-      };
-    }
-    if (!(candidate.conflictsWith ?? []).includes(memory.id)) {
-      return {
-        project,
-        memoryRoot: lockedMemoryRoot,
-        result: {
-          action: "conflict",
-          reason: "Pending replacement is not linked to the active memory"
-        }
-      };
-    }
-    const normalizedKeyConflict = lockedActive.find((item) => {
-      return item.id !== memory.id && item.normalizedKey === candidate.normalizedKey;
-    });
-    if (normalizedKeyConflict !== void 0) {
-      return {
-        project,
-        memoryRoot: lockedMemoryRoot,
-        result: {
-          action: "conflict",
-          reason: "Replacement normalizedKey conflicts with another active memory"
-        }
-      };
-    }
-    const lockedTombstones = await readTombstonesFromRoot(lockedMemoryRoot);
-    const confirmedCandidate = { ...candidate, userConfirmed: true };
-    const decision2 = validateMemoryCandidate({
-      candidate: confirmedCandidate,
-      existingMemories: lockedActive,
-      tombstones: lockedTombstones,
-      now
-    });
-    if (decision2.action === "reject") {
-      return {
-        project,
-        memoryRoot: lockedMemoryRoot,
-        result: {
-          action: "rejected_by_validator",
-          candidateId: candidate.id,
-          reason: decision2.reason,
-          tombstone: decision2.tombstone
-        }
-      };
-    }
-    const candidateForActivation = decision2.action === "pending" ? decision2.candidate : confirmedCandidate;
-    const promoted = {
-      ...activateCandidate(candidateForActivation, now),
-      supersedes: uniqueInOrder4([...candidateForActivation.conflictsWith ?? [], memory.id])
-    };
-    const tombstone = tombstoneForActiveMemory(memory, {
-      reason: "superseded",
-      now,
-      replacementMemoryId: promoted.id
-    });
-    await writeActiveMemoriesFromRoot(lockedMemoryRoot, [
-      ...lockedActive.filter((item) => item.id !== memory.id),
-      promoted
-    ]);
-    await writePendingMemoriesFromRoot(lockedMemoryRoot, lockedPending.filter((item) => item.id !== candidate.id));
-    await appendTombstoneFromRoot(lockedMemoryRoot, tombstone);
-    await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID16(),
-      action: "supersede",
-      at: now,
-      reason: input.reason,
-      memoryId: promoted.id,
-      candidateId: candidate.id,
-      details: {
-        supersededMemoryId: memory.id,
-        tombstoneId: tombstone.id,
-        supersededMemory: lifecycleMemorySnapshot2(memory, "superseded")
-      }
-    });
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
-    return {
-      project,
-      memoryRoot: lockedMemoryRoot,
-      result: {
-        action: "supersede",
-        memoryId: promoted.id,
-        supersededMemoryId: memory.id
-      }
-    };
-  }, input.now);
-}
-async function mutateActiveMemory(cwd, id, contentHash, fn, nowInput) {
-  const now = nowInput ?? (/* @__PURE__ */ new Date()).toISOString();
-  const { project, memoryRoot, readableRoots } = await getProjectAndReadableActiveRoots(cwd);
-  const foundMemoryRoot = await findActiveMemoryRoot(readableRoots, id);
-  const targetRoot = foundMemoryRoot ?? memoryRoot;
-  await assertMemoryMaintenanceTargetsSafeFromRoot(targetRoot);
-  return withMemoryMaintenanceLockFromRoot(targetRoot, async (lockedMemoryRoot) => {
-    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
-    const lockedActive = await readActiveMemoriesFromRoot(lockedMemoryRoot);
-    const memory = lockedActive.find((item) => item.id === id);
-    if (memory === void 0) {
-      return {
-        project,
-        memoryRoot: lockedMemoryRoot,
-        result: {
-          action: "not_found",
-          reason: "Active memory not found"
-        }
-      };
-    }
-    if (contentHashForActiveMemory(memory) !== contentHash) {
-      return {
-        project,
-        memoryRoot: lockedMemoryRoot,
-        result: {
-          action: "conflict",
-          reason: "Active memory changed since review"
-        }
-      };
-    }
-    return fn({ project, lockedMemoryRoot, lockedActive, memory, now });
-  });
-}
-async function getProjectAndReadableActiveRoots(cwd) {
-  const identity = await identifyCodexProject(cwd);
-  const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(identity.projectId) ?? codexProjectMemoryRoot(identity.projectId);
-  const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
-  return {
-    project: { projectId: identity.projectId, displayName: identity.displayName },
-    memoryRoot: projectMemoryRoot,
-    readableRoots: uniqueInOrder4([globalMemoryRoot, projectMemoryRoot])
-  };
-}
-async function findActiveMemoryRoot(roots, id) {
-  for (const root of roots) {
-    const active = await readActiveMemoriesFromRoot(root);
-    if (active.some((memory) => memory.id === id)) {
-      return root;
-    }
-  }
-  return void 0;
-}
-async function refreshModelVisibleMemory(input) {
-  await renderMemoryProjectionsFromRoot(input.memoryRoot);
-  await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
-}
-function tombstoneForActiveMemory(memory, input) {
-  return {
-    id: `tombstone-${memory.id}-${createHash12("sha256").update(`${memory.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
-    memoryId: memory.id,
-    normalizedKey: memory.normalizedKey,
-    domain: memory.domain,
-    type: memory.type,
-    strength: memory.strength,
-    scope: memory.scope,
-    reason: input.reason,
-    createdAt: input.now,
-    ...input.expiresAt === void 0 ? {} : { expiresAt: input.expiresAt },
-    ...input.replacementMemoryId === void 0 ? {} : { replacementMemoryId: input.replacementMemoryId },
-    evidence: memory.evidence
-  };
-}
-function requireDestructiveConfirmation(memory, confirmText) {
-  if (!activeMemoryRequiresDestructiveConfirmation(memory)) return void 0;
-  if (confirmText?.trim() === memory.id) return void 0;
-  return {
-    action: "confirmation_required",
-    reason: `High-risk active memory requires confirmText to exactly match memory id ${memory.id}.`
-  };
-}
-function lifecycleMemorySnapshot2(memory, status) {
-  return {
-    ...memory,
-    status
-  };
-}
-function addDays4(iso, days) {
-  const date3 = new Date(iso);
-  date3.setUTCDate(date3.getUTCDate() + days);
-  return date3.toISOString();
-}
-function uniqueInOrder4(values) {
-  const seen = /* @__PURE__ */ new Set();
-  return values.filter((value) => {
-    if (seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    return true;
-  });
 }
 
 // src/codex/codex-memory-active-cli.ts
@@ -24755,9 +25022,9 @@ function skipSemanticRewrite(candidate, eligibilityReasons) {
   };
 }
 function semanticPrepareIneligibilityReasons(candidate, externalReasons) {
-  return uniqueInOrder5([
+  return uniqueInOrder6([
     ...externalReasons,
-    ...nonEmptyString4(candidate.sourceOfTruth) === void 0 ? ["source_boundary_unconfirmed"] : [],
+    ...nonEmptyString5(candidate.sourceOfTruth) === void 0 ? ["source_boundary_unconfirmed"] : [],
     ...candidate.domain === "personal" || candidate.domain === "relationship" || candidate.domain === "affective" ? ["high_risk_memory_domain"] : [],
     ...candidate.conflictsWith !== void 0 && candidate.conflictsWith.length > 0 ? ["conflicted_pending"] : [],
     ...candidate.promoteAfter !== void 0 ? ["user_deferred_pending"] : [],
@@ -24800,12 +25067,12 @@ function rewriteRawFileRuleExcerpt(content) {
   const source = /\bAGENTS\.md\b/i.test(content) ? "AGENTS.md" : "the source-of-truth file";
   return `${source} is the source of truth for repository working rules; active memory should reference it instead of copying raw policy text.`;
 }
-function nonEmptyString4(value) {
+function nonEmptyString5(value) {
   if (value === void 0) return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
 }
-function uniqueInOrder5(values) {
+function uniqueInOrder6(values) {
   return Array.from(new Set(values));
 }
 function semanticRewriteReceipt(input) {
@@ -24969,7 +25236,7 @@ function applySafeTriageDecisions(input) {
       counts.auto_drop += 1;
       continue;
     }
-    if (decision2.action === "auto_merge") {
+    if (decision2.action === "auto_merge_allowed") {
       const memberIds = decision2.candidateIds.slice().sort();
       const keeperId = memberIds.find((id) => retainedIds.has(id) && byId.has(id));
       if (keeperId === void 0) continue;
@@ -24988,7 +25255,7 @@ function applySafeTriageDecisions(input) {
       byId.set(keeperId, merged);
       events.push(memoryEventForTriageDecision("pending", merged, input.now, decision2.reason, {
         reviewAction: "triage_auto_merge",
-        triageDecision: "auto_merge",
+        triageDecision: "auto_merge_allowed",
         clusterId: decision2.clusterId,
         mergedCandidateIds: mergedCandidateIds.sort()
       }));
@@ -25023,7 +25290,7 @@ function compareSafeTriageDecisionApplyOrder(left, right) {
 }
 function triageApplyPriority(action) {
   if (action === "auto_drop") return 0;
-  if (action === "auto_merge") return 1;
+  if (action === "auto_merge_allowed") return 1;
   if (action === "auto_defer") return 2;
   return 3;
 }
@@ -25269,7 +25536,7 @@ function groupDistillationInputsByNormalizedKey(inputs) {
 }
 function buildDistillationInputCandidate(normalizedKey, items, hasActiveOverlap) {
   const sourceItems = sortDistillationInputs(items);
-  const sourceIds = uniqueInOrder6(sourceItems.flatMap(sourceIdsForDistillationInput));
+  const sourceIds = uniqueInOrder7(sourceItems.flatMap(sourceIdsForDistillationInput));
   const rawContents = sourceItems.flatMap((item) => item.rawContents);
   const evidenceRefs2 = uniqueSorted3(sourceItems.flatMap((item) => item.evidenceRefs));
   const sourceAdmissionDecisionIds = uniqueSorted3(sourceItems.flatMap((item) => item.admissionDecisionIds));
@@ -25354,7 +25621,7 @@ function buildOrphanAdmissionCandidate(draft, admission, hasActiveOverlap) {
     ...route,
     risk: "high",
     updatePolicy: "manual_only",
-    reasons: uniqueInOrder6([`active memory already has normalizedKey ${normalizedKey}`, ...route.reasons])
+    reasons: uniqueInOrder7([`active memory already has normalizedKey ${normalizedKey}`, ...route.reasons])
   } : route;
   const risk = hasActiveOverlap ? "high" : semanticRoute.risk;
   const semanticMemory = semanticCandidateFromDraft({
@@ -25395,7 +25662,7 @@ function mergeDistilledCandidates(left, right) {
   const risk = highestRisk(left.risk, right.risk);
   const sourceIds = uniqueSorted3([...left.sourceIds, ...right.sourceIds]);
   const evidence = [...left.evidence, ...right.evidence];
-  const reasons = uniqueInOrder6([...left.reasons, ...right.reasons]);
+  const reasons = uniqueInOrder7([...left.reasons, ...right.reasons]);
   const sourceOfTruth = left.sourceOfTruth ?? right.sourceOfTruth;
   const evidenceRefs2 = mergeOptionalStrings(left.evidenceRefs, right.evidenceRefs, "sorted");
   const sourceAdmissionDecisionIds = mergeOptionalStrings(
@@ -25439,7 +25706,7 @@ function mergeSemanticMemoryPreviews(left, right, merged) {
     ...left.reviewState ?? {},
     ...right.reviewState ?? {},
     ...merged.sourceOfTruth === void 0 ? {} : { sourceOfTruth: merged.sourceOfTruth },
-    admissionReasons: uniqueInOrder6([
+    admissionReasons: uniqueInOrder7([
       ...left.reviewState?.admissionReasons ?? [],
       ...right.reviewState?.admissionReasons ?? []
     ]),
@@ -25472,7 +25739,7 @@ function mergeSemanticRouting(left, right, risk, reasons) {
     ...base,
     risk,
     updatePolicy,
-    reasons: uniqueInOrder6([...left?.reasons ?? [], ...right?.reasons ?? [], ...reasons])
+    reasons: uniqueInOrder7([...left?.reasons ?? [], ...right?.reasons ?? [], ...reasons])
   };
 }
 function strongestReviewPolicy(left, right, risk) {
@@ -25508,7 +25775,7 @@ function mergeOptionalStrings(left, right, order = "preserve") {
     return void 0;
   }
   const values = [...left ?? [], ...right ?? []];
-  return order === "sorted" ? uniqueSorted3(values) : uniqueInOrder6(values);
+  return order === "sorted" ? uniqueSorted3(values) : uniqueInOrder7(values);
 }
 function isHighRiskDomain(item) {
   return item.domain === "personal" || item.domain === "relationship" || item.domain === "affective";
@@ -25617,7 +25884,7 @@ function firstDefined(items) {
 function uniqueSorted3(items) {
   return Array.from(new Set(items)).sort();
 }
-function uniqueInOrder6(items) {
+function uniqueInOrder7(items) {
   return Array.from(new Set(items));
 }
 function buildReasons(normalizedKey, pendingCount, hasActiveOverlap, highRiskDomains, hasMixedMetadata) {
@@ -25686,8 +25953,10 @@ async function handleCodexUiApiRequest(input) {
       }
       const selection = parseSelectionRequest(input.searchParams);
       if ("error" in selection) return selection.error;
-      const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, "memory triage");
-      if (unsupportedScope !== void 0) return unsupportedScope;
+      if (input.pathname.endsWith("/apply")) {
+        const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, "memory triage apply");
+        if (unsupportedScope !== void 0) return unsupportedScope;
+      }
       return ok(await runUiMemoryTriage({
         cwd: input.cwd,
         selection: selection.value,
@@ -26217,7 +26486,9 @@ async function readProjects(cwd) {
   const projects = /* @__PURE__ */ new Map();
   for (const entry of entries) {
     if (entry.disabled) continue;
-    projects.set(entry.projectId, projectOptionFromRegistryEntry(entry, currentProject, indexedProjectNames.get(entry.projectId)));
+    const indexedDisplayName = indexedProjectNames.get(entry.projectId);
+    if (!shouldExposeProjectOption(entry, currentProject, indexedDisplayName)) continue;
+    projects.set(entry.projectId, projectOptionFromRegistryEntry(entry, currentProject, indexedDisplayName));
   }
   const currentRegistryEntry = entries.find((entry) => entry.projectId === currentProject.projectId);
   if (!projects.has(currentProject.projectId) && currentRegistryEntry?.disabled !== true) {
@@ -26295,20 +26566,22 @@ async function runUiMemoryTriage(input) {
     await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
     return withMemoryMaintenanceLockFromRoot(memoryRoot, async (lockedMemoryRoot) => {
       await assertMemoryMaintenanceTargetsSafeFromRoot(lockedMemoryRoot);
-      const [pending2, active2, tombstones2] = await Promise.all([
+      const [pending, active, tombstones] = await Promise.all([
         readPendingMemoriesFromRoot(lockedMemoryRoot),
         readActiveMemoriesFromRoot(lockedMemoryRoot),
         readTombstonesFromRoot(lockedMemoryRoot)
       ]);
+      const rootScope = rootScopeForMemoryRoot(selection, lockedMemoryRoot);
       const result3 = triagePendingMemories({
-        pending: pending2,
-        active: active2,
-        tombstones: tombstones2,
-        scope: selection.scope === "global" ? "global" : "project",
+        pending: pending.map((candidate) => ({ ...candidate, memoryRoot: lockedMemoryRoot, rootScope })),
+        active,
+        tombstones,
+        scope: rootScope,
+        memoryRoot: lockedMemoryRoot,
         now
       });
       const applied = applySafeTriageDecisions({
-        pending: pending2,
+        pending,
         decisions: result3.decisions,
         now
       });
@@ -26331,16 +26604,27 @@ async function runUiMemoryTriage(input) {
       };
     });
   }
-  const [pending, active, tombstones] = await Promise.all([
-    readPendingMemoriesFromRoot(memoryRoot),
-    readActiveMemoriesFromRoot(memoryRoot),
-    readTombstonesFromRoot(memoryRoot)
-  ]);
+  const triageInputs = await Promise.all(selection.memoryRoots.map(async (root) => {
+    const rootScope = rootScopeForMemoryRoot(selection, root);
+    const [pending, active, tombstones] = await Promise.all([
+      readPendingMemoriesFromRoot(root),
+      readActiveMemoriesFromRoot(root),
+      readTombstonesFromRoot(root)
+    ]);
+    return {
+      memoryRoot: root,
+      rootScope,
+      pending: pending.map((candidate) => ({ ...candidate, memoryRoot: root, rootScope })),
+      active,
+      tombstones
+    };
+  }));
   const result2 = triagePendingMemories({
-    pending,
-    active,
-    tombstones,
+    pending: triageInputs.flatMap((root) => root.pending),
+    active: triageInputs.flatMap((root) => root.active),
+    tombstones: triageInputs.flatMap((root) => root.tombstones),
     scope: selection.scope === "global" ? "global" : "project",
+    memoryRoot: selection.scope === "all" ? void 0 : memoryRoot,
     now
   });
   return {
@@ -26393,29 +26677,44 @@ async function readAutomation(cwd, request) {
 }
 async function readAutomationFromSelection(selection) {
   const memoryRoot = selection.memoryRoot;
-  const automation = await readCodexMemoryDreamState(memoryRoot);
+  const automation = publicAutomationState(await readCodexMemoryDreamState(memoryRoot));
   return { project: selection.project, selection: publicSelection(selection), memoryRoot, automation };
 }
 async function readActiveFromSelection(selection) {
-  const active = (await Promise.all(selection.memoryRoots.map((root) => readActiveMemoriesFromRoot(root)))).flat();
+  const activeByRoot = await Promise.all(selection.memoryRoots.map(async (root) => ({
+    memoryRoot: root,
+    active: await readActiveMemoriesFromRoot(root)
+  })));
+  const active = activeByRoot.flatMap((root) => root.active.map((memory) => ({
+    ...memory,
+    ...memoryProjectionFor(selection, root.memoryRoot, memory),
+    contentHash: contentHashForActiveMemory(memory),
+    destructiveConfirmationRequired: activeMemoryRequiresDestructiveConfirmation(memory)
+  })));
   return {
     project: selection.project,
-    active: sortMemoriesNewestFirst(active).map((memory) => ({
-      ...memory,
-      contentHash: contentHashForActiveMemory(memory),
-      destructiveConfirmationRequired: activeMemoryRequiresDestructiveConfirmation(memory)
-    })),
+    active: sortMemoriesNewestFirst(active),
     memoryRoot: selection.memoryRoot
   };
 }
 async function readPendingFromSelection(selection) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const pendingByRoot = await Promise.all(selection.memoryRoots.map(async (root) => ({
+    memoryRoot: root,
     pending: await readPendingMemoriesFromRoot(root),
     receipts: await readSemanticRewriteReceiptsFromRoot(root)
   })));
   const summaries = sortPendingNewestFirst3(pendingByRoot.flatMap(
-    (root) => root.pending.map((candidate) => summarizePendingMemory(candidate, now, root.receipts))
+    (root) => root.pending.map((candidate) => {
+      const summary = summarizePendingMemory(candidate, now, root.receipts);
+      return {
+        ...summary,
+        ...memoryProjectionFor(selection, root.memoryRoot, {
+          ...candidate,
+          semanticMemory: summary.semanticMemory
+        })
+      };
+    })
   ));
   return {
     project: selection.project,
@@ -26426,14 +26725,144 @@ async function readPendingFromSelection(selection) {
     memoryRoots: selection.memoryRoots
   };
 }
+function publicAutomationState(state) {
+  return {
+    due: state.dreamDue,
+    ...state.nextDreamDueAt === void 0 ? {} : { nextRunAt: state.nextDreamDueAt },
+    ...state.lastDreamAt === void 0 ? {} : { lastRunAt: state.lastDreamAt },
+    ...state.lastDreamStatus === void 0 ? {} : { status: state.lastDreamStatus },
+    ...state.lastDreamError === void 0 ? {} : { error: state.lastDreamError }
+  };
+}
+function memoryProjectionFor(selection, memoryRoot, memory) {
+  const origin = memoryOriginFor(selection, memoryRoot, memory);
+  const sourceBoundary = sourceBoundaryForMemory(memory);
+  return {
+    origin,
+    sourceBoundary,
+    pollutionFlags: pollutionFlagsForMemory(origin, memory, sourceBoundary)
+  };
+}
+function memoryOriginFor(selection, memoryRoot, memory) {
+  const rootScope = rootScopeForMemoryRoot(selection, memoryRoot);
+  return {
+    rootScope,
+    memoryRoot,
+    ...rootScope === "project" ? { projectId: selection.projectId } : {},
+    selectionScope: selection.scope,
+    ...typeof memory.scope === "string" ? { declaredScope: memory.scope } : {},
+    rootLabel: rootScope === "global" ? "Global" : selection.project.displayName
+  };
+}
+function rootScopeForMemoryRoot(selection, memoryRoot) {
+  return memoryRoot === selection.globalMemoryRoot ? "global" : "project";
+}
+function sourceBoundaryForMemory(memory) {
+  const semanticMemory = isRecord8(memory.semanticMemory) ? memory.semanticMemory : void 0;
+  const normalizedKey = stringValue(memory.normalizedKey);
+  const evidenceRecords = [
+    ...evidenceRecordsFor(memory.evidence),
+    ...evidenceRecordsFor(semanticMemory?.evidence)
+  ];
+  const rawSourceOfTruth = stringValue(memory.sourceOfTruth) ?? stringValue(semanticMemory?.sourceOfTruth);
+  const sourceOfTruth = rawSourceOfTruth !== void 0 && rawSourceOfTruth !== normalizedKey ? rawSourceOfTruth : void 0;
+  const directSource = usableSourceKind(memory.source);
+  const evidenceSourceKind = evidenceRecords.map((evidence) => usableSourceKind(evidence.sourceKind ?? evidence.source)).find((value) => value !== void 0);
+  const evidenceRefs2 = uniqueInOrder8(evidenceRecords.flatMap(evidenceRefsForEvidence)).filter((ref) => !isGeneratedNormalizedKeyEvidenceRef(ref, normalizedKey));
+  if (sourceOfTruth !== void 0) {
+    const sourceKind = evidenceSourceKind ?? directSource;
+    return {
+      status: "explicit",
+      sourceOfTruth,
+      ...sourceKind === void 0 ? {} : { sourceKind },
+      evidenceRefs: uniqueInOrder8([sourceOfTruth, ...evidenceRefs2])
+    };
+  }
+  const episodeEvidence = isRecord8(memory.episodeEvidence) ? memory.episodeEvidence : void 0;
+  const episodeSource = usableSourceKind(episodeEvidence?.source);
+  if (evidenceRefs2.length > 0) {
+    const sourceKind = evidenceSourceKind ?? episodeSource ?? directSource;
+    return {
+      status: "evidence_trace",
+      ...sourceKind === void 0 ? {} : { sourceKind },
+      evidenceRefs: evidenceRefs2
+    };
+  }
+  if (normalizedKey !== void 0) {
+    return {
+      status: "fallback_normalized_key",
+      ...directSource === void 0 ? {} : { sourceKind: directSource },
+      evidenceRefs: []
+    };
+  }
+  return {
+    status: "missing",
+    ...directSource === void 0 ? {} : { sourceKind: directSource },
+    evidenceRefs: []
+  };
+}
+function pollutionFlagsForMemory(origin, memory, sourceBoundary) {
+  const flags = /* @__PURE__ */ new Set();
+  if (origin.rootScope === "global" && origin.declaredScope === "project" || origin.rootScope === "project" && origin.declaredScope === "global") {
+    flags.add("scope_root_mismatch");
+  }
+  if (sourceBoundary.status === "missing" || sourceBoundary.status === "fallback_normalized_key") {
+    flags.add("missing_source_boundary");
+  }
+  const domain = stringValue(memory.domain);
+  if (origin.rootScope === "global" && (origin.declaredScope === "project" || domain === "project" || sourceBoundary.sourceKind === "file" || sourceBoundary.sourceKind === "tool_trace")) {
+    flags.add("global_project_specific_source");
+  }
+  if (origin.rootScope === "project" && (domain === "personal" || domain === "relationship" || domain === "affective")) {
+    flags.add("project_personal_domain");
+  }
+  return [...flags];
+}
+function evidenceRecordsFor(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => isRecord8(item));
+}
+function evidenceRefsForEvidence(evidence) {
+  return [
+    evidence.sourceRef,
+    evidence.evidenceRef,
+    evidence.id,
+    evidence.runId,
+    evidence.sessionId,
+    evidence.taskHash,
+    evidence.quoteHash,
+    evidence.evidenceGroupId,
+    ...Array.isArray(evidence.traceRefs) ? evidence.traceRefs : [],
+    ...Array.isArray(evidence.messageIds) ? evidence.messageIds : []
+  ].map(stringValue).filter((value) => value !== void 0);
+}
+function isGeneratedNormalizedKeyEvidenceRef(ref, normalizedKey) {
+  if (normalizedKey === void 0) return false;
+  return ref === normalizedKey || ref === `${normalizedKey}-evidence-1` || ref === `memory:${normalizedKey}:evidence:1`;
+}
+function usableSourceKind(value) {
+  const source = stringValue(value);
+  return source === void 0 || source === "unknown" ? void 0 : source;
+}
+function stringValue(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
 async function resolveSelection(cwd, request) {
   const projects = await readProjects(cwd);
-  const projectId = request.projectId ?? projects.currentProjectId;
-  const projectOption = projects.projects.find((project2) => project2.projectId === projectId);
-  const project = projectOption === void 0 ? { projectId, displayName: unlabeledProjectName(projectId) } : { projectId, displayName: projectOption.displayName };
+  const requestedProjectId = request.projectId ?? projects.currentProjectId;
+  const requestedProjectOption = projects.projects.find((project2) => project2.projectId === requestedProjectId);
+  const currentProjectOption = projects.projects.find((project2) => project2.projectId === projects.currentProjectId);
+  const projectOption = requestedProjectOption ?? currentProjectOption;
+  const projectId = projectOption?.projectId ?? projects.currentProjectId;
+  const project = {
+    projectId,
+    displayName: projectOption?.displayName ?? projects.currentProject.displayName
+  };
   const globalMemoryRoot = await getReadableCodexGlobalMemoryRoot() ?? codexGlobalMemoryRoot();
   const projectMemoryRoot = await getReadableCodexProjectMemoryRoot(projectId) ?? codexProjectMemoryRoot(projectId);
-  const memoryRoots = request.scope === "global" ? [globalMemoryRoot] : request.scope === "all" ? uniqueInOrder7([globalMemoryRoot, projectMemoryRoot]) : [projectMemoryRoot];
+  const memoryRoots = request.scope === "global" ? [globalMemoryRoot] : request.scope === "all" ? uniqueInOrder8([globalMemoryRoot, projectMemoryRoot]) : [projectMemoryRoot];
   const memoryRoot = request.scope === "global" ? globalMemoryRoot : projectMemoryRoot;
   return {
     scope: request.scope,
@@ -26538,6 +26967,12 @@ function projectOptionFromRegistryEntry(entry, currentProject, indexedDisplayNam
     current: entry.projectId === currentProject.projectId
   };
 }
+function shouldExposeProjectOption(entry, currentProject, indexedDisplayName) {
+  if (entry.projectId === currentProject.projectId) return true;
+  if (entry.aliases.length > 0) return true;
+  if (indexedDisplayName !== void 0 && indexedDisplayName.trim() !== "") return true;
+  return entry.displayName.trim() !== "" && entry.displayName !== entry.projectId;
+}
 function projectDisplayName(entry, currentProject, indexedDisplayName) {
   if (entry.aliases[0] !== void 0) return entry.aliases[0];
   if (entry.projectId === currentProject.projectId) return currentProject.displayName;
@@ -26570,7 +27005,7 @@ function compareProjectOptions(left, right) {
 }
 function sortPendingNewestFirst3(pending) {
   return [...pending].sort((left, right) => {
-    const lastSeen = right.lastSeenAt.localeCompare(left.lastSeenAt);
+    const lastSeen = (right.lastSeenAt ?? "").localeCompare(left.lastSeenAt ?? "");
     return lastSeen === 0 ? left.id.localeCompare(right.id) : lastSeen;
   });
 }
@@ -26586,7 +27021,7 @@ function isCodexUiMemoryScope(value) {
 function isValidProjectId(value) {
   return /^[A-Za-z0-9._-]+$/.test(value) && !/^\.+$/.test(value);
 }
-function uniqueInOrder7(values) {
+function uniqueInOrder8(values) {
   const seen = /* @__PURE__ */ new Set();
   return values.filter((value) => {
     if (seen.has(value)) return false;
@@ -26642,7 +27077,9 @@ function groupGlobalMemories(memories) {
   return GLOBAL_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }));
 }
 function groupMemoriesForSelection(memories, scope) {
-  return scope === "global" ? groupGlobalMemories(memories) : groupProjectMemories(memories);
+  if (scope === "global") return groupGlobalMemories(memories);
+  if (scope === "all") return [...groupProjectMemories(memories), ...groupGlobalMemories(memories)];
+  return groupProjectMemories(memories);
 }
 function labelForProjectLifecycleMemory(memory) {
   if (memory.confidenceTier === "trial") return "Trial";
@@ -27191,6 +27628,12 @@ function renderSemanticReviewCard(candidate, options = {}) {
           ['Scope', memory.scope || candidate.scope || 'project'],
           ['Domain', memory.domain || candidate.domain || 'project']
         ])}
+        \${reviewSection('Storage', [
+          ['Root', memoryOriginLabel(candidate)],
+          ['Declared scope', candidate.origin?.declaredScope || memory.scope || candidate.scope || 'project'],
+          ['Source boundary', sourceBoundaryLabel(candidate.sourceBoundary)],
+          ['Pollution flags', pollutionFlagsLabel(candidate)]
+        ])}
         \${reviewSection('Policy', [
           ['Update policy', updatePolicy],
           ['Review policy', reviewPolicy],
@@ -27302,11 +27745,19 @@ function renderProjectMemory() {
 }
 
 function renderMemoryRow(memory) {
+  const meta = [
+    memory.candidateKind || memory.type || 'memory',
+    memoryOriginLabel(memory),
+    \`scope \${memory.origin?.declaredScope || memory.scope || 'unknown'}\`,
+    sourceBoundaryLabel(memory.sourceBoundary),
+    pollutionFlagsLabel(memory),
+    memory.updatedAt || memory.createdAt || 'unknown time'
+  ].join(' \xB7 ')
   return \`
     <article class="data-row">
       <div>
         <div class="row-title">\${escapeHtml(memory.content || memory.id || 'Memory')}</div>
-        <div class="row-meta">\${escapeHtml(memory.candidateKind || memory.type || 'memory')} \xB7 \${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
+        <div class="row-meta">\${escapeHtml(meta)}</div>
       </div>
       <div class="row-actions">
         \${statusChip('tier', memoryTierLabel(memory), 'ok')}
@@ -27781,9 +28232,10 @@ function renderAutomation() {
       <div class="soft-panel">
         <h3>Automation status</h3>
         <div class="soft-inset">
-          Due: \${escapeHtml(String(automation.dreamDue ?? 'unknown'))}<br>
-          Last run: \${escapeHtml(automation.lastDreamAt || 'never')}<br>
-          Status: \${escapeHtml(automation.lastDreamStatus || 'unknown')}
+          Due: \${escapeHtml(String(automation.due ?? 'unknown'))}<br>
+          Last run: \${escapeHtml(automation.lastRunAt || 'never')}<br>
+          Next run: \${escapeHtml(automation.nextRunAt || 'not scheduled')}<br>
+          Status: \${escapeHtml(automation.status || 'unknown')}
         </div>
       </div>
     </section>
@@ -27980,6 +28432,7 @@ function renderPendingDetail(candidate) {
   return \`
     <div class="rail-stack">
       \${renderProposedSemanticMemorySection(candidate)}
+      \${renderStorageOriginSection(candidate)}
       \${renderEpisodeEvidenceSection(candidate)}
       \${renderAdmissionRoutingSection(candidate)}
       \${renderUpdatePolicySection(candidate)}
@@ -28046,6 +28499,18 @@ function renderProposedSemanticMemorySection(candidate) {
     ['Scope', firstPresent(memory.scope, proposed.scope, candidate.scope)],
     ['Domain', firstPresent(memory.domain, candidate.domain)],
     ['Source of truth', sourceOfTruthForWorkflow(candidate)]
+  ])
+}
+
+function renderStorageOriginSection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  return renderWorkflowSection('Storage / Origin', [
+    ['Root', memoryOriginLabel(candidate)],
+    ['Selection scope', candidate.origin?.selectionScope || state.memoryScope],
+    ['Declared scope', candidate.origin?.declaredScope || memory.scope || candidate.scope],
+    ['Memory root', candidate.origin?.memoryRoot || 'missing'],
+    ['Source boundary', sourceBoundaryLabel(candidate.sourceBoundary)],
+    ['Pollution flags', pollutionFlagsLabel(candidate)]
   ])
 }
 
@@ -28449,6 +28914,27 @@ function memoryTierLabel(memory) {
   if (memory?.confidenceTier === 'project_core') return 'Project Core'
   if (memory?.confidenceTier === 'global_core') return 'Global Core'
   return 'Invalid Tier'
+}
+
+function memoryOriginLabel(memory) {
+  const origin = memory?.origin || {}
+  if (origin.rootScope === 'global') return 'Global'
+  if (origin.rootScope === 'project') return \`Project \${shortHash(origin.projectId || '')}\`
+  return memory?.scope === 'global' ? 'Global' : 'Project'
+}
+
+function sourceBoundaryLabel(boundary) {
+  if (!boundary) return 'source missing'
+  const evidenceRefs = Array.isArray(boundary.evidenceRefs) ? boundary.evidenceRefs.filter(Boolean) : []
+  if (boundary.status === 'explicit') return \`source \${boundary.sourceOfTruth || 'explicit'}\`
+  if (boundary.status === 'evidence_trace') return \`evidence \${boundary.sourceKind || evidenceRefs[0] || 'trace'}\`
+  if (boundary.status === 'fallback_normalized_key') return 'fallback normalized key'
+  return 'source missing'
+}
+
+function pollutionFlagsLabel(memory) {
+  const flags = Array.isArray(memory?.pollutionFlags) ? memory.pollutionFlags.filter(Boolean) : []
+  return flags.length > 0 ? \`warnings \${flags.join(', ')}\` : 'warnings none'
 }
 
 function reviewQueueStatusLabel(status) {
@@ -29829,7 +30315,7 @@ async function markSimilarHintTransferable(input) {
 async function findActiveMemory(cwd, memoryId, currentProjectOnly = false) {
   const current = await identifyCodexProject(cwd);
   const currentRoot = await ensureCodexProjectMemoryRoot(current.projectId);
-  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder8([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
+  const roots = currentProjectOnly ? [currentRoot] : uniqueInOrder9([currentRoot, ...await getReadableCodexProjectMemoryRoots()]);
   for (const memoryRoot of roots) {
     const active = await readActiveMemoriesFromRoot(memoryRoot);
     const memory = active.find((item) => item.id === memoryId);
@@ -29874,7 +30360,7 @@ function memoryPortability(memory) {
 function projectIdFromMemoryRoot(memoryRoot) {
   return basename6(dirname11(memoryRoot));
 }
-function uniqueInOrder8(values) {
+function uniqueInOrder9(values) {
   const seen = /* @__PURE__ */ new Set();
   const unique2 = [];
   for (const value of values) {
@@ -30000,6 +30486,25 @@ async function handleCodexCommand(input) {
       userMessage: parseRequiredOption(input.args, "--message", "context preview message"),
       task: parseContextPreviewTask(input.args)
     }), null, 2)}
+`);
+    return;
+  }
+  if (command === "memory" && input.args[1] === "feedback") {
+    const result2 = await recordCodexMemoryFeedback({
+      cwd: input.cwd,
+      memoryId: parseRequiredPositional(input.args, 2, "memory id"),
+      contentHash: parseRequiredOption(input.args, "--content-hash", "feedback content hash"),
+      event: parsePublicActivationFeedbackEvent(input.args),
+      activationId: parseOptionalOption(input.args, "--activation-id"),
+      evidenceRef: parseOptionalOption(input.args, "--evidence-ref"),
+      query: parseOptionalOption(input.args, "--query"),
+      reason: parseOptionalOption(input.args, "--reason"),
+      idempotencyKey: parseOptionalOption(input.args, "--idempotency-key")
+    });
+    if (result2.result.action === "invalid_request") {
+      throw new Error(result2.result.reason);
+    }
+    process.stdout.write(`${JSON.stringify(result2, null, 2)}
 `);
     return;
   }
@@ -30228,7 +30733,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -30318,6 +30823,13 @@ function parseContextPreviewTask(args) {
     return value;
   }
   throw new Error(`Invalid --task: ${value}. Expected coding, planning, debugging, conversation, or memory`);
+}
+function parsePublicActivationFeedbackEvent(args) {
+  const value = parseRequiredOption(args, "--event", "feedback event");
+  if (value === "applied" || value === "ignored" || value === "corrected" || value === "violated") {
+    return value;
+  }
+  throw new Error(`Invalid --event: ${value}. Expected applied, ignored, corrected, or violated`);
 }
 function parseRequiredPositional(args, index, label) {
   const value = args[index];
@@ -44654,6 +45166,32 @@ async function handleMemoryAutomationRun(input, fallbackCwd) {
   return jsonText(result2);
 }
 
+// src/mcp/tools/memory-feedback.ts
+var memoryFeedbackInputSchema = {
+  memoryId: external_exports.string().min(1),
+  contentHash: external_exports.string().min(1),
+  event: external_exports.enum(["applied", "ignored", "corrected", "violated"]),
+  activationId: external_exports.string().optional(),
+  evidenceRef: external_exports.string().optional(),
+  query: external_exports.string().optional(),
+  reason: external_exports.string().optional(),
+  idempotencyKey: external_exports.string().optional()
+};
+async function handleMemoryFeedback(input, fallbackCwd) {
+  const result2 = await recordCodexMemoryFeedback({
+    cwd: fallbackCwd,
+    memoryId: input.memoryId,
+    contentHash: input.contentHash,
+    event: input.event,
+    activationId: input.activationId,
+    evidenceRef: input.evidenceRef,
+    query: input.query,
+    reason: input.reason,
+    idempotencyKey: input.idempotencyKey
+  });
+  return jsonText(result2);
+}
+
 // src/mcp/tools/memory-propose.ts
 var memoryCandidateKindSchema = external_exports.enum(MEMORY_CANDIDATE_KINDS2);
 var memoryCandidateSchema = external_exports.object({
@@ -44926,6 +45464,14 @@ function createCyreneMcpServer(options) {
       inputSchema: memoryHarvestProjectInputSchema
     },
     async (input) => handleMemoryHarvestProject(input, options.cwd)
+  );
+  server.registerTool(
+    "cyrene_memory_feedback",
+    {
+      description: "Record hash-checked active memory usage feedback as lifecycle evidence; this never promotes, edits, archives, or tombstones memory directly.",
+      inputSchema: memoryFeedbackInputSchema
+    },
+    async (input) => handleMemoryFeedback(input, options.cwd)
   );
   server.registerTool(
     "cyrene_memory_pending_list",

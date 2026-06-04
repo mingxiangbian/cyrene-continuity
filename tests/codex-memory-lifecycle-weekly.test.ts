@@ -2,9 +2,14 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
+import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { runCodexMemoryLifecycleWeekly } from '../src/codex/codex-memory-lifecycle-weekly.js'
+import { recordCodexMemoryFeedback } from '../src/codex/memory-feedback.js'
 import { writeLifecycleProfileFromCoreMemory } from '../src/codex/memory-lifecycle-profile.js'
+import { identifyCodexProject } from '../src/codex/project-id.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
+import { semanticMemoryToActiveMemory } from '../src/memory/semantic-memory-adapter.js'
 import {
   appendActivationEventFromRoot,
   readMemoryEventsFromRoot,
@@ -15,8 +20,10 @@ import type { MemoryDomain, MemoryModule, SemanticMemory } from '../src/memory/t
 
 const tempDirs: string[] = []
 const NOW = '2026-06-03T00:00:00.000Z'
+const originalHome = process.env.HOME
 
 afterEach(async () => {
+  process.env.HOME = originalHome
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
@@ -147,6 +154,68 @@ describe('weekly core and global consolidation job', () => {
         evalGate: expect.objectContaining({ passed: true })
       })
     }))
+  })
+
+  it('counts distinct public applied feedback contexts and ignores duplicate feedback', async () => {
+    const home = await createTempDir('cyrene-weekly-feedback-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-weekly-feedback-project-')
+    const project = await identifyCodexProject(cwd)
+    const root = codexProjectMemoryRoot(project.projectId)
+    const memory = semanticMemory({ id: 'validated-feedback' })
+    const contentHash = contentHashForActiveMemory(semanticMemoryToActiveMemory(memory))
+    await writeSemanticMemoriesFromRoot(root, [memory])
+
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: memory.id,
+      contentHash,
+      event: 'applied',
+      evidenceRef: 'session:1',
+      idempotencyKey: 'weekly-feedback-session-1',
+      now: '2026-06-03T00:00:00.000Z'
+    })
+    const duplicate = await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: memory.id,
+      contentHash,
+      event: 'applied',
+      evidenceRef: 'session:2',
+      idempotencyKey: 'weekly-feedback-session-1',
+      now: '2026-06-03T00:01:00.000Z'
+    })
+
+    expect(duplicate.result.action).toBe('duplicate')
+    const beforeSecondContext = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: project.projectId, memoryRoot: root }],
+      apply: true,
+      now: NOW
+    })
+    expect(beforeSecondContext.projectRoots[0]).toMatchObject({ promotedValidatedToProjectCore: 0 })
+    expect((await readSemanticMemoriesFromRoot(root))[0]).toMatchObject({ confidenceTier: 'validated' })
+
+    await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: memory.id,
+      contentHash,
+      event: 'applied',
+      evidenceRef: 'session:2',
+      now: '2026-06-03T00:02:00.000Z'
+    })
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: project.projectId, memoryRoot: root }],
+      apply: true,
+      now: NOW
+    })
+
+    expect(result.projectRoots[0]).toMatchObject({ promotedValidatedToProjectCore: 1 })
+    const promote = (await readMemoryEventsFromRoot(root)).find((event) => event.action === 'promote')
+    expect(promote).toMatchObject({
+      details: expect.objectContaining({
+        distinctEvidenceCount: 2
+      })
+    })
   })
 
   it('does not promote when corrected or violated feedback exists and emits recommendation audit', async () => {

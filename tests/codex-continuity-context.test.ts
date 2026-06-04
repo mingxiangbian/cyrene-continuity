@@ -247,7 +247,8 @@ describe('Codex continuity context', () => {
     expect(context.activation.workflowHints).toEqual([
       expect.objectContaining({
         memoryId: 'trial-memory',
-        activationMode: 'workflow_hint'
+        activationMode: 'workflow_hint',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/)
       })
     ])
     expect(context.activation.planConstraints).toEqual([])
@@ -278,13 +279,15 @@ describe('Codex continuity context', () => {
     expect(context.activation.planConstraints).toEqual([
       expect.objectContaining({
         memoryId: 'validated-memory',
-        activationMode: 'plan_constraint'
+        activationMode: 'plan_constraint',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/)
       })
     ])
     expect(context.activation.checklistItems).toEqual([
       expect.objectContaining({
         memoryId: 'validated-memory',
-        activationMode: 'checklist_item'
+        activationMode: 'checklist_item',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/)
       })
     ])
   })

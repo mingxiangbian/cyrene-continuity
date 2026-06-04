@@ -2,9 +2,37 @@ import { deriveMemoryCandidateKind } from '../memory/candidate-kind.js'
 import { distinctEvidenceCount } from '../memory/memory-validator.js'
 import type { CyreneMemory, MemoryTombstone, PendingMemory } from '../memory/types.js'
 
+export const MEMORY_BOUNDARY_FLAGS = [
+  'scope_root_mismatch',
+  'global_project_specific_source',
+  'project_personal_domain',
+  'missing_source_boundary',
+  'cross_root_normalized_key_collision',
+  'active_pending_collision',
+  'same_key_mixed_metadata'
+] as const
+
+export type MemoryBoundaryFlag = typeof MEMORY_BOUNDARY_FLAGS[number]
+
+type PendingMemoryWithRoot = PendingMemory & { memoryRoot?: string; rootScope?: 'project' | 'global' }
+
 export type TriageDecision =
   | { action: 'auto_drop'; candidateId: string; reason: string }
-  | { action: 'auto_merge'; candidateIds: string[]; clusterId: string; reason: string }
+  | {
+      action: 'auto_merge_allowed'
+      candidateIds: string[]
+      clusterId: string
+      reason: string
+      flags: MemoryBoundaryFlag[]
+    }
+  | {
+      action: 'manual_review_recommended'
+      candidateIds: string[]
+      clusterId: string
+      priority: 'normal' | 'high'
+      reason: string
+      flags: MemoryBoundaryFlag[]
+    }
   | { action: 'auto_defer'; candidateId: string; days: number; reason: string }
   | { action: 'recommend'; candidateId: string; priority: 'normal' | 'high'; reason: string }
   | { action: 'auto_promote'; candidateId: string; policyId: AutoPromotionPolicyId; reason: string }
@@ -18,6 +46,7 @@ export interface CandidateCluster {
   memberIds: string[]
   evidenceCount: number
   recommendation: 'review' | 'promote' | 'drop' | 'defer'
+  flags: MemoryBoundaryFlag[]
 }
 
 export interface AutoPromotionPolicyInput {
@@ -45,10 +74,10 @@ export interface PendingEvictionRank {
 const MAX_REVIEW_RECOMMENDATIONS = 20
 const HIGH_PRIORITY_RECOMMENDATION_SCORE = 1_000
 
-export function buildCandidateClusters(pending: PendingMemory[]): CandidateCluster[] {
+export function buildCandidateClusters(pending: PendingMemoryWithRoot[]): CandidateCluster[] {
   const byKey = new Map<string, PendingMemory[]>()
   for (const candidate of pending) {
-    const key = `${candidate.normalizedKey}|${deriveMemoryCandidateKind(candidate)}|${candidate.scope}`
+    const key = candidate.normalizedKey
     byKey.set(key, [...(byKey.get(key) ?? []), candidate])
   }
   return [...byKey.values()]
@@ -58,7 +87,8 @@ export function buildCandidateClusters(pending: PendingMemory[]): CandidateClust
       normalizedKey: items[0].normalizedKey,
       memberIds: items.map((item) => item.id).sort(),
       evidenceCount: items.reduce((sum, item) => sum + item.evidence.length, 0),
-      recommendation: 'review'
+      recommendation: 'review',
+      flags: []
     }))
 }
 
@@ -147,7 +177,8 @@ export function evaluateAutoPromotionPolicy(input: AutoPromotionPolicyInput): Au
 }
 
 export function triagePendingMemories(input: {
-  pending: PendingMemory[]
+  memoryRoot?: string
+  pending: PendingMemoryWithRoot[]
   active: CyreneMemory[]
   tombstones: MemoryTombstone[]
   scope: 'project' | 'global'
@@ -156,11 +187,31 @@ export function triagePendingMemories(input: {
   const decisions: TriageDecision[] = []
   const clusters = buildCandidateClusters(input.pending)
   for (const cluster of clusters) {
-    decisions.push({
-      action: 'auto_merge',
+    const members = cluster.memberIds
+      .map((id) => input.pending.find((candidate) => candidate.id === id))
+      .filter((candidate): candidate is PendingMemoryWithRoot => candidate !== undefined)
+    const flags = duplicateBoundaryFlags({
+      candidates: members,
+      active: input.active,
+      rootScope: input.scope,
+      memoryRoot: input.memoryRoot
+    })
+    const reason = flags.length === 0
+      ? 'exact duplicate normalizedKey/kind/scope cluster passed conservative merge policy'
+      : `duplicate normalizedKey cluster requires manual review: ${flags.join(', ')}`
+    decisions.push(flags.length === 0 ? {
+      action: 'auto_merge_allowed',
       candidateIds: cluster.memberIds,
       clusterId: cluster.id,
-      reason: 'duplicate normalizedKey/kind/scope cluster'
+      reason,
+      flags
+    } : {
+      action: 'manual_review_recommended',
+      candidateIds: cluster.memberIds,
+      clusterId: cluster.id,
+      priority: flags.some((flag) => flag !== 'missing_source_boundary') ? 'high' : 'normal',
+      reason,
+      flags
     })
   }
   for (const candidate of input.pending) {
@@ -271,4 +322,112 @@ function sourceBonus(source: PendingMemory['source']): number {
   if (source === 'legacy_markdown') return 100
   if (source === 'user_implicit') return 50
   return 0
+}
+
+function duplicateBoundaryFlags(input: {
+  candidates: PendingMemoryWithRoot[]
+  active: CyreneMemory[]
+  rootScope: 'project' | 'global'
+  memoryRoot?: string
+}): MemoryBoundaryFlag[] {
+  const flags = new Set<MemoryBoundaryFlag>()
+  if (input.candidates.length < 2) return []
+  const roots = new Set(input.candidates.map((candidate) => memoryRootForCandidate(candidate, input.memoryRoot)))
+  if (roots.size > 1) flags.add('cross_root_normalized_key_collision')
+  if (input.candidates.some((candidate) => isScopeRootMismatch(candidate, rootScopeForCandidate(candidate, input.rootScope)))) {
+    flags.add('scope_root_mismatch')
+  }
+  if (input.candidates.some((candidate) =>
+    rootScopeForCandidate(candidate, input.rootScope) === 'project' &&
+    (candidate.domain === 'personal' || candidate.domain === 'relationship' || candidate.domain === 'affective')
+  )) {
+    flags.add('project_personal_domain')
+  }
+  if (input.candidates.some((candidate) =>
+    rootScopeForCandidate(candidate, input.rootScope) === 'global' &&
+    isProjectSpecificGlobalCandidate(candidate)
+  )) {
+    flags.add('global_project_specific_source')
+  }
+  if (input.candidates.some((candidate) => !hasSourceBoundary(candidate))) {
+    flags.add('missing_source_boundary')
+  }
+  if (input.active.some((memory) => input.candidates.some((candidate) => memory.normalizedKey === candidate.normalizedKey))) {
+    flags.add('active_pending_collision')
+  }
+  if (hasMixedDuplicateMetadata(input.candidates)) {
+    flags.add('same_key_mixed_metadata')
+  }
+  if (input.candidates.some((candidate) => candidate.conflictsWith !== undefined && candidate.conflictsWith.length > 0)) {
+    flags.add('same_key_mixed_metadata')
+  }
+  if (input.candidates.some((candidate) => candidate.scores.sensitivity > 0.6 || candidate.scores.safety < 0.65)) {
+    flags.add('same_key_mixed_metadata')
+  }
+  return [...flags]
+}
+
+function memoryRootForCandidate(candidate: PendingMemoryWithRoot, fallbackRoot: string | undefined): string {
+  return candidate.memoryRoot ?? fallbackRoot ?? ''
+}
+
+function rootScopeForCandidate(
+  candidate: PendingMemoryWithRoot,
+  fallbackScope: 'project' | 'global'
+): 'project' | 'global' {
+  return candidate.rootScope ?? fallbackScope
+}
+
+function isScopeRootMismatch(candidate: PendingMemory, rootScope: 'project' | 'global'): boolean {
+  if (rootScope === 'global') return candidate.scope === 'project'
+  return candidate.scope === 'global'
+}
+
+function isProjectSpecificGlobalCandidate(candidate: PendingMemory): boolean {
+  const boundaryText = `${candidate.sourceOfTruth ?? ''} ${candidate.content}`.toLowerCase()
+  return (
+    candidate.scope === 'project' ||
+    candidate.domain === 'project' ||
+    candidate.source === 'file' ||
+    candidate.source === 'tool_trace' ||
+    /\b(package\.json|readme|agents\.md|src\/|tests\/|docs\/|\.\/|\.\.)\b/.test(boundaryText)
+  )
+}
+
+function hasSourceBoundary(candidate: PendingMemory): boolean {
+  if (nonEmptyString(candidate.sourceOfTruth) !== undefined) return true
+  return candidate.evidence.some(hasEvidenceTrace)
+}
+
+function hasEvidenceTrace(entry: PendingMemory['evidence'][number]): boolean {
+  return (
+    nonEmptyString(entry.runId) !== undefined ||
+    nonEmptyString(entry.sessionId) !== undefined ||
+    nonEmptyString(entry.taskHash) !== undefined ||
+    nonEmptyString(entry.quoteHash) !== undefined ||
+    nonEmptyString(entry.evidenceGroupId) !== undefined ||
+    (entry.traceRefs ?? []).some((value) => nonEmptyString(value) !== undefined) ||
+    (entry.messageIds ?? []).some((value) => nonEmptyString(value) !== undefined)
+  )
+}
+
+function hasMixedDuplicateMetadata(candidates: PendingMemory[]): boolean {
+  return (
+    distinctValues(candidates.map((candidate) => deriveMemoryCandidateKind(candidate))).length > 1 ||
+    distinctValues(candidates.map((candidate) => candidate.scope)).length > 1 ||
+    distinctValues(candidates.map((candidate) => candidate.domain)).length > 1 ||
+    distinctValues(candidates.map((candidate) => candidate.type)).length > 1 ||
+    distinctValues(candidates.map((candidate) => candidate.source)).length > 1 ||
+    distinctValues(candidates.map((candidate) => nonEmptyString(candidate.sourceOfTruth) ?? '')).length > 1
+  )
+}
+
+function distinctValues(values: string[]): string[] {
+  return Array.from(new Set(values))
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
 }

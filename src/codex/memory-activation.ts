@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto'
+import { contentHashForActiveMemory } from './active-memory-review.js'
 import { isRuntimeActivatableSemanticMemory } from '../memory/memory-lifecycle.js'
-import { activeMemoryToSemanticMemory } from '../memory/semantic-memory-adapter.js'
+import { activeMemoryToSemanticMemory, semanticMemoryToActiveMemory } from '../memory/semantic-memory-adapter.js'
 import { tokenizeMemoryText } from '../memory/tokenizer.js'
 import type { ActivationMode, ConfidenceTier, CyreneMemory, SemanticMemory } from '../memory/types.js'
 
 export interface MemoryActivation {
   id: string
   memoryId: string
+  contentHash: string
   confidenceTier: ConfidenceTier
   activationMode: ActivationMode
   text: string
@@ -133,6 +135,7 @@ function activationForMemory(input: {
   return {
     id: stableActivationId(input.memory.id, input.activationMode, input.source),
     memoryId: input.memory.id,
+    contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(input.memory)),
     confidenceTier: input.memory.confidenceTier,
     activationMode: input.activationMode,
     text: input.text,

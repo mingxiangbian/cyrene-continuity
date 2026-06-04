@@ -502,6 +502,79 @@ describe('Codex memory propose', () => {
     expect(semantic[0]?.confidenceTier).toBe('trial')
   })
 
+  it('keeps otherwise trial-eligible candidates with missing source boundary in pending review', async () => {
+    const home = await createTempDir('cyrene-propose-missing-boundary-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-propose-missing-boundary-project-')
+
+    const result = await proposeCodexMemoryCandidate({
+      cwd,
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        strength: 'hard',
+        scope: 'project',
+        source: 'file',
+        candidateKind: 'project_fact',
+        content: 'Project source-boundary gates require auditable file or trace references.',
+        normalizedKey: 'project-source-boundary-gates',
+        evidence: [{ summary: 'A summary without a source ref is not enough for trial admission.' }],
+        scores: {
+          evidenceStrength: 0.95,
+          stability: 0.95,
+          usefulness: 0.9,
+          safety: 0.95,
+          sensitivity: 0.1
+        }
+      }
+    })
+
+    expect(result.result.action).toBe('pending')
+    if (result.result.action !== 'pending') throw new Error(`Expected pending, got ${result.result.action}`)
+    expect(result.result.reason).toContain('source boundary')
+    await expect(readFile(join(result.memoryRoot, 'index.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('admits trial candidates with evidence trace source boundaries', async () => {
+    const home = await createTempDir('cyrene-propose-evidence-boundary-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-propose-evidence-boundary-project-')
+
+    const result = await proposeCodexMemoryCandidate({
+      cwd,
+      candidate: {
+        domain: 'project',
+        type: 'project_fact',
+        strength: 'hard',
+        scope: 'project',
+        source: 'tool_trace',
+        candidateKind: 'project_fact',
+        content: 'Focused duplicate gate tests cover cross-root collisions.',
+        normalizedKey: 'duplicate-gate-cross-root-tests',
+        evidence: [{
+          evidenceGroupId: 'duplicate-gates-test',
+          sourceKind: 'tool_trace',
+          traceRefs: ['tests/codex-memory-triage.test.ts'],
+          summary: 'Focused test covers cross-root duplicate behavior.'
+        }],
+        scores: {
+          evidenceStrength: 0.95,
+          stability: 0.95,
+          usefulness: 0.9,
+          safety: 0.95,
+          sensitivity: 0.1
+        }
+      }
+    })
+
+    expect(result.result.action).toBe('trial')
+    const semantic = await readSemanticMemoriesFromRoot(result.memoryRoot)
+    expect(semantic[0]?.evidence[0]).toMatchObject({
+      sourceKind: 'tool_trace',
+      sourceRef: 'duplicate-gates-test'
+    })
+  })
+
   it('does not auto-promote repeated implementation notes before rewrite', async () => {
     const home = await createTempDir('cyrene-propose-auto-promote-rewrite-home-')
     vi.stubEnv('HOME', home)
