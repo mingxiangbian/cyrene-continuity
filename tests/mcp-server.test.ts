@@ -25,6 +25,7 @@ import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
+const PLUGIN_BUILD_TEST_TIMEOUT_MS = 20_000
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
 
@@ -467,7 +468,7 @@ describe('Cyrene MCP server', () => {
     } finally {
       await client.close()
     }
-  })
+  }, PLUGIN_BUILD_TEST_TIMEOUT_MS)
 
   it('documents pending review behavior in the Codex continuity skill', async () => {
     const source = await readFile(

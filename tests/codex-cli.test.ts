@@ -17,6 +17,7 @@ import {
 import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
+const PLUGIN_BUILD_TEST_TIMEOUT_MS = 20_000
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
 
@@ -591,7 +592,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('Disable or remove manual Cyrene MCP config')
     expect(shim).toContain('plugin/runtime/cyrene-continuity.mjs')
     expect(shim).toContain('exec node "$runtime" "$@"')
-  })
+  }, PLUGIN_BUILD_TEST_TIMEOUT_MS)
 
   it('install --plugin refuses to write a shim when the plugin runtime has not been built', async () => {
     const home = await createTempDir('cyrene-codex-plugin-install-missing-runtime-home-')
@@ -633,7 +634,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('stable shim: present')
     expect(result.stdout).toContain('cyrene-continuity: plugin')
     expect(result.stdout).toContain('status: ready')
-  })
+  }, PLUGIN_BUILD_TEST_TIMEOUT_MS)
 
   it('doctor reports a manual MCP config as a plugin bridge conflict', async () => {
     const home = await createTempDir('cyrene-codex-plugin-conflict-home-')
@@ -666,7 +667,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('status: not ready')
     expect(result.stdout).toContain('action: disable or remove manual Cyrene MCP config')
     expect(result.stdout).not.toContain('action: rerun')
-  })
+  }, PLUGIN_BUILD_TEST_TIMEOUT_MS)
 
   it('install-hook --stop --dry-run does not write hooks.json', async () => {
     const home = await createTempDir('cyrene-codex-hook-dry-run-home-')

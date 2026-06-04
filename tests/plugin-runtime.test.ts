@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const execFileAsync = promisify(execFile)
+const PLUGIN_BUILD_TEST_TIMEOUT_MS = 20_000
 const tempDirs: string[] = []
 
 afterEach(async () => {
@@ -54,7 +55,7 @@ describe('plugin runtime package', () => {
     expect(source.startsWith('#!/usr/bin/env node')).toBe(true)
     expect(source).toContain('cyrene_continuity_get')
     expect(source).not.toMatch(/^import\s+.+from ['"]@modelcontextprotocol\/sdk/m)
-  })
+  }, PLUGIN_BUILD_TEST_TIMEOUT_MS)
 
   it('builds the plugin runtime relative to the repo when invoked from another directory', async () => {
     const otherCwd = await createTempDir('cyrene-plugin-build-cwd-')
@@ -76,5 +77,5 @@ describe('plugin runtime package', () => {
     await expect(stat(join(otherCwd, 'plugin', 'runtime', 'cyrene-continuity.mjs'))).rejects.toMatchObject({
       code: 'ENOENT'
     })
-  })
+  }, PLUGIN_BUILD_TEST_TIMEOUT_MS)
 })
