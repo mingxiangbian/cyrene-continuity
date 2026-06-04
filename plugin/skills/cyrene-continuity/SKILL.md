@@ -40,8 +40,9 @@ Use `cyrene-continuity codex ui` when the user wants local visual review of the 
 21. When multiple manual review candidates exist, show at most three at a time unless the user asks for more.
 22. Do not invent user preferences from assistant suggestions or silence.
 23. Memory Automation may recommend repeated independent evidence for review, but it must not admit high-risk, ambiguous, personal, relationship, affective, similar-project, or assistant-observed-only memory into trial, validated, or core without explicit approval and review hash.
-24. Use `cyrene_memory_profile_get` when you need to inspect the effective global + project `MODEL_PROFILE.md` context. Profile context is generated from core memory; project harvest creates project-scope trial memory by default for strict low-risk evidence, and review queue candidates for high-risk or ambiguous evidence.
-25. Use `cyrene_memory_automation_run` only for explicit daily/weekly lifecycle maintenance or verification tasks; running it is not a substitute for asking approve/reject/edit/defer on visible manual review candidates.
+24. When `cyrene_continuity_get` returns an active activation item with `memoryId` and `contentHash`, call `cyrene_memory_feedback` after the memory is actually applied, ignored, corrected, or violated. Feedback is active-memory evidence only: it must not include raw transcript/appshot/attachment content, must rely on `contentHash`, and must not be described as promotion.
+25. Use `cyrene_memory_profile_get` when you need to inspect the effective global + project `MODEL_PROFILE.md` context. Profile context is generated from core memory; project harvest creates project-scope trial memory by default for strict low-risk evidence, and review queue candidates for high-risk or ambiguous evidence.
+26. Use `cyrene_memory_automation_run` only for explicit daily/weekly lifecycle maintenance or verification tasks; running it is not a substitute for asking approve/reject/edit/defer on visible manual review candidates.
 
 ## Boundaries
 

@@ -374,7 +374,8 @@ describe('cyrene-continuity codex CLI', () => {
       expect.objectContaining({
         memoryId: 'preview-trial-1',
         confidenceTier: 'trial',
-        activationMode: 'workflow_hint'
+        activationMode: 'workflow_hint',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/)
       })
     ])
     expect(preview.activation.planConstraints).toEqual([])
@@ -407,6 +408,86 @@ describe('cyrene-continuity codex CLI', () => {
     expect(activeAndActivation).not.toContain('DO NOT LEAK GLOBAL PENDING CONTENT')
     expect(activeAndActivation).not.toContain('DO NOT LEAK ARCHIVED CONTENT')
     expect(await readActivationEventsFromRoot(projectRoot)).toEqual([])
+  })
+
+  it('records active memory feedback from the CLI without storing raw query text', async () => {
+    const home = await createTempDir('cyrene-codex-cli-feedback-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-feedback-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'feedback-cli-test' }), 'utf8')
+    const { active, contentHash, memoryRoot } = await seedCliActiveMemory(cwd)
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        '--cwd',
+        cwd,
+        'codex',
+        'memory',
+        'feedback',
+        active.id,
+        '--content-hash',
+        contentHash,
+        '--event',
+        'applied',
+        '--query',
+        'CLI feedback raw query must not persist.'
+      ],
+      { cwd: process.cwd(), env: cliEnv(home), timeout: 10_000 }
+    )
+    const parsed = JSON.parse(result.stdout)
+
+    expect(parsed).toMatchObject({
+      action: 'memory_feedback',
+      result: {
+        action: 'recorded',
+        memoryId: active.id,
+        event: 'applied'
+      }
+    })
+    const events = await readActivationEventsFromRoot(memoryRoot)
+    expect(events).toHaveLength(1)
+    expect(events[0]?.queryHash).toMatch(/^[a-f0-9]{16}$/)
+    expect(JSON.stringify(events)).not.toContain('CLI feedback raw query must not persist')
+  })
+
+  it.each([
+    ['invalid event', ['--event', 'retrieved'], 'Invalid --event: retrieved. Expected applied, ignored, corrected, or violated'],
+    ['missing content hash', ['--event', 'applied', '--query', 'feedback query'], 'Invalid feedback content hash: missing value'],
+    ['negative event missing reason', ['--event', 'violated'], 'violated feedback requires reason']
+  ])('rejects CLI memory feedback with %s', async (_label, args, stderr) => {
+    const home = await createTempDir('cyrene-codex-cli-feedback-invalid-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-feedback-invalid-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'feedback-cli-invalid-test' }), 'utf8')
+    const { active, contentHash } = await seedCliActiveMemory(cwd)
+    const contentHashArgs = args.includes('--content-hash') || stderr.includes('content hash')
+      ? []
+      : ['--content-hash', contentHash]
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+          join(process.cwd(), 'src/main.ts'),
+          '--cwd',
+          cwd,
+          'codex',
+          'memory',
+          'feedback',
+          active.id,
+          ...contentHashArgs,
+          ...args
+        ],
+        { cwd: process.cwd(), env: cliEnv(home), timeout: 10_000 }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining(stderr)
+    })
   })
 
   it('runs project memory harvest dry-run without model config', async () => {

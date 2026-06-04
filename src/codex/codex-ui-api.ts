@@ -41,7 +41,7 @@ import {
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
-import { triagePendingMemories, type TriageDecision } from './memory-triage.js'
+import { triagePendingMemories, type MemoryBoundaryFlag, type TriageDecision } from './memory-triage.js'
 import { applySafeTriageDecisions, type TriageApplyCounts } from './triage-apply.js'
 import {
   deferCodexPendingMemory,
@@ -98,11 +98,57 @@ interface ActiveMemoryResult {
   memoryRoot: string
 }
 
-type CodexUiActiveMemorySummary = CyreneMemory & { contentHash: string; destructiveConfirmationRequired: boolean }
+interface CodexUiMemoryOrigin {
+  rootScope: 'global' | 'project'
+  memoryRoot: string
+  projectId?: string
+  selectionScope: CodexUiMemoryScope
+  declaredScope?: string
+  rootLabel: string
+}
+
+interface CodexUiSourceBoundary {
+  status: 'explicit' | 'evidence_trace' | 'missing' | 'fallback_normalized_key'
+  sourceOfTruth?: string
+  sourceKind?: string
+  evidenceRefs: string[]
+}
+
+interface CodexUiMemoryProjection {
+  origin: CodexUiMemoryOrigin
+  sourceBoundary: CodexUiSourceBoundary
+  pollutionFlags: MemoryBoundaryFlag[]
+}
+
+interface CodexUiAutomationState {
+  due: boolean
+  nextRunAt?: string
+  lastRunAt?: string
+  status?: 'success' | 'skipped' | 'failed'
+  error?: string
+}
+
+interface CodexUiMemoryProjectionInput {
+  scope?: unknown
+  domain?: unknown
+  source?: unknown
+  sourceOfTruth?: unknown
+  evidence?: unknown
+  normalizedKey?: unknown
+  semanticMemory?: unknown
+  episodeEvidence?: unknown
+}
+
+type CodexUiActiveMemorySummary = CyreneMemory & CodexUiMemoryProjection & {
+  contentHash: string
+  destructiveConfirmationRequired: boolean
+}
+
+type CodexUiPendingMemorySummary = CodexPendingMemorySummary & CodexUiMemoryProjection
 
 interface ProjectMemoryGroup {
   label: string
-  memories: CyreneMemory[]
+  memories: CodexUiActiveMemorySummary[]
 }
 
 const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
@@ -224,8 +270,10 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
       }
       const selection = parseSelectionRequest(input.searchParams)
       if ('error' in selection) return selection.error
-      const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, 'memory triage')
-      if (unsupportedScope !== undefined) return unsupportedScope
+      if (input.pathname.endsWith('/apply')) {
+        const unsupportedScope = rejectAllScopeForSingleRootOperation(selection.value, 'memory triage apply')
+        if (unsupportedScope !== undefined) return unsupportedScope
+      }
       return ok(await runUiMemoryTriage({
         cwd: input.cwd,
         selection: selection.value,
@@ -855,7 +903,9 @@ async function readProjects(cwd: string): Promise<CodexUiProjectsResult> {
 
   for (const entry of entries) {
     if (entry.disabled) continue
-    projects.set(entry.projectId, projectOptionFromRegistryEntry(entry, currentProject, indexedProjectNames.get(entry.projectId)))
+    const indexedDisplayName = indexedProjectNames.get(entry.projectId)
+    if (!shouldExposeProjectOption(entry, currentProject, indexedDisplayName)) continue
+    projects.set(entry.projectId, projectOptionFromRegistryEntry(entry, currentProject, indexedDisplayName))
   }
 
   const currentRegistryEntry = entries.find((entry) => entry.projectId === currentProject.projectId)
@@ -968,11 +1018,13 @@ async function runUiMemoryTriage(input: {
         readActiveMemoriesFromRoot(lockedMemoryRoot),
         readTombstonesFromRoot(lockedMemoryRoot)
       ])
+      const rootScope = rootScopeForMemoryRoot(selection, lockedMemoryRoot)
       const result = triagePendingMemories({
-        pending,
+        pending: pending.map((candidate) => ({ ...candidate, memoryRoot: lockedMemoryRoot, rootScope })),
         active,
         tombstones,
-        scope: selection.scope === 'global' ? 'global' : 'project',
+        scope: rootScope,
+        memoryRoot: lockedMemoryRoot,
         now
       })
       const applied = applySafeTriageDecisions({
@@ -1000,16 +1052,27 @@ async function runUiMemoryTriage(input: {
     })
   }
 
-  const [pending, active, tombstones] = await Promise.all([
-    readPendingMemoriesFromRoot(memoryRoot),
-    readActiveMemoriesFromRoot(memoryRoot),
-    readTombstonesFromRoot(memoryRoot)
-  ])
+  const triageInputs = await Promise.all(selection.memoryRoots.map(async (root) => {
+    const rootScope = rootScopeForMemoryRoot(selection, root)
+    const [pending, active, tombstones] = await Promise.all([
+      readPendingMemoriesFromRoot(root),
+      readActiveMemoriesFromRoot(root),
+      readTombstonesFromRoot(root)
+    ])
+    return {
+      memoryRoot: root,
+      rootScope,
+      pending: pending.map((candidate) => ({ ...candidate, memoryRoot: root, rootScope })),
+      active,
+      tombstones
+    }
+  }))
   const result = triagePendingMemories({
-    pending,
-    active,
-    tombstones,
+    pending: triageInputs.flatMap((root) => root.pending),
+    active: triageInputs.flatMap((root) => root.active),
+    tombstones: triageInputs.flatMap((root) => root.tombstones),
     scope: selection.scope === 'global' ? 'global' : 'project',
+    memoryRoot: selection.scope === 'all' ? undefined : memoryRoot,
     now
   })
   return {
@@ -1104,7 +1167,7 @@ async function readAutomation(cwd: string, request: CodexUiSelectionRequest): Pr
   project: CodexUiProjectIdentity
   selection: ReturnType<typeof publicSelection>
   memoryRoot: string
-  automation: Awaited<ReturnType<typeof readCodexMemoryDreamState>>
+  automation: CodexUiAutomationState
 }> {
   return readAutomationFromSelection(await resolveSelection(cwd, request))
 }
@@ -1113,22 +1176,27 @@ async function readAutomationFromSelection(selection: CodexUiResolvedSelection):
   project: CodexUiProjectIdentity
   selection: ReturnType<typeof publicSelection>
   memoryRoot: string
-  automation: Awaited<ReturnType<typeof readCodexMemoryDreamState>>
+  automation: CodexUiAutomationState
 }> {
   const memoryRoot = selection.memoryRoot
-  const automation = await readCodexMemoryDreamState(memoryRoot)
+  const automation = publicAutomationState(await readCodexMemoryDreamState(memoryRoot))
   return { project: selection.project, selection: publicSelection(selection), memoryRoot, automation }
 }
 
 async function readActiveFromSelection(selection: CodexUiResolvedSelection): Promise<ActiveMemoryResult> {
-  const active = (await Promise.all(selection.memoryRoots.map((root) => readActiveMemoriesFromRoot(root)))).flat()
+  const activeByRoot = await Promise.all(selection.memoryRoots.map(async (root) => ({
+    memoryRoot: root,
+    active: await readActiveMemoriesFromRoot(root)
+  })))
+  const active = activeByRoot.flatMap((root) => root.active.map((memory) => ({
+    ...memory,
+    ...memoryProjectionFor(selection, root.memoryRoot, memory),
+    contentHash: contentHashForActiveMemory(memory),
+    destructiveConfirmationRequired: activeMemoryRequiresDestructiveConfirmation(memory)
+  })))
   return {
     project: selection.project,
-    active: sortMemoriesNewestFirst(active).map((memory) => ({
-      ...memory,
-      contentHash: contentHashForActiveMemory(memory),
-      destructiveConfirmationRequired: activeMemoryRequiresDestructiveConfirmation(memory)
-    })),
+    active: sortMemoriesNewestFirst(active),
     memoryRoot: selection.memoryRoot
   }
 }
@@ -1136,18 +1204,28 @@ async function readActiveFromSelection(selection: CodexUiResolvedSelection): Pro
 async function readPendingFromSelection(selection: CodexUiResolvedSelection): Promise<{
   project: CodexUiProjectIdentity
   selection: ReturnType<typeof publicSelection>
-  pending: CodexPendingMemorySummary[]
+  pending: CodexUiPendingMemorySummary[]
   total: number
   memoryRoot: string
   memoryRoots: string[]
 }> {
   const now = new Date().toISOString()
   const pendingByRoot = await Promise.all(selection.memoryRoots.map(async (root) => ({
+    memoryRoot: root,
     pending: await readPendingMemoriesFromRoot(root),
     receipts: await readSemanticRewriteReceiptsFromRoot(root)
   })))
   const summaries = sortPendingNewestFirst(pendingByRoot.flatMap((root) =>
-    root.pending.map((candidate) => summarizePendingMemory(candidate, now, root.receipts))
+    root.pending.map((candidate) => {
+      const summary = summarizePendingMemory(candidate, now, root.receipts)
+      return {
+        ...summary,
+        ...memoryProjectionFor(selection, root.memoryRoot, {
+          ...candidate,
+          semanticMemory: summary.semanticMemory
+        })
+      }
+    })
   ))
   return {
     project: selection.project,
@@ -1159,13 +1237,190 @@ async function readPendingFromSelection(selection: CodexUiResolvedSelection): Pr
   }
 }
 
+function publicAutomationState(state: Awaited<ReturnType<typeof readCodexMemoryDreamState>>): CodexUiAutomationState {
+  return {
+    due: state.dreamDue,
+    ...(state.nextDreamDueAt === undefined ? {} : { nextRunAt: state.nextDreamDueAt }),
+    ...(state.lastDreamAt === undefined ? {} : { lastRunAt: state.lastDreamAt }),
+    ...(state.lastDreamStatus === undefined ? {} : { status: state.lastDreamStatus }),
+    ...(state.lastDreamError === undefined ? {} : { error: state.lastDreamError })
+  }
+}
+
+function memoryProjectionFor(
+  selection: CodexUiResolvedSelection,
+  memoryRoot: string,
+  memory: CodexUiMemoryProjectionInput
+): CodexUiMemoryProjection {
+  const origin = memoryOriginFor(selection, memoryRoot, memory)
+  const sourceBoundary = sourceBoundaryForMemory(memory)
+  return {
+    origin,
+    sourceBoundary,
+    pollutionFlags: pollutionFlagsForMemory(origin, memory, sourceBoundary)
+  }
+}
+
+function memoryOriginFor(
+  selection: CodexUiResolvedSelection,
+  memoryRoot: string,
+  memory: CodexUiMemoryProjectionInput
+): CodexUiMemoryOrigin {
+  const rootScope = rootScopeForMemoryRoot(selection, memoryRoot)
+  return {
+    rootScope,
+    memoryRoot,
+    ...(rootScope === 'project' ? { projectId: selection.projectId } : {}),
+    selectionScope: selection.scope,
+    ...(typeof memory.scope === 'string' ? { declaredScope: memory.scope } : {}),
+    rootLabel: rootScope === 'global' ? 'Global' : selection.project.displayName
+  }
+}
+
+function rootScopeForMemoryRoot(
+  selection: Pick<CodexUiResolvedSelection, 'globalMemoryRoot'>,
+  memoryRoot: string
+): 'project' | 'global' {
+  return memoryRoot === selection.globalMemoryRoot ? 'global' : 'project'
+}
+
+function sourceBoundaryForMemory(memory: CodexUiMemoryProjectionInput): CodexUiSourceBoundary {
+  const semanticMemory = isRecord(memory.semanticMemory) ? memory.semanticMemory : undefined
+  const normalizedKey = stringValue(memory.normalizedKey)
+  const evidenceRecords = [
+    ...evidenceRecordsFor(memory.evidence),
+    ...evidenceRecordsFor(semanticMemory?.evidence)
+  ]
+  const rawSourceOfTruth = stringValue(memory.sourceOfTruth) ?? stringValue(semanticMemory?.sourceOfTruth)
+  const sourceOfTruth = rawSourceOfTruth !== undefined && rawSourceOfTruth !== normalizedKey
+    ? rawSourceOfTruth
+    : undefined
+  const directSource = usableSourceKind(memory.source)
+  const evidenceSourceKind = evidenceRecords
+    .map((evidence) => usableSourceKind(evidence.sourceKind ?? evidence.source))
+    .find((value) => value !== undefined)
+  const evidenceRefs = uniqueInOrder(evidenceRecords.flatMap(evidenceRefsForEvidence))
+    .filter((ref) => !isGeneratedNormalizedKeyEvidenceRef(ref, normalizedKey))
+  if (sourceOfTruth !== undefined) {
+    const sourceKind = evidenceSourceKind ?? directSource
+    return {
+      status: 'explicit',
+      sourceOfTruth,
+      ...(sourceKind === undefined ? {} : { sourceKind }),
+      evidenceRefs: uniqueInOrder([sourceOfTruth, ...evidenceRefs])
+    }
+  }
+
+  const episodeEvidence = isRecord(memory.episodeEvidence) ? memory.episodeEvidence : undefined
+  const episodeSource = usableSourceKind(episodeEvidence?.source)
+  if (evidenceRefs.length > 0) {
+    const sourceKind = evidenceSourceKind ?? episodeSource ?? directSource
+    return {
+      status: 'evidence_trace',
+      ...(sourceKind === undefined ? {} : { sourceKind }),
+      evidenceRefs
+    }
+  }
+
+  if (normalizedKey !== undefined) {
+    return {
+      status: 'fallback_normalized_key',
+      ...(directSource === undefined ? {} : { sourceKind: directSource }),
+      evidenceRefs: []
+    }
+  }
+  return {
+    status: 'missing',
+    ...(directSource === undefined ? {} : { sourceKind: directSource }),
+    evidenceRefs: []
+  }
+}
+
+function pollutionFlagsForMemory(
+  origin: CodexUiMemoryOrigin,
+  memory: CodexUiMemoryProjectionInput,
+  sourceBoundary: CodexUiSourceBoundary
+): MemoryBoundaryFlag[] {
+  const flags = new Set<MemoryBoundaryFlag>()
+  if (
+    (origin.rootScope === 'global' && origin.declaredScope === 'project') ||
+    (origin.rootScope === 'project' && origin.declaredScope === 'global')
+  ) {
+    flags.add('scope_root_mismatch')
+  }
+  if (sourceBoundary.status === 'missing' || sourceBoundary.status === 'fallback_normalized_key') {
+    flags.add('missing_source_boundary')
+  }
+  const domain = stringValue(memory.domain)
+  if (
+    origin.rootScope === 'global' &&
+    (origin.declaredScope === 'project' ||
+      domain === 'project' ||
+      sourceBoundary.sourceKind === 'file' ||
+      sourceBoundary.sourceKind === 'tool_trace')
+  ) {
+    flags.add('global_project_specific_source')
+  }
+  if (
+    origin.rootScope === 'project' &&
+    (domain === 'personal' || domain === 'relationship' || domain === 'affective')
+  ) {
+    flags.add('project_personal_domain')
+  }
+  return [...flags]
+}
+
+function evidenceRecordsFor(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is Record<string, unknown> => isRecord(item))
+}
+
+function evidenceRefsForEvidence(evidence: Record<string, unknown>): string[] {
+  return [
+    evidence.sourceRef,
+    evidence.evidenceRef,
+    evidence.id,
+    evidence.runId,
+    evidence.sessionId,
+    evidence.taskHash,
+    evidence.quoteHash,
+    evidence.evidenceGroupId,
+    ...(Array.isArray(evidence.traceRefs) ? evidence.traceRefs : []),
+    ...(Array.isArray(evidence.messageIds) ? evidence.messageIds : [])
+  ].map(stringValue).filter((value): value is string => value !== undefined)
+}
+
+function isGeneratedNormalizedKeyEvidenceRef(ref: string, normalizedKey: string | undefined): boolean {
+  if (normalizedKey === undefined) return false
+  return (
+    ref === normalizedKey ||
+    ref === `${normalizedKey}-evidence-1` ||
+    ref === `memory:${normalizedKey}:evidence:1`
+  )
+}
+
+function usableSourceKind(value: unknown): string | undefined {
+  const source = stringValue(value)
+  return source === undefined || source === 'unknown' ? undefined : source
+}
+
+function stringValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
 async function resolveSelection(cwd: string, request: CodexUiSelectionRequest): Promise<CodexUiResolvedSelection> {
   const projects = await readProjects(cwd)
-  const projectId = request.projectId ?? projects.currentProjectId
-  const projectOption = projects.projects.find((project) => project.projectId === projectId)
-  const project = projectOption === undefined
-    ? { projectId, displayName: unlabeledProjectName(projectId) }
-    : { projectId, displayName: projectOption.displayName }
+  const requestedProjectId = request.projectId ?? projects.currentProjectId
+  const requestedProjectOption = projects.projects.find((project) => project.projectId === requestedProjectId)
+  const currentProjectOption = projects.projects.find((project) => project.projectId === projects.currentProjectId)
+  const projectOption = requestedProjectOption ?? currentProjectOption
+  const projectId = projectOption?.projectId ?? projects.currentProjectId
+  const project = {
+    projectId,
+    displayName: projectOption?.displayName ?? projects.currentProject.displayName
+  }
   const globalMemoryRoot = (await getReadableCodexGlobalMemoryRoot()) ?? codexGlobalMemoryRoot()
   const projectMemoryRoot = (await getReadableCodexProjectMemoryRoot(projectId)) ?? codexProjectMemoryRoot(projectId)
   const memoryRoots = request.scope === 'global'
@@ -1314,6 +1569,17 @@ function projectOptionFromRegistryEntry(
   }
 }
 
+function shouldExposeProjectOption(
+  entry: CodexProjectRegistryEntry,
+  currentProject: CodexProjectIdentity,
+  indexedDisplayName?: string
+): boolean {
+  if (entry.projectId === currentProject.projectId) return true
+  if (entry.aliases.length > 0) return true
+  if (indexedDisplayName !== undefined && indexedDisplayName.trim() !== '') return true
+  return entry.displayName.trim() !== '' && entry.displayName !== entry.projectId
+}
+
 function projectDisplayName(
   entry: CodexProjectRegistryEntry,
   currentProject: CodexProjectIdentity,
@@ -1354,14 +1620,14 @@ function compareProjectOptions(left: CodexUiProjectOption, right: CodexUiProject
   return left.displayName.localeCompare(right.displayName) || left.projectId.localeCompare(right.projectId)
 }
 
-function sortPendingNewestFirst(pending: CodexPendingMemorySummary[]): CodexPendingMemorySummary[] {
+function sortPendingNewestFirst<T extends { id: string; lastSeenAt?: string; firstSeenAt?: string }>(pending: T[]): T[] {
   return [...pending].sort((left, right) => {
-    const lastSeen = right.lastSeenAt.localeCompare(left.lastSeenAt)
+    const lastSeen = (right.lastSeenAt ?? '').localeCompare(left.lastSeenAt ?? '')
     return lastSeen === 0 ? left.id.localeCompare(right.id) : lastSeen
   })
 }
 
-function sortMemoriesNewestFirst(memories: CyreneMemory[]): CyreneMemory[] {
+function sortMemoriesNewestFirst<T extends { id: string; updatedAt: string }>(memories: T[]): T[] {
   return [...memories].sort((left, right) => {
     const updated = right.updatedAt.localeCompare(left.updatedAt)
     return updated === 0 ? left.id.localeCompare(right.id) : updated
@@ -1413,8 +1679,8 @@ async function readReviewSummaryRecordsForUi(memoryRoot: string): Promise<CodexR
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
 
-function groupProjectMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
-  const groups = new Map<ProjectLifecycleLabel, CyreneMemory[]>()
+function groupProjectMemories(memories: CodexUiActiveMemorySummary[]): ProjectMemoryGroup[] {
+  const groups = new Map<ProjectLifecycleLabel, CodexUiActiveMemorySummary[]>()
   for (const label of PROJECT_LIFECYCLE_LABELS) {
     groups.set(label, [])
   }
@@ -1429,8 +1695,8 @@ function groupProjectMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
   return PROJECT_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
 }
 
-function groupGlobalMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
-  const groups = new Map<GlobalLifecycleLabel, CyreneMemory[]>()
+function groupGlobalMemories(memories: CodexUiActiveMemorySummary[]): ProjectMemoryGroup[] {
+  const groups = new Map<GlobalLifecycleLabel, CodexUiActiveMemorySummary[]>()
   for (const label of GLOBAL_LIFECYCLE_LABELS) {
     groups.set(label, [])
   }
@@ -1445,8 +1711,10 @@ function groupGlobalMemories(memories: CyreneMemory[]): ProjectMemoryGroup[] {
   return GLOBAL_LIFECYCLE_LABELS.map((label) => ({ label, memories: groups.get(label) ?? [] }))
 }
 
-function groupMemoriesForSelection(memories: CyreneMemory[], scope: CodexUiMemoryScope): ProjectMemoryGroup[] {
-  return scope === 'global' ? groupGlobalMemories(memories) : groupProjectMemories(memories)
+function groupMemoriesForSelection(memories: CodexUiActiveMemorySummary[], scope: CodexUiMemoryScope): ProjectMemoryGroup[] {
+  if (scope === 'global') return groupGlobalMemories(memories)
+  if (scope === 'all') return [...groupProjectMemories(memories), ...groupGlobalMemories(memories)]
+  return groupProjectMemories(memories)
 }
 
 function labelForProjectLifecycleMemory(memory: CyreneMemory): ProjectLifecycleLabel | undefined {

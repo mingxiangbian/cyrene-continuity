@@ -9,6 +9,7 @@ import {
   handleMemoryAutomationRun,
   memoryAutomationRunInputSchema
 } from './tools/memory-automation.js'
+import { handleMemoryFeedback, memoryFeedbackInputSchema } from './tools/memory-feedback.js'
 import { handleMemoryPropose, memoryProposeInputSchema } from './tools/memory-propose.js'
 import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from './tools/memory-harvest-project.js'
 import {
@@ -75,6 +76,16 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
       inputSchema: memoryHarvestProjectInputSchema
     },
     async (input) => handleMemoryHarvestProject(input, options.cwd)
+  )
+
+  server.registerTool(
+    'cyrene_memory_feedback',
+    {
+      description:
+        'Record hash-checked active memory usage feedback as lifecycle evidence; this never promotes, edits, archives, or tombstones memory directly.',
+      inputSchema: memoryFeedbackInputSchema
+    },
+    async (input) => handleMemoryFeedback(input, options.cwd)
   )
 
   server.registerTool(

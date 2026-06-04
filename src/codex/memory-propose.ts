@@ -239,12 +239,14 @@ export async function proposeCodexMemoryCandidate(input: {
         })
       : undefined
 
+    const trialEligibility = evaluateProjectTrialEligibility({
+      candidate: mergedCandidate,
+      activeReadinessReady: activeReadiness.ready
+    })
+
     if (
       input.allowAutoPromote !== false &&
-      isProjectTrialEligible({
-        candidate: mergedCandidate,
-        activeReadinessReady: activeReadiness.ready
-      })
+      trialEligibility.allowed
     ) {
       const trial = trialSemanticMemoryFromCandidate(mergedCandidate, now)
       await upsertSemanticMemoriesFromRoot(lockedMemoryRoot, [trial])
@@ -356,6 +358,8 @@ export async function proposeCodexMemoryCandidate(input: {
     if (decision.action === 'auto_write') {
       if (input.allowAutoPromote === false) {
         reason = `Auto-promotion disabled for this proposal: ${autoPromotion.reason}; pending for manual review.`
+      } else if (trialEligibility.otherwiseEligible && !trialEligibility.hasSourceBoundary) {
+        reason = 'Trial admission requires explicit source boundary or evidence trace; pending for manual review.'
       } else if (!activeReadiness.ready) {
         reason = activeReadinessReason
       } else if (autoPromotion.allowed && autoPromotionEval?.passed === false) {
@@ -388,21 +392,43 @@ function isProjectTrialEligible(input: {
   candidate: PendingMemory
   activeReadinessReady: boolean
 }): boolean {
+  return evaluateProjectTrialEligibility(input).allowed
+}
+
+function evaluateProjectTrialEligibility(input: {
+  candidate: PendingMemory
+  activeReadinessReady: boolean
+}): { allowed: boolean; otherwiseEligible: boolean; hasSourceBoundary: boolean } {
   const candidate = input.candidate
   const kind = deriveMemoryCandidateKind(candidate)
-  if (!input.activeReadinessReady) return false
-  if (candidate.scope !== 'project') return false
-  if (!['project', 'procedural', 'system'].includes(candidate.domain)) return false
+  let otherwiseEligible = true
+  if (!input.activeReadinessReady) otherwiseEligible = false
+  if (candidate.scope !== 'project') otherwiseEligible = false
+  if (!['project', 'procedural', 'system'].includes(candidate.domain)) otherwiseEligible = false
   if (!['project_fact', 'project_decision', 'workflow_rule', 'known_pitfall', 'rejected_approach'].includes(kind)) {
-    return false
+    otherwiseEligible = false
   }
-  if (candidate.source === 'assistant_observed') return false
-  if (candidate.evidence.some((entry) => entry.sourceKind === 'assistant_observed')) return false
-  if (candidate.scores.evidenceStrength < 0.55) return false
-  if (candidate.scores.usefulness < 0.55) return false
-  if (candidate.scores.safety < 0.8) return false
-  if (candidate.scores.sensitivity > 0.35) return false
-  return true
+  if (candidate.source === 'assistant_observed') otherwiseEligible = false
+  if (candidate.evidence.some((entry) => entry.sourceKind === 'assistant_observed')) otherwiseEligible = false
+  if (candidate.scores.evidenceStrength < 0.55) otherwiseEligible = false
+  if (candidate.scores.usefulness < 0.55) otherwiseEligible = false
+  if (candidate.scores.safety < 0.8) otherwiseEligible = false
+  if (candidate.scores.sensitivity > 0.35) otherwiseEligible = false
+  const hasSourceBoundary = hasTrialSourceBoundary(candidate)
+  return { allowed: otherwiseEligible && hasSourceBoundary, otherwiseEligible, hasSourceBoundary }
+}
+
+function hasTrialSourceBoundary(candidate: PendingMemory): boolean {
+  if (nonEmptyString(candidate.sourceOfTruth) !== undefined) return true
+  return candidate.evidence.some((entry) =>
+    nonEmptyString(entry.runId) !== undefined ||
+    nonEmptyString(entry.sessionId) !== undefined ||
+    nonEmptyString(entry.taskHash) !== undefined ||
+    nonEmptyString(entry.quoteHash) !== undefined ||
+    nonEmptyString(entry.evidenceGroupId) !== undefined ||
+    (entry.traceRefs ?? []).some((value) => nonEmptyString(value) !== undefined) ||
+    (entry.messageIds ?? []).some((value) => nonEmptyString(value) !== undefined)
+  )
 }
 
 function trialSemanticMemoryFromCandidate(candidate: PendingMemory, now: string): SemanticMemory {

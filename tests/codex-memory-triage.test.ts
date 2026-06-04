@@ -6,6 +6,7 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { runCodexMemoryTriage } from '../src/codex/codex-memory-triage-cli.js'
 import { rejectCodexPendingMemory, reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import {
+  MEMORY_BOUNDARY_FLAGS,
   buildCandidateClusters,
   evaluateAutoPromotionPolicy,
   rankPendingForEviction,
@@ -44,6 +45,7 @@ function pending(overrides: Partial<PendingMemory> = {}): PendingMemory {
       { summary: 'Tool trace rebuilt memory.db.', evidenceGroupId: 'tool-1', sourceKind: 'tool_trace' }
     ],
     source: 'file',
+    sourceOfTruth: 'AGENTS.md',
     scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.8, safety: 0.95, sensitivity: 0.05 },
     seenCount: 2,
     firstSeenAt: '2026-05-30T00:00:00.000Z',
@@ -115,6 +117,141 @@ describe('memory triage', () => {
     ])
 
     expect(clusters).toEqual([expect.objectContaining({ memberIds: ['a', 'b'], normalizedKey: 'same-key' })])
+  })
+
+  it('auto-merges only exact low-risk duplicates from the same root with compatible metadata', () => {
+    const result = triagePendingMemories({
+      memoryRoot: '/tmp/project-memory',
+      pending: [
+        pending({
+          id: 'merge-a',
+          normalizedKey: 'same-key',
+          type: 'procedural_rule',
+          candidateKind: 'workflow_rule',
+          content: 'Run focused tests before declaring task completion.',
+          evidence: [{ summary: 'AGENTS.md requires verification.', sourceKind: 'file', traceRefs: ['AGENTS.md'] }]
+        }),
+        pending({
+          id: 'merge-b',
+          normalizedKey: 'same-key',
+          type: 'procedural_rule',
+          candidateKind: 'workflow_rule',
+          content: 'Run focused tests before declaring task completion.',
+          evidence: [{ summary: 'Plan requires focused tests.', sourceKind: 'file', traceRefs: ['plan.md'] }]
+        })
+      ],
+      active: [],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.decisions).toContainEqual(expect.objectContaining({
+      action: 'auto_merge_allowed',
+      candidateIds: ['merge-a', 'merge-b'],
+      flags: []
+    }))
+  })
+
+  it.each([
+    [
+      'different root',
+      [
+        pending({ id: 'a', normalizedKey: 'same-key', memoryRoot: '/tmp/root-a' } as Partial<PendingMemory>),
+        pending({ id: 'b', normalizedKey: 'same-key', memoryRoot: '/tmp/root-b' } as Partial<PendingMemory>)
+      ],
+      'cross_root_normalized_key_collision'
+    ],
+    [
+      'different sourceOfTruth',
+      [
+        pending({ id: 'a', normalizedKey: 'same-key', sourceOfTruth: 'AGENTS.md' }),
+        pending({ id: 'b', normalizedKey: 'same-key', sourceOfTruth: 'README.md' })
+      ],
+      'same_key_mixed_metadata'
+    ],
+    [
+      'high-risk personal domain',
+      [
+        pending({ id: 'a', normalizedKey: 'same-key', domain: 'personal', type: 'user_preference', source: 'user_implicit' }),
+        pending({ id: 'b', normalizedKey: 'same-key', domain: 'personal', type: 'user_preference', source: 'user_implicit' })
+      ],
+      'project_personal_domain'
+    ],
+    [
+      'mixed candidate kind',
+      [
+        pending({ id: 'a', normalizedKey: 'same-key', candidateKind: 'workflow_rule' }),
+        pending({ id: 'b', normalizedKey: 'same-key', candidateKind: 'known_pitfall' })
+      ],
+      'same_key_mixed_metadata'
+    ],
+    [
+      'missing source boundary',
+      [
+        pending({ id: 'a', normalizedKey: 'same-key', sourceOfTruth: undefined, evidence: [{ summary: 'plain evidence' }] }),
+        pending({ id: 'b', normalizedKey: 'same-key', sourceOfTruth: undefined, evidence: [{ summary: 'plain evidence 2' }] })
+      ],
+      'missing_source_boundary'
+    ]
+  ])('recommends duplicate review for %s', (_name, candidates, flag) => {
+    const result = triagePendingMemories({
+      memoryRoot: '/tmp/project-memory',
+      pending: candidates,
+      active: [],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.decisions).toContainEqual(expect.objectContaining({
+      action: 'manual_review_recommended',
+      candidateIds: ['a', 'b'],
+      flags: expect.arrayContaining([flag])
+    }))
+    expect(result.decisions).not.toContainEqual(expect.objectContaining({
+      action: 'auto_merge_allowed',
+      candidateIds: ['a', 'b']
+    }))
+  })
+
+  it('recommends review instead of auto-merge when a pending duplicate overlaps active memory', () => {
+    const result = triagePendingMemories({
+      memoryRoot: '/tmp/project-memory',
+      pending: [
+        pending({ id: 'a', normalizedKey: 'same-key' }),
+        pending({ id: 'b', normalizedKey: 'same-key' })
+      ],
+      active: [
+        {
+          ...pending({ id: 'active', normalizedKey: 'same-key', status: 'pending' }),
+          status: 'active',
+          createdAt: '2026-05-30T00:00:00.000Z',
+          updatedAt: '2026-05-30T00:00:00.000Z'
+        }
+      ],
+      tombstones: [],
+      scope: 'project',
+      now: '2026-05-30T00:00:00.000Z'
+    })
+
+    expect(result.decisions).toContainEqual(expect.objectContaining({
+      action: 'manual_review_recommended',
+      candidateIds: ['a', 'b'],
+      flags: expect.arrayContaining(['active_pending_collision'])
+    }))
+  })
+
+  it('exports the duplicate and pollution gate names as a stable contract', () => {
+    expect(MEMORY_BOUNDARY_FLAGS).toEqual([
+      'scope_root_mismatch',
+      'global_project_specific_source',
+      'project_personal_domain',
+      'missing_source_boundary',
+      'cross_root_normalized_key_collision',
+      'active_pending_collision',
+      'same_key_mixed_metadata'
+    ])
   })
 
   it('recommends ordinary pending candidates for explicit review', () => {

@@ -75,7 +75,7 @@ function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
     status: 'active',
     content: 'Memory review Web UI route button facts should be grouped for the UI.',
     normalizedKey: 'memory-review-web-ui-route-button-facts-grouped',
-    evidence: [{ summary: 'Seeded active memory.' }],
+    evidence: [{ runId: 'active-seed-run', summary: 'Seeded active memory.', sourceKind: 'file' }],
     source: 'file',
     scores: {
       evidenceStrength: 0.9,
@@ -179,7 +179,7 @@ describe('handleCodexUiApiRequest', () => {
   it('returns the UI session token for same-origin UI bootstrap', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
-    const { cwd } = await seedProject()
+    const { cwd, memoryRoot } = await seedProject()
 
     const result = await handleCodexUiApiRequest({
       cwd,
@@ -198,7 +198,8 @@ describe('handleCodexUiApiRequest', () => {
   it('returns dashboard data with pending memory and profile text', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
-    const { cwd } = await seedProject()
+    const { cwd, memoryRoot } = await seedProject()
+    const expectedMemoryRoot = await realpath(memoryRoot)
 
     const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/dashboard' })
 
@@ -218,10 +219,55 @@ describe('handleCodexUiApiRequest', () => {
           }>
         }
         profile: { profile: string }
-        automation: { automation: { dreamDue?: boolean; lastDreamStatus?: string } }
+        active: {
+          active: Array<{
+            id: string
+            origin?: { rootScope: string; memoryRoot: string; projectId?: string; selectionScope: string; declaredScope?: string }
+            sourceBoundary?: {
+              status: string
+              sourceOfTruth?: string
+              sourceKind?: string
+              evidenceRefs?: string[]
+            }
+            pollutionFlags?: string[]
+          }>
+        }
+        automation: { automation: { due?: boolean; status?: string } }
         signals: { signals: Array<{ kind: string; files?: string[] }> }
       }
       expect(data.pending.pending[0]).toMatchObject({ id: 'pending-1' })
+      expect(data.pending.pending[0]).toMatchObject({
+        origin: {
+          rootScope: 'project',
+          memoryRoot: expectedMemoryRoot,
+          projectId: expect.any(String),
+          selectionScope: 'project',
+          declaredScope: 'project'
+        },
+        sourceBoundary: {
+          status: 'explicit',
+          sourceOfTruth: 'ui-seed-run',
+          sourceKind: 'user_explicit',
+          evidenceRefs: ['ui-seed-run']
+        },
+        pollutionFlags: []
+      })
+      expect(data.active.active[0]).toMatchObject({
+        id: 'active-1',
+        origin: {
+          rootScope: 'project',
+          memoryRoot: expectedMemoryRoot,
+          projectId: expect.any(String),
+          selectionScope: 'project',
+          declaredScope: 'project'
+        },
+        sourceBoundary: {
+          status: 'evidence_trace',
+          sourceKind: 'file',
+          evidenceRefs: ['active-seed-run']
+        },
+        pollutionFlags: []
+      })
       expect(data.pending.pending[0]?.semanticMemory).toMatchObject({
         module: expect.any(String),
         reviewPolicy: expect.any(String),
@@ -230,9 +276,10 @@ describe('handleCodexUiApiRequest', () => {
       })
       expect(data.profile.profile).toBe('Project profile text for UI.')
       expect(data.automation.automation).toMatchObject({
-        dreamDue: true,
-        lastDreamStatus: 'success'
+        due: true,
+        status: 'success'
       })
+      expect(JSON.stringify(data.automation.automation)).not.toContain('dream')
       expect(data.signals.signals).toContainEqual(expect.objectContaining({
         kind: 'project_manifest',
         files: ['package.json']
@@ -251,11 +298,140 @@ describe('handleCodexUiApiRequest', () => {
     expect(result.body.ok).toBe(true)
     if (result.body.ok) {
       const data = result.body.data as {
-        automation: { dreamDue?: boolean; lastDreamStatus?: string }
+        automation: { due?: boolean; status?: string; lastRunAt?: string }
       }
       expect(data.automation).toMatchObject({
-        dreamDue: true,
-        lastDreamStatus: 'success'
+        due: true,
+        lastRunAt: '2026-05-28T00:00:00.000Z',
+        status: 'success'
+      })
+      expect(JSON.stringify(data.automation)).not.toContain('dream')
+    }
+  })
+
+  it('returns item-level origin for all-scope project and global memory', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    const expectedMemoryRoot = await realpath(memoryRoot)
+    const expectedGlobalRoot = await realpath(globalRoot)
+    await writeActiveMemoriesFromRoot(globalRoot, [
+      createActive({
+        id: 'global-active-1',
+        scope: 'global',
+        domain: 'procedural',
+        source: 'tool_trace',
+        normalizedKey: 'global-active-memory',
+        confidenceTier: 'global_core',
+        activationPolicy: activationPolicyForConfidenceTier('global_core')
+      })
+    ])
+    await writePendingMemoriesFromRoot(globalRoot, [
+      createPending({
+        id: 'global-pending-1',
+        scope: 'global',
+        source: 'tool_trace',
+        normalizedKey: 'global-pending-memory'
+      })
+    ])
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'GET',
+      pathname: '/api/dashboard',
+      searchParams: new URLSearchParams('scope=all')
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        pending: { pending: Array<{ id: string; origin?: { rootScope: string; memoryRoot: string; projectId?: string; selectionScope: string } }> }
+        active: { active: Array<{ id: string; origin?: { rootScope: string; memoryRoot: string; projectId?: string; selectionScope: string } }> }
+        projectMemory: { groups: Array<{ label: string; memories: Array<{ id: string }> }> }
+      }
+      expect(data.pending.pending).toContainEqual(expect.objectContaining({
+        id: 'pending-1',
+        origin: expect.objectContaining({ rootScope: 'project', memoryRoot: expectedMemoryRoot, selectionScope: 'all' })
+      }))
+      expect(data.pending.pending).toContainEqual(expect.objectContaining({
+        id: 'global-pending-1',
+        origin: expect.objectContaining({ rootScope: 'global', memoryRoot: expectedGlobalRoot, selectionScope: 'all' })
+      }))
+      expect(data.active.active).toContainEqual(expect.objectContaining({
+        id: 'active-1',
+        origin: expect.objectContaining({ rootScope: 'project', memoryRoot: expectedMemoryRoot, selectionScope: 'all' })
+      }))
+      expect(data.active.active).toContainEqual(expect.objectContaining({
+        id: 'global-active-1',
+        origin: expect.objectContaining({ rootScope: 'global', memoryRoot: expectedGlobalRoot, selectionScope: 'all' })
+      }))
+      expect(data.active.active.find((memory) => memory.id === 'global-active-1')?.origin?.projectId).toBeUndefined()
+      expect(groupIds(data.projectMemory.groups)).toMatchObject({
+        Trial: [],
+        Validated: [],
+        'Project Core': [],
+        'Global Core': ['global-active-1']
+      })
+    }
+  })
+
+  it('reports source-boundary gaps and pollution flags at item level', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeActiveMemoriesFromRoot(memoryRoot, [
+      createActive({
+        id: 'source-only-active',
+        evidence: [],
+        source: 'file',
+        normalizedKey: 'source-only-active'
+      })
+    ])
+    await writeActiveMemoriesFromRoot(globalRoot, [
+      createActive({
+        id: 'project-memory-in-global-root',
+        scope: 'project',
+        domain: 'project',
+        evidence: [],
+        source: 'file',
+        normalizedKey: 'project-memory-in-global-root'
+      })
+    ])
+
+    const result = await handleCodexUiApiRequest({
+      cwd,
+      method: 'GET',
+      pathname: '/api/memory/active',
+      searchParams: new URLSearchParams('scope=all')
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        active: Array<{
+          id: string
+          origin?: { rootScope: string; declaredScope?: string }
+          sourceBoundary?: { status: string; sourceKind?: string; evidenceRefs?: string[] }
+          pollutionFlags?: string[]
+        }>
+      }
+      expect(data.active.find((memory) => memory.id === 'source-only-active')).toMatchObject({
+        sourceBoundary: {
+          status: 'fallback_normalized_key',
+          sourceKind: 'file',
+          evidenceRefs: []
+        },
+        pollutionFlags: ['missing_source_boundary']
+      })
+      expect(data.active.find((memory) => memory.id === 'project-memory-in-global-root')).toMatchObject({
+        origin: { rootScope: 'global', declaredScope: 'project' },
+        pollutionFlags: expect.arrayContaining(['scope_root_mismatch', 'global_project_specific_source'])
       })
     }
   })
@@ -668,6 +844,48 @@ describe('handleCodexUiApiRequest', () => {
     }
   })
 
+  it('omits orphan project roots without identity metadata from the project dropdown', async () => {
+    const home = await createTempDir('cyrene-ui-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd } = await seedProject()
+    const currentProject = await identifyCodexProject(cwd)
+    const orphanProjectId = 'orphan-project-without-identity'
+    const orphanRoot = codexProjectMemoryRoot(orphanProjectId)
+    await mkdir(orphanRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(orphanRoot, [
+      createSemanticMemory({
+        id: 'orphan-active-1',
+        content: 'Orphan active memory should not appear as an unlabeled project.'
+      })
+    ])
+
+    const projects = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/projects' })
+
+    expect(projects.status).toBe(200)
+    expect(projects.body.ok).toBe(true)
+    if (projects.body.ok) {
+      const data = projects.body.data as { projects: Array<{ projectId: string; displayName: string }> }
+      expect(data.projects).not.toContainEqual(expect.objectContaining({ projectId: orphanProjectId }))
+      expect(data.projects).toContainEqual(expect.objectContaining({ projectId: currentProject.projectId }))
+      expect(JSON.stringify(data.projects)).not.toContain('Unlabeled project')
+    }
+
+    const dashboard = await handleCodexUiApiRequest({
+      cwd,
+      method: 'GET',
+      pathname: '/api/dashboard',
+      searchParams: new URLSearchParams(`projectId=${orphanProjectId}`)
+    })
+
+    expect(dashboard.status).toBe(200)
+    expect(dashboard.body.ok).toBe(true)
+    if (dashboard.body.ok) {
+      const data = dashboard.body.data as { selection: { projectId: string; label: string } }
+      expect(data.selection.projectId).toBe(currentProject.projectId)
+      expect(data.selection.label).not.toContain('Unlabeled project')
+    }
+  })
+
   it('deletes and disables project memory through the Web UI project route', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
@@ -962,23 +1180,62 @@ describe('handleCodexUiApiRequest', () => {
     await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(pendingBefore)
   })
 
-  it('rejects all-scope memory triage because the route operates on one memory root', async () => {
+  it('runs all-scope memory triage dry-run across project and global roots', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
-    const { cwd } = await seedProject()
+    const { cwd, memoryRoot } = await seedProject()
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writePendingMemoriesFromRoot(memoryRoot, [
+      createPending({
+        id: 'project-cross-root-duplicate',
+        normalizedKey: 'cross-root-duplicate-memory',
+        sourceOfTruth: 'review_summary:project',
+        evidence: [{ runId: 'project-run', summary: 'Project duplicate.', sourceKind: 'review_event' }]
+      })
+    ])
+    await writePendingMemoriesFromRoot(globalRoot, [
+      createPending({
+        id: 'global-cross-root-duplicate',
+        scope: 'global',
+        domain: 'procedural',
+        normalizedKey: 'cross-root-duplicate-memory',
+        source: 'review_event',
+        sourceOfTruth: 'review_summary:global',
+        evidence: [{ runId: 'global-run', summary: 'Global duplicate.', sourceKind: 'review_event' }]
+      })
+    ])
+    const projectBefore = await readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')
+    const globalBefore = await readFile(join(globalRoot, 'review_queue.jsonl'), 'utf8')
 
     const result = await handleCodexUiApiRequest({
       cwd,
       method: 'POST',
       pathname: '/api/memory/triage/dry-run',
-      searchParams: new URLSearchParams('scope=all')
+      searchParams: new URLSearchParams('scope=all'),
+      now: '2026-05-30T00:00:00.000Z'
     })
 
-    expect(result.status).toBe(400)
-    expect(result.body.ok).toBe(false)
-    if (!result.body.ok) {
-      expect(result.body.error.message).toContain('scope=all')
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        selection: { scope: string; memoryRoots: string[] }
+        decisions: Array<{ action: string; candidateIds?: string[]; flags?: string[] }>
+      }
+      expect(data.selection.scope).toBe('all')
+      expect(data.selection.memoryRoots).toEqual(expect.arrayContaining([
+        await realpath(globalRoot),
+        await realpath(memoryRoot)
+      ]))
+      expect(data.decisions).toContainEqual(expect.objectContaining({
+        action: 'manual_review_recommended',
+        candidateIds: ['global-cross-root-duplicate', 'project-cross-root-duplicate'],
+        flags: expect.arrayContaining(['cross_root_normalized_key_collision'])
+      }))
     }
+    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(projectBefore)
+    await expect(readFile(join(globalRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe(globalBefore)
   })
 
   it('runs memory prepare dry-run without mutating pending memory', async () => {

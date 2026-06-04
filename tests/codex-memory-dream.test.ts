@@ -398,7 +398,11 @@ describe('Codex memory dream runtime', () => {
       rejected: 0,
       keptPending: 1
     })
-    await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain(candidate.normalizedKey)
+    const report = await readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')
+    expect(report).toContain('# Cyrene Automation Preview')
+    expect(report).toContain(candidate.normalizedKey)
+    expect(report).not.toContain('codex memory dream')
+    expect(report).not.toContain('Cyrene Dream Preview')
     const proposed = JSON.parse(await readFile(join(memoryRoot, 'dream-preview', 'proposed_changes.json'), 'utf8')) as {
       root: { proposedChanges: Array<{ action: string; candidateId: string }> }
     }

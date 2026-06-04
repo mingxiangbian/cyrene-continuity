@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { MEMORY_BOUNDARY_FLAGS } from '../src/codex/memory-triage.js'
 import {
   MEMORY_DELTA_REPORT_TEMPLATE,
   MEMORY_QUALITY_FIXTURES,
@@ -200,6 +201,18 @@ describe('memory quality contract fixtures', () => {
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Captured durable signals')
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Why no durable signal was dropped')
     expect(MEMORY_DELTA_REPORT_TEMPLATE).toContain('Why pending / active stayed clean')
+  })
+
+  it('keeps duplicate and pollution gates explicit in the quality contract', () => {
+    expect(MEMORY_BOUNDARY_FLAGS).toEqual([
+      'scope_root_mismatch',
+      'global_project_specific_source',
+      'project_personal_domain',
+      'missing_source_boundary',
+      'cross_root_normalized_key_collision',
+      'active_pending_collision',
+      'same_key_mixed_metadata'
+    ])
   })
 
   it('validates memory delta report handoffs', () => {

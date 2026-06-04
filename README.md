@@ -34,6 +34,9 @@ The plugin MCP server exposes:
 - `cyrene_project_identify`: identify the current Cyrene project namespace.
 - `cyrene_continuity_get`: read compact continuity context, response strategy,
   and principled dissent hints.
+- `cyrene_memory_feedback`: record hash-checked active-memory usage feedback
+  (`applied`, `ignored`, `corrected`, or `violated`) as lifecycle evidence.
+  It stores query text only as `queryHash` and never promotes memory directly.
 - `cyrene_memory_propose`: write a pending-only memory candidate for review.
 - `cyrene_memory_pending_list`: list pending memory candidates.
 - `cyrene_memory_pending_get`: read one pending candidate.
@@ -111,6 +114,7 @@ npm run dev -- codex memory harvest-project [--dry-run] [--changed-files] [--sin
 npm run dev -- codex memory automation --job daily --dry-run
 npm run dev -- codex memory automation --job weekly --dry-run
 npm run dev -- codex memory context-preview --message "..." --task coding
+npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event applied --query "..."
 npm run dev -- codex memory maintenance
 npm run dev -- codex memory profile
 npm run dev -- codex profile reflect --source daily-interview
@@ -146,6 +150,12 @@ validated project memory to project core and consolidates safe project-core
 signals into global core candidates. High-risk, ambiguous, personal,
 relationship, affective, similar-project, and assistant-observed-only memory
 remains in manual review unless explicitly approved with review-hash validation.
+
+`codex memory feedback` records explicit usage evidence for active memory only.
+Callers must pass the active memory `contentHash`; stale hashes are rejected.
+Raw query text is never persisted, and feedback cannot promote memory by
+itself. Daily/weekly automation decides how repeated evidence affects
+trial/validated/core lifecycle movement.
 
 `CYRENE_MEMORY_RECOMMEND_PROMOTION=0` disables automation promotion
 recommendations while preserving pending candidates. The older

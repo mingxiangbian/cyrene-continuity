@@ -485,6 +485,12 @@ function renderSemanticReviewCard(candidate, options = {}) {
           ['Scope', memory.scope || candidate.scope || 'project'],
           ['Domain', memory.domain || candidate.domain || 'project']
         ])}
+        ${reviewSection('Storage', [
+          ['Root', memoryOriginLabel(candidate)],
+          ['Declared scope', candidate.origin?.declaredScope || memory.scope || candidate.scope || 'project'],
+          ['Source boundary', sourceBoundaryLabel(candidate.sourceBoundary)],
+          ['Pollution flags', pollutionFlagsLabel(candidate)]
+        ])}
         ${reviewSection('Policy', [
           ['Update policy', updatePolicy],
           ['Review policy', reviewPolicy],
@@ -596,11 +602,19 @@ function renderProjectMemory() {
 }
 
 function renderMemoryRow(memory) {
+  const meta = [
+    memory.candidateKind || memory.type || 'memory',
+    memoryOriginLabel(memory),
+    `scope ${memory.origin?.declaredScope || memory.scope || 'unknown'}`,
+    sourceBoundaryLabel(memory.sourceBoundary),
+    pollutionFlagsLabel(memory),
+    memory.updatedAt || memory.createdAt || 'unknown time'
+  ].join(' · ')
   return `
     <article class="data-row">
       <div>
         <div class="row-title">${escapeHtml(memory.content || memory.id || 'Memory')}</div>
-        <div class="row-meta">${escapeHtml(memory.candidateKind || memory.type || 'memory')} · ${escapeHtml(memory.updatedAt || memory.createdAt || 'unknown time')}</div>
+        <div class="row-meta">${escapeHtml(meta)}</div>
       </div>
       <div class="row-actions">
         ${statusChip('tier', memoryTierLabel(memory), 'ok')}
@@ -1075,9 +1089,10 @@ function renderAutomation() {
       <div class="soft-panel">
         <h3>Automation status</h3>
         <div class="soft-inset">
-          Due: ${escapeHtml(String(automation.dreamDue ?? 'unknown'))}<br>
-          Last run: ${escapeHtml(automation.lastDreamAt || 'never')}<br>
-          Status: ${escapeHtml(automation.lastDreamStatus || 'unknown')}
+          Due: ${escapeHtml(String(automation.due ?? 'unknown'))}<br>
+          Last run: ${escapeHtml(automation.lastRunAt || 'never')}<br>
+          Next run: ${escapeHtml(automation.nextRunAt || 'not scheduled')}<br>
+          Status: ${escapeHtml(automation.status || 'unknown')}
         </div>
       </div>
     </section>
@@ -1274,6 +1289,7 @@ function renderPendingDetail(candidate) {
   return `
     <div class="rail-stack">
       ${renderProposedSemanticMemorySection(candidate)}
+      ${renderStorageOriginSection(candidate)}
       ${renderEpisodeEvidenceSection(candidate)}
       ${renderAdmissionRoutingSection(candidate)}
       ${renderUpdatePolicySection(candidate)}
@@ -1340,6 +1356,18 @@ function renderProposedSemanticMemorySection(candidate) {
     ['Scope', firstPresent(memory.scope, proposed.scope, candidate.scope)],
     ['Domain', firstPresent(memory.domain, candidate.domain)],
     ['Source of truth', sourceOfTruthForWorkflow(candidate)]
+  ])
+}
+
+function renderStorageOriginSection(candidate) {
+  const memory = semanticMemoryForCandidate(candidate)
+  return renderWorkflowSection('Storage / Origin', [
+    ['Root', memoryOriginLabel(candidate)],
+    ['Selection scope', candidate.origin?.selectionScope || state.memoryScope],
+    ['Declared scope', candidate.origin?.declaredScope || memory.scope || candidate.scope],
+    ['Memory root', candidate.origin?.memoryRoot || 'missing'],
+    ['Source boundary', sourceBoundaryLabel(candidate.sourceBoundary)],
+    ['Pollution flags', pollutionFlagsLabel(candidate)]
   ])
 }
 
@@ -1743,6 +1771,27 @@ function memoryTierLabel(memory) {
   if (memory?.confidenceTier === 'project_core') return 'Project Core'
   if (memory?.confidenceTier === 'global_core') return 'Global Core'
   return 'Invalid Tier'
+}
+
+function memoryOriginLabel(memory) {
+  const origin = memory?.origin || {}
+  if (origin.rootScope === 'global') return 'Global'
+  if (origin.rootScope === 'project') return `Project ${shortHash(origin.projectId || '')}`
+  return memory?.scope === 'global' ? 'Global' : 'Project'
+}
+
+function sourceBoundaryLabel(boundary) {
+  if (!boundary) return 'source missing'
+  const evidenceRefs = Array.isArray(boundary.evidenceRefs) ? boundary.evidenceRefs.filter(Boolean) : []
+  if (boundary.status === 'explicit') return `source ${boundary.sourceOfTruth || 'explicit'}`
+  if (boundary.status === 'evidence_trace') return `evidence ${boundary.sourceKind || evidenceRefs[0] || 'trace'}`
+  if (boundary.status === 'fallback_normalized_key') return 'fallback normalized key'
+  return 'source missing'
+}
+
+function pollutionFlagsLabel(memory) {
+  const flags = Array.isArray(memory?.pollutionFlags) ? memory.pollutionFlags.filter(Boolean) : []
+  return flags.length > 0 ? `warnings ${flags.join(', ')}` : 'warnings none'
 }
 
 function reviewQueueStatusLabel(status) {
