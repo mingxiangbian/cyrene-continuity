@@ -45,9 +45,9 @@ The plugin MCP server exposes:
   the edited candidate remains pending.
 - `cyrene_memory_defer`: defer a pending candidate after review-hash validation;
   this never promotes active memory.
-- `cyrene_memory_dream_run`: run light, REM, deep-preview, or gated deep-apply
-  memory maintenance. Dream can recommend promotions for review, but it does
-  not promote unapproved pending memory.
+- `cyrene_memory_automation_run`: run daily or weekly memory lifecycle
+  maintenance. Automation can promote strict low-risk lifecycle memory through
+  named v1.5 gates and leaves high-risk recommendations in manual review.
 - `cyrene_memory_profile_get`: read the effective global and project
   `MODEL_PROFILE.md` context.
 - `cyrene_memory_harvest_project`: harvest current-project signals into
@@ -108,9 +108,9 @@ npm run dev -- codex memory defer <candidateId> --review-hash <hash> --days 7
 npm run dev -- codex memory db rebuild
 npm run dev -- codex memory distill --dry-run
 npm run dev -- codex memory harvest-project [--dry-run] [--changed-files] [--since last-summary]
-npm run dev -- codex memory dream --stage deep-preview
-npm run dev -- codex memory dream report --root project
-npm run dev -- codex memory dream --stage deep-apply
+npm run dev -- codex memory automation --job daily --dry-run
+npm run dev -- codex memory automation --job weekly --dry-run
+npm run dev -- codex memory context-preview --message "..." --task coding
 npm run dev -- codex memory maintenance
 npm run dev -- codex memory profile
 npm run dev -- codex profile reflect --source daily-interview
@@ -125,29 +125,29 @@ following ports and prints the bound URL. Pass `--port <n>` to request a
 specific port, or `--port 0` to let the operating system choose an available
 local port.
 
-The local Web UI is a review console for Overview, Inbox, Timeline, Project
-Memory, Harvester, Dream, and Profile views. It shows pending review candidates,
-review summaries, active project/global memory, project harvester signals,
-Dream state, and profile text from the local Cyrene data store. Use the
+The local Web UI is a review console for Overview, Manual Review, Timeline,
+Lifecycle Memory, Automation, Tools, and Profile views. It shows pending review
+candidates, review summaries, active project/global memory, project harvester
+signals, automation state, and profile text from the local Cyrene data store. Use the
 Project/Global scope controls to inspect the selected project memory root or
 global memory.
 It supports hash-checked
 single-candidate pending review actions: approve, reject, defer, and edit. Every
 write action requires the current review hash and an in-session UI token.
 Reject/defer accept an optional review note; edit requires a change note. The UI does not
-batch approve, does not apply Dream/Profile changes, and does not require model
+batch approve, does not apply Memory Automation/Profile changes, and does not require model
 API configuration for reviewing existing pending candidates. The Harvester view
 only runs `harvest-project` dry-run preview from the UI; it does not write
 pending memory, active memory, or profiles.
 
-`deep-preview` is the default safe dream stage. It writes review artifacts under
-`dream-preview/` and does not promote, reject, or tombstone memory. `deep-apply`
-recomputes the proposal, runs the deterministic eval gate, may reject or expire
-gated unsafe pending memory, and writes recommendation artifacts. It does not
-promote unapproved pending memory; use pending review tools with explicit user
-approval and review-hash validation for active promotion.
+`codex memory automation --job daily` updates project lifecycle memory from
+trial to validated for strict low-risk evidence. `--job weekly` updates
+validated project memory to project core and consolidates safe project-core
+signals into global core candidates. High-risk, ambiguous, personal,
+relationship, affective, similar-project, and assistant-observed-only memory
+remains in manual review unless explicitly approved with review-hash validation.
 
-`CYRENE_MEMORY_RECOMMEND_PROMOTION=0` disables Dream promotion
+`CYRENE_MEMORY_RECOMMEND_PROMOTION=0` disables automation promotion
 recommendations while preserving pending candidates. The older
 `CYRENE_MEMORY_AUTO_PROMOTE` variable is deprecated and read only as
 recommendation-generation compatibility; it no longer enables unapproved active
@@ -223,12 +223,12 @@ Deterministic gates protect retrieval, review, apply, and release paths:
 
 - `memory_routing_eval`: active, pending, and similar-project memories must stay
   in their explicit routes.
-- `pending_usage_eval`: Dream apply cannot promote assistant-observed or
+- `pending_usage_eval`: automation apply cannot promote assistant-observed or
   unauditable pending memory.
 - `profile_pollution_eval`: profile apply must trace to approved active memory
   and profile previews cannot include pending-only content.
 - `affective_boundary_eval`: diagnostic affective claims are blocked from
-  profile and Dream apply outputs.
+  profile and automation apply outputs.
 - `cross_project_leak_eval`: same-project, global, local-only, or missing-home
   similar hints are rejected, and personal, relationship, or affective memory is
   not migrated across project IDs.

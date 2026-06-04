@@ -326,10 +326,10 @@ export async function handleCodexUiApiRequest(input: HandleCodexUiApiRequestInpu
         if ('error' in selection) return selection.error
         return ok(await readProjectMemory(input.cwd, selection.value))
       }
-      case '/api/dream': {
+      case '/api/automation': {
         const selection = parseSelectionRequest(input.searchParams)
         if ('error' in selection) return selection.error
-        return ok(await readDream(input.cwd, selection.value))
+        return ok(await readAutomation(input.cwd, selection.value))
       }
       case '/api/profile': {
         const selection = parseSelectionRequest(input.searchParams)
@@ -891,13 +891,13 @@ async function readDashboard(cwd: string, now: string | undefined, request: Code
     task: 'memory'
   })
   const selection = await resolveSelection(cwd, request)
-  const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals, projects] = await Promise.all([
+  const [status, pending, active, reviewSummaries, projectMemory, automation, profile, signals, projects] = await Promise.all([
     readCodexMemoryStatus({ cwd }),
     readPendingFromSelection(selection),
     readActiveFromSelection(selection),
     readReviewSummariesFromSelection(selection),
     readProjectMemoryFromSelection(selection),
-    readDreamFromSelection(selection),
+    readAutomationFromSelection(selection),
     readProfileFromSelection(selection),
     collectProjectMemorySignals({ cwd, now, mode: 'default' }),
     readProjects(cwd)
@@ -912,7 +912,7 @@ async function readDashboard(cwd: string, now: string | undefined, request: Code
     active,
     reviewSummaries,
     projectMemory,
-    dream,
+    automation,
     profile,
     signals
   }
@@ -1100,24 +1100,24 @@ async function readProfileFromSelection(selection: CodexUiResolvedSelection): Pr
   return { project: selection.project, selection: publicSelection(selection), memoryRoot: selection.memoryRoot, profile: profile ?? '' }
 }
 
-async function readDream(cwd: string, request: CodexUiSelectionRequest): Promise<{
+async function readAutomation(cwd: string, request: CodexUiSelectionRequest): Promise<{
   project: CodexUiProjectIdentity
   selection: ReturnType<typeof publicSelection>
   memoryRoot: string
-  dream: Awaited<ReturnType<typeof readCodexMemoryDreamState>>
+  automation: Awaited<ReturnType<typeof readCodexMemoryDreamState>>
 }> {
-  return readDreamFromSelection(await resolveSelection(cwd, request))
+  return readAutomationFromSelection(await resolveSelection(cwd, request))
 }
 
-async function readDreamFromSelection(selection: CodexUiResolvedSelection): Promise<{
+async function readAutomationFromSelection(selection: CodexUiResolvedSelection): Promise<{
   project: CodexUiProjectIdentity
   selection: ReturnType<typeof publicSelection>
   memoryRoot: string
-  dream: Awaited<ReturnType<typeof readCodexMemoryDreamState>>
+  automation: Awaited<ReturnType<typeof readCodexMemoryDreamState>>
 }> {
   const memoryRoot = selection.memoryRoot
-  const dream = await readCodexMemoryDreamState(memoryRoot)
-  return { project: selection.project, selection: publicSelection(selection), memoryRoot, dream }
+  const automation = await readCodexMemoryDreamState(memoryRoot)
+  return { project: selection.project, selection: publicSelection(selection), memoryRoot, automation }
 }
 
 async function readActiveFromSelection(selection: CodexUiResolvedSelection): Promise<ActiveMemoryResult> {

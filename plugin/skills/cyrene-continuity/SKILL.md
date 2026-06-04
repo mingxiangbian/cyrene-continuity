@@ -13,7 +13,7 @@ When using this repository from source, rebuild and install the plugin bridge wi
 
 ## Local Web UI
 
-Use `cyrene-continuity codex ui` when the user wants local visual review of the memory pipeline or hash-checked single-candidate review queue actions. The UI can approve/reject/defer/edit review candidates, but it must not imply batch review, Dream apply, Profile apply, or direct trial/validated/core edits.
+Use `cyrene-continuity codex ui` when the user wants local visual review of the memory pipeline or hash-checked single-candidate review queue actions. The UI can approve/reject/defer/edit review candidates, but it must not imply batch review, Memory Automation apply, Profile apply, or direct trial/validated/core edits.
 
 ## Required behavior
 
@@ -39,9 +39,9 @@ Use `cyrene-continuity codex ui` when the user wants local visual review of the 
 20. Manual review queue candidates are not trial, validated, or core continuity memory. Do not use pending content as factual context until promoted with explicit approval and review-hash validation, or until a named v1.5 policy receipt confirms admission to trial/core.
 21. When multiple manual review candidates exist, show at most three at a time unless the user asks for more.
 22. Do not invent user preferences from assistant suggestions or silence.
-23. `Dream Deep` may recommend repeated independent evidence for review, but it must not admit high-risk, ambiguous, personal, relationship, affective, similar-project, or assistant-observed-only memory into trial, validated, or core without explicit approval and review hash.
+23. Memory Automation may recommend repeated independent evidence for review, but it must not admit high-risk, ambiguous, personal, relationship, affective, similar-project, or assistant-observed-only memory into trial, validated, or core without explicit approval and review hash.
 24. Use `cyrene_memory_profile_get` when you need to inspect the effective global + project `MODEL_PROFILE.md` context. Profile context is generated from core memory; project harvest creates project-scope trial memory by default for strict low-risk evidence, and review queue candidates for high-risk or ambiguous evidence.
-25. Use `cyrene_memory_dream_run` only for explicit maintenance or verification tasks; running it is not a substitute for asking approve/reject/edit/defer on visible manual review candidates.
+25. Use `cyrene_memory_automation_run` only for explicit daily/weekly lifecycle maintenance or verification tasks; running it is not a substitute for asking approve/reject/edit/defer on visible manual review candidates.
 
 ## Boundaries
 

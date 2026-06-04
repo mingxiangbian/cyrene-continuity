@@ -237,6 +237,33 @@ describe('Codex review summary runtime', () => {
     expect(draft.evidenceRefs).toEqual(['episode-global'])
   })
 
+  it('does not capture appshot context dumps as explicit global instructions', async () => {
+    const home = await createTempDir('cyrene-review-runtime-global-dump-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-review-runtime-global-dump-project-')
+    const appshotDump = [
+      '# Applications mentioned by the user:',
+      '<appshot app="Google Chrome" bundle-identifier="com.google.Chrome" window-title="cyrene-continuity">',
+      'container README text mentions global memory, all projects, and automation settings.',
+      'link Description: cyrene_memory_automation_run Value: github.com/example/repo',
+      '</appshot>',
+      '## My request for Codex:',
+      '检查为什么上传后显示 fail'
+    ].join('\n')
+
+    const result = await runCodexReviewSummary({
+      cwd,
+      messages: [{ role: 'user', content: appshotDump }],
+      config: createConfig(cwd),
+      callModel: async () => modelResponse(JSON.stringify({ summary: '用户询问 CI 失败。', candidates: [] })),
+      sourceEpisodeIds: ['episode-global-dump'],
+      now: '2026-06-04T00:00:00.000Z'
+    })
+
+    expect(result.action).toBe('summary')
+    await expect(readFile(join(codexGlobalMemoryRoot(), 'review_queue.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('preserves candidateKind from review summary candidates', async () => {
     const home = await createTempDir('cyrene-review-runtime-kind-home-')
     vi.stubEnv('HOME', home)

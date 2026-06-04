@@ -2,9 +2,22 @@ import { createHash } from 'node:crypto'
 import type { CodexMemoryCandidateInput } from './memory-propose.js'
 import type { MemoryEvent } from '../memory/types.js'
 
-const GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i
+const GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|今后所有项目|所有项目|每个项目|all projects|every project|across projects|remember globally|(?:作为|写入|加入|保存到|记到).{0,8}全局记忆|全局(?:记住|保存|默认|规则|使用))/i
 const PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i
 const AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i
+const QUESTION_OR_DIAGNOSTIC_PATTERN = /[？?]|为什么|为何|怎么|如何|检查一下|排查|bug|出现|是.+吗|why\b|how\b|what\b|debug\b/i
+const EXPLICIT_GLOBAL_INSTRUCTION_MAX_LENGTH = 200
+const EXPLICIT_GLOBAL_INSTRUCTION_MAX_LINES = 3
+const STRUCTURED_CONTEXT_DUMP_PATTERNS = [
+  /^#\s+Applications mentioned by the user:/im,
+  /^#\s+Files mentioned by the user:/im,
+  /^##\s+My request for Codex:/im,
+  /<appshot\b/i,
+  /<\/appshot>/i,
+  /^<environment_context>/im,
+  /^<INSTRUCTIONS>/im,
+  /```/
+]
 
 export function candidateFromExplicitGlobalInstruction(input: {
   text: string
@@ -14,7 +27,10 @@ export function candidateFromExplicitGlobalInstruction(input: {
   if (AUTOMATION_PROMPT_PATTERN.test(text)) {
     return undefined
   }
-  if (!GLOBAL_INSTRUCTION_PATTERN.test(text)) {
+  if (isLikelyStructuredContextDump(text) || text.length > EXPLICIT_GLOBAL_INSTRUCTION_MAX_LENGTH) {
+    return undefined
+  }
+  if (!GLOBAL_INSTRUCTION_PATTERN.test(text) || QUESTION_OR_DIAGNOSTIC_PATTERN.test(text)) {
     return undefined
   }
   if (PERSONAL_PREFERENCE_PATTERN.test(text)) {
@@ -44,6 +60,30 @@ export function candidateFromExplicitGlobalInstruction(input: {
     tags: ['global_capture', 'explicit_instruction'],
     userConfirmed: true
   }
+}
+
+function isLikelyStructuredContextDump(text: string): boolean {
+  if (STRUCTURED_CONTEXT_DUMP_PATTERNS.some((pattern) => pattern.test(text))) {
+    return true
+  }
+
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  if (lines.length > EXPLICIT_GLOBAL_INSTRUCTION_MAX_LINES) {
+    return true
+  }
+
+  const markupTagCount = text.match(/<\/?[a-z][^>\n]{0,120}>/gi)?.length ?? 0
+  if (markupTagCount >= 2) {
+    return true
+  }
+
+  const metadataLabelCount = text.match(/\b(?:app|bundle-identifier|window-title|image|url|description|value|role|content|cwd|shell|workdir|container|button|link|text)\s*[:=]/gi)?.length ?? 0
+  if (metadataLabelCount >= 4) {
+    return true
+  }
+
+  const jsonLikeFieldCount = text.match(/["'][A-Za-z0-9_-]{3,}["']\s*:/g)?.length ?? 0
+  return jsonLikeFieldCount >= 4
 }
 
 export function candidateFromReviewPattern(input: {

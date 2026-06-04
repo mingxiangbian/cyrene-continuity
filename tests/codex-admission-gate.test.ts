@@ -109,7 +109,7 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.reasons).toContain('stale_numeric_snapshot')
   })
 
-  it('routes version-bound implementation notes to distillation instead of pending', () => {
+  it('drops version-bound implementation changelog instead of routing it to memory', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({
         content: 'v1 admission gate 核心实现采用 subagent-driven 执行方案，并创建隔离工作区。',
@@ -123,12 +123,13 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(decision.action).toBe('admit_to_distillation')
+    expect(decision.action).toBe('auto_drop')
     expect(decision.reasons).toContain('implementation_note')
-    expect(decision.reasons).toContain('needs_active_memory_rewrite')
+    expect(decision.reasons).toContain('implementation_changelog')
+    expect(decision.reasons).not.toContain('needs_active_memory_rewrite')
   })
 
-  it('routes raw file rule excerpts to distillation instead of pending', () => {
+  it('drops raw file rule excerpts instead of routing them to distillation', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({
         content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
@@ -141,17 +142,18 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(decision.action).toBe('admit_to_distillation')
+    expect(decision.action).toBe('auto_drop')
     expect(decision.reasons).toContain('raw_file_rule_excerpt')
-    expect(decision.reasons).toContain('needs_active_memory_rewrite')
+    expect(decision.reasons).not.toContain('needs_active_memory_rewrite')
   })
 
-  it('keeps source-of-truth duplicate raw excerpts reference-only', () => {
+  it('drops source-of-truth raw excerpts instead of creating reference memory', () => {
     const sourceDuplicateDecision = evaluateCandidateAdmission({
       draft: draft({
         content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
         candidateKind: 'workflow_rule',
         normalizedKey: 'agents-md-all-edits-surgical',
+        sourceKind: 'file',
         sourceOfTruth: 'AGENTS.md'
       }),
       pending: [],
@@ -160,12 +162,13 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(sourceDuplicateDecision.action).toBe('reference_only')
-    expect(sourceDuplicateDecision.reasons).toContain('source_of_truth_duplicate')
+    expect(sourceDuplicateDecision.action).toBe('auto_drop')
+    expect(sourceDuplicateDecision.reasons).toContain('source_of_truth_excerpt')
     expect(sourceDuplicateDecision.reasons).toContain('raw_file_rule_excerpt')
+    expect(sourceDuplicateDecision.reasons).not.toContain('source_of_truth_duplicate')
   })
 
-  it('keeps single-evidence AGENTS.md repository policy excerpts reference-only', () => {
+  it('drops single-evidence AGENTS.md repository policy excerpts', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({
         content: '仓库工作规则：必须进行直接针对请求问题的精确更改（surgical changes）。',
@@ -181,8 +184,8 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-06-02T00:00:00.000Z'
     })
 
-    expect(decision.action).toBe('reference_only')
-    expect(decision.reasons).toContain('source_of_truth_duplicate')
+    expect(decision.action).toBe('auto_drop')
+    expect(decision.reasons).toContain('source_of_truth_excerpt')
     expect(decision.reasons).toContain('raw_file_rule_excerpt')
   })
 
@@ -203,13 +206,14 @@ describe('evaluateCandidateAdmission', () => {
     })
 
     expect(decision.action).not.toBe('admit_to_pending')
-    expect(['episode_only', 'admit_to_distillation', 'auto_drop']).toContain(decision.action)
+    expect(decision.action).toBe('auto_drop')
+    expect(decision.reasons).toContain('implementation_changelog')
     expect(decision.reasons).toContain('temporary_status')
     expect(decision.reasons).toContain('stale_numeric_snapshot')
     expect(decision.reasons).toContain('low_future_usefulness')
   })
 
-  it('does not mark operational source-of-truth rewrites as reference-only', () => {
+  it('drops operational raw source-of-truth excerpts unless they are rewritten as memory', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({
         content: 'AGENTS.md requires Codex to use surgical edits for non-trivial code changes and keep each changed line tied to the requested task.',
@@ -223,8 +227,7 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(decision.action).not.toBe('reference_only')
-    expect(['admit_to_pending', 'admit_to_distillation']).toContain(decision.action)
+    expect(decision.action).toBe('auto_drop')
     expect(decision.reasons).toContain('raw_file_rule_excerpt')
     expect(decision.reasons).not.toContain('source_of_truth_duplicate')
   })
@@ -318,12 +321,13 @@ describe('evaluateCandidateAdmission', () => {
     expect(decision.reasons).not.toContain('duplicate_active')
   })
 
-  it('keeps active source-of-truth duplicate raw excerpts reference-only', () => {
+  it('drops active source-of-truth duplicate raw excerpts before duplicate handling', () => {
     const decision = evaluateCandidateAdmission({
       draft: draft({
         content: 'AGENTS.md 中规定：所有修改必须直接追溯到指定的 issue 或 task，进行精确的手术式更改。',
         candidateKind: 'workflow_rule',
         normalizedKey: 'duplicate-key',
+        sourceKind: 'file',
         sourceOfTruth: 'AGENTS.md'
       }),
       pending: [],
@@ -332,11 +336,11 @@ describe('evaluateCandidateAdmission', () => {
       now: '2026-05-31T00:00:00.000Z'
     })
 
-    expect(decision.action).toBe('reference_only')
-    expect(decision.reasons).toContain('source_of_truth_duplicate')
+    expect(decision.action).toBe('auto_drop')
+    expect(decision.reasons).toContain('source_of_truth_excerpt')
     expect(decision.reasons).toContain('raw_file_rule_excerpt')
     expect(decision.reasons).not.toContain('duplicate_active')
-    expect(decision.targetMemoryId).toBe('active-1')
+    expect(decision.targetMemoryId).toBeUndefined()
   })
 
   it('rejects source-of-truth duplicate active memory with exact reasons', () => {

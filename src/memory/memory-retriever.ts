@@ -7,6 +7,7 @@ import {
   type RetrievalPlan
 } from '../codex/retrieval-planner.js'
 import { readActiveMemories, readActiveMemoriesFromRoot } from './memory-store.js'
+import { tokenizeMemoryText } from './tokenizer.js'
 import type { CyreneMemory, MemoryDomain, MemoryScope, MemoryStrength, MemoryType } from './types.js'
 
 export interface RetrieveMemoriesInput {
@@ -47,7 +48,7 @@ export async function retrieveMemories(input: RetrieveMemoriesInput): Promise<Re
   const memories = await readInputMemories(input)
   const task = input.task ?? 'conversation'
   const retrievalPlan = buildRetrievalPlan({ query: input.query, task })
-  const queryTokens = tokenize(input.query)
+  const queryTokens = tokenizeMemoryText(input.query)
   const filtered = memories.filter((memory) => (
     isMemoryEligibleForRetrieval(memory, input, task) &&
     !retrievalPlan.excludeDomains.includes(memory.domain)
@@ -178,7 +179,7 @@ function scoreMemory(memory: CyreneMemory, queryTokens: string[], retrievalPlan:
 }
 
 function relevanceScore(memory: CyreneMemory, queryTokens: string[]): number {
-  const haystack = tokenize([
+  const haystack = tokenizeMemoryText([
     memory.content,
     memory.normalizedKey,
     memory.domain,
@@ -187,7 +188,7 @@ function relevanceScore(memory: CyreneMemory, queryTokens: string[]): number {
     ...memory.tags
   ].join(' '))
   const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)))
-  return matches.length / queryTokens.length
+  return matches.length / Math.min(queryTokens.length, 8)
 }
 
 function compareRetrievedMemories(left: RetrievedMemory, right: RetrievedMemory): number {
@@ -209,12 +210,4 @@ function domainPriority(domain: MemoryDomain): number {
   if (domain === 'personal') return 3
   if (domain === 'relationship') return 4
   return 5
-}
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9_]+/)
-    .map((token) => token.trim())
-    .filter(Boolean)
 }

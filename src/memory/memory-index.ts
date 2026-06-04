@@ -18,6 +18,7 @@ import {
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot
 } from './memory-store.js'
+import { tokenizeMemoryText } from './tokenizer.js'
 import type { CyreneMemory, MemoryPortability, PendingMemory } from './types.js'
 
 export interface MemoryIndexRoot {
@@ -1190,7 +1191,7 @@ function readString(value: unknown, field: string): string {
 }
 
 function scoreRow(row: MemoryIndexRow, query: string, ftsMatches: Set<string>): number {
-  const tokens = tokenize(query)
+  const tokens = tokenizeMemoryText(query)
   const relevance = tokens.length === 0 ? 0.2 : relevanceScore(row, tokens)
   const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0
   const safety = typeof row.scores.safety === 'number' ? row.scores.safety : 0.8
@@ -1201,7 +1202,7 @@ function scoreRow(row: MemoryIndexRow, query: string, ftsMatches: Set<string>): 
 }
 
 function relevanceScore(row: MemoryIndexRow, queryTokens: string[]): number {
-  const haystack = tokenize([
+  const haystack = tokenizeMemoryText([
     row.content,
     row.normalizedKey,
     row.domain,
@@ -1211,7 +1212,7 @@ function relevanceScore(row: MemoryIndexRow, queryTokens: string[]): number {
     ...row.tags
   ].join(' '))
   const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)))
-  return matches.length / queryTokens.length
+  return matches.length / Math.min(queryTokens.length, 8)
 }
 
 function compareIndexedItems<T extends { score: number; memory: { id: string } }>(left: T, right: T): number {
@@ -1241,12 +1242,12 @@ function selectWithinBudget<T extends { memory: { content: string } }>(items: T[
 }
 
 function ftsExpression(text: string): string {
-  return tokenize(text)
+  return basicFtsTokens(text)
     .map((token) => `"${token.replace(/"/g, '""')}"`)
     .join(' ')
 }
 
-function tokenize(text: string): string[] {
+function basicFtsTokens(text: string): string[] {
   return text
     .toLowerCase()
     .match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) ?? []

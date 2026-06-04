@@ -11093,7 +11093,7 @@ import { join as join8 } from "node:path";
 import { basename as basename2, dirname as dirname3, join as join7 } from "node:path";
 
 // src/memory/memory-index.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { mkdir as mkdir4 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname as dirname2 } from "node:path";
@@ -11156,6 +11156,137 @@ function tokenize(text) {
   return text.split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 
+// src/memory/tokenizer.ts
+import { createHash } from "node:crypto";
+var MEMORY_TOKEN_ALIASES = {
+  "\u591A\u667A\u80FD\u4F53": ["multi-agent", "multi_agent", "multiagent"],
+  "\u4ED3\u5E93": ["repo", "repository"],
+  "\u5BA1\u67E5": ["review", "audit"],
+  "\u9A8C\u8BC1": ["verify", "validation", "verification"],
+  "\u8BB0\u5FC6": ["memory"],
+  "\u81EA\u52A8\u5316": ["automation"],
+  "\u4E0A\u4E0B\u6587": ["context"],
+  "\u6C61\u67D3": ["pollution"]
+};
+var STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "been",
+  "being",
+  "but",
+  "by",
+  "can",
+  "could",
+  "for",
+  "from",
+  "if",
+  "in",
+  "include",
+  "into",
+  "is",
+  "it",
+  "its",
+  "may",
+  "must",
+  "note",
+  "notes",
+  "of",
+  "on",
+  "or",
+  "outline",
+  "plan",
+  "should",
+  "test",
+  "that",
+  "the",
+  "then",
+  "these",
+  "this",
+  "those",
+  "to",
+  "was",
+  "were",
+  "when",
+  "while",
+  "will",
+  "with",
+  "without",
+  "would",
+  "write",
+  "writing"
+]);
+function tokenizeMemoryText(text) {
+  const tokens = /* @__PURE__ */ new Set();
+  const normalized = text.toLowerCase();
+  for (const token of normalized.match(/[a-z0-9]+(?:[-_][a-z0-9]+)*|[\u4e00-\u9fff]+/g) ?? []) {
+    addToken(tokens, token);
+    if (hasConnector(token)) {
+      addToken(tokens, token.replace(/-/g, "_"));
+      addToken(tokens, token.replace(/[-_]/g, ""));
+      for (const part of token.split(/[-_]+/)) {
+        addToken(tokens, part);
+      }
+    }
+    if (isCjkToken(token)) {
+      for (const gram of cjkNgrams(token)) {
+        addToken(tokens, gram);
+      }
+    }
+  }
+  for (const [source, aliases] of Object.entries(MEMORY_TOKEN_ALIASES)) {
+    if (normalized.includes(source)) {
+      addToken(tokens, source);
+      for (const alias of aliases) {
+        addToken(tokens, alias);
+      }
+    }
+  }
+  return Array.from(tokens);
+}
+function normalizeMemoryKey(text) {
+  const tokens = tokenizeMemoryText(text).filter((token) => !isCjkToken(token) || token.length >= 2).sort(compareTokensForKey);
+  const slug = tokens.join("-").replace(/[^a-z0-9\u4e00-\u9fff_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return slug.length > 0 ? slug : createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+function addToken(tokens, token) {
+  const trimmed = token.trim().toLowerCase();
+  if (trimmed === "" || STOP_WORDS.has(trimmed)) {
+    return;
+  }
+  tokens.add(trimmed);
+}
+function hasConnector(token) {
+  return /[-_]/.test(token);
+}
+function isCjkToken(token) {
+  return /^[\u4e00-\u9fff]+$/.test(token);
+}
+function cjkNgrams(token) {
+  const grams = [];
+  for (const size of [2, 3]) {
+    for (let index = 0; index <= token.length - size; index += 1) {
+      grams.push(token.slice(index, index + size));
+    }
+  }
+  return grams;
+}
+function compareTokensForKey(left, right) {
+  const leftAscii = isAsciiToken(left);
+  const rightAscii = isAsciiToken(right);
+  if (leftAscii !== rightAscii) {
+    return leftAscii ? -1 : 1;
+  }
+  return left.localeCompare(right);
+}
+function isAsciiToken(token) {
+  return /^[a-z0-9_-]+$/.test(token);
+}
+
 // src/memory/memory-retriever.ts
 function memoryRetrievalBudgetForTask(task) {
   if (task === "coding" || task === "debugging") return { maxItems: 12, maxTokens: 2e3 };
@@ -11167,7 +11298,7 @@ async function retrieveMemories(input) {
   const memories = await readInputMemories(input);
   const task = input.task ?? "conversation";
   const retrievalPlan = buildRetrievalPlan({ query: input.query, task });
-  const queryTokens = tokenize2(input.query);
+  const queryTokens = tokenizeMemoryText(input.query);
   const filtered = memories.filter((memory) => isMemoryEligibleForRetrieval(memory, input, task) && !retrievalPlan.excludeDomains.includes(memory.domain));
   const scored = filtered.map((memory) => {
     const score = scoreMemory(memory, queryTokens, retrievalPlan);
@@ -11264,7 +11395,7 @@ function scoreMemory(memory, queryTokens, retrievalPlan) {
   return relevance * 0.35 + memory.scores.usefulness * 0.25 + memory.scores.evidenceStrength * 0.2 + memory.scores.safety * 0.1 + recency * 0.1 - sensitivityPenalty + plannerBoost;
 }
 function relevanceScore(memory, queryTokens) {
-  const haystack = tokenize2([
+  const haystack = tokenizeMemoryText([
     memory.content,
     memory.normalizedKey,
     memory.domain,
@@ -11273,7 +11404,7 @@ function relevanceScore(memory, queryTokens) {
     ...memory.tags
   ].join(" "));
   const matches2 = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches2.length / queryTokens.length;
+  return matches2.length / Math.min(queryTokens.length, 8);
 }
 function compareRetrievedMemories(left, right) {
   const scoreDiff = right.score - left.score;
@@ -11293,9 +11424,6 @@ function domainPriority(domain) {
   if (domain === "personal") return 3;
   if (domain === "relationship") return 4;
   return 5;
-}
-function tokenize2(text) {
-  return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 
 // src/memory/memory-index.ts
@@ -12151,7 +12279,7 @@ function isSafeFileTraceRef(ref) {
   return /^[\w./-]+\.[\w]+$/.test(ref) && !ref.includes("..");
 }
 function hashText(value, length) {
-  return createHash("sha256").update(value).digest("hex").slice(0, length);
+  return createHash2("sha256").update(value).digest("hex").slice(0, length);
 }
 function dependencyFingerprint(dependencyNames2) {
   return dependencyNames2.slice().sort().join("\n");
@@ -12210,7 +12338,7 @@ function readString(value, field) {
   return value;
 }
 function scoreRow(row, query, ftsMatches) {
-  const tokens = tokenize3(query);
+  const tokens = tokenizeMemoryText(query);
   const relevance = tokens.length === 0 ? 0.2 : relevanceScore2(row, tokens);
   const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0;
   const safety = typeof row.scores.safety === "number" ? row.scores.safety : 0.8;
@@ -12220,7 +12348,7 @@ function scoreRow(row, query, ftsMatches) {
   return relevance * 0.45 + usefulness * 0.2 + evidence * 0.15 + safety * 0.1 + ftsBoost - sensitivity * 0.1;
 }
 function relevanceScore2(row, queryTokens) {
-  const haystack = tokenize3([
+  const haystack = tokenizeMemoryText([
     row.content,
     row.normalizedKey,
     row.domain,
@@ -12230,7 +12358,7 @@ function relevanceScore2(row, queryTokens) {
     ...row.tags
   ].join(" "));
   const matches2 = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  return matches2.length / queryTokens.length;
+  return matches2.length / Math.min(queryTokens.length, 8);
 }
 function compareIndexedItems(left, right) {
   const scoreDiff = right.score - left.score;
@@ -12257,14 +12385,14 @@ function selectWithinBudget(items, maxItems, maxTokens) {
   return selected;
 }
 function ftsExpression(text) {
-  return tokenize3(text).map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
+  return basicFtsTokens(text).map((token) => `"${token.replace(/"/g, '""')}"`).join(" ");
 }
-function tokenize3(text) {
+function basicFtsTokens(text) {
   return text.toLowerCase().match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) ?? [];
 }
 
 // src/codex/project-fingerprint.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { readdir as readdir2, readFile as readFile3, stat } from "node:fs/promises";
 import { join as join6 } from "node:path";
 var MAX_PROJECT_SCAN_FILES = 1e3;
@@ -12451,12 +12579,12 @@ async function exists(path) {
   }
 }
 function hashShort(value) {
-  return createHash2("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash3("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/project-id.ts
 import { execFile } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { realpath as realpath4 } from "node:fs/promises";
 import { basename, resolve as resolve2 } from "node:path";
 import { promisify } from "node:util";
@@ -12494,7 +12622,7 @@ async function tryGit(args, cwd) {
   }
 }
 function sha256Short(value) {
-  return createHash3("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash4("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/codex-memory-index.ts
@@ -12871,11 +12999,6 @@ async function markCodexMemoryDreamDue(memoryRoot, now) {
     nextDreamDueAt: dueAt
   });
 }
-function nextDreamDueAt(now, intervalHours) {
-  const date3 = new Date(now);
-  date3.setUTCHours(date3.getUTCHours() + intervalHours);
-  return date3.toISOString();
-}
 function isDreamStatus(value) {
   return value === "success" || value === "skipped" || value === "failed";
 }
@@ -12980,11 +13103,11 @@ async function formatCodexMemoryStatus(input) {
     `  last stop hook run: ${formatStopHookRun(status.stopHook)}`,
     status.stopHook.reason === void 0 ? void 0 : `  stop hook reason: ${status.stopHook.reason}`,
     "",
-    "dream:",
-    `  dream state: ${status.dream.state}`,
-    status.dream.reason === void 0 ? void 0 : `  dream state reason: ${status.dream.reason}`,
-    `  dream due: ${status.dream.due ? "yes" : "no"}`,
-    `  last dream: ${status.dream.lastDreamAt ?? "never"}`
+    "automation:",
+    `  automation state: ${status.dream.state}`,
+    status.dream.reason === void 0 ? void 0 : `  automation state reason: ${status.dream.reason}`,
+    `  automation due: ${status.dream.due ? "yes" : "no"}`,
+    `  last automation run: ${status.dream.lastDreamAt ?? "never"}`
   ].filter((line) => line !== void 0 && line !== "").join("\n") + "\n";
 }
 async function readKnownProjectMemoryRoots() {
@@ -13386,9 +13509,9 @@ async function formatCodexDoctor(input) {
     `  stable shim: ${pluginState.shimExists ? "present" : "missing"}`,
     "",
     "migration:",
-    `  automation dream stage: ${migrationState.automationDreamStage}`,
-    `  stable shim deep-preview: ${migrationState.stableShimDeepPreview}`,
-    `  stable shim deep-apply: ${migrationState.stableShimDeepApply}`,
+    `  legacy deep automation: ${migrationState.automationDreamStage}`,
+    `  stable shim preview job: ${migrationState.stableShimDeepPreview}`,
+    `  stable shim apply job: ${migrationState.stableShimDeepApply}`,
     `  embedding provider: ${migrationState.embeddingProvider}`,
     "",
     "skill:",
@@ -13420,10 +13543,10 @@ async function formatCodexDoctor(input) {
     `  session summaries: ${memoryStatus.stopHook.sessionSummaries}`,
     `  last stop hook run: ${memoryStatus.stopHook.lastRunAt === void 0 ? "never" : `${memoryStatus.stopHook.lastRunAt} (${memoryStatus.stopHook.lastRunStatus ?? "unknown"})`}`,
     memoryStatus.stopHook.reason === void 0 ? void 0 : `  stop hook reason: ${memoryStatus.stopHook.reason}`,
-    `  dream state: ${memoryStatus.dream.state}`,
-    memoryStatus.dream.reason === void 0 ? void 0 : `  dream state reason: ${memoryStatus.dream.reason}`,
-    `  dream due: ${memoryState.dreamDue ? "yes" : "no"}`,
-    `  last dream: ${memoryState.lastDreamAt ?? "never"}`,
+    `  automation state: ${memoryStatus.dream.state}`,
+    memoryStatus.dream.reason === void 0 ? void 0 : `  automation state reason: ${memoryStatus.dream.reason}`,
+    `  automation due: ${memoryState.dreamDue ? "yes" : "no"}`,
+    `  last automation run: ${memoryState.lastDreamAt ?? "never"}`,
     `  promotion recommendations: ${config2.memoryRecommendPromotionEnabled ? "enabled" : "disabled"}`,
     `  deprecated CYRENE_MEMORY_AUTO_PROMOTE: ${config2.deprecatedMemoryAutoPromoteConfigured ? "set" : "unset"}`,
     config2.deprecatedMemoryAutoPromoteConfigured ? "  advisory: CYRENE_MEMORY_AUTO_PROMOTE is deprecated; use CYRENE_MEMORY_RECOMMEND_PROMOTION" : void 0
@@ -14119,7 +14242,7 @@ function overlapScore(label, sourceValues, targetValues, weight, reason) {
 }
 
 // src/codex/memory-review.ts
-import { createHash as createHash5, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID7 } from "node:crypto";
 
 // src/codex/active-memory-readiness.ts
 var VERSION_OR_SESSION_PATTERN = /(?:\bv\d+(?:\.\d+)*\b|本轮|这次|当前|目前|刚刚|today|this round|current)/i;
@@ -14199,7 +14322,7 @@ import { lstat as lstat8, open, readdir as readdir4, readFile as readFile8, real
 import { dirname as dirname8, isAbsolute as isAbsolute3, join as join13, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 function validateMemoryCandidate(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const candidate = normalizeCandidate(input.candidate);
@@ -14305,7 +14428,7 @@ function distinctEvidenceCount(candidate) {
       seenRunIds.add(runId);
     }
     const summaryQuote = `${entry.summary ?? ""}|${entry.quote ?? ""}`;
-    const hash = createHash4("sha256").update(summaryQuote).digest("hex");
+    const hash = createHash5("sha256").update(summaryQuote).digest("hex");
     keys.add(evidenceGroupId ?? sessionId ?? runId ?? hash);
   }
   return keys.size;
@@ -14473,8 +14596,8 @@ function cleanEvidencePart(value) {
   const trimmed = value?.trim();
   return trimmed === void 0 || trimmed === "" ? void 0 : trimmed;
 }
-function pendingResult(reason, distinctEvidenceCount3) {
-  return { promotable: false, reason, distinctEvidenceCount: distinctEvidenceCount3 };
+function pendingResult(reason, distinctEvidenceCount2) {
+  return { promotable: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
 }
 function promotionThreshold(candidate) {
   if (candidate.domain === "personal" || candidate.domain === "relationship") {
@@ -14988,9 +15111,6 @@ var MemoryMaintenanceLockTimeoutError = class extends Error {
   }
   lockDir;
 };
-function isMemoryMaintenanceLockTimeoutError(error2) {
-  return error2 instanceof MemoryMaintenanceLockTimeoutError;
-}
 async function assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot) {
   const root = await assertMemorySnapshotTargetSafeFromRoot(memoryRoot);
   await assertMemoryProjectionTargetsSafe(root);
@@ -15883,7 +16003,7 @@ function reviewHashForSemanticMemory(memory) {
     createdAt: memory.createdAt,
     updatedAt: memory.updatedAt
   };
-  return createHash5("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash6("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).toISOString(), semanticRewriteReceipts = []) {
   const semanticMemory = pendingReviewSemanticMemory(candidate);
@@ -16937,9 +17057,9 @@ function addDays2(iso, days) {
 }
 
 // src/codex/memory-feedback.ts
-import { createHash as createHash6, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID8 } from "node:crypto";
 function queryHashFor(query) {
-  return createHash6("sha256").update(query).digest("hex").slice(0, 16);
+  return createHash7("sha256").update(query).digest("hex").slice(0, 16);
 }
 async function appendActivationEventFailOpen(input) {
   try {
@@ -16977,7 +17097,7 @@ async function appendActivationEventsFailOpen(input) {
 }
 
 // src/codex/memory-activation.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 
 // src/memory/memory-lifecycle.ts
 var LOW_RISK_DOMAINS = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
@@ -17040,58 +17160,6 @@ function activationPolicyMatchesConfidenceTier(tier, policy) {
 }
 
 // src/codex/memory-activation.ts
-var STOP_WORDS = /* @__PURE__ */ new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "been",
-  "being",
-  "but",
-  "by",
-  "can",
-  "could",
-  "for",
-  "from",
-  "if",
-  "in",
-  "include",
-  "into",
-  "is",
-  "it",
-  "its",
-  "may",
-  "must",
-  "note",
-  "notes",
-  "of",
-  "on",
-  "or",
-  "outline",
-  "plan",
-  "should",
-  "test",
-  "that",
-  "the",
-  "then",
-  "these",
-  "this",
-  "those",
-  "to",
-  "was",
-  "were",
-  "when",
-  "while",
-  "will",
-  "with",
-  "without",
-  "would",
-  "write",
-  "writing"
-]);
 var DISTINCTIVE_TOKEN_LENGTH = 8;
 var DO_NOT_USE_BOUNDARY_TOKENS = /* @__PURE__ */ new Set([
   "avoid",
@@ -17117,7 +17185,7 @@ function buildMemoryActivations(input) {
     planConstraints: [],
     checklistItems: []
   };
-  const queryTokens = tokenize4(input.query);
+  const queryTokens = tokenizeMemoryText(input.query);
   if (queryTokens.length === 0 || maxPerBucket === 0) {
     return output;
   }
@@ -17191,7 +17259,7 @@ function matchTriggerReason(memory, queryTokens) {
   if (memory.doNotUseWhen.some((boundary) => doNotUseWhenSuppresses(queryTokens, boundary))) {
     return null;
   }
-  const memoryTokens = new Set(tokenize4([memory.content, ...memory.useWhen].join(" ")));
+  const memoryTokens = new Set(tokenizeMemoryText([memory.content, ...memory.useWhen].join(" ")));
   const matchedTokens = matchingTokens(queryTokens, memoryTokens);
   if (!isStrongMatch(matchedTokens)) {
     return null;
@@ -17199,7 +17267,7 @@ function matchTriggerReason(memory, queryTokens) {
   return `matched distinctive query tokens: ${matchedTokens.join(", ")}`;
 }
 function doNotUseWhenSuppresses(queryTokens, boundary) {
-  const boundaryTokens = new Set(tokenize4(boundary));
+  const boundaryTokens = new Set(tokenizeMemoryText(boundary));
   if (!isStrongTokenOverlap(queryTokens, boundaryTokens)) {
     return false;
   }
@@ -17226,17 +17294,12 @@ function riskForMemory(memory) {
   return "low";
 }
 function stableActivationId(memoryId, mode, source) {
-  return createHash7("sha256").update(`${memoryId}:${mode}:${source}`).digest("hex").slice(0, 16);
+  return createHash8("sha256").update(`${memoryId}:${mode}:${source}`).digest("hex").slice(0, 16);
 }
 function normalizeMaxPerBucket(value) {
   if (value === void 0) return 6;
   if (!Number.isFinite(value)) return 6;
   return Math.max(0, Math.floor(value));
-}
-function tokenize4(text) {
-  return Array.from(new Set(
-    (text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).map((token) => token.trim()).filter((token) => token !== "" && !STOP_WORDS.has(token))
-  ));
 }
 
 // src/codex/continuity-context.ts
@@ -17281,22 +17344,24 @@ async function getCodexContinuityContext(input) {
     globalMemories: globalActivationMemories,
     projectMemories: projectActivationMemories
   });
-  await Promise.all([
-    appendActivationEventsFailOpen({
-      memoryRoot: globalMemoryRoot,
-      memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
-      projectId: project.projectId,
-      query: input.userMessage,
-      event: "retrieved"
-    }),
-    appendActivationEventsFailOpen({
-      memoryRoot: projectMemoryRoot,
-      memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
-      projectId: project.projectId,
-      query: input.userMessage,
-      event: "retrieved"
-    })
-  ]);
+  if (input.recordActivationEvents !== false) {
+    await Promise.all([
+      appendActivationEventsFailOpen({
+        memoryRoot: globalMemoryRoot,
+        memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
+        projectId: project.projectId,
+        query: input.userMessage,
+        event: "retrieved"
+      }),
+      appendActivationEventsFailOpen({
+        memoryRoot: projectMemoryRoot,
+        memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
+        projectId: project.projectId,
+        query: input.userMessage,
+        event: "retrieved"
+      })
+    ]);
+  }
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory];
   const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory);
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join("\n\n");
@@ -17641,11 +17706,11 @@ function canonicalGlobalMemorySignature(memory) {
   ]);
 }
 function scorePendingMemory(memory, query) {
-  const tokens = tokenize5(query);
+  const tokens = tokenize2(query);
   if (tokens.length === 0) {
     return 0.2;
   }
-  const haystack = tokenize5([
+  const haystack = tokenize2([
     memory.content,
     memory.normalizedKey,
     memory.domain,
@@ -17706,7 +17771,7 @@ function selectPendingWithinBudget(items, maxItems, maxTokens) {
   }
   return selected;
 }
-function tokenize5(text) {
+function tokenize2(text) {
   return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 function toRoutedMemoryDigestItem(item, input) {
@@ -18102,6 +18167,7 @@ var ONE_TIME_ACTION_PATTERN = /(?:使用|ran|run|checked|检查|修复|完成|�
 var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i;
 var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
 var REVIEW_SUMMARY_STATUS_PATTERN = /(?:修复|完成|清理|归零|通过|merge|push|merged|pushed|typecheck|plugin validation|review summary failed|测试|pending)/i;
+var IMPLEMENTATION_CHANGELOG_PATTERN = /(?:更新(?:了)?|新增(?:了)?|修复(?:了)?|实现(?:了)?|完成(?:了)?|迁移(?:了)?|改造(?:了)?|重构(?:了)?|清理(?:了)?|renamed|refactored|implemented|migrated|updated|added|fixed|removed|completed).{0,120}(?:CLI|UI|MCP|tests?|测试|runtime|plugin|pending|active|trial|validated|core|automation|自动化|lifecycle|memory|记忆|工作区|worktree)/i;
 var TEST_COUNT_PATTERN = /(?:tests?|测试).{0,16}\d+|\d+.{0,16}(?:tests?|测试)/i;
 var VAGUE_PATTERN = /(?:若干|一些|多个|相关|事情|问题|改进|优化|处理)/i;
 var PRESCRIPTIVE_PATTERN = /(?:must|should|need to|required|before|after|必须|需要|不得|不能|应该|应当|先|前)/i;
@@ -18113,12 +18179,10 @@ function evaluateCandidateAdmission(input) {
   if (reasons.includes("task_state")) {
     return decision(input.draft, "task_state", reasons, scores, now);
   }
-  const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey);
-  if (isSourceOfTruthReferenceOnly(input.draft, reasons)) {
-    return decision(input.draft, "reference_only", ["source_of_truth_duplicate", ...reasons], scores, now, {
-      ...duplicateActive === void 0 ? {} : { targetMemoryId: duplicateActive.id }
-    });
+  if (isDropOnlyAdmission(reasons)) {
+    return decision(input.draft, "auto_drop", reasons, scores, now);
   }
+  const duplicateActive = findByNormalizedKey(input.active, input.draft.normalizedKey);
   if (duplicateActive !== void 0) {
     return decision(
       input.draft,
@@ -18157,6 +18221,8 @@ function reasonsForDraft(draft) {
   const reasons = [];
   const durableGuidance = isDurablePrescriptiveGuidance(draft);
   const readiness = evaluateActiveMemoryReadiness(draft);
+  const sourceOfTruthExcerpt = isSourceOfTruthPolicyExcerpt(draft, readiness.reasons.includes("raw_file_rule_excerpt"));
+  const implementationChangelog = isImplementationChangelog(draft, readiness.reasons.includes("implementation_note"), durableGuidance);
   if (draft.candidateKind === "user_instruction" || draft.sourceKind === "user_explicit") {
     reasons.push("explicit_user_instruction");
   }
@@ -18184,11 +18250,14 @@ function reasonsForDraft(draft) {
   if (isReviewSummaryStatusNoise(draft)) {
     reasons.push("temporary_status", "low_future_usefulness");
   }
+  if (implementationChangelog) {
+    reasons.push("implementation_changelog");
+  }
   if (TEST_COUNT_PATTERN.test(draft.content)) {
     reasons.push("stale_numeric_snapshot", "low_actionability");
   }
-  if (isSourceOfTruthPolicyExcerpt(draft)) {
-    reasons.push("raw_file_rule_excerpt");
+  if (sourceOfTruthExcerpt) {
+    reasons.push("source_of_truth_excerpt", "raw_file_rule_excerpt");
   }
   if (draft.taskState !== void 0) {
     reasons.push("task_state");
@@ -18197,7 +18266,12 @@ function reasonsForDraft(draft) {
     reasons.push("too_vague");
   }
   if (!readiness.ready) {
-    reasons.push(...readiness.reasons);
+    reasons.push(...readiness.reasons.filter((reason) => {
+      if (reason === "needs_active_memory_rewrite") {
+        return !implementationChangelog && !sourceOfTruthExcerpt && !readiness.reasons.includes("raw_file_rule_excerpt");
+      }
+      return true;
+    }));
   }
   return Array.from(new Set(reasons));
 }
@@ -18211,13 +18285,18 @@ function isDurablePrescriptiveGuidance(draft) {
 function isReviewSummaryStatusNoise(draft) {
   return draft.sourceKind === "review_summary" && !isDurablePrescriptiveGuidance(draft) && REVIEW_SUMMARY_STATUS_PATTERN.test(draft.content);
 }
-function isSourceOfTruthPolicyExcerpt(draft) {
+function isImplementationChangelog(draft, readinessImplementationNote, durableGuidance) {
+  if (durableGuidance) return false;
+  const projectLike = draft.candidateKind === "project_fact" || draft.candidateKind === "project_decision" || draft.domain === "project";
+  return projectLike && (readinessImplementationNote || IMPLEMENTATION_CHANGELOG_PATTERN.test(draft.content));
+}
+function isSourceOfTruthPolicyExcerpt(draft, readinessRawFileExcerpt) {
   if (draft.sourceOfTruth === void 0) return false;
   if (!/(?:^|\/)(?:AGENTS\.md|README\.md|CONTRIBUTING\.md)$/i.test(draft.sourceOfTruth.trim())) {
     return false;
   }
   if (draft.sourceKind !== "file") return false;
-  return /(?:仓库工作规则|仓库政策|repository policy|working rules|agent guidance)/i.test(draft.content);
+  return readinessRawFileExcerpt || /(?:仓库工作规则|仓库政策|中规定|定义|要求|states?|says?|requires?|repository policy|working rules|agent guidance)/i.test(draft.content);
 }
 function scoreOverridesForReasons(reasons) {
   const noisy = reasons.some(
@@ -18288,6 +18367,7 @@ function admissionScoreFor(scores) {
 }
 function actionFor(draft, reasons, score) {
   if (reasons.includes("task_state")) return "task_state";
+  if (isDropOnlyAdmission(reasons)) return "auto_drop";
   if (reasons.includes("explicit_user_instruction")) return "admit_to_pending";
   if (reasons.includes("needs_active_memory_rewrite")) return "admit_to_distillation";
   if (reasons.includes("valuable_workflow_rule") || reasons.includes("valuable_known_pitfall") || reasons.includes("valuable_rejected_approach") || reasons.includes("valuable_project_decision")) {
@@ -18300,17 +18380,8 @@ function actionFor(draft, reasons, score) {
   if (score < 0.65) return "admit_to_distillation";
   return draft.candidateKind === "project_fact" ? "admit_to_distillation" : "admit_to_pending";
 }
-function isSourceOfTruthReferenceOnly(draft, reasons) {
-  if (draft.sourceOfTruth === void 0 || draft.sourceOfTruth.trim() === "") {
-    return false;
-  }
-  if (!reasons.includes("raw_file_rule_excerpt")) {
-    return false;
-  }
-  return !hasOperationalInterpretationSignal(draft.content);
-}
-function hasOperationalInterpretationSignal(content) {
-  return /because|exception|applies when|mitigation|\buse\b|non-trivial|keep each|避免|例外|适用|边界|改写|使用|非琐碎|非平凡/i.test(content);
+function isDropOnlyAdmission(reasons) {
+  return reasons.includes("implementation_changelog") || reasons.includes("source_of_truth_excerpt") || reasons.includes("raw_file_rule_excerpt");
 }
 function decision(draft, action, reasons, scores, now, extras = {}) {
   return {
@@ -18340,7 +18411,7 @@ function clamp(value) {
 import { randomUUID as randomUUID11 } from "node:crypto";
 
 // src/codex/memory-propose.ts
-import { createHash as createHash8, randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -18471,8 +18542,8 @@ function rankPendingForEviction(pending, now) {
     };
   }).sort((left, right) => left.score - right.score || left.candidateId.localeCompare(right.candidateId));
 }
-function denied(reason, distinctEvidenceCount3) {
-  return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount3 };
+function denied(reason, distinctEvidenceCount2) {
+  return { allowed: false, reason, distinctEvidenceCount: distinctEvidenceCount2 };
 }
 function candidateIdsForDecisions(decisions) {
   const ids = /* @__PURE__ */ new Set();
@@ -18749,7 +18820,7 @@ function contentOf2(input) {
 
 // src/codex/memory-propose.ts
 function normalizedKeyForCodexMemoryCandidate(input) {
-  return input.normalizedKey ?? normalizeKey(`${input.domain}:${input.type}:${input.content}`);
+  return input.normalizedKey ?? normalizeMemoryKey(`${input.domain}:${input.type}:${input.content}`);
 }
 var DEFAULT_SCORES2 = {
   evidenceStrength: 0.75,
@@ -19147,10 +19218,6 @@ function evidenceRefsForCandidate(evidence) {
     entry.summary
   ]).flatMap((value) => value === void 0 ? [] : [value]);
 }
-function normalizeKey(value) {
-  const slug = value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  return slug.length > 0 ? slug : createHash8("sha256").update(value).digest("hex").slice(0, 16);
-}
 function addDays3(iso, days) {
   const date3 = new Date(iso);
   date3.setUTCDate(date3.getUTCDate() + days);
@@ -19374,11 +19441,13 @@ async function runCodexAdmissionPipeline(input) {
     await appendDistillationInputFromRoot(memoryRoot, distillationInputFromAdmission(draft, admission));
   }
   if (admission.action !== "admit_to_pending" && admission.action !== "merge_with_existing") {
-    await appendRoutingAndReviewDecisions(memoryRoot, {
-      admission,
-      route,
-      semanticMemoryId: semanticCandidate.id
-    });
+    if (admission.action !== "auto_drop") {
+      await appendRoutingAndReviewDecisions(memoryRoot, {
+        admission,
+        route,
+        semanticMemoryId: semanticCandidate.id
+      });
+    }
     return {
       project: { projectId: project.projectId, displayName: project.displayName },
       memoryRoot,
@@ -19626,15 +19695,31 @@ function asString(value) {
 
 // src/codex/global-memory-capture.ts
 import { createHash as createHash9 } from "node:crypto";
-var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|所有项目|每个项目|全局|all projects|every project|across projects|remember globally|global(?:ly)?)/i;
+var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|今后所有项目|所有项目|每个项目|all projects|every project|across projects|remember globally|(?:作为|写入|加入|保存到|记到).{0,8}全局记忆|全局(?:记住|保存|默认|规则|使用))/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
 var AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i;
+var QUESTION_OR_DIAGNOSTIC_PATTERN = /[？?]|为什么|为何|怎么|如何|检查一下|排查|bug|出现|是.+吗|why\b|how\b|what\b|debug\b/i;
+var EXPLICIT_GLOBAL_INSTRUCTION_MAX_LENGTH = 200;
+var EXPLICIT_GLOBAL_INSTRUCTION_MAX_LINES = 3;
+var STRUCTURED_CONTEXT_DUMP_PATTERNS = [
+  /^#\s+Applications mentioned by the user:/im,
+  /^#\s+Files mentioned by the user:/im,
+  /^##\s+My request for Codex:/im,
+  /<appshot\b/i,
+  /<\/appshot>/i,
+  /^<environment_context>/im,
+  /^<INSTRUCTIONS>/im,
+  /```/
+];
 function candidateFromExplicitGlobalInstruction(input) {
   const text = input.text.trim();
   if (AUTOMATION_PROMPT_PATTERN.test(text)) {
     return void 0;
   }
-  if (!GLOBAL_INSTRUCTION_PATTERN.test(text)) {
+  if (isLikelyStructuredContextDump(text) || text.length > EXPLICIT_GLOBAL_INSTRUCTION_MAX_LENGTH) {
+    return void 0;
+  }
+  if (!GLOBAL_INSTRUCTION_PATTERN.test(text) || QUESTION_OR_DIAGNOSTIC_PATTERN.test(text)) {
     return void 0;
   }
   if (PERSONAL_PREFERENCE_PATTERN.test(text)) {
@@ -19663,6 +19748,25 @@ function candidateFromExplicitGlobalInstruction(input) {
     tags: ["global_capture", "explicit_instruction"],
     userConfirmed: true
   };
+}
+function isLikelyStructuredContextDump(text) {
+  if (STRUCTURED_CONTEXT_DUMP_PATTERNS.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+  const lines2 = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines2.length > EXPLICIT_GLOBAL_INSTRUCTION_MAX_LINES) {
+    return true;
+  }
+  const markupTagCount = text.match(/<\/?[a-z][^>\n]{0,120}>/gi)?.length ?? 0;
+  if (markupTagCount >= 2) {
+    return true;
+  }
+  const metadataLabelCount = text.match(/\b(?:app|bundle-identifier|window-title|image|url|description|value|role|content|cwd|shell|workdir|container|button|link|text)\s*[:=]/gi)?.length ?? 0;
+  if (metadataLabelCount >= 4) {
+    return true;
+  }
+  const jsonLikeFieldCount = text.match(/["'][A-Za-z0-9_-]{3,}["']\s*:/g)?.length ?? 0;
+  return jsonLikeFieldCount >= 4;
 }
 function candidateFromReviewPattern(input) {
   if (input.count < 3) {
@@ -22181,12 +22285,12 @@ async function formatCodexMemoryDashboard(input) {
     "",
     ...formatReviewSummaries(reviewSummaries),
     "",
-    "dream:",
-    `  last dream: ${dreamState.lastDreamAt ?? "never"}`,
-    `  next dream due: ${dreamState.nextDreamDueAt ?? "unknown"}`,
-    `  dream due: ${dreamState.dreamDue ? "yes" : "no"}`,
-    dreamState.lastDreamStatus === void 0 ? void 0 : `  last dream status: ${dreamState.lastDreamStatus}`,
-    dreamState.lastDreamError === void 0 ? void 0 : `  last dream error: ${dreamState.lastDreamError}`,
+    "automation:",
+    `  last automation run: ${dreamState.lastDreamAt ?? "never"}`,
+    `  next automation due: ${dreamState.nextDreamDueAt ?? "unknown"}`,
+    `  automation due: ${dreamState.dreamDue ? "yes" : "no"}`,
+    dreamState.lastDreamStatus === void 0 ? void 0 : `  last automation status: ${dreamState.lastDreamStatus}`,
+    dreamState.lastDreamError === void 0 ? void 0 : `  last automation error: ${dreamState.lastDreamError}`,
     "",
     ...formatTombstones(tombstones),
     "",
@@ -22523,7 +22627,7 @@ function processProjectMemory(state, memory, activationEvents) {
     return memory;
   }
   const evidenceCount = memory.evidence.length;
-  const distinctEvidenceCount3 = distinctStructuredEvidenceCount(memory.evidence);
+  const distinctEvidenceCount2 = distinctStructuredEvidenceCount(memory.evidence);
   const evalItem = autoPromotionEvalItem({
     memory,
     scope: "project",
@@ -22531,7 +22635,7 @@ function processProjectMemory(state, memory, activationEvents) {
     usedToday: state.usedToday,
     dailyCap: state.dailyCap,
     evidenceCount,
-    distinctEvidenceCount: distinctEvidenceCount3
+    distinctEvidenceCount: distinctEvidenceCount2
   });
   const evalGate = runV5AutoPromotionEvalGate([evalItem]);
   if (!evalGate.passed) {
@@ -22549,7 +22653,7 @@ function processProjectMemory(state, memory, activationEvents) {
     return memory;
   }
   state.result.promotedTrialToValidated += 1;
-  state.events.push(promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidenceCount3, evalGate));
+  state.events.push(promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidenceCount2, evalGate));
   state.usedToday += 1;
   return {
     ...memory,
@@ -22567,7 +22671,7 @@ function processGlobalMemory(state, memory) {
     return memory;
   }
   const evidenceCount = memory.evidence.length;
-  const distinctEvidenceCount3 = distinctStructuredEvidenceCount(memory.evidence);
+  const distinctEvidenceCount2 = distinctStructuredEvidenceCount(memory.evidence);
   const evalItem = autoPromotionEvalItem({
     memory,
     scope: "global",
@@ -22575,7 +22679,7 @@ function processGlobalMemory(state, memory) {
     usedToday: state.usedToday,
     dailyCap: state.dailyCap,
     evidenceCount,
-    distinctEvidenceCount: distinctEvidenceCount3
+    distinctEvidenceCount: distinctEvidenceCount2
   });
   const policyGate = runV5AutoPromotionEvalGate([evalItem]);
   const globalGate = runV5GlobalAutoPromotionEvalGate([evalItem]);
@@ -22603,7 +22707,7 @@ function processGlobalMemory(state, memory) {
     return memory;
   }
   state.result.promotedExplicitGlobalToCore += 1;
-  state.events.push(promoteGlobalEvent(state, promoted, evidenceCount, distinctEvidenceCount3, evalGate));
+  state.events.push(promoteGlobalEvent(state, promoted, evidenceCount, distinctEvidenceCount2, evalGate));
   state.usedToday += 1;
   return promoted;
 }
@@ -22779,7 +22883,7 @@ function addGlobalRecommendation(state, memory, reason, evalGate, lifecycleFindi
     }
   });
 }
-function promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidenceCount3, evalGate) {
+function promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidenceCount2, evalGate) {
   return {
     id: randomUUID17(),
     action: "promote",
@@ -22793,7 +22897,7 @@ function promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidence
       previousConfidenceTier: "trial",
       confidenceTier: "validated",
       evidenceCount,
-      distinctEvidenceCount: distinctEvidenceCount3,
+      distinctEvidenceCount: distinctEvidenceCount2,
       appliedEvents: stats.applied,
       correctedEvents: stats.corrected,
       violatedEvents: stats.violated,
@@ -22811,7 +22915,7 @@ function promoteTrialEvent(state, memory, stats, evidenceCount, distinctEvidence
     }
   };
 }
-function promoteGlobalEvent(state, memory, evidenceCount, distinctEvidenceCount3, evalGate) {
+function promoteGlobalEvent(state, memory, evidenceCount, distinctEvidenceCount2, evalGate) {
   return {
     id: randomUUID17(),
     action: "promote",
@@ -22825,7 +22929,7 @@ function promoteGlobalEvent(state, memory, evidenceCount, distinctEvidenceCount3
       lifecyclePolicyId: DAILY_EXPLICIT_GLOBAL_CORE_POLICY_ID,
       confidenceTier: "global_core",
       evidenceCount,
-      distinctEvidenceCount: distinctEvidenceCount3,
+      distinctEvidenceCount: distinctEvidenceCount2,
       capStatus: {
         scope: "global",
         usedToday: state.usedToday,
@@ -24028,7 +24132,7 @@ async function runGlobalWeeklyLocked(input) {
       });
       continue;
     }
-    const distinctEvidenceCount3 = distinctGlobalEvidenceCount(group.sources);
+    const distinctEvidenceCount2 = distinctGlobalEvidenceCount(group.sources);
     const candidate = globalCoreMemoryFromProjectCore(group.sources, input.now);
     const validationFindings = validateSemanticMemoryLifecycle(candidate);
     if (validationFindings.length > 0) {
@@ -24048,7 +24152,7 @@ async function runGlobalWeeklyLocked(input) {
       policyId: GLOBAL_PROMOTION_POLICY_ID,
       decision: PROMOTION_DECISION,
       evidenceCount: group.sources.length,
-      distinctEvidenceCount: distinctEvidenceCount3,
+      distinctEvidenceCount: distinctEvidenceCount2,
       usedToday,
       dailyCap: input.dailyCap
     };
@@ -24069,7 +24173,7 @@ async function runGlobalWeeklyLocked(input) {
     candidates.push({
       memory: candidate,
       sources: group.sources,
-      distinctEvidenceCount: distinctEvidenceCount3,
+      distinctEvidenceCount: distinctEvidenceCount2,
       usedToday,
       dailyCap: input.dailyCap,
       evalGate
@@ -25675,10 +25779,10 @@ async function handleCodexUiApiRequest(input) {
         if ("error" in selection) return selection.error;
         return ok(await readProjectMemory(input.cwd, selection.value));
       }
-      case "/api/dream": {
+      case "/api/automation": {
         const selection = parseSelectionRequest(input.searchParams);
         if ("error" in selection) return selection.error;
-        return ok(await readDream(input.cwd, selection.value));
+        return ok(await readAutomation(input.cwd, selection.value));
       }
       case "/api/profile": {
         const selection = parseSelectionRequest(input.searchParams);
@@ -26144,13 +26248,13 @@ async function readDashboard(cwd, now, request) {
     task: "memory"
   });
   const selection = await resolveSelection(cwd, request);
-  const [status, pending, active, reviewSummaries, projectMemory, dream, profile, signals, projects] = await Promise.all([
+  const [status, pending, active, reviewSummaries, projectMemory, automation, profile, signals, projects] = await Promise.all([
     readCodexMemoryStatus({ cwd }),
     readPendingFromSelection(selection),
     readActiveFromSelection(selection),
     readReviewSummariesFromSelection(selection),
     readProjectMemoryFromSelection(selection),
-    readDreamFromSelection(selection),
+    readAutomationFromSelection(selection),
     readProfileFromSelection(selection),
     collectProjectMemorySignals({ cwd, now, mode: "default" }),
     readProjects(cwd)
@@ -26165,7 +26269,7 @@ async function readDashboard(cwd, now, request) {
     active,
     reviewSummaries,
     projectMemory,
-    dream,
+    automation,
     profile,
     signals
   };
@@ -26282,13 +26386,13 @@ async function readProfileFromSelection(selection) {
   const profile = await readModelProfileFromRootIfExists(selection.memoryRoot);
   return { project: selection.project, selection: publicSelection(selection), memoryRoot: selection.memoryRoot, profile: profile ?? "" };
 }
-async function readDream(cwd, request) {
-  return readDreamFromSelection(await resolveSelection(cwd, request));
+async function readAutomation(cwd, request) {
+  return readAutomationFromSelection(await resolveSelection(cwd, request));
 }
-async function readDreamFromSelection(selection) {
+async function readAutomationFromSelection(selection) {
   const memoryRoot = selection.memoryRoot;
-  const dream = await readCodexMemoryDreamState(memoryRoot);
-  return { project: selection.project, selection: publicSelection(selection), memoryRoot, dream };
+  const automation = await readCodexMemoryDreamState(memoryRoot);
+  return { project: selection.project, selection: publicSelection(selection), memoryRoot, automation };
 }
 async function readActiveFromSelection(selection) {
   const active = (await Promise.all(selection.memoryRoots.map((root) => readActiveMemoriesFromRoot(root)))).flat();
@@ -26617,7 +26721,7 @@ const EMPTY_DASHBOARD = {
   active: { active: [], project: {} },
   reviewSummaries: { summaries: [] },
   projectMemory: { groups: [] },
-  dream: { dream: {} },
+  automation: { automation: {} },
   profile: { profile: '' },
   signals: { signals: [] }
 }
@@ -26749,7 +26853,7 @@ function mergeDashboard(data) {
     active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },
     reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },
     projectMemory: { ...EMPTY_DASHBOARD.projectMemory, ...(data?.projectMemory || {}) },
-    dream: { ...EMPTY_DASHBOARD.dream, ...(data?.dream || {}) },
+    automation: { ...EMPTY_DASHBOARD.automation, ...(data?.automation || {}) },
     profile: { ...EMPTY_DASHBOARD.profile, ...(data?.profile || {}) },
     signals: { ...EMPTY_DASHBOARD.signals, ...(data?.signals || {}) }
   }
@@ -26963,7 +27067,6 @@ function pageHtml(tabId) {
   if (tabId === 'prepare') return renderMemoryPrepare()
   if (tabId === 'distillation') return renderDistillPanel()
   if (tabId === 'harvester') return renderHarvester()
-  if (tabId === 'dream') return renderDream()
   if (tabId === 'profile') return renderProfile()
   return renderOverview()
 }
@@ -27664,7 +27767,7 @@ function renderDistillCandidate(candidate) {
 }
 
 function renderAutomation() {
-  const dream = state.dashboard.dream.dream || {}
+  const automation = state.dashboard.automation.automation || {}
   return \`
     <section class="page-stack">
       \${sectionHeader('Automation', 'Scheduled lifecycle maintenance.')}
@@ -27674,11 +27777,11 @@ function renderAutomation() {
         \${metric('Manual Review', listPending().length, 'High-risk recommendations')}
       </div>
       <div class="soft-panel">
-        <h3>Dream status</h3>
+        <h3>Automation status</h3>
         <div class="soft-inset">
-          Due: \${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
-          Last run: \${escapeHtml(dream.lastDreamAt || 'never')}<br>
-          Status: \${escapeHtml(dream.lastDreamStatus || 'unknown')}
+          Due: \${escapeHtml(String(automation.dreamDue ?? 'unknown'))}<br>
+          Last run: \${escapeHtml(automation.lastDreamAt || 'never')}<br>
+          Status: \${escapeHtml(automation.lastDreamStatus || 'unknown')}
         </div>
       </div>
     </section>
@@ -27693,23 +27796,6 @@ function renderTools() {
       \${renderMemoryPrepare()}
       \${renderDistillPanel()}
       \${renderHarvester()}
-    </section>
-  \`
-}
-
-function renderDream() {
-  const dream = state.dashboard.dream.dream || {}
-  return \`
-    <section class="page-stack">
-      \${sectionHeader('Dream', 'Read-only dream pass state.')}
-      <div class="soft-panel">
-        <h3>Dream status</h3>
-        <div class="soft-inset">
-          Due: \${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
-          Last run: \${escapeHtml(dream.lastDreamAt || 'never')}<br>
-          Status: \${escapeHtml(dream.lastDreamStatus || 'unknown')}
-        </div>
-      </div>
     </section>
   \`
 }
@@ -28891,378 +28977,7 @@ async function runCodexMemoryDefer(input) {
 `;
 }
 
-// src/codex/dream-artifacts.ts
-import { randomUUID as randomUUID24 } from "node:crypto";
-import { lstat as lstat16, mkdir as mkdir11, readFile as readFile20, realpath as realpath8, rename as rename7, writeFile as writeFile10 } from "node:fs/promises";
-import { join as join28 } from "node:path";
-var DREAM_PREVIEW_DIR = "dream-preview";
-var DREAM_REPORT_FILE = "DREAM_REPORT.md";
-async function writeDreamPreviewArtifacts(input) {
-  const memoryRoot = await ensureWritableMemoryRootPath(input.memoryRoot);
-  const previewDir = await ensurePreviewDir(memoryRoot);
-  const proposalId = randomUUID24();
-  const createdAt = (/* @__PURE__ */ new Date()).toISOString();
-  const paths = {
-    reportPath: join28(previewDir, DREAM_REPORT_FILE),
-    proposedChangesPath: join28(previewDir, "proposed_changes.json"),
-    diffPath: join28(previewDir, "diff.json"),
-    evalResultsPath: join28(previewDir, "eval_results.json")
-  };
-  await writeTextAtomic(paths.reportPath, renderDreamReport({ proposalId, createdAt, proposal: input.proposal }));
-  await writeJsonAtomic(paths.proposedChangesPath, {
-    proposalId,
-    createdAt,
-    root: {
-      memoryRoot: input.proposal.memoryRoot,
-      proposedChanges: input.proposal.proposedChanges,
-      summary: input.proposal.summary,
-      evalGate: input.proposal.evalGate
-    }
-  });
-  await writeJsonAtomic(paths.diffPath, input.proposal.diff);
-  await writeJsonAtomic(paths.evalResultsPath, input.proposal.evalGate);
-  return paths;
-}
-async function readDreamReport(input) {
-  const memoryRoot = input.root === "global" ? await getReadableCodexGlobalMemoryRoot() : await getReadableProjectMemoryRoot(input.cwd);
-  if (memoryRoot === null) {
-    throw new Error(`No readable ${input.root} memory root exists`);
-  }
-  try {
-    const previewDir = await getExistingPreviewDir(memoryRoot);
-    const reportPath = join28(previewDir, DREAM_REPORT_FILE);
-    await assertSafeMemoryDataFileTarget(reportPath);
-    return { memoryRoot, report: await readFile20(reportPath, "utf8") };
-  } catch (error2) {
-    if (isFileErrorCode15(error2, "ENOENT")) {
-      throw new Error(`No dream report found for ${input.root} memory root. Run codex memory dream --stage deep-preview first.`);
-    }
-    throw error2;
-  }
-}
-async function getReadableProjectMemoryRoot(cwd) {
-  const project = await identifyCodexProject(cwd);
-  return getReadableCodexProjectMemoryRoot(project.projectId);
-}
-function renderDreamReport(input) {
-  const lines2 = [
-    "# Cyrene Dream Preview",
-    "",
-    `- proposalId: ${input.proposalId}`,
-    `- createdAt: ${input.createdAt}`,
-    `- memoryRoot: ${input.proposal.memoryRoot}`,
-    `- recommendedPromotions: ${input.proposal.summary.recommendedPromotions}`,
-    `- reject: ${input.proposal.summary.reject}`,
-    `- expire: ${input.proposal.summary.expire}`,
-    `- keepPending: ${input.proposal.summary.keepPending}`,
-    `- evalGate: ${input.proposal.evalGate.passed ? "passed" : "failed"}`,
-    "",
-    "## Proposed Changes",
-    ""
-  ];
-  if (input.proposal.proposedChanges.length === 0) {
-    lines2.push("- none");
-  } else {
-    for (const change of input.proposal.proposedChanges) {
-      if (change.action === "recommend_promote") {
-        lines2.push(`- recommend_promote ${change.normalizedKey} (${change.candidateId}) -> ${change.recommendedMemoryId}: ${change.reason}`);
-      } else if (change.action === "promote") {
-        lines2.push(`- promote ${change.normalizedKey} (${change.candidateId}) -> ${change.memoryId}: ${change.reason}`);
-      } else if (change.action === "reject") {
-        lines2.push(`- reject ${change.normalizedKey} (${change.candidateId}) as ${change.tombstoneReason}: ${change.reason}`);
-      } else {
-        lines2.push(`- keep_pending ${change.normalizedKey} (${change.candidateId}): ${change.reason}`);
-      }
-    }
-  }
-  lines2.push(
-    "",
-    "## Apply",
-    "",
-    "Use cyrene_memory_pending_list / cyrene_memory_pending_get and explicit cyrene_memory_promote approval to promote recommended candidates. deep-apply does not promote unapproved pending memory."
-  );
-  return `${lines2.join("\n")}
-`;
-}
-async function ensurePreviewDir(memoryRoot) {
-  const previewDir = join28(memoryRoot, DREAM_PREVIEW_DIR);
-  await mkdir11(previewDir, { recursive: true });
-  const stats = await lstat16(previewDir);
-  if (stats.isSymbolicLink()) {
-    throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
-  }
-  if (!stats.isDirectory()) {
-    throw new Error(`Refusing to use non-directory dream preview path: ${previewDir}`);
-  }
-  return realpath8(previewDir);
-}
-async function getExistingPreviewDir(memoryRoot) {
-  const previewDir = join28(memoryRoot, DREAM_PREVIEW_DIR);
-  const stats = await lstat16(previewDir);
-  if (stats.isSymbolicLink()) {
-    throw new Error(`Refusing to use dream preview symlink: ${previewDir}`);
-  }
-  if (!stats.isDirectory()) {
-    throw new Error(`Refusing to use non-directory dream preview path: ${previewDir}`);
-  }
-  return realpath8(previewDir);
-}
-async function writeJsonAtomic(filePath, value) {
-  await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}
-`);
-}
-async function writeTextAtomic(filePath, content) {
-  await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID24()}.tmp`;
-  await writeFile10(tempPath, content, "utf8");
-  await rename7(tempPath, filePath);
-}
-function isFileErrorCode15(error2, code) {
-  return error2 instanceof Error && "code" in error2 && error2.code === code;
-}
-
 // src/codex/memory-dream.ts
-import { randomUUID as randomUUID25 } from "node:crypto";
-import { lstat as lstat18, mkdir as mkdir12, readFile as readFile21, rm as rm8, writeFile as writeFile11 } from "node:fs/promises";
-import { join as join29 } from "node:path";
-
-// src/codex/dream-proposal.ts
-import { lstat as lstat17, realpath as realpath9 } from "node:fs/promises";
-async function buildDreamProposalForRoot(input) {
-  const memoryRoot = await resolveReadableMemoryRootPath(input.memoryRoot);
-  const active = await readActiveMemoriesFromRoot(memoryRoot);
-  const tombstones = await readTombstonesFromRoot(memoryRoot);
-  const pending = await readPendingMemoriesFromRoot(memoryRoot);
-  const proposedChanges = [];
-  const applyPlan = [];
-  const diff = {
-    addActiveMemoryIds: [],
-    recommendActiveMemoryIds: [],
-    removePendingCandidateIds: [],
-    addTombstoneIds: [],
-    keepPendingCandidateIds: []
-  };
-  const summary = {
-    recommendedPromotions: 0,
-    reject: 0,
-    expire: 0,
-    keepPending: 0,
-    maintenanceWouldRun: true
-  };
-  for (const candidate of pending) {
-    if (candidate.expiresAt <= input.now) {
-      const tombstone = tombstoneForExpiredPending(candidate, input.now);
-      proposedChanges.push({
-        action: "reject",
-        candidateId: candidate.id,
-        normalizedKey: candidate.normalizedKey,
-        reason: "Memory candidate expired before dream promotion",
-        tombstoneReason: "expired"
-      });
-      applyPlan.push({
-        action: "reject",
-        candidateId: candidate.id,
-        tombstone,
-        reason: "Memory candidate expired before dream promotion"
-      });
-      diff.removePendingCandidateIds.push(candidate.id);
-      diff.addTombstoneIds.push(tombstone.id);
-      summary.reject += 1;
-      summary.expire += 1;
-      continue;
-    }
-    const decision2 = validateMemoryCandidate({ candidate, existingMemories: active, tombstones, now: input.now });
-    if (decision2.action === "reject") {
-      proposedChanges.push({
-        action: "reject",
-        candidateId: candidate.id,
-        normalizedKey: candidate.normalizedKey,
-        reason: decision2.reason,
-        tombstoneReason: decision2.tombstone.reason
-      });
-      applyPlan.push({
-        action: "reject",
-        candidateId: candidate.id,
-        tombstone: decision2.tombstone,
-        reason: decision2.reason
-      });
-      diff.removePendingCandidateIds.push(candidate.id);
-      diff.addTombstoneIds.push(decision2.tombstone.id);
-      summary.reject += 1;
-      continue;
-    }
-    const activeReadiness = evaluateActiveMemoryReadiness({
-      content: candidate.content,
-      candidateKind: deriveMemoryCandidateKind(candidate),
-      domain: candidate.domain,
-      type: candidate.type,
-      tags: candidate.tags
-    });
-    if (!activeReadiness.ready) {
-      const reason = `Active-readiness requires rewrite before promotion: ${activeReadiness.reasons.join(", ")}`;
-      proposedChanges.push({
-        action: "keep_pending",
-        candidateId: candidate.id,
-        normalizedKey: candidate.normalizedKey,
-        reason,
-        distinctEvidenceCount: distinctEvidenceCount2(candidate)
-      });
-      applyPlan.push({
-        action: "keep_pending",
-        candidate,
-        reason
-      });
-      diff.keepPendingCandidateIds.push(candidate.id);
-      summary.keepPending += 1;
-      continue;
-    }
-    const evaluation = evaluatePendingPromotion(candidate, input.now);
-    if (!evaluation.promotable) {
-      proposedChanges.push({
-        action: "keep_pending",
-        candidateId: candidate.id,
-        normalizedKey: candidate.normalizedKey,
-        reason: evaluation.reason,
-        distinctEvidenceCount: evaluation.distinctEvidenceCount
-      });
-      applyPlan.push({ action: "keep_pending", candidate, reason: evaluation.reason });
-      diff.keepPendingCandidateIds.push(candidate.id);
-      summary.keepPending += 1;
-      continue;
-    }
-    if (input.recommendPromotionEnabled === false) {
-      proposedChanges.push({
-        action: "keep_pending",
-        candidateId: candidate.id,
-        normalizedKey: candidate.normalizedKey,
-        reason: "Promotion recommendations are disabled by configuration",
-        distinctEvidenceCount: evaluation.distinctEvidenceCount
-      });
-      applyPlan.push({
-        action: "keep_pending",
-        candidate,
-        reason: "Promotion recommendations are disabled by configuration"
-      });
-      diff.keepPendingCandidateIds.push(candidate.id);
-      summary.keepPending += 1;
-      continue;
-    }
-    const memory = decision2.action === "auto_write" ? decision2.memory : decision2.action === "pending" ? activateCandidate(decision2.candidate, input.now) : void 0;
-    if (memory === void 0) {
-      proposedChanges.push({
-        action: "keep_pending",
-        candidateId: candidate.id,
-        normalizedKey: candidate.normalizedKey,
-        reason: decision2.reason,
-        distinctEvidenceCount: evaluation.distinctEvidenceCount
-      });
-      applyPlan.push({ action: "keep_pending", candidate, reason: decision2.reason });
-      diff.keepPendingCandidateIds.push(candidate.id);
-      summary.keepPending += 1;
-      continue;
-    }
-    proposedChanges.push({
-      action: "recommend_promote",
-      candidateId: candidate.id,
-      recommendedMemoryId: memory.id,
-      normalizedKey: candidate.normalizedKey,
-      reason: evaluation.reason,
-      distinctEvidenceCount: evaluation.distinctEvidenceCount
-    });
-    applyPlan.push({ action: "keep_pending", candidate, reason: evaluation.reason });
-    diff.recommendActiveMemoryIds.push(memory.id);
-    diff.keepPendingCandidateIds.push(candidate.id);
-    summary.recommendedPromotions += 1;
-    summary.keepPending += 1;
-  }
-  const evalGate = runDreamApplyEvalGate({ proposedChanges, pending });
-  return {
-    memoryRoot,
-    proposedChanges,
-    applyPlan,
-    diff,
-    summary,
-    evalGate
-  };
-}
-async function resolveReadableMemoryRootPath(memoryRoot) {
-  try {
-    const stats = await lstat17(memoryRoot);
-    if (stats.isSymbolicLink()) {
-      throw new Error(`Refusing to use memory symlink: ${memoryRoot}`);
-    }
-    if (!stats.isDirectory()) {
-      throw new Error(`Refusing to use non-directory memory path: ${memoryRoot}`);
-    }
-    return realpath9(memoryRoot);
-  } catch (error2) {
-    if (isFileErrorCode16(error2, "ENOENT")) {
-      return memoryRoot;
-    }
-    throw error2;
-  }
-}
-function tombstoneForExpiredPending(candidate, now) {
-  return {
-    id: `tombstone-${candidate.id}`,
-    normalizedKey: candidate.normalizedKey,
-    domain: candidate.domain,
-    type: candidate.type,
-    strength: candidate.strength,
-    scope: candidate.scope,
-    reason: "expired",
-    createdAt: now,
-    evidence: candidate.evidence
-  };
-}
-function distinctEvidenceCount2(candidate) {
-  return new Set(
-    candidate.evidence.map((item) => item.evidenceGroupId ?? item.runId ?? item.sessionId ?? item.summary)
-  ).size;
-}
-function isFileErrorCode16(error2, code) {
-  return error2 instanceof Error && "code" in error2 && error2.code === code;
-}
-
-// src/codex/memory-dream.ts
-var DREAM_LOCK_DIR = "dream.lock";
-var DREAM_LOCKS_DIR = ".locks";
-async function runCodexMemoryDream(input) {
-  const project = await identifyCodexProject(input.cwd);
-  const stage = input.stage ?? "deep-preview";
-  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
-  const config2 = createDefaultConfig(input.cwd);
-  const roots = config2.memoryDreamEnabled ? await dreamRoots(project.projectId) : await readableDreamRoots(project.projectId);
-  const results = [];
-  const runtimeBudget = dreamRuntimeBudget(config2);
-  if (!config2.memoryDreamEnabled) {
-    return {
-      project: { projectId: project.projectId, displayName: project.displayName },
-      roots: await Promise.all(roots.map(
-        (memoryRoot) => skippedDreamRoot(memoryRoot, stage, "Skipped because memory dream is disabled by CYRENE_MEMORY_DREAM_ENABLED")
-      ))
-    };
-  }
-  for (const memoryRoot of roots) {
-    if (isDreamRuntimeExpired(runtimeBudget)) {
-      results.push(await skippedDreamRoot(memoryRoot, stage, dreamRuntimeBudgetExceededReason(runtimeBudget)));
-      continue;
-    }
-    if (stage === "light") {
-      results.push(await runLightDreamRoot(memoryRoot, stage, now, config2.memoryDreamIntervalHours, runtimeBudget));
-    } else if (stage === "rem") {
-      results.push(await runRemDreamRoot(memoryRoot, stage, now, config2.memoryDreamIntervalHours, runtimeBudget));
-    } else if (stage === "deep-preview") {
-      results.push(await runDeepPreviewDreamRoot(memoryRoot, stage, now, config2.memoryRecommendPromotionEnabled));
-    } else {
-      results.push(await runDeepDreamRoot(memoryRoot, now, config2, runtimeBudget));
-    }
-  }
-  return {
-    project: { projectId: project.projectId, displayName: project.displayName },
-    roots: results
-  };
-}
 async function runCodexMemoryMaintenance(input) {
   const project = await identifyCodexProject(input.cwd);
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -29324,227 +29039,6 @@ async function dreamRoots(projectId) {
   }
   return roots;
 }
-async function readableDreamRoots(projectId) {
-  const roots = [];
-  const globalRoot = await getReadableCodexGlobalMemoryRoot();
-  if (globalRoot !== null) {
-    roots.push(globalRoot);
-  }
-  const projectRoot = await getReadableCodexProjectMemoryRoot(projectId);
-  if (projectRoot !== null && !roots.includes(projectRoot)) {
-    roots.push(projectRoot);
-  }
-  return roots;
-}
-async function runLightDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBudget) {
-  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
-  return withDreamMaintenanceLock(memoryRoot, stage, runtimeBudget, async (lockedRoot) => {
-    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot);
-    const pending = await readPendingMemoriesFromRoot(lockedRoot);
-    const merged = mergePendingDuplicates(pending);
-    if (merged.changed) {
-      await writePendingMemoriesFromRoot(lockedRoot, merged.pending);
-    }
-    await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID25(),
-      action: "audit",
-      at: now,
-      reason: "Codex memory dream light pass audited pending memory.",
-      details: { stage, pendingCount: merged.pending.length, mergedDuplicates: pending.length - merged.pending.length }
-    });
-    await writeDreamSuccess(lockedRoot, now, intervalHours);
-    return {
-      memoryRoot: lockedRoot,
-      stage,
-      promoted: 0,
-      recommendedPromotions: 0,
-      rejected: 0,
-      keptPending: merged.pending.length
-    };
-  });
-}
-async function runRemDreamRoot(memoryRoot, stage, now, intervalHours, runtimeBudget) {
-  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
-  return withDreamMaintenanceLock(memoryRoot, stage, runtimeBudget, async (lockedRoot) => {
-    await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot);
-    const pending = await readPendingMemoriesFromRoot(lockedRoot);
-    for (const candidate of pending) {
-      const evaluation = evaluatePendingPromotion(candidate, now);
-      await appendMemoryEventFromRoot(lockedRoot, {
-        id: randomUUID25(),
-        action: "audit",
-        at: now,
-        reason: "Codex memory dream REM pass evaluated pending memory.",
-        candidateId: candidate.id,
-        details: {
-          stage,
-          candidateId: candidate.id,
-          proposedAction: evaluation.promotable ? "recommend_promote" : proposedActionForPending(candidate, evaluation.reason),
-          reason: evaluation.reason,
-          distinctEvidenceCount: evaluation.distinctEvidenceCount
-        }
-      });
-    }
-    await writeDreamSuccess(lockedRoot, now, intervalHours);
-    return {
-      memoryRoot: lockedRoot,
-      stage,
-      promoted: 0,
-      recommendedPromotions: 0,
-      rejected: 0,
-      keptPending: pending.length
-    };
-  });
-}
-async function runDeepPreviewDreamRoot(memoryRoot, stage, now, recommendPromotionEnabled) {
-  await assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot);
-  const proposal = await buildDreamProposalForRoot({ memoryRoot, now, recommendPromotionEnabled });
-  await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal });
-  return {
-    memoryRoot: proposal.memoryRoot,
-    stage,
-    promoted: 0,
-    recommendedPromotions: proposal.summary.recommendedPromotions,
-    rejected: proposal.summary.reject,
-    keptPending: proposal.summary.keepPending
-  };
-}
-async function runDeepDreamRoot(memoryRoot, now, config2, runtimeBudget) {
-  let acquiredLock;
-  try {
-    const lock = await tryAcquireDreamLock(memoryRoot, now, config2.memoryDreamLockTtlMs);
-    if (!lock.acquired) {
-      return {
-        memoryRoot: lock.memoryRoot,
-        stage: "deep-apply",
-        promoted: 0,
-        recommendedPromotions: 0,
-        rejected: 0,
-        keptPending: (await readPendingMemoriesFromRoot(lock.memoryRoot)).length,
-        skipped: lock.reason
-      };
-    }
-    acquiredLock = lock;
-    const result2 = await withDreamMaintenanceLock(lock.memoryRoot, "deep-apply", runtimeBudget, async (lockedRoot) => {
-      await assertMemoryMaintenanceTargetsSafeFromRoot(lockedRoot);
-      return runDeepDreamRootLocked(
-        lockedRoot,
-        now,
-        maintenanceBudget(config2),
-        config2.memoryDreamIntervalHours,
-        config2.memoryRecommendPromotionEnabled
-      );
-    });
-    return result2;
-  } catch (error2) {
-    await writeDreamFailedFailOpen(memoryRoot, now, error2);
-    throw error2;
-  } finally {
-    if (acquiredLock !== void 0) {
-      await releaseDreamLock(acquiredLock);
-    }
-  }
-}
-async function runDeepDreamRootLocked(memoryRoot, now, budget, intervalHours, recommendPromotionEnabled) {
-  const proposal = await buildDreamProposalForRoot({ memoryRoot, now, recommendPromotionEnabled });
-  await writeDreamPreviewArtifacts({ memoryRoot: proposal.memoryRoot, proposal });
-  if (!proposal.evalGate.passed) {
-    const reason = `Dream apply blocked by eval gate: ${proposal.evalGate.failedChecks.join(", ")}`;
-    await writeDreamFailed(proposal.memoryRoot, now, new Error(reason));
-    return {
-      memoryRoot: proposal.memoryRoot,
-      stage: "deep-apply",
-      promoted: 0,
-      recommendedPromotions: proposal.summary.recommendedPromotions,
-      rejected: 0,
-      keptPending: (await readPendingMemoriesFromRoot(proposal.memoryRoot)).length,
-      skipped: reason
-    };
-  }
-  const applied = await applyDreamProposal(proposal.memoryRoot, proposal, now);
-  const maintenance = await runMemoryMaintenanceFromRootLocked({
-    memoryRoot: proposal.memoryRoot,
-    budget,
-    now,
-    reason: "after codex memory dream deep-apply pass",
-    preservePendingCandidateIds: proposal.proposedChanges.flatMap(
-      (change) => change.action === "recommend_promote" ? [change.candidateId] : []
-    )
-  });
-  await writeDreamSuccess(proposal.memoryRoot, now, intervalHours);
-  return {
-    memoryRoot: proposal.memoryRoot,
-    stage: "deep-apply",
-    promoted: applied.promoted,
-    recommendedPromotions: proposal.summary.recommendedPromotions,
-    rejected: applied.rejected,
-    keptPending: maintenance.pendingCount,
-    maintenance
-  };
-}
-async function applyDreamProposal(memoryRoot, proposal, now) {
-  const pending = await readPendingMemoriesFromRoot(memoryRoot);
-  const nextPending = [];
-  const events = [];
-  const newTombstones = [];
-  let rejected = 0;
-  let mutated = false;
-  for (const operation of proposal.applyPlan) {
-    if (operation.action === "keep_pending") {
-      nextPending.push(operation.candidate);
-      continue;
-    }
-    if (operation.action === "reject") {
-      newTombstones.push(operation.tombstone);
-      events.push({
-        id: randomUUID25(),
-        action: "reject",
-        at: now,
-        reason: operation.reason,
-        candidateId: operation.candidateId
-      });
-      rejected += 1;
-      mutated = true;
-    }
-  }
-  if (mutated) {
-    const retainedIds = new Set(nextPending.map((candidate) => candidate.id));
-    for (const candidate of pending) {
-      if (!retainedIds.has(candidate.id) && !proposal.diff.removePendingCandidateIds.includes(candidate.id)) {
-        nextPending.push(candidate);
-      }
-    }
-    await writePendingMemoriesFromRoot(memoryRoot, nextPending);
-    for (const tombstone of newTombstones) {
-      await appendTombstoneFromRoot(memoryRoot, tombstone);
-    }
-    for (const event of events) {
-      await appendMemoryEventFromRoot(memoryRoot, event);
-    }
-  }
-  return { promoted: 0, rejected };
-}
-function mergePendingDuplicates(pending) {
-  const merged = [];
-  for (const candidate of pending) {
-    const index = merged.findIndex((existing) => existing.normalizedKey === candidate.normalizedKey);
-    if (index === -1) {
-      merged.push(candidate);
-    } else {
-      merged[index] = mergePendingMemory(merged[index], candidate);
-    }
-  }
-  return { changed: merged.length !== pending.length, pending: merged };
-}
-function proposedActionForPending(candidate, reason) {
-  if (shouldRejectWithoutMoreEvidence(reason)) {
-    return "reject";
-  }
-  return distinctEvidenceCount(candidate) > 0 ? "keep_pending" : "reject";
-}
-function shouldRejectWithoutMoreEvidence(reason) {
-  return /diagnostic affective claim|missing auditable evidence/i.test(reason);
-}
 function maintenanceBudget(config2) {
   return {
     activeMaxItems: config2.memoryActiveMaxItems,
@@ -29555,197 +29049,131 @@ function maintenanceBudget(config2) {
     pendingMaxItems: config2.memoryPendingMaxItems
   };
 }
-function dreamRuntimeBudget(config2) {
-  const maxRuntimeMs = config2.memoryDreamMaxRuntimeMs;
-  return {
-    maxRuntimeMs,
-    deadlineMs: Date.now() + maxRuntimeMs
-  };
+
+// src/codex/memory-automation.ts
+async function runCodexMemoryAutomation(input) {
+  if (input.job === "daily") {
+    const result3 = await runCodexMemoryLifecycleDaily({
+      cwd: input.cwd,
+      allProjects: input.allProjects,
+      includeGlobalRoot: true,
+      apply: input.apply,
+      now: input.now
+    });
+    return { job: "daily", ...result3 };
+  }
+  const result2 = await runCodexMemoryLifecycleWeekly({
+    cwd: input.cwd,
+    allProjects: input.allProjects,
+    apply: input.apply,
+    now: input.now
+  });
+  return { job: "weekly", ...result2 };
 }
-async function withDreamMaintenanceLock(memoryRoot, stage, runtimeBudget, task) {
-  try {
-    return await withMemoryMaintenanceLockFromRoot(
-      memoryRoot,
+
+// src/codex/memory-context-preview.ts
+async function runCodexMemoryContextPreview(input) {
+  const task = input.task ?? "coding";
+  const project = await identifyCodexProject(input.cwd);
+  const globalRoot = codexGlobalMemoryRoot();
+  const projectRoot = codexProjectMemoryRoot(project.projectId);
+  const [context, globalPending, projectPending, globalTombstones, projectTombstones, globalSemantic, projectSemantic] = await Promise.all([
+    getCodexContinuityContext({
+      cwd: input.cwd,
+      userMessage: input.userMessage,
       task,
-      dreamMaintenanceLockOptions(runtimeBudget)
-    );
-  } catch (error2) {
-    if (isMemoryMaintenanceLockTimeoutError(error2)) {
-      return skippedDreamRoot(memoryRoot, stage, dreamRuntimeBudgetExceededReason(runtimeBudget));
-    }
-    throw error2;
-  }
-}
-function dreamMaintenanceLockOptions(runtimeBudget) {
+      recordActivationEvents: false
+    }),
+    readPendingMemoriesFromRoot(globalRoot),
+    readPendingMemoriesFromRoot(projectRoot),
+    readTombstonesFromRoot(globalRoot),
+    readTombstonesFromRoot(projectRoot),
+    readSemanticMemoriesFromRoot(globalRoot),
+    readSemanticMemoriesFromRoot(projectRoot)
+  ]);
+  const pendingReviewItems = [
+    ...globalPending.map((memory) => pendingExclusion(memory, "global")),
+    ...projectPending.map((memory) => pendingExclusion(memory, "project"))
+  ];
   return {
-    timeoutMs: Math.min(remainingDreamRuntimeMs(runtimeBudget), memoryMaintenanceLockTimeoutMs())
+    version: 1,
+    input: {
+      task,
+      userMessage: input.userMessage
+    },
+    project: context.project,
+    activeContext: {
+      globalMemory: context.globalMemory.map(previewMemory),
+      projectMemory: context.projectMemory.map(previewMemory),
+      similarProjectHints: context.similarProjectHints.map(previewMemory)
+    },
+    activation: context.activation,
+    exclusions: {
+      pendingReview: {
+        count: pendingReviewItems.length,
+        items: pendingReviewItems
+      },
+      tombstones: [
+        ...globalTombstones.map((memory) => tombstoneExclusion(memory, "global")),
+        ...projectTombstones.map((memory) => tombstoneExclusion(memory, "project"))
+      ],
+      archived: [
+        ...globalSemantic.flatMap((memory) => archivedExclusion(memory, "global")),
+        ...projectSemantic.flatMap((memory) => archivedExclusion(memory, "project"))
+      ]
+    },
+    diagnostics: {
+      ...context.diagnostics?.memoryIndex === void 0 ? {} : { memoryIndex: context.diagnostics.memoryIndex },
+      pendingReview: {
+        hasItems: pendingReviewItems.length > 0,
+        count: pendingReviewItems.length
+      }
+    }
   };
 }
-function remainingDreamRuntimeMs(runtimeBudget) {
-  return Math.max(1, runtimeBudget.deadlineMs - Date.now());
-}
-function isDreamRuntimeExpired(runtimeBudget) {
-  return Date.now() >= runtimeBudget.deadlineMs;
-}
-function dreamRuntimeBudgetExceededReason(runtimeBudget) {
-  return `Skipped because memory dream runtime budget was exhausted after ${runtimeBudget.maxRuntimeMs} ms`;
-}
-async function skippedDreamRoot(memoryRoot, stage, reason) {
+function previewMemory(memory) {
   return {
-    memoryRoot,
-    stage,
-    promoted: 0,
-    recommendedPromotions: 0,
-    rejected: 0,
-    keptPending: (await readPendingMemoriesFromRoot(memoryRoot)).length,
-    skipped: reason
+    id: memory.id,
+    scope: "scope" in memory ? memory.scope : "project",
+    domain: memory.domain,
+    type: memory.type,
+    strength: memory.strength,
+    content: memory.content,
+    score: memory.score
   };
 }
-async function writeDreamSuccess(memoryRoot, now, intervalHours) {
-  const current = await readCodexMemoryDreamState(memoryRoot);
-  await writeCodexMemoryDreamState(memoryRoot, {
-    ...current,
-    dreamDue: false,
-    lastDreamAt: now,
-    nextDreamDueAt: nextDreamDueAt(now, intervalHours),
-    lastDreamStatus: "success",
-    lastDreamError: void 0
-  });
+function pendingExclusion(memory, root) {
+  return {
+    id: memory.id,
+    scope: memory.scope,
+    root,
+    reason: "pending_review_required"
+  };
 }
-async function writeDreamFailed(memoryRoot, now, error2) {
-  const current = await readCodexMemoryDreamState(memoryRoot);
-  await writeCodexMemoryDreamState(memoryRoot, {
-    ...current,
-    dreamDue: true,
-    lastDreamAt: now,
-    lastDreamStatus: "failed",
-    lastDreamError: error2 instanceof Error ? error2.message : String(error2)
-  });
+function tombstoneExclusion(memory, root) {
+  return {
+    id: memory.id,
+    scope: memory.scope,
+    root,
+    reason: memory.reason
+  };
 }
-async function writeDreamFailedFailOpen(memoryRoot, now, error2) {
-  try {
-    await writeDreamFailed(memoryRoot, now, error2);
-  } catch {
+function archivedExclusion(memory, root) {
+  if (memory.status !== "archived" && memory.status !== "rejected" && memory.status !== "superseded") {
+    return [];
   }
-}
-async function tryAcquireDreamLock(memoryRoot, now, ttlMs) {
-  const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const locksDir = await ensureDreamLocksDir(root);
-  const lockDir = join29(locksDir, DREAM_LOCK_DIR);
-  const token = randomUUID25();
-  while (true) {
-    try {
-      await mkdir12(lockDir);
-      await writeFile11(join29(lockDir, "owner.json"), `${JSON.stringify({ acquiredAt: now, pid: process.pid, token })}
-`, "utf8");
-      return { acquired: true, memoryRoot: root, lockDir, token };
-    } catch (error2) {
-      if (!isFileErrorCode17(error2, "EEXIST")) {
-        throw error2;
-      }
-      const owner = await readDreamLockOwner(lockDir);
-      if (owner !== void 0 && isDreamLockOwnerStale(owner, now, ttlMs) && await removeDreamLockIfOwner(lockDir, owner)) {
-        continue;
-      }
-      if (owner === void 0 && await isDreamLockDirStale(lockDir, now, ttlMs) && await removeDreamLockIfUnowned(lockDir)) {
-        continue;
-      }
-      return { acquired: false, memoryRoot: root, reason: `Skipped because dream lock is active: ${lockDir}` };
-    }
-  }
-}
-async function ensureDreamLocksDir(memoryRoot) {
-  const locksDir = join29(memoryRoot, DREAM_LOCKS_DIR);
-  await mkdir12(locksDir).catch((error2) => {
-    if (!isFileErrorCode17(error2, "EEXIST")) {
-      throw error2;
-    }
-  });
-  const stats = await lstat18(locksDir);
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new Error(`Refusing to use invalid memory dream locks path: ${locksDir}`);
-  }
-  return locksDir;
-}
-async function readDreamLockOwner(lockDir) {
-  let stats;
-  try {
-    stats = await lstat18(lockDir);
-  } catch (error2) {
-    if (isFileErrorCode17(error2, "ENOENT")) {
-      return void 0;
-    }
-    throw error2;
-  }
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
-  }
-  try {
-    const parsed = JSON.parse(await readFile21(join29(lockDir, "owner.json"), "utf8"));
-    if (typeof parsed.acquiredAt !== "string") {
-      return void 0;
-    }
-    return {
-      acquiredAt: parsed.acquiredAt,
-      ...typeof parsed.pid === "number" ? { pid: parsed.pid } : {},
-      ...typeof parsed.token === "string" ? { token: parsed.token } : {}
-    };
-  } catch (error2) {
-    if (isFileErrorCode17(error2, "ENOENT") || error2 instanceof SyntaxError) {
-      return void 0;
-    }
-    throw error2;
-  }
-}
-function isDreamLockOwnerStale(owner, now, ttlMs) {
-  return new Date(now).getTime() - new Date(owner.acquiredAt).getTime() > ttlMs;
-}
-async function removeDreamLockIfOwner(lockDir, expectedOwner) {
-  const owner = await readDreamLockOwner(lockDir);
-  if (owner === void 0) {
-    return false;
-  }
-  if (!isSameDreamLockOwner(owner, expectedOwner)) {
-    return false;
-  }
-  await rm8(lockDir, { recursive: true, force: true });
-  return true;
-}
-async function isDreamLockDirStale(lockDir, now, ttlMs) {
-  const stats = await lstat18(lockDir);
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new Error(`Refusing to use invalid memory dream lock path: ${lockDir}`);
-  }
-  return new Date(now).getTime() - stats.mtimeMs > ttlMs;
-}
-async function removeDreamLockIfUnowned(lockDir) {
-  const owner = await readDreamLockOwner(lockDir);
-  if (owner !== void 0) {
-    return false;
-  }
-  await rm8(lockDir, { recursive: true, force: true });
-  return true;
-}
-function isSameDreamLockOwner(owner, expectedOwner) {
-  if (expectedOwner.token !== void 0) {
-    return owner.token === expectedOwner.token;
-  }
-  return owner.acquiredAt === expectedOwner.acquiredAt && owner.pid === expectedOwner.pid;
-}
-async function releaseDreamLock(lock) {
-  const owner = await readDreamLockOwner(lock.lockDir);
-  if (owner !== void 0 && owner.token === lock.token) {
-    await rm8(lock.lockDir, { recursive: true, force: true });
-  }
-}
-function isFileErrorCode17(error2, code) {
-  return error2 instanceof Error && "code" in error2 && error2.code === code;
+  return [{
+    id: memory.id,
+    scope: memory.scope,
+    root,
+    reason: memory.status
+  }];
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash16, randomUUID as randomUUID26 } from "node:crypto";
-import { lstat as lstat19, readFile as readFile22, rename as rename8, writeFile as writeFile12 } from "node:fs/promises";
-import { join as join30 } from "node:path";
+import { createHash as createHash16, randomUUID as randomUUID24 } from "node:crypto";
+import { lstat as lstat16, readFile as readFile20, rename as rename7, writeFile as writeFile10 } from "node:fs/promises";
+import { join as join28 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -29873,7 +29301,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID26(),
+      id: randomUUID24(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -30104,13 +29532,13 @@ function upsertActiveMemory2(active, memory) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join30(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join28(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile22(targetPath, "utf8");
+    const content = await readFile20(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
-    if (isFileErrorCode18(error2, "ENOENT")) {
+    if (isFileErrorCode15(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -30118,21 +29546,21 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join30(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join28(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID24()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
-  await writeFile12(tempPath, content === "" ? "" : `${content}
+  await writeFile10(tempPath, content === "" ? "" : `${content}
 `, "utf8");
-  await rename8(tempPath, targetPath);
+  await rename7(tempPath, targetPath);
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join30(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join28(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
-  await writeFile12(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
-  await rename8(tempPath, targetPath);
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID24()}.tmp`;
+  await writeFile10(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
+  await rename7(tempPath, targetPath);
 }
 function formatPendingProfilePatch(candidates) {
   const pending = candidates.filter((candidate) => candidate.status === "pending");
@@ -30167,7 +29595,7 @@ function formatPendingProfilePatch(candidates) {
 }
 async function assertSafeProfileFileTarget(targetPath, label) {
   try {
-    const stats = await lstat19(targetPath);
+    const stats = await lstat16(targetPath);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use ${label} symlink: ${targetPath}`);
     }
@@ -30175,13 +29603,13 @@ async function assertSafeProfileFileTarget(targetPath, label) {
       throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`);
     }
   } catch (error2) {
-    if (isFileErrorCode18(error2, "ENOENT")) {
+    if (isFileErrorCode15(error2, "ENOENT")) {
       return;
     }
     throw error2;
   }
 }
-function isFileErrorCode18(error2, code) {
+function isFileErrorCode15(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -30270,7 +29698,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash17, randomUUID as randomUUID27 } from "node:crypto";
+import { createHash as createHash17, randomUUID as randomUUID25 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -30385,7 +29813,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory) => memory.id === lockedMemory.id ? nextMemory : memory)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID27(),
+      id: randomUUID25(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -30538,15 +29966,15 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  if (command === "memory" && input.args[1] === "dream") {
-    if (input.args[2] === "report") {
-      const report = await readDreamReport({ cwd: input.cwd, root: parseDreamReportRoot(input.args) });
-      process.stdout.write(report.report);
-      return;
+  if (command === "memory" && input.args[1] === "automation") {
+    if (input.args.includes("--dry-run") && input.args.includes("--apply")) {
+      throw new Error("memory automation accepts only one of --dry-run or --apply");
     }
-    process.stdout.write(`${JSON.stringify(await runCodexMemoryDream({
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryAutomation({
       cwd: input.cwd,
-      stage: parseDreamStage(input.args)
+      job: parseMemoryAutomationJob(input.args),
+      allProjects: input.args.includes("--all-projects"),
+      apply: input.args.includes("--apply")
     }), null, 2)}
 `);
     return;
@@ -30561,6 +29989,15 @@ async function handleCodexCommand(input) {
       mode: parseHarvestProjectMode(input.args)
     });
     process.stdout.write(`${JSON.stringify(addHarvestProjectCompatibilityWarnings(result2, sinceWarning), null, 2)}
+`);
+    return;
+  }
+  if (command === "memory" && input.args[1] === "context-preview") {
+    process.stdout.write(`${JSON.stringify(await runCodexMemoryContextPreview({
+      cwd: input.cwd,
+      userMessage: parseRequiredOption(input.args, "--message", "context preview message"),
+      task: parseContextPreviewTask(input.args)
+    }), null, 2)}
 `);
     return;
   }
@@ -30789,7 +30226,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory dream [--stage light|rem|deep-preview|deep-apply]|memory dream report [--root global|project]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -30856,48 +30293,29 @@ function parseConfigPath(args) {
   }
   return value;
 }
-function parseDreamStage(args) {
-  const index = args.indexOf("--stage");
-  const inline = args.find((arg) => arg.startsWith("--stage="));
-  const value = index >= 0 ? args[index + 1] : inline?.slice("--stage=".length);
-  if (value === void 0) {
-    if (index >= 0 || inline !== void 0) {
-      throw new Error("Invalid memory dream stage: missing value");
-    }
-    return void 0;
-  }
-  if (value === "" || value.startsWith("--")) {
-    throw new Error("Invalid memory dream stage: missing value");
-  }
-  if (value === "light" || value === "rem" || value === "deep-preview" || value === "deep-apply") {
-    return value;
-  }
-  if (value === "deep") {
-    throw new Error("Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.");
-  }
-  throw new Error(`Invalid memory dream stage: ${value}`);
-}
-function parseDreamReportRoot(args) {
-  const index = args.indexOf("--root");
-  const inline = args.find((arg) => arg.startsWith("--root="));
-  const value = index >= 0 ? args[index + 1] : inline?.slice("--root=".length);
-  if (value === void 0) {
-    return "project";
-  }
-  if (value === "" || value.startsWith("--")) {
-    throw new Error("Invalid memory dream report root: missing value");
-  }
-  if (value === "global" || value === "project") {
-    return value;
-  }
-  throw new Error(`Invalid memory dream report root: ${value}`);
-}
 function parseProfileReflectionSource(args) {
   const value = parseRequiredOption(args, "--source", "profile reflection source");
   if (value === "daily-interview") {
     return value;
   }
   throw new Error(`Invalid profile reflection source: ${value}`);
+}
+function parseMemoryAutomationJob(args) {
+  const value = parseRequiredOption(args, "--job", "memory automation job");
+  if (value === "daily" || value === "weekly") {
+    return value;
+  }
+  throw new Error(`Invalid memory automation job: ${value}. Expected daily or weekly`);
+}
+function parseContextPreviewTask(args) {
+  const value = parseOptionalOption(args, "--task");
+  if (value === void 0) {
+    return void 0;
+  }
+  if (value === "coding" || value === "planning" || value === "debugging" || value === "conversation" || value === "memory") {
+    return value;
+  }
+  throw new Error(`Invalid --task: ${value}. Expected coding, planning, debugging, conversation, or memory`);
 }
 function parseRequiredPositional(args, index, label) {
   const value = args[index];
@@ -45210,20 +44628,26 @@ async function handleContinuityGet(input, fallbackCwd) {
 }
 
 // src/mcp/tools/memory-dream.ts
-var memoryDreamRunInputSchema = {
-  stage: external_exports.enum(["light", "rem", "deep-preview", "deep-apply"]).optional()
-};
 var memoryProfileGetInputSchema = {};
-async function handleMemoryDreamRun(input, fallbackCwd) {
-  const result2 = await runCodexMemoryDream({
-    cwd: input.cwd ?? fallbackCwd,
-    stage: input.stage
-  });
-  return jsonText(result2);
-}
 async function handleMemoryProfileGet(input, fallbackCwd) {
   const result2 = await getCodexMemoryProfile({
     cwd: input.cwd ?? fallbackCwd
+  });
+  return jsonText(result2);
+}
+
+// src/mcp/tools/memory-automation.ts
+var memoryAutomationRunInputSchema = {
+  job: external_exports.enum(["daily", "weekly"]),
+  apply: external_exports.boolean().optional(),
+  allProjects: external_exports.boolean().optional()
+};
+async function handleMemoryAutomationRun(input, fallbackCwd) {
+  const result2 = await runCodexMemoryAutomation({
+    cwd: input.cwd ?? fallbackCwd,
+    job: input.job,
+    allProjects: input.allProjects,
+    apply: input.apply
   });
   return jsonText(result2);
 }
@@ -45582,12 +45006,12 @@ function createCyreneMcpServer(options) {
     async (input) => handleActiveMemorySupersede(input, options.cwd)
   );
   server.registerTool(
-    "cyrene_memory_dream_run",
+    "cyrene_memory_automation_run",
     {
-      description: "Run a Cyrene Codex memory dream pass. Use deep-preview for read-only proposed changes; deep-apply can reject or expire gated unsafe pending memory and write recommendation artifacts, but never promotes unapproved pending memory.",
-      inputSchema: memoryDreamRunInputSchema
+      description: "Run Cyrene memory lifecycle automation. Daily promotes low-risk project trial memory to validated; weekly promotes validated project memory to core and consolidates safe global core candidates.",
+      inputSchema: memoryAutomationRunInputSchema
     },
-    async (input) => handleMemoryDreamRun(input, options.cwd)
+    async (input) => handleMemoryAutomationRun(input, options.cwd)
   );
   server.registerTool(
     "cyrene_memory_profile_get",

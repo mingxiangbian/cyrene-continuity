@@ -28,12 +28,47 @@ describe('global memory capture', () => {
   it('does not create global memory from automation prompts', () => {
     expect(candidateFromExplicitGlobalInstruction({
       text: [
-        'Automation: Cyrene Memory Dream Deep',
-        'Automation ID: cyrene-memory-dream-deep',
-        'Run the Cyrene Continuity memory Dream Deep pass for global and project roots.',
+        'Automation: Cyrene Memory Weekly Lifecycle',
+        'Automation ID: cyrene-memory-automation-weekly',
+        'Run Cyrene memory automation for global and project roots.',
         'Do not modify source files.'
       ].join('\n'),
       now: '2026-06-02T00:00:00.000Z'
+    })).toBeUndefined()
+  })
+
+  it('does not create global memory from long context dumps even when they mention global memory', () => {
+    expect(candidateFromExplicitGlobalInstruction({
+      text: [
+        '# Applications mentioned by the user:',
+        '<appshot app="Google Chrome" bundle-identifier="com.google.Chrome" window-title="cyrene-continuity">',
+        'container README text mentions global memory, all projects, and automation settings.',
+        'link Description: cyrene_memory_automation_run Value: github.com/example/repo',
+        '</appshot>',
+        'The actual user request was to check why CI failed.'
+      ].join('\n'),
+      now: '2026-06-04T00:00:00.000Z'
+    })).toBeUndefined()
+  })
+
+  it('does not create global memory from overlong global-looking prose', () => {
+    expect(candidateFromExplicitGlobalInstruction({
+      text: `以后所有项目都默认遵循这一大段说明：${'这是一段上下文说明，不是单条全局记忆指令。'.repeat(12)}`,
+      now: '2026-06-04T00:00:00.000Z'
+    })).toBeUndefined()
+  })
+
+  it('does not create global memory from diagnostic questions mentioning global review', () => {
+    expect(candidateFromExplicitGlobalInstruction({
+      text: 'global的review中有一个特别长的待审阅的memory，为何会出现这种情况？是bug吗？还是之前生成的？',
+      now: '2026-06-04T00:00:00.000Z'
+    })).toBeUndefined()
+  })
+
+  it('does not create global memory from implementation requests mentioning global memory', () => {
+    expect(candidateFromExplicitGlobalInstruction({
+      text: '加一个文字上限吧。这个质量门的作用是什么？为什么会出现现在这些待审阅的记忆，且都放在global中，检查一下这些memory是怎么进入global的',
+      now: '2026-06-04T00:00:00.000Z'
     })).toBeUndefined()
   })
 

@@ -157,6 +157,31 @@ describe('buildMemoryActivations', () => {
 
     expect(output).toEqual(emptyOutput())
   })
+
+  it('activates English technical memory from Chinese query aliases', () => {
+    const output = buildMemoryActivations({
+      query: '多智能体审查 仓库更新验证',
+      projectMemories: [
+        createSemanticMemory({
+          id: 'multi-agent-review-memory',
+          confidenceTier: 'trial',
+          activationPolicy: activationPolicyForConfidenceTier('trial'),
+          content: 'Use multi-agent review before high-risk repo update verification.',
+          useWhen: ['multi-agent review for repo update verification']
+        })
+      ],
+      globalMemories: []
+    })
+
+    expect(output.workflowHints).toEqual([
+      expect.objectContaining({
+        memoryId: 'multi-agent-review-memory',
+        activationMode: 'workflow_hint'
+      })
+    ])
+    expect(output.planConstraints).toEqual([])
+    expect(output.checklistItems).toEqual([])
+  })
 })
 
 function createSemanticMemory(overrides: Partial<SemanticMemory> = {}): SemanticMemory {

@@ -17,7 +17,7 @@ const EMPTY_DASHBOARD = {
   active: { active: [], project: {} },
   reviewSummaries: { summaries: [] },
   projectMemory: { groups: [] },
-  dream: { dream: {} },
+  automation: { automation: {} },
   profile: { profile: '' },
   signals: { signals: [] }
 }
@@ -149,7 +149,7 @@ function mergeDashboard(data) {
     active: { ...EMPTY_DASHBOARD.active, ...(data?.active || {}) },
     reviewSummaries: { ...EMPTY_DASHBOARD.reviewSummaries, ...(data?.reviewSummaries || {}) },
     projectMemory: { ...EMPTY_DASHBOARD.projectMemory, ...(data?.projectMemory || {}) },
-    dream: { ...EMPTY_DASHBOARD.dream, ...(data?.dream || {}) },
+    automation: { ...EMPTY_DASHBOARD.automation, ...(data?.automation || {}) },
     profile: { ...EMPTY_DASHBOARD.profile, ...(data?.profile || {}) },
     signals: { ...EMPTY_DASHBOARD.signals, ...(data?.signals || {}) }
   }
@@ -363,7 +363,6 @@ function pageHtml(tabId) {
   if (tabId === 'prepare') return renderMemoryPrepare()
   if (tabId === 'distillation') return renderDistillPanel()
   if (tabId === 'harvester') return renderHarvester()
-  if (tabId === 'dream') return renderDream()
   if (tabId === 'profile') return renderProfile()
   return renderOverview()
 }
@@ -1064,7 +1063,7 @@ function renderDistillCandidate(candidate) {
 }
 
 function renderAutomation() {
-  const dream = state.dashboard.dream.dream || {}
+  const automation = state.dashboard.automation.automation || {}
   return `
     <section class="page-stack">
       ${sectionHeader('Automation', 'Scheduled lifecycle maintenance.')}
@@ -1074,11 +1073,11 @@ function renderAutomation() {
         ${metric('Manual Review', listPending().length, 'High-risk recommendations')}
       </div>
       <div class="soft-panel">
-        <h3>Dream status</h3>
+        <h3>Automation status</h3>
         <div class="soft-inset">
-          Due: ${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
-          Last run: ${escapeHtml(dream.lastDreamAt || 'never')}<br>
-          Status: ${escapeHtml(dream.lastDreamStatus || 'unknown')}
+          Due: ${escapeHtml(String(automation.dreamDue ?? 'unknown'))}<br>
+          Last run: ${escapeHtml(automation.lastDreamAt || 'never')}<br>
+          Status: ${escapeHtml(automation.lastDreamStatus || 'unknown')}
         </div>
       </div>
     </section>
@@ -1093,23 +1092,6 @@ function renderTools() {
       ${renderMemoryPrepare()}
       ${renderDistillPanel()}
       ${renderHarvester()}
-    </section>
-  `
-}
-
-function renderDream() {
-  const dream = state.dashboard.dream.dream || {}
-  return `
-    <section class="page-stack">
-      ${sectionHeader('Dream', 'Read-only dream pass state.')}
-      <div class="soft-panel">
-        <h3>Dream status</h3>
-        <div class="soft-inset">
-          Due: ${escapeHtml(String(dream.dreamDue ?? 'unknown'))}<br>
-          Last run: ${escapeHtml(dream.lastDreamAt || 'never')}<br>
-          Status: ${escapeHtml(dream.lastDreamStatus || 'unknown')}
-        </div>
-      </div>
     </section>
   `
 }

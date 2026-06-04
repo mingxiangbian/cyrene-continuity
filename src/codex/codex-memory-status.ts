@@ -172,11 +172,11 @@ export async function formatCodexMemoryStatus(input: { cwd: string }): Promise<s
     `  last stop hook run: ${formatStopHookRun(status.stopHook)}`,
     status.stopHook.reason === undefined ? undefined : `  stop hook reason: ${status.stopHook.reason}`,
     '',
-    'dream:',
-    `  dream state: ${status.dream.state}`,
-    status.dream.reason === undefined ? undefined : `  dream state reason: ${status.dream.reason}`,
-    `  dream due: ${status.dream.due ? 'yes' : 'no'}`,
-    `  last dream: ${status.dream.lastDreamAt ?? 'never'}`
+    'automation:',
+    `  automation state: ${status.dream.state}`,
+    status.dream.reason === undefined ? undefined : `  automation state reason: ${status.dream.reason}`,
+    `  automation due: ${status.dream.due ? 'yes' : 'no'}`,
+    `  last automation run: ${status.dream.lastDreamAt ?? 'never'}`
   ].filter((line): line is string => line !== undefined && line !== '').join('\n') + '\n'
 }
 

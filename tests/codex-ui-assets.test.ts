@@ -148,6 +148,8 @@ describe('Codex UI source assets', () => {
     expect(js).toContain('Global Core')
     expect(js).toContain('Daily 15:00')
     expect(js).toContain('Weekly Sun 15:00')
+    expect(js).toContain('Automation status')
+    expect(js).not.toContain('Dream status')
     expect(js).not.toContain('Needs Tier')
     expect(js).not.toContain('Needs Tier Review')
     expect(js).toContain('/api/session')

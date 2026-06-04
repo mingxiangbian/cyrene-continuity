@@ -215,6 +215,7 @@ export async function getCodexContinuityContext(input: {
   cwd: string
   userMessage: string
   task?: CodexContinuityTask
+  recordActivationEvents?: boolean
 }): Promise<CodexContinuityContext> {
   const project = await identifyCodexProject(input.cwd)
   const config = createDefaultConfig(input.cwd)
@@ -256,22 +257,24 @@ export async function getCodexContinuityContext(input: {
     globalMemories: globalActivationMemories,
     projectMemories: projectActivationMemories
   })
-  await Promise.all([
-    appendActivationEventsFailOpen({
-      memoryRoot: globalMemoryRoot,
-      memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
-      projectId: project.projectId,
-      query: input.userMessage,
-      event: 'retrieved'
-    }),
-    appendActivationEventsFailOpen({
-      memoryRoot: projectMemoryRoot,
-      memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
-      projectId: project.projectId,
-      query: input.userMessage,
-      event: 'retrieved'
-    })
-  ])
+  if (input.recordActivationEvents !== false) {
+    await Promise.all([
+      appendActivationEventsFailOpen({
+        memoryRoot: globalMemoryRoot,
+        memoryIds: canonicalGlobalActivationMemoryIds(routedMemory.globalMemory, canonicalGlobalMemorySignatures),
+        projectId: project.projectId,
+        query: input.userMessage,
+        event: 'retrieved'
+      }),
+      appendActivationEventsFailOpen({
+        memoryRoot: projectMemoryRoot,
+        memoryIds: routedMemory.projectMemory.map((item) => item.memory.id),
+        projectId: project.projectId,
+        query: input.userMessage,
+        event: 'retrieved'
+      })
+    ])
+  }
   const activeMemory = [...routedMemory.globalMemory, ...routedMemory.projectMemory]
   const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory)
   const profileContent = [globalProfile, projectProfile].filter(Boolean).join('\n\n')

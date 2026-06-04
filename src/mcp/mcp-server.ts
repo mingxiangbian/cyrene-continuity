@@ -2,11 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { continuityGetInputSchema, handleContinuityGet } from './tools/continuity-get.js'
 import {
-  handleMemoryDreamRun,
   handleMemoryProfileGet,
-  memoryDreamRunInputSchema,
   memoryProfileGetInputSchema
 } from './tools/memory-dream.js'
+import {
+  handleMemoryAutomationRun,
+  memoryAutomationRunInputSchema
+} from './tools/memory-automation.js'
 import { handleMemoryPropose, memoryProposeInputSchema } from './tools/memory-propose.js'
 import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from './tools/memory-harvest-project.js'
 import {
@@ -170,13 +172,13 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
   )
 
   server.registerTool(
-    'cyrene_memory_dream_run',
+    'cyrene_memory_automation_run',
     {
       description:
-        'Run a Cyrene Codex memory dream pass. Use deep-preview for read-only proposed changes; deep-apply can reject or expire gated unsafe pending memory and write recommendation artifacts, but never promotes unapproved pending memory.',
-      inputSchema: memoryDreamRunInputSchema
+        'Run Cyrene memory lifecycle automation. Daily promotes low-risk project trial memory to validated; weekly promotes validated project memory to core and consolidates safe global core candidates.',
+      inputSchema: memoryAutomationRunInputSchema
     },
-    async (input) => handleMemoryDreamRun(input, options.cwd)
+    async (input) => handleMemoryAutomationRun(input, options.cwd)
   )
 
   server.registerTool(

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { isRuntimeActivatableSemanticMemory } from '../memory/memory-lifecycle.js'
 import { activeMemoryToSemanticMemory } from '../memory/semantic-memory-adapter.js'
+import { tokenizeMemoryText } from '../memory/tokenizer.js'
 import type { ActivationMode, ConfidenceTier, CyreneMemory, SemanticMemory } from '../memory/types.js'
 
 export interface MemoryActivation {
@@ -22,58 +23,6 @@ export interface MemoryActivationOutput {
 
 type ActivationSource = MemoryActivation['source']
 
-const STOP_WORDS = new Set([
-  'a',
-  'an',
-  'and',
-  'are',
-  'as',
-  'at',
-  'be',
-  'been',
-  'being',
-  'but',
-  'by',
-  'can',
-  'could',
-  'for',
-  'from',
-  'if',
-  'in',
-  'include',
-  'into',
-  'is',
-  'it',
-  'its',
-  'may',
-  'must',
-  'note',
-  'notes',
-  'of',
-  'on',
-  'or',
-  'outline',
-  'plan',
-  'should',
-  'test',
-  'that',
-  'the',
-  'then',
-  'these',
-  'this',
-  'those',
-  'to',
-  'was',
-  'were',
-  'when',
-  'while',
-  'will',
-  'with',
-  'without',
-  'would',
-  'write',
-  'writing'
-])
 const DISTINCTIVE_TOKEN_LENGTH = 8
 const DO_NOT_USE_BOUNDARY_TOKENS = new Set([
   'avoid',
@@ -110,7 +59,7 @@ export function buildMemoryActivations(input: {
     planConstraints: [],
     checklistItems: []
   }
-  const queryTokens = tokenize(input.query)
+  const queryTokens = tokenizeMemoryText(input.query)
   if (queryTokens.length === 0 || maxPerBucket === 0) {
     return output
   }
@@ -204,7 +153,7 @@ function matchTriggerReason(memory: SemanticMemory, queryTokens: string[]): stri
     return null
   }
 
-  const memoryTokens = new Set(tokenize([memory.content, ...memory.useWhen].join(' ')))
+  const memoryTokens = new Set(tokenizeMemoryText([memory.content, ...memory.useWhen].join(' ')))
   const matchedTokens = matchingTokens(queryTokens, memoryTokens)
   if (!isStrongMatch(matchedTokens)) {
     return null
@@ -213,7 +162,7 @@ function matchTriggerReason(memory: SemanticMemory, queryTokens: string[]): stri
 }
 
 function doNotUseWhenSuppresses(queryTokens: string[], boundary: string): boolean {
-  const boundaryTokens = new Set(tokenize(boundary))
+  const boundaryTokens = new Set(tokenizeMemoryText(boundary))
   if (!isStrongTokenOverlap(queryTokens, boundaryTokens)) {
     return false
   }
@@ -257,12 +206,4 @@ function normalizeMaxPerBucket(value: number | undefined): number {
   if (value === undefined) return 6
   if (!Number.isFinite(value)) return 6
   return Math.max(0, Math.floor(value))
-}
-
-function tokenize(text: string): string[] {
-  return Array.from(new Set(
-    (text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])
-      .map((token) => token.trim())
-      .filter((token) => token !== '' && !STOP_WORDS.has(token))
-  ))
 }

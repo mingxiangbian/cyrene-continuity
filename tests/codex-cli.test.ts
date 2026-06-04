@@ -9,12 +9,16 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { reviewHashForSimilarHintMemory } from '../src/codex/similar-hints-review.js'
+import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import {
+  appendTombstoneFromRoot,
+  readActivationEventsFromRoot,
   readActiveMemoriesFromRoot,
+  writeSemanticMemoriesFromRoot,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../src/memory/memory-store.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import type { CyreneMemory, MemoryDomain, MemoryModule, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
 const PLUGIN_BUILD_TEST_TIMEOUT_MS = 20_000
@@ -140,6 +144,73 @@ function createActive(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
   }
 }
 
+function semanticMemory(overrides: Partial<SemanticMemory> = {}): SemanticMemory {
+  const confidenceTier = overrides.confidenceTier ?? 'trial'
+  const scope = overrides.scope ?? 'project'
+  const domain = overrides.domain ?? 'procedural'
+  const module = overrides.module ?? moduleForDomain(domain)
+  const content = overrides.content ?? 'Context preview trial review workflow memory must stay a workflow hint.'
+  return {
+    id: overrides.id ?? 'context-preview-trial-1',
+    status: overrides.status ?? 'active',
+    module,
+    kind: overrides.kind ?? 'workflow_rule',
+    scope,
+    domain,
+    content,
+    useWhen: overrides.useWhen ?? ['context preview trial review'],
+    doNotUseWhen: overrides.doNotUseWhen ?? ['unrelated work'],
+    sourceOfTruth: overrides.sourceOfTruth,
+    evidence: overrides.evidence ?? [
+      {
+        id: `evidence-${overrides.id ?? 'context-preview-trial-1'}`,
+        sourceKind: 'review_event',
+        sourceRef: `review:${overrides.id ?? 'context-preview-trial-1'}`,
+        when: '2026-06-03T00:00:00.000Z',
+        whatHappened: 'The preview memory was reviewed.',
+        whyImportant: 'It verifies runtime preview boundaries.'
+      }
+    ],
+    routing: overrides.routing ?? {
+      module,
+      updatePolicy: 'strict_auto_promote',
+      risk: 'low',
+      reasons: ['context preview fixture']
+    },
+    reviewPolicy: overrides.reviewPolicy ?? 'strict_auto_promote',
+    reviewState: overrides.reviewState ?? {
+      normalizedKey: content.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      type: domain === 'system' ? 'system_policy' : 'procedural_rule',
+      strength: 'hard',
+      source: 'review_event',
+      portability: scope === 'global' ? 'global' : 'local_only',
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.9,
+        usefulness: 0.85,
+        safety: 0.95,
+        sensitivity: 0.1
+      },
+      tags: ['workflow_rule']
+    },
+    confidenceTier,
+    activationPolicy: activationPolicyForConfidenceTier(confidenceTier),
+    supersedes: overrides.supersedes ?? [],
+    expiresAt: overrides.expiresAt,
+    reviewAfter: overrides.reviewAfter,
+    createdAt: overrides.createdAt ?? '2026-06-03T00:00:00.000Z',
+    updatedAt: overrides.updatedAt ?? '2026-06-03T00:00:00.000Z',
+    ...overrides
+  }
+}
+
+function moduleForDomain(domain: MemoryDomain): MemoryModule {
+  if (domain === 'system') return 'system'
+  if (domain === 'project') return 'project_semantic'
+  if (domain === 'procedural') return 'procedural'
+  return 'relationship_affective'
+}
+
 async function seedCliPending(cwd: string, pending: PendingMemory | PendingMemory[]): Promise<string> {
   const identity = await identifyCodexProject(cwd)
   const memoryRoot = codexProjectMemoryRoot(identity.projectId)
@@ -224,6 +295,118 @@ describe('cyrene-continuity codex CLI', () => {
       code: 1,
       stderr: expect.stringContaining(stderr)
     })
+  })
+
+  it('previews runtime memory context without exposing pending or archived content', async () => {
+    const home = await createTempDir('cyrene-codex-cli-context-preview-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-context-preview-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'context-preview-cli-test' }), 'utf8')
+    const identity = await identifyCodexProject(cwd)
+    const projectRoot = codexProjectMemoryRoot(identity.projectId)
+    const globalRoot = codexGlobalMemoryRoot()
+
+    await writeSemanticMemoriesFromRoot(projectRoot, [
+      semanticMemory({
+        id: 'preview-trial-1',
+        content: 'Context preview trial review workflow memory must stay a workflow hint.',
+        useWhen: ['context preview trial review']
+      }),
+      semanticMemory({
+        id: 'preview-archived-1',
+        status: 'archived',
+        content: 'DO NOT LEAK ARCHIVED CONTENT'
+      })
+    ])
+    await writePendingMemoriesFromRoot(projectRoot, [
+      createPending({
+        id: 'preview-project-pending-1',
+        content: 'DO NOT LEAK PROJECT PENDING CONTENT',
+        normalizedKey: 'preview-project-pending',
+        sourceDraftIds: ['draft-project-pending']
+      })
+    ])
+    await writePendingMemoriesFromRoot(globalRoot, [
+      createPending({
+        id: 'preview-global-pending-1',
+        scope: 'global',
+        content: 'DO NOT LEAK GLOBAL PENDING CONTENT',
+        normalizedKey: 'preview-global-pending'
+      })
+    ])
+    await appendTombstoneFromRoot(projectRoot, {
+      id: 'preview-tombstone-1',
+      normalizedKey: 'preview-tombstone',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      scope: 'project',
+      reason: 'user_rejected',
+      createdAt: '2026-06-03T00:00:00.000Z'
+    })
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        '--cwd',
+        cwd,
+        'codex',
+        'memory',
+        'context-preview',
+        '--message',
+        'context preview trial review',
+        '--task',
+        'coding'
+      ],
+      { cwd: process.cwd(), env: cliEnv(home), timeout: 10_000 }
+    )
+    const preview = JSON.parse(result.stdout)
+
+    expect(preview.input).toEqual({ task: 'coding', userMessage: 'context preview trial review' })
+    expect(preview.activeContext.projectMemory).toEqual([
+      expect.objectContaining({
+        id: 'preview-trial-1',
+        content: 'Context preview trial review workflow memory must stay a workflow hint.'
+      })
+    ])
+    expect(preview.activation.workflowHints).toEqual([
+      expect.objectContaining({
+        memoryId: 'preview-trial-1',
+        confidenceTier: 'trial',
+        activationMode: 'workflow_hint'
+      })
+    ])
+    expect(preview.activation.planConstraints).toEqual([])
+    expect(preview.activation.checklistItems).toEqual([])
+    expect(preview.exclusions.pendingReview).toMatchObject({
+      count: 2,
+      items: expect.arrayContaining([
+        { id: 'preview-project-pending-1', scope: 'project', root: 'project', reason: 'pending_review_required' },
+        { id: 'preview-global-pending-1', scope: 'global', root: 'global', reason: 'pending_review_required' }
+      ])
+    })
+    expect(preview.exclusions.tombstones).toContainEqual({
+      id: 'preview-tombstone-1',
+      scope: 'project',
+      root: 'project',
+      reason: 'user_rejected'
+    })
+    expect(preview.exclusions.archived).toContainEqual({
+      id: 'preview-archived-1',
+      scope: 'project',
+      root: 'project',
+      reason: 'archived'
+    })
+
+    const activeAndActivation = JSON.stringify({
+      activeContext: preview.activeContext,
+      activation: preview.activation
+    })
+    expect(activeAndActivation).not.toContain('DO NOT LEAK PROJECT PENDING CONTENT')
+    expect(activeAndActivation).not.toContain('DO NOT LEAK GLOBAL PENDING CONTENT')
+    expect(activeAndActivation).not.toContain('DO NOT LEAK ARCHIVED CONTENT')
+    expect(await readActivationEventsFromRoot(projectRoot)).toEqual([])
   })
 
   it('runs project memory harvest dry-run without model config', async () => {
@@ -775,7 +958,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('advisory: optional Stop hook is not installed')
   })
 
-  it('doctor reports memory profile and dream state without blocking readiness', async () => {
+  it('doctor reports memory profile and automation state without blocking readiness', async () => {
     const home = await createTempDir('cyrene-codex-cli-memory-doctor-home-')
     process.env.HOME = home
     const configPath = join(home, '.codex-config.toml')
@@ -819,8 +1002,8 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('memory:')
     expect(result.stdout).toContain('global profile: present')
     expect(result.stdout).toContain('project profile: missing')
-    expect(result.stdout).toContain('dream due: yes')
-    expect(result.stdout).toContain('last dream: 2026-05-25T00:00:00.000Z')
+    expect(result.stdout).toContain('automation due: yes')
+    expect(result.stdout).toContain('last automation run: 2026-05-25T00:00:00.000Z')
     expect(result.stdout).toContain('promotion recommendations: enabled')
     expect(result.stdout).not.toContain(['auto', 'promote:'].join(' '))
   })
@@ -839,7 +1022,7 @@ describe('cyrene-continuity codex CLI', () => {
       [
         'id = "cyrene-memory-dream-deep"',
         'status = "ACTIVE"',
-        'prompt = "Run codex memory dream --stage deep and report the summary."'
+        'prompt = "Run codex memory automation --job weekly --apply and report the summary."'
       ].join('\n')
     )
 
@@ -850,9 +1033,9 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('automation dream stage: needs migration')
-    expect(result.stdout).toContain('stable shim deep-preview: missing')
-    expect(result.stdout).toContain('stable shim deep-apply: missing')
+    expect(result.stdout).toContain('legacy deep automation: unknown')
+    expect(result.stdout).toContain('stable shim preview job: missing')
+    expect(result.stdout).toContain('stable shim apply job: missing')
     expect(result.stdout).toContain('embedding provider: disabled')
     expect(result.stdout).toContain('profile candidates: ok')
   })
@@ -1267,7 +1450,7 @@ describe('cyrene-continuity codex CLI', () => {
     expect(doctor.stdout).toContain('last stop hook run: 2026-05-28T00:00:00.000Z (ok)')
   })
 
-  it('prints a memory dashboard with review, dream, top memory, and warnings', async () => {
+  it('prints a memory dashboard with review, automation, top memory, and warnings', async () => {
     const home = await createTempDir('cyrene-codex-cli-dashboard-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-cli-dashboard-repo-')
@@ -1345,8 +1528,8 @@ describe('cyrene-continuity codex CLI', () => {
     expect(result.stdout).toContain('dashboard-pending-1')
     expect(result.stdout).toContain('review summaries:')
     expect(result.stdout).toContain('Dashboard review summary.')
-    expect(result.stdout).toContain('last dream: 2026-05-27T00:00:00.000Z')
-    expect(result.stdout).toContain('next dream due: 2026-05-28T00:00:00.000Z')
+    expect(result.stdout).toContain('last automation run: 2026-05-27T00:00:00.000Z')
+    expect(result.stdout).toContain('next automation due: 2026-05-28T00:00:00.000Z')
     expect(result.stdout).toContain('warnings:')
     expect(result.stdout).toContain('Stop Hook stale')
     expect(result.stdout).toContain('profile missing')
@@ -1465,10 +1648,10 @@ describe('cyrene-continuity codex CLI', () => {
     expect(doctor.stdout).toContain('stop hook reason: Transcript path is unreadable.')
   })
 
-  it('reports unreadable dream state without failing memory status', async () => {
-    const home = await createTempDir('cyrene-codex-cli-memory-status-dream-state-home-')
+  it('reports unreadable automation state without failing memory status', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-automation-state-home-')
     process.env.HOME = home
-    const repo = await createTempDir('cyrene-codex-cli-memory-status-dream-state-repo-')
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-automation-state-repo-')
     const identity = await identifyCodexProject(repo)
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(projectMemoryRoot, { recursive: true })
@@ -1481,14 +1664,14 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('dream state: unreadable')
-    expect(result.stdout).toContain('dream state reason:')
+    expect(result.stdout).toContain('automation state: unreadable')
+    expect(result.stdout).toContain('automation state reason:')
   })
 
-  it('reports unreadable dream state without failing doctor', async () => {
-    const home = await createTempDir('cyrene-codex-cli-doctor-dream-state-home-')
+  it('reports unreadable automation state without failing doctor', async () => {
+    const home = await createTempDir('cyrene-codex-cli-doctor-automation-state-home-')
     process.env.HOME = home
-    const repo = await createTempDir('cyrene-codex-cli-doctor-dream-state-repo-')
+    const repo = await createTempDir('cyrene-codex-cli-doctor-automation-state-repo-')
     const identity = await identifyCodexProject(repo)
     const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(projectMemoryRoot, { recursive: true })
@@ -1501,8 +1684,8 @@ describe('cyrene-continuity codex CLI', () => {
     )
 
     expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('dream state: unreadable')
-    expect(result.stdout).toContain('dream state reason:')
+    expect(result.stdout).toContain('automation state: unreadable')
+    expect(result.stdout).toContain('automation state reason:')
   })
 
   it('doctor reports pending counts and current repo MCP command freshness', async () => {
@@ -1921,79 +2104,26 @@ describe('cyrene-continuity codex CLI', () => {
     })
   })
 
-  it('runs memory dream apply from the CLI without promoting unapproved pending memory', async () => {
-    const home = await createTempDir('cyrene-codex-cli-dream-home-')
+  it('runs memory automation daily and weekly from the CLI', async () => {
+    const home = await createTempDir('cyrene-codex-cli-automation-home-')
     process.env.HOME = home
-    const identity = await identifyCodexProject(process.cwd())
-    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    const candidate = createPending()
-    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(candidate)}\n`)
 
-    const result = await execFileAsync(
+    const daily = await execFileAsync(
       process.execPath,
-      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep-apply'],
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'automation', '--job', 'daily', '--dry-run'],
       { env: cliEnv(home) }
     )
 
-    expect(result.stderr).toBe('')
-    const parsed = JSON.parse(result.stdout) as { roots: Array<{ promoted: number; recommendedPromotions: number; keptPending: number }> }
-    expect(parsed.roots.some((root) => root.promoted === 0 && root.recommendedPromotions === 1 && root.keptPending === 1)).toBe(true)
-    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ content: candidate.content })])
-    )
-    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain(candidate.content)
-  })
-
-  it('runs memory dream preview from the CLI without promoting pending memory', async () => {
-    const home = await createTempDir('cyrene-codex-cli-dream-preview-home-')
-    process.env.HOME = home
-    const identity = await identifyCodexProject(process.cwd())
-    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(createPending())}\n`)
-
-    const result = await execFileAsync(
+    const weekly = await execFileAsync(
       process.execPath,
-      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep-preview'],
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'automation', '--job', 'weekly', '--dry-run'],
       { env: cliEnv(home) }
     )
 
-    expect(result.stderr).toBe('')
-    const parsed = JSON.parse(result.stdout) as {
-      roots: Array<{ stage: string; promoted: number; recommendedPromotions: number; keptPending: number }>
-    }
-    expect(parsed.roots.some((root) =>
-      root.stage === 'deep-preview' && root.promoted === 0 && root.recommendedPromotions === 1 && root.keptPending === 1
-    )).toBe(true)
-    await expect(readActiveMemoriesFromRoot(memoryRoot)).resolves.toEqual([])
-    await expect(readFile(join(memoryRoot, 'dream-preview', 'DREAM_REPORT.md'), 'utf8')).resolves.toContain('cli-dream-promotes-pending')
-  })
-
-  it('prints the latest project dream report from the CLI', async () => {
-    const home = await createTempDir('cyrene-codex-cli-dream-report-home-')
-    process.env.HOME = home
-    const identity = await identifyCodexProject(process.cwd())
-    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
-    await mkdir(memoryRoot, { recursive: true })
-    await writeFile(join(memoryRoot, 'review_queue.jsonl'), `${JSON.stringify(createPending())}\n`)
-
-    await execFileAsync(
-      process.execPath,
-      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep-preview'],
-      { env: cliEnv(home) }
-    )
-
-    const result = await execFileAsync(
-      process.execPath,
-      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', 'report', '--root', 'project'],
-      { env: cliEnv(home) }
-    )
-
-    expect(result.stderr).toBe('')
-    expect(result.stdout).toContain('Cyrene Dream Preview')
-    expect(result.stdout).toContain(memoryRoot)
-    expect(result.stdout).toContain('cli-dream-promotes-pending')
+    expect(daily.stderr).toBe('')
+    expect(JSON.parse(daily.stdout)).toMatchObject({ job: 'daily', action: 'memory_lifecycle_daily', dryRun: true })
+    expect(weekly.stderr).toBe('')
+    expect(JSON.parse(weekly.stdout)).toMatchObject({ job: 'weekly', action: 'memory_lifecycle_weekly', dryRun: true })
   })
 
   it('runs memory maintenance from the CLI without promoting pending memory', async () => {
@@ -2199,33 +2329,33 @@ describe('cyrene-continuity codex CLI', () => {
     })
   })
 
-  it('rejects memory dream --stage without a value', async () => {
-    const home = await createTempDir('cyrene-codex-cli-dream-home-')
+  it('rejects memory automation --job without a value', async () => {
+    const home = await createTempDir('cyrene-codex-cli-automation-home-')
     process.env.HOME = home
 
     await expect(
       execFileAsync(
         process.execPath,
-        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage'],
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'automation', '--job'],
         { env: cliEnv(home) }
       )
     ).rejects.toMatchObject({
-      stderr: expect.stringContaining('Invalid memory dream stage')
+      stderr: expect.stringContaining('Invalid memory automation job')
     })
   })
 
-  it('rejects legacy memory dream deep stage with migration guidance', async () => {
-    const home = await createTempDir('cyrene-codex-cli-dream-legacy-home-')
+  it('rejects unsupported memory automation jobs', async () => {
+    const home = await createTempDir('cyrene-codex-cli-automation-invalid-home-')
     process.env.HOME = home
 
     await expect(
       execFileAsync(
         process.execPath,
-        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'dream', '--stage', 'deep'],
+        ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', 'codex', 'memory', 'automation', '--job', 'deep'],
         { env: cliEnv(home) }
       )
     ).rejects.toMatchObject({
-      stderr: expect.stringContaining('Invalid memory dream stage: deep. Use deep-preview to generate proposed changes or deep-apply to apply gated changes.')
+      stderr: expect.stringContaining('Invalid memory automation job: deep. Expected daily or weekly')
     })
   })
 
