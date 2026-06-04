@@ -179,7 +179,7 @@ describe('handleCodexUiApiRequest', () => {
   it('returns the UI session token for same-origin UI bootstrap', async () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
-    const { cwd, memoryRoot } = await seedProject()
+    const { cwd } = await seedProject()
 
     const result = await handleCodexUiApiRequest({
       cwd,

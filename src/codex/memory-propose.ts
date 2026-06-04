@@ -388,13 +388,6 @@ export async function proposeCodexMemoryCandidate(input: {
   })
 }
 
-function isProjectTrialEligible(input: {
-  candidate: PendingMemory
-  activeReadinessReady: boolean
-}): boolean {
-  return evaluateProjectTrialEligibility(input).allowed
-}
-
 function evaluateProjectTrialEligibility(input: {
   candidate: PendingMemory
   activeReadinessReady: boolean
