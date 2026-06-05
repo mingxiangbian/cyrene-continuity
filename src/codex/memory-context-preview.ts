@@ -2,7 +2,7 @@ import { readPendingMemoriesFromRoot, readSemanticMemoriesFromRoot, readTombston
 import type { MemoryTombstone, PendingMemory, SemanticMemory } from '../memory/types.js'
 import type { RetrieveMemoriesInput } from '../memory/memory-retriever.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from './codex-memory-root.js'
-import type { ContextMode } from './context-policy.js'
+import { buildRetrievalPolicy, type ContextMode } from './context-policy.js'
 import { getCodexContinuityContext, type CodexContinuityContext } from './continuity-context.js'
 import { identifyCodexProject } from './project-id.js'
 
@@ -79,7 +79,18 @@ export async function runCodexMemoryContextPreview(input: {
   maxTokens?: number
 }): Promise<CodexMemoryContextPreview> {
   const task = input.task ?? 'coding'
-  const mode = input.mode ?? 'fast'
+  const policy = buildRetrievalPolicy({
+    mode: input.mode,
+    task,
+    userMessage: input.userMessage,
+    includeSimilarProjectHints: input.includeSimilarProjectHints,
+    includePendingDetails: input.includePendingDetails,
+    includePendingNotice: input.includePendingNotice,
+    includeDiagnostics: input.includeDiagnostics,
+    recordRetrievedEvents: input.recordRetrievedEvents,
+    maxTokens: input.maxTokens
+  })
+  const mode = policy.mode
   const includeExclusionDetails = mode === 'review' || input.includePendingDetails === true || input.includeDiagnostics === true
   const project = await identifyCodexProject(input.cwd)
   const globalRoot = codexGlobalMemoryRoot()
@@ -91,7 +102,7 @@ export async function runCodexMemoryContextPreview(input: {
         cwd: input.cwd,
         userMessage: input.userMessage,
         task,
-        mode,
+        mode: input.mode,
         includeSimilarProjectHints: input.includeSimilarProjectHints,
         includePendingDetails: input.includePendingDetails,
         includePendingNotice: input.includePendingNotice,

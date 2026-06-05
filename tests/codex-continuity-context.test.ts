@@ -10,7 +10,7 @@ import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { writeFastSummaryProjection } from '../src/codex/fast-summary-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { readRuntimeMetrics } from '../src/codex/runtime-metrics.js'
-import { replaceCodexSessionHints } from '../src/codex/session-hints.js'
+import { readCodexSessionHints, replaceCodexSessionHints } from '../src/codex/session-hints.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import {
   readActivationEventsFromRoot,
@@ -150,7 +150,7 @@ describe('Codex continuity context', () => {
     expect(JSON.stringify(metrics)).not.toContain('raw prompt text must not persist')
   })
 
-  it('review mode returns pending notice, pending hypotheses, diagnostics, and similar hints', async () => {
+  it('review mode returns pending notice, pending hypotheses, and diagnostics without similar hints by default', async () => {
     const home = await createTempDir('cyrene-codex-continuity-review-mode-home-')
     process.env.HOME = home
     const currentRepo = await createTempDir('cyrene-codex-continuity-review-current-')
@@ -210,14 +210,7 @@ describe('Codex continuity context', () => {
       expect.objectContaining({ id: 'review-pending-context', provisional: true, status: 'pending' })
     ])
     expect(context.diagnostics?.memoryIndex).toBeDefined()
-    expect(context.similarProjectHints).toEqual([
-      expect.objectContaining({
-        id: 'review-portable-similar',
-        sourceProjectId: other.projectId,
-        transferable: true,
-        notCurrentProjectFact: true
-      })
-    ])
+    expect(context.similarProjectHints).toEqual([])
     expect(context.memory.items.map((item) => item.id)).not.toContain('review-pending-context')
     expect(context.memory.items.map((item) => item.id)).not.toContain('review-portable-similar')
   })
@@ -255,6 +248,95 @@ describe('Codex continuity context', () => {
       expect.objectContaining({ id: 'hint-1', transferable: true, notCurrentProjectFact: true })
     ])
     expect(context.memory.items).toEqual([])
+  })
+
+  it('balanced planning context can generate session hints from similar projects without returning similar hints', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-generated-session-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-codex-generated-session-current-')
+    const otherRepo = await createTempDir('cyrene-codex-generated-session-other-')
+    await writeFile(join(currentRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0' }
+    }), 'utf8')
+    await writeFile(join(currentRepo, 'package-lock.json'), '{}\n', 'utf8')
+    await writeFile(join(otherRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0' }
+    }), 'utf8')
+    await writeFile(join(otherRepo, 'package-lock.json'), '{}\n', 'utf8')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    const currentRoot = codexProjectMemoryRoot(current.projectId)
+    const otherRoot = codexProjectMemoryRoot(other.projectId)
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(otherRoot, { recursive: true })
+    await writeFile(join(otherRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'generated-session-similar',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      portability: 'similar_project',
+      content: 'Generated session hints should keep plugin runtime rebuilds explicit.',
+      normalizedKey: 'generated-session-runtime-rebuild',
+      tags: ['mcp', 'plugin']
+    })) + '\n')
+
+    await rebuildCodexMemoryIndex({ cwd: otherRepo })
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'Plan the plugin runtime rebuild work.',
+      task: 'planning',
+      includeSessionHints: true,
+      sessionId: 'generated-session-1'
+    })
+
+    expect(context.similarProjectHints).toEqual([])
+    expect(context.sessionHints).toEqual([
+      expect.objectContaining({
+        sourceProjectId: other.projectId,
+        sourceProjectName: other.displayName,
+        transferable: true,
+        notCurrentProjectFact: true
+      })
+    ])
+    expect(context.memory.items.map((item) => item.id)).not.toContain('generated-session-similar')
+    await expect(readCodexSessionHints(currentRoot, {
+      sessionId: 'generated-session-1',
+      projectId: current.projectId,
+      now: new Date().toISOString()
+    })).resolves.toEqual([
+      expect.objectContaining({
+        sourceProjectId: other.projectId,
+        summary: 'Generated session hints should keep plugin runtime rebuilds explicit.'
+      })
+    ])
+  })
+
+  it('balanced mode reads full global and project profiles', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-balanced-profile-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-balanced-profile-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await mkdir(globalMemoryRoot, { recursive: true })
+    await writeFile(join(globalMemoryRoot, 'MODEL_PROFILE.md'), '# Global Profile\n\nBalanced reads global profile.\n')
+    await writeFile(join(projectMemoryRoot, 'MODEL_PROFILE.md'), '# Project Profile\n\nBalanced reads project profile.\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'Write the implementation plan.',
+      task: 'planning'
+    })
+
+    expect(context.profile.global).toBe('# Global Profile\n\nBalanced reads global profile.')
+    expect(context.profile.project).toBe('# Project Profile\n\nBalanced reads project profile.')
+    expect(context.profile.content).toBe([
+      '# Global Profile\n\nBalanced reads global profile.',
+      '# Project Profile\n\nBalanced reads project profile.'
+    ].join('\n\n'))
   })
 
   it('returns compact project, memory, strategy, and dissent context', async () => {
@@ -1191,7 +1273,8 @@ describe('Codex continuity context', () => {
       cwd: currentRepo,
       userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
       task: 'planning',
-      mode: 'review'
+      mode: 'review',
+      includeSimilarProjectHints: true
     })
 
     expect(context.similarProjectHints).toEqual([
@@ -1257,7 +1340,8 @@ describe('Codex continuity context', () => {
       cwd: currentRepo,
       userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
       task: 'planning',
-      mode: 'review'
+      mode: 'review',
+      includeSimilarProjectHints: true
     })
 
     expect(context.diagnostics?.memoryIndex?.available).toBe(true)
@@ -1305,7 +1389,8 @@ describe('Codex continuity context', () => {
       cwd: currentRepo,
       userMessage: 'What MCP plugin guidance applies?',
       task: 'planning',
-      mode: 'review'
+      mode: 'review',
+      includeSimilarProjectHints: true
     })
 
     expect(context.similarProjectHints).toEqual([])
@@ -1336,7 +1421,8 @@ describe('Codex continuity context', () => {
       cwd: currentRepo,
       userMessage: 'What transferable guidance applies?',
       task: 'planning',
-      mode: 'review'
+      mode: 'review',
+      includeSimilarProjectHints: true
     })
 
     expect(context.diagnostics?.projectSimilarity).toMatchObject({

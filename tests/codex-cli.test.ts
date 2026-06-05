@@ -6,6 +6,11 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import {
+  markFastSummaryProjectionStale,
+  readFastSummaryProjection,
+  writeFastSummaryProjection
+} from '../src/codex/fast-summary-store.js'
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { reviewHashForSimilarHintMemory } from '../src/codex/similar-hints-review.js'
@@ -439,6 +444,61 @@ describe('cyrene-continuity codex CLI', () => {
     expect(preview.diagnostics.pendingReview).toBeUndefined()
     expect(JSON.stringify(preview)).not.toContain('DO NOT LEAK FAST PENDING CONTENT')
     expect(await readActivationEventsFromRoot(projectRoot)).toEqual([])
+  })
+
+  it('refreshes global fast summary projections from an explicit CLI maintenance command', async () => {
+    const home = await createTempDir('cyrene-codex-cli-summary-refresh-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-summary-refresh-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'summary-refresh-cli-test' }), 'utf8')
+    const globalRoot = codexGlobalMemoryRoot()
+    await writeSemanticMemoriesFromRoot(globalRoot, [
+      semanticMemory({
+        id: 'summary-refresh-global-core',
+        scope: 'global',
+        confidenceTier: 'global_core',
+        content: 'CLI summary refresh should project confirmed global runtime guidance.'
+      })
+    ])
+    await writeFile(join(globalRoot, 'MODEL_PROFILE.md'), '# Global Profile\n\nUse refreshed profile summary.\n', 'utf8')
+    await writeFastSummaryProjection(globalRoot, {
+      globalFastSummary: 'Old fast summary.',
+      profileFastSummary: 'Old profile summary.',
+      generatedAt: '2026-06-05T00:00:00.000Z'
+    })
+    await markFastSummaryProjectionStale(globalRoot, {
+      reason: 'active_memory_archive',
+      now: '2026-06-05T01:00:00.000Z'
+    })
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        '--cwd',
+        cwd,
+        'codex',
+        'memory',
+        'summary',
+        'refresh',
+        '--scope',
+        'global'
+      ],
+      { cwd: process.cwd(), env: cliEnv(home), timeout: 10_000 }
+    )
+    const parsed = JSON.parse(result.stdout) as { action?: string; scope?: string; fastSummaryUpdated?: boolean }
+    const projection = await readFastSummaryProjection(globalRoot)
+
+    expect(result.stderr).toBe('')
+    expect(parsed).toMatchObject({
+      action: 'memory_summary_refresh',
+      scope: 'global',
+      fastSummaryUpdated: true
+    })
+    expect(projection.globalFastSummary).toContain('CLI summary refresh should project confirmed global runtime guidance.')
+    expect(projection.profileFastSummary).toContain('Use refreshed profile summary.')
+    expect(projection.stale).toBe(false)
   })
 
   it('records active memory feedback from the CLI without storing raw query text', async () => {

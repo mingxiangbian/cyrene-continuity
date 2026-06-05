@@ -1,5 +1,6 @@
 export const CONTEXT_MODES = ['fast', 'balanced', 'review'] as const
 export type ContextMode = typeof CONTEXT_MODES[number]
+export type ContextPolicyTask = 'coding' | 'planning' | 'debugging' | 'conversation' | 'memory'
 
 export interface RetrievalPolicyFlags {
   includePendingDetails?: boolean
@@ -31,6 +32,8 @@ export interface RetrievalPolicy {
 
 export interface BuildRetrievalPolicyInput extends RetrievalPolicyFlags {
   mode?: ContextMode | string
+  task?: ContextPolicyTask
+  userMessage?: string
   env?: NodeJS.ProcessEnv
 }
 
@@ -57,7 +60,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeDiagnostics: false,
     includeSimilarProjectHints: false,
     includeSessionHints: true,
-    includeFullProfile: false,
+    includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
     allowJsonlFallback: true,
@@ -69,7 +72,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includePendingDetails: true,
     includePendingNotice: true,
     includeDiagnostics: true,
-    includeSimilarProjectHints: true,
+    includeSimilarProjectHints: false,
     includeSessionHints: true,
     includeFullProfile: true,
     includeFastSummaries: false,
@@ -91,7 +94,7 @@ export function parseContextMode(value: string | undefined): ContextMode | undef
 
 export function buildRetrievalPolicy(input: BuildRetrievalPolicyInput): RetrievalPolicy {
   const env = input.env ?? process.env
-  const mode = parseContextMode(input.mode) ?? parseContextMode(env.CYRENE_CONTEXT_MODE) ?? 'fast'
+  const mode = parseContextMode(input.mode) ?? parseContextMode(env.CYRENE_CONTEXT_MODE) ?? inferContextMode(input) ?? 'fast'
   return {
     ...MODE_DEFAULTS[mode],
     ...definedOnly(envPolicyFlags(env)),
@@ -110,6 +113,33 @@ export function buildRetrievalPolicy(input: BuildRetrievalPolicyInput): Retrieva
     mode,
     allowHotPathIndexRebuild: false
   }
+}
+
+export function inferContextMode(input: Pick<BuildRetrievalPolicyInput, 'task' | 'userMessage'> & RetrievalPolicyFlags): ContextMode | undefined {
+  if (
+    input.includePendingDetails === true ||
+    input.includePendingNotice === true
+  ) {
+    return 'review'
+  }
+  if (input.includeDiagnostics === true) {
+    return 'balanced'
+  }
+
+  const message = normalizeMessage(input.userMessage)
+  if (hasReviewSignal(message)) {
+    return 'review'
+  }
+  if (hasBalancedSignal(message)) {
+    return 'balanced'
+  }
+  if (input.task === 'memory') {
+    return 'review'
+  }
+  if (input.task === 'planning' || input.task === 'debugging') {
+    return 'balanced'
+  }
+  return undefined
 }
 
 function envPolicyFlags(env: NodeJS.ProcessEnv): RetrievalPolicyFlags {
@@ -149,6 +179,18 @@ function parsePositiveInteger(value: string | undefined): number | undefined {
     return parsed
   }
   throw new Error(`Invalid positive integer environment value: ${value}`)
+}
+
+function normalizeMessage(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function hasReviewSignal(message: string): boolean {
+  return /(?:pending (?:memory|candidate|review)|review pending|pending review|review queue|memory review|review memory|approve|reject|defer|review-hash|automation|profile apply|profile candidate|审核|审批|待审核|记忆评审|记忆审核|自动化|应用 profile|应用档案)/i.test(message)
+}
+
+function hasBalancedSignal(message: string): boolean {
+  return /(?:plan|planning|implementation plan|spec|architecture|design|roadmap|code review|review this|debug|debugging|root cause|similar project|project start|new project|计划|规划|方案|规格|架构|设计|路线图|代码评审|排查|调试|类似项目|相似项目|新项目)/i.test(message)
 }
 
 function definedOnly<T extends object>(input: T): Partial<T> {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { buildContinuitySnapshot } from '../affect/affect-runtime.js'
 import type { PrincipledDissentPolicy } from '../affect/types.js'
 import { createDefaultConfig } from '../config.js'
@@ -59,7 +60,7 @@ import {
 } from './context-policy.js'
 import { readFastSummaryProjection, type FastSummaryProjection } from './fast-summary-store.js'
 import { appendRuntimeMetric, type RuntimeMetricEvent } from './runtime-metrics.js'
-import { readCodexSessionHints, type CodexSessionHint } from './session-hints.js'
+import { readCodexSessionHints, replaceCodexSessionHints, type CodexSessionHint } from './session-hints.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
 
@@ -271,6 +272,8 @@ export async function getCodexContinuityContext(input: {
   const task = input.task ?? 'coding'
   const policy = buildRetrievalPolicy({
     mode: input.mode,
+    task,
+    userMessage: input.userMessage,
     maxTokens: input.maxTokens,
     includePendingDetails: input.includePendingDetails,
     includePendingNotice: input.includePendingNotice,
@@ -297,7 +300,7 @@ export async function getCodexContinuityContext(input: {
       maxTokens: Math.min(budget.maxTokens, policy.maxTokens)
   }
   let profileReadLatencyMs = 0
-  const [pendingReview, [fastSummary, globalProfile, projectProfile], sessionHints] = await Promise.all([
+  const [pendingReview, [fastSummary, globalProfile, projectProfile], storedSessionHints] = await Promise.all([
     policy.includePendingNotice ? getCodexPendingReviewNotice({ cwd: input.cwd }) : Promise.resolve({}),
     measureAsync(async () => Promise.all([
       policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
@@ -354,6 +357,17 @@ export async function getCodexContinuityContext(input: {
     ])
   }
   const activeMemory = [...modelVisibleGlobalMemory, ...modelVisibleProjectMemory]
+  const sessionHints = await resolveCodexSessionHints({
+    cwd: input.cwd,
+    projectId: project.projectId,
+    projectMemoryRoot,
+    query: input.userMessage,
+    task,
+    policy,
+    sessionId: input.sessionId,
+    existingSessionHints: storedSessionHints,
+    activeMemoryCount: activeMemory.length
+  })
   const retrievalExcluded = policy.includePendingDetails
     ? routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory)
     : []
@@ -852,6 +866,109 @@ async function retrieveSimilarProjectHints(input: {
       reason: projectSimilarityReason(metadata.length, selectedSimilarities.length)
     }
   }
+}
+
+async function resolveCodexSessionHints(input: {
+  cwd: string
+  projectId: string
+  projectMemoryRoot: string
+  query: string
+  task: CodexContinuityTask
+  policy: RetrievalPolicy
+  sessionId?: string
+  existingSessionHints: CodexSessionHint[]
+  activeMemoryCount: number
+}): Promise<CodexSessionHint[]> {
+  if (
+    !input.policy.includeSessionHints ||
+    input.sessionId === undefined ||
+    input.existingSessionHints.length > 0 ||
+    !shouldGenerateCodexSessionHints(input)
+  ) {
+    return input.existingSessionHints
+  }
+
+  const generated = await generateCodexSessionHintsFailOpen(input)
+  if (generated.length === 0) {
+    return []
+  }
+  await replaceCodexSessionHints(input.projectMemoryRoot, {
+    sessionId: input.sessionId,
+    projectId: input.projectId,
+    hints: generated,
+    now: generated[0]?.createdAt
+  })
+  return generated
+}
+
+function shouldGenerateCodexSessionHints(input: {
+  query: string
+  task: CodexContinuityTask
+  activeMemoryCount: number
+}): boolean {
+  if (input.task === 'planning' || input.task === 'debugging') {
+    return true
+  }
+  if (input.activeMemoryCount === 0) {
+    return true
+  }
+  return /(?:similar project|project start|new project|architecture|implementation plan|类似项目|相似项目|新项目|架构|计划|规划)/i.test(input.query)
+}
+
+async function generateCodexSessionHintsFailOpen(input: {
+  cwd: string
+  projectId: string
+  query: string
+  task: CodexContinuityTask
+}): Promise<CodexSessionHint[]> {
+  try {
+    const roots = await codexMemoryIndexRoots(input.projectId)
+    const indexStatus = await readCodexMemoryIndexStatus(roots.map((root) => root.memoryRoot))
+    if (!isQueryableIndexStatus(indexStatus)) {
+      return []
+    }
+    const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() })
+    try {
+      if (!adapter.diagnostics().available) {
+        return []
+      }
+      const similarRetrieval = await retrieveSimilarProjectHints({
+        cwd: input.cwd,
+        projectId: input.projectId,
+        query: input.query,
+        task: input.task,
+        adapter
+      })
+      if (!similarRetrieval.similarHintGate.passed) {
+        return []
+      }
+      const now = new Date().toISOString()
+      return similarRetrieval.similarProjectHints.slice(0, 3).map((item) => ({
+        id: stableSessionHintId(item),
+        sourceProjectId: item.homeProjectId,
+        ...(item.sourceProjectName === undefined ? {} : { sourceProjectName: item.sourceProjectName }),
+        summary: capSessionHintSummary(item.memory.content),
+        createdAt: now
+      }))
+    } finally {
+      adapter.close()
+    }
+  } catch {
+    return []
+  }
+}
+
+function stableSessionHintId(item: IndexedSimilarMemory): string {
+  return `session-hint-${createHash('sha256').update(JSON.stringify({
+    sourceProjectId: item.homeProjectId,
+    memoryId: item.memory.id,
+    content: item.memory.content
+  })).digest('hex').slice(0, 16)}`
+}
+
+function capSessionHintSummary(content: string): string {
+  const cleaned = content.replace(/\s+/g, ' ').trim()
+  return cleaned.length <= 500 ? cleaned : cleaned.slice(0, 500).trimEnd()
 }
 
 function emptySimilarRetrieval(reason: string): SimilarRetrievalResult {

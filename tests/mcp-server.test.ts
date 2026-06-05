@@ -407,6 +407,19 @@ describe('Cyrene MCP server', () => {
     expect(serverSource).not.toContain('cyrene_memory_dream_run')
   })
 
+  it('documents registered active memory MCP tools in the README registry', async () => {
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+
+    for (const toolName of [
+      'cyrene_memory_active_archive',
+      'cyrene_memory_active_tombstone',
+      'cyrene_memory_active_propose_edit',
+      'cyrene_memory_active_supersede'
+    ]) {
+      expect(readme).toContain(toolName)
+    }
+  })
+
   it('exposes Codex pending review tools through a fresh MCP server', async () => {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
     const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js')

@@ -32,20 +32,20 @@ describe('context policy', () => {
       includeDiagnostics: false,
       includeSimilarProjectHints: false,
       includeSessionHints: true,
-      includeFullProfile: false,
+      includeFullProfile: true,
       includeFastSummaries: false,
       recordRetrievedEvents: false
     })
   })
 
-  it('uses review mode for pending, diagnostics, and review visibility', () => {
+  it('uses review mode for pending and diagnostics without similar hints by default', () => {
     expect(buildRetrievalPolicy({ mode: 'review' })).toMatchObject({
       mode: 'review',
       maxTokens: 4000,
       includePendingDetails: true,
       includePendingNotice: true,
       includeDiagnostics: true,
-      includeSimilarProjectHints: true,
+      includeSimilarProjectHints: false,
       includeSessionHints: true,
       includeFullProfile: true,
       includeFastSummaries: false,
@@ -67,6 +67,58 @@ describe('context policy', () => {
       includeSimilarProjectHints: true,
       recordRetrievedEvents: true
     })
+  })
+
+  it('infers balanced mode for planning and architecture work', () => {
+    expect(buildRetrievalPolicy({
+      task: 'planning',
+      userMessage: 'write an implementation plan for the runtime architecture'
+    })).toMatchObject({
+      mode: 'balanced',
+      includeSessionHints: true,
+      includeFullProfile: true,
+      includePendingDetails: false,
+      includeSimilarProjectHints: false
+    })
+  })
+
+  it('infers review mode for pending memory review work', () => {
+    expect(buildRetrievalPolicy({
+      task: 'memory',
+      userMessage: 'review pending memory candidates'
+    })).toMatchObject({
+      mode: 'review',
+      includePendingDetails: true,
+      includePendingNotice: true,
+      includeDiagnostics: true,
+      includeSimilarProjectHints: false
+    })
+  })
+
+  it('keeps ordinary coding context in fast mode when no review signal exists', () => {
+    expect(buildRetrievalPolicy({
+      task: 'coding',
+      userMessage: 'implement the button handler'
+    })).toMatchObject({
+      mode: 'fast',
+      includeFastSummaries: true,
+      includeFullProfile: false
+    })
+  })
+
+  it('lets explicit and env modes override inferred mode', () => {
+    vi.stubEnv('CYRENE_CONTEXT_MODE', 'fast')
+
+    expect(buildRetrievalPolicy({
+      task: 'planning',
+      userMessage: 'write an implementation plan'
+    })).toMatchObject({ mode: 'fast' })
+
+    expect(buildRetrievalPolicy({
+      mode: 'review',
+      task: 'coding',
+      userMessage: 'ordinary implementation'
+    })).toMatchObject({ mode: 'review' })
   })
 
   it('lets env defaults fill missing explicit values', () => {

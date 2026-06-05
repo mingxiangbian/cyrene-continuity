@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
+import { markFastSummaryProjectionStale } from './fast-summary-store.js'
 import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
@@ -150,7 +151,12 @@ export async function archiveCodexActiveMemory(input: {
         previousMemory: lifecycleMemorySnapshot(memory, 'archived')
       }
     })
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot })
+    await refreshModelVisibleMemory({
+      cwd: input.cwd,
+      memoryRoot: lockedMemoryRoot,
+      staleReason: 'active_memory_archive',
+      sourceLatestAt: now
+    })
 
     return {
       project,
@@ -198,7 +204,12 @@ export async function tombstoneCodexActiveMemory(input: {
         previousMemory: lifecycleMemorySnapshot(memory, 'archived')
       }
     })
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot })
+    await refreshModelVisibleMemory({
+      cwd: input.cwd,
+      memoryRoot: lockedMemoryRoot,
+      staleReason: 'active_memory_tombstone',
+      sourceLatestAt: now
+    })
 
     return {
       project,
@@ -388,7 +399,12 @@ export async function supersedeCodexActiveMemory(input: {
         supersededMemory: lifecycleMemorySnapshot(memory, 'superseded')
       }
     })
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot })
+    await refreshModelVisibleMemory({
+      cwd: input.cwd,
+      memoryRoot: lockedMemoryRoot,
+      staleReason: 'active_memory_supersede',
+      sourceLatestAt: now
+    })
 
     return {
       project,
@@ -470,9 +486,19 @@ async function findActiveMemoryRoot(roots: string[], id: string): Promise<string
   return undefined
 }
 
-async function refreshModelVisibleMemory(input: { cwd: string; memoryRoot: string }): Promise<void> {
+async function refreshModelVisibleMemory(input: {
+  cwd: string
+  memoryRoot: string
+  staleReason: string
+  sourceLatestAt: string
+}): Promise<void> {
   await renderMemoryProjectionsFromRoot(input.memoryRoot)
   await syncCurrentCodexMemoryIndex({ cwd: input.cwd })
+  await markFastSummaryProjectionStale(input.memoryRoot, {
+    reason: input.staleReason,
+    sourceLatestAt: input.sourceLatestAt,
+    now: input.sourceLatestAt
+  })
 }
 
 function tombstoneForActiveMemory(

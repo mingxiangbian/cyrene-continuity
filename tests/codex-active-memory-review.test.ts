@@ -10,6 +10,7 @@ import {
   tombstoneCodexActiveMemory
 } from '../src/codex/active-memory-review.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { readFastSummaryProjection, writeFastSummaryProjection } from '../src/codex/fast-summary-store.js'
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { renderMemoryProjectionsFromRoot } from '../src/memory/memory-exporter.js'
@@ -120,6 +121,11 @@ describe('Codex active memory lifecycle', () => {
     const memory = active()
     const root = await seed(cwd, [memory])
     await renderMemoryProjectionsFromRoot(root)
+    await writeFastSummaryProjection(root, {
+      globalFastSummary: 'Existing fast summary.',
+      profileFastSummary: 'Existing profile summary.',
+      generatedAt: '2026-05-30T00:00:00.000Z'
+    })
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.toContain(memory.content)
 
     const result = await archiveCodexActiveMemory({
@@ -142,6 +148,11 @@ describe('Codex active memory lifecycle', () => {
       id: memory.id,
       content: memory.content,
       status: 'archived'
+    })
+    await expect(readFastSummaryProjection(root)).resolves.toMatchObject({
+      stale: true,
+      staleReason: 'active_memory_archive',
+      sourceLatestAt: '2026-05-30T01:00:00.000Z'
     })
   })
 

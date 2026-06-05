@@ -13773,6 +13773,9 @@ function isErrorCode3(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/continuity-context.ts
+import { createHash as createHash10 } from "node:crypto";
+
 // src/affect/affect-runtime.ts
 async function buildContinuitySnapshot(input) {
   const shouldChallengeUser = shouldChallenge(input);
@@ -17063,6 +17066,109 @@ import { createHash as createHash8, randomUUID as randomUUID9 } from "node:crypt
 
 // src/codex/active-memory-review.ts
 import { createHash as createHash7, randomUUID as randomUUID8 } from "node:crypto";
+
+// src/codex/fast-summary-store.ts
+import { mkdir as mkdir10, readFile as readFile12, writeFile as writeFile8 } from "node:fs/promises";
+import { join as join17 } from "node:path";
+var GLOBAL_FAST_SUMMARY_FILE = "global_fast_summary.md";
+var PROFILE_FAST_SUMMARY_FILE = "profile_fast_summary.md";
+var FAST_SUMMARY_META_FILE = "fast_summary_meta.json";
+var GLOBAL_CHAR_LIMIT = 900;
+var PROFILE_CHAR_LIMIT = 700;
+async function readFastSummaryProjection(memoryRoot) {
+  const [globalFastSummary, profileFastSummary, meta] = await Promise.all([
+    readOptionalSafeText(join17(memoryRoot, GLOBAL_FAST_SUMMARY_FILE)),
+    readOptionalSafeText(join17(memoryRoot, PROFILE_FAST_SUMMARY_FILE)),
+    readFastSummaryMeta(join17(memoryRoot, FAST_SUMMARY_META_FILE))
+  ]);
+  return {
+    globalFastSummary,
+    profileFastSummary,
+    generatedAt: meta.generatedAt,
+    stale: meta.stale,
+    staleReason: meta.staleReason,
+    sourceLatestAt: meta.sourceLatestAt
+  };
+}
+async function writeFastSummaryProjection(memoryRoot, projection) {
+  await mkdir10(memoryRoot, { recursive: true });
+  const globalPath = join17(memoryRoot, GLOBAL_FAST_SUMMARY_FILE);
+  const profilePath = join17(memoryRoot, PROFILE_FAST_SUMMARY_FILE);
+  const metaPath = join17(memoryRoot, FAST_SUMMARY_META_FILE);
+  await Promise.all([
+    assertSafeMemoryDataFileTarget(globalPath),
+    assertSafeMemoryDataFileTarget(profilePath),
+    assertSafeMemoryDataFileTarget(metaPath)
+  ]);
+  await Promise.all([
+    writeFile8(globalPath, `${capText(projection.globalFastSummary, GLOBAL_CHAR_LIMIT)}
+`, "utf8"),
+    writeFile8(profilePath, `${capText(projection.profileFastSummary, PROFILE_CHAR_LIMIT)}
+`, "utf8"),
+    writeFile8(metaPath, `${JSON.stringify({
+      generatedAt: projection.generatedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+      stale: false
+    })}
+`, "utf8")
+  ]);
+}
+async function markFastSummaryProjectionStale(memoryRoot, input) {
+  await mkdir10(memoryRoot, { recursive: true });
+  const metaPath = join17(memoryRoot, FAST_SUMMARY_META_FILE);
+  await assertSafeMemoryDataFileTarget(metaPath);
+  const existing = await readFastSummaryMeta(metaPath);
+  await writeFile8(metaPath, `${JSON.stringify({
+    generatedAt: existing.generatedAt,
+    stale: true,
+    staleReason: input.reason,
+    staleMarkedAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString(),
+    ...input.sourceLatestAt === void 0 ? {} : { sourceLatestAt: input.sourceLatestAt }
+  })}
+`, "utf8");
+}
+function capText(value, limit) {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  return cleaned.length <= limit ? cleaned : cleaned.slice(0, limit).trimEnd();
+}
+async function readOptionalSafeText(filePath) {
+  await assertSafeMemoryDataFileTarget(filePath);
+  try {
+    return (await readFile12(filePath, "utf8")).trim();
+  } catch (error2) {
+    if (isFileErrorCode10(error2, "ENOENT")) return "";
+    throw error2;
+  }
+}
+async function readFastSummaryMeta(filePath) {
+  await assertSafeMemoryDataFileTarget(filePath);
+  try {
+    const parsed = JSON.parse(await readFile12(filePath, "utf8"));
+    if (!isPlainRecord(parsed)) {
+      return emptyMeta();
+    }
+    return {
+      generatedAt: typeof parsed.generatedAt === "string" ? parsed.generatedAt : void 0,
+      stale: parsed.stale === true,
+      staleReason: typeof parsed.staleReason === "string" ? parsed.staleReason : void 0,
+      sourceLatestAt: typeof parsed.sourceLatestAt === "string" ? parsed.sourceLatestAt : void 0,
+      staleMarkedAt: typeof parsed.staleMarkedAt === "string" ? parsed.staleMarkedAt : void 0
+    };
+  } catch (error2) {
+    if (isFileErrorCode10(error2, "ENOENT")) return emptyMeta();
+    throw error2;
+  }
+}
+function emptyMeta() {
+  return { generatedAt: void 0, stale: false, staleReason: void 0, sourceLatestAt: void 0 };
+}
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isFileErrorCode10(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
+// src/codex/active-memory-review.ts
 function contentHashForActiveMemory(memory) {
   return createHash7("sha256").update(JSON.stringify({
     id: memory.id,
@@ -17090,7 +17196,12 @@ async function archiveCodexActiveMemory(input) {
         previousMemory: lifecycleMemorySnapshot2(memory, "archived")
       }
     });
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    await refreshModelVisibleMemory({
+      cwd: input.cwd,
+      memoryRoot: lockedMemoryRoot,
+      staleReason: "active_memory_archive",
+      sourceLatestAt: now
+    });
     return {
       project,
       memoryRoot: lockedMemoryRoot,
@@ -17127,7 +17238,12 @@ async function tombstoneCodexActiveMemory(input) {
         previousMemory: lifecycleMemorySnapshot2(memory, "archived")
       }
     });
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    await refreshModelVisibleMemory({
+      cwd: input.cwd,
+      memoryRoot: lockedMemoryRoot,
+      staleReason: "active_memory_tombstone",
+      sourceLatestAt: now
+    });
     return {
       project,
       memoryRoot: lockedMemoryRoot,
@@ -17292,7 +17408,12 @@ async function supersedeCodexActiveMemory(input) {
         supersededMemory: lifecycleMemorySnapshot2(memory, "superseded")
       }
     });
-    await refreshModelVisibleMemory({ cwd: input.cwd, memoryRoot: lockedMemoryRoot });
+    await refreshModelVisibleMemory({
+      cwd: input.cwd,
+      memoryRoot: lockedMemoryRoot,
+      staleReason: "active_memory_supersede",
+      sourceLatestAt: now
+    });
     return {
       project,
       memoryRoot: lockedMemoryRoot,
@@ -17359,6 +17480,11 @@ async function findActiveMemoryRoot(roots, id) {
 async function refreshModelVisibleMemory(input) {
   await renderMemoryProjectionsFromRoot(input.memoryRoot);
   await syncCurrentCodexMemoryIndex({ cwd: input.cwd });
+  await markFastSummaryProjectionStale(input.memoryRoot, {
+    reason: input.staleReason,
+    sourceLatestAt: input.sourceLatestAt,
+    now: input.sourceLatestAt
+  });
 }
 function tombstoneForActiveMemory(memory, input) {
   return {
@@ -17969,7 +18095,7 @@ var MODE_DEFAULTS = {
     includeDiagnostics: false,
     includeSimilarProjectHints: false,
     includeSessionHints: true,
-    includeFullProfile: false,
+    includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
     allowJsonlFallback: true,
@@ -17981,7 +18107,7 @@ var MODE_DEFAULTS = {
     includePendingDetails: true,
     includePendingNotice: true,
     includeDiagnostics: true,
-    includeSimilarProjectHints: true,
+    includeSimilarProjectHints: false,
     includeSessionHints: true,
     includeFullProfile: true,
     includeFastSummaries: false,
@@ -18001,7 +18127,7 @@ function parseContextMode(value) {
 }
 function buildRetrievalPolicy(input) {
   const env = input.env ?? process.env;
-  const mode = parseContextMode(input.mode) ?? parseContextMode(env.CYRENE_CONTEXT_MODE) ?? "fast";
+  const mode = parseContextMode(input.mode) ?? parseContextMode(env.CYRENE_CONTEXT_MODE) ?? inferContextMode(input) ?? "fast";
   return {
     ...MODE_DEFAULTS[mode],
     ...definedOnly(envPolicyFlags(env)),
@@ -18020,6 +18146,28 @@ function buildRetrievalPolicy(input) {
     mode,
     allowHotPathIndexRebuild: false
   };
+}
+function inferContextMode(input) {
+  if (input.includePendingDetails === true || input.includePendingNotice === true) {
+    return "review";
+  }
+  if (input.includeDiagnostics === true) {
+    return "balanced";
+  }
+  const message = normalizeMessage(input.userMessage);
+  if (hasReviewSignal(message)) {
+    return "review";
+  }
+  if (hasBalancedSignal(message)) {
+    return "balanced";
+  }
+  if (input.task === "memory") {
+    return "review";
+  }
+  if (input.task === "planning" || input.task === "debugging") {
+    return "balanced";
+  }
+  return void 0;
 }
 function envPolicyFlags(env) {
   return {
@@ -18057,70 +18205,17 @@ function parsePositiveInteger(value) {
   }
   throw new Error(`Invalid positive integer environment value: ${value}`);
 }
+function normalizeMessage(value) {
+  return value?.trim().toLowerCase() ?? "";
+}
+function hasReviewSignal(message) {
+  return /(?:pending (?:memory|candidate|review)|review pending|pending review|review queue|memory review|review memory|approve|reject|defer|review-hash|automation|profile apply|profile candidate|审核|审批|待审核|记忆评审|记忆审核|自动化|应用 profile|应用档案)/i.test(message);
+}
+function hasBalancedSignal(message) {
+  return /(?:plan|planning|implementation plan|spec|architecture|design|roadmap|code review|review this|debug|debugging|root cause|similar project|project start|new project|计划|规划|方案|规格|架构|设计|路线图|代码评审|排查|调试|类似项目|相似项目|新项目)/i.test(message);
+}
 function definedOnly(input) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== void 0));
-}
-
-// src/codex/fast-summary-store.ts
-import { mkdir as mkdir10, readFile as readFile12, writeFile as writeFile8 } from "node:fs/promises";
-import { join as join17 } from "node:path";
-var GLOBAL_FAST_SUMMARY_FILE = "global_fast_summary.md";
-var PROFILE_FAST_SUMMARY_FILE = "profile_fast_summary.md";
-var FAST_SUMMARY_META_FILE = "fast_summary_meta.json";
-var GLOBAL_CHAR_LIMIT = 900;
-var PROFILE_CHAR_LIMIT = 700;
-async function readFastSummaryProjection(memoryRoot) {
-  const [globalFastSummary, profileFastSummary, generatedAt] = await Promise.all([
-    readOptionalSafeText(join17(memoryRoot, GLOBAL_FAST_SUMMARY_FILE)),
-    readOptionalSafeText(join17(memoryRoot, PROFILE_FAST_SUMMARY_FILE)),
-    readGeneratedAt(join17(memoryRoot, FAST_SUMMARY_META_FILE))
-  ]);
-  return { globalFastSummary, profileFastSummary, generatedAt };
-}
-async function writeFastSummaryProjection(memoryRoot, projection) {
-  await mkdir10(memoryRoot, { recursive: true });
-  const globalPath = join17(memoryRoot, GLOBAL_FAST_SUMMARY_FILE);
-  const profilePath = join17(memoryRoot, PROFILE_FAST_SUMMARY_FILE);
-  const metaPath = join17(memoryRoot, FAST_SUMMARY_META_FILE);
-  await Promise.all([
-    assertSafeMemoryDataFileTarget(globalPath),
-    assertSafeMemoryDataFileTarget(profilePath),
-    assertSafeMemoryDataFileTarget(metaPath)
-  ]);
-  await Promise.all([
-    writeFile8(globalPath, `${capText(projection.globalFastSummary, GLOBAL_CHAR_LIMIT)}
-`, "utf8"),
-    writeFile8(profilePath, `${capText(projection.profileFastSummary, PROFILE_CHAR_LIMIT)}
-`, "utf8"),
-    writeFile8(metaPath, `${JSON.stringify({ generatedAt: projection.generatedAt ?? (/* @__PURE__ */ new Date()).toISOString() })}
-`, "utf8")
-  ]);
-}
-function capText(value, limit) {
-  const cleaned = value.replace(/\s+/g, " ").trim();
-  return cleaned.length <= limit ? cleaned : cleaned.slice(0, limit).trimEnd();
-}
-async function readOptionalSafeText(filePath) {
-  await assertSafeMemoryDataFileTarget(filePath);
-  try {
-    return (await readFile12(filePath, "utf8")).trim();
-  } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) return "";
-    throw error2;
-  }
-}
-async function readGeneratedAt(filePath) {
-  await assertSafeMemoryDataFileTarget(filePath);
-  try {
-    const parsed = JSON.parse(await readFile12(filePath, "utf8"));
-    return typeof parsed.generatedAt === "string" ? parsed.generatedAt : void 0;
-  } catch (error2) {
-    if (isFileErrorCode10(error2, "ENOENT")) return void 0;
-    throw error2;
-  }
-}
-function isFileErrorCode10(error2, code) {
-  return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
 // src/codex/runtime-metrics.ts
@@ -18156,6 +18251,22 @@ import { mkdir as mkdir12, readFile as readFile14, rm as rm5, writeFile as write
 import { join as join19 } from "node:path";
 var SESSION_HINTS_FILE = "session_hints.json";
 var DEFAULT_TTL_MS = 8 * 60 * 60 * 1e3;
+async function replaceCodexSessionHints(memoryRoot, input) {
+  await mkdir12(memoryRoot, { recursive: true });
+  const targetPath = join19(memoryRoot, SESSION_HINTS_FILE);
+  await assertSafeMemoryDataFileTarget(targetPath);
+  const updatedAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const expiresAt = new Date(Date.parse(updatedAt) + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString();
+  const record2 = {
+    sessionId: input.sessionId,
+    projectId: input.projectId,
+    updatedAt,
+    expiresAt,
+    hints: input.hints.map(cleanSessionHint)
+  };
+  await writeFile9(targetPath, `${JSON.stringify(record2)}
+`, "utf8");
+}
 async function readCodexSessionHints(memoryRoot, input) {
   const targetPath = join19(memoryRoot, SESSION_HINTS_FILE);
   await assertSafeMemoryDataFileTarget(targetPath);
@@ -18183,19 +18294,28 @@ async function clearCodexSessionHints(memoryRoot) {
   await assertSafeMemoryDataFileTarget(targetPath);
   await rm5(targetPath, { force: true });
 }
+function cleanSessionHint(hint) {
+  return {
+    id: hint.id,
+    sourceProjectId: hint.sourceProjectId,
+    ...hint.sourceProjectName === void 0 ? {} : { sourceProjectName: hint.sourceProjectName },
+    summary: hint.summary,
+    createdAt: hint.createdAt
+  };
+}
 function isCodexSessionHintsFile(value) {
-  if (!isPlainRecord(value)) {
+  if (!isPlainRecord2(value)) {
     return false;
   }
   return typeof value.sessionId === "string" && typeof value.projectId === "string" && typeof value.updatedAt === "string" && Number.isFinite(Date.parse(value.updatedAt)) && typeof value.expiresAt === "string" && Number.isFinite(Date.parse(value.expiresAt)) && Array.isArray(value.hints) && value.hints.every(isCodexSessionHint);
 }
 function isCodexSessionHint(value) {
-  if (!isPlainRecord(value)) {
+  if (!isPlainRecord2(value)) {
     return false;
   }
   return typeof value.id === "string" && typeof value.sourceProjectId === "string" && (value.sourceProjectName === void 0 || typeof value.sourceProjectName === "string") && typeof value.summary === "string" && typeof value.createdAt === "string" && Number.isFinite(Date.parse(value.createdAt));
 }
-function isPlainRecord(value) {
+function isPlainRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isFileErrorCode11(error2, code) {
@@ -18210,6 +18330,8 @@ async function getCodexContinuityContext(input) {
   const task = input.task ?? "coding";
   const policy = buildRetrievalPolicy({
     mode: input.mode,
+    task,
+    userMessage: input.userMessage,
     maxTokens: input.maxTokens,
     includePendingDetails: input.includePendingDetails,
     includePendingNotice: input.includePendingNotice,
@@ -18236,7 +18358,7 @@ async function getCodexContinuityContext(input) {
     maxTokens: Math.min(budget.maxTokens, policy.maxTokens)
   };
   let profileReadLatencyMs = 0;
-  const [pendingReview, [fastSummary, globalProfile, projectProfile], sessionHints] = await Promise.all([
+  const [pendingReview, [fastSummary, globalProfile, projectProfile], storedSessionHints] = await Promise.all([
     policy.includePendingNotice ? getCodexPendingReviewNotice({ cwd: input.cwd }) : Promise.resolve({}),
     measureAsync(async () => Promise.all([
       policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
@@ -18289,6 +18411,17 @@ async function getCodexContinuityContext(input) {
     ]);
   }
   const activeMemory = [...modelVisibleGlobalMemory, ...modelVisibleProjectMemory];
+  const sessionHints = await resolveCodexSessionHints({
+    cwd: input.cwd,
+    projectId: project.projectId,
+    projectMemoryRoot,
+    query: input.userMessage,
+    task,
+    policy,
+    sessionId: input.sessionId,
+    existingSessionHints: storedSessionHints,
+    activeMemoryCount: activeMemory.length
+  });
   const retrievalExcluded = policy.includePendingDetails ? routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory) : [];
   const profileContent = policy.includeFullProfile ? [globalProfile, projectProfile].filter(Boolean).join("\n\n") : [fastSummary.globalFastSummary, fastSummary.profileFastSummary].filter(Boolean).join("\n\n");
   const snapshot = await buildContinuitySnapshot({
@@ -18695,6 +18828,79 @@ async function retrieveSimilarProjectHints(input) {
       reason: projectSimilarityReason(metadata.length, selectedSimilarities.length)
     }
   };
+}
+async function resolveCodexSessionHints(input) {
+  if (!input.policy.includeSessionHints || input.sessionId === void 0 || input.existingSessionHints.length > 0 || !shouldGenerateCodexSessionHints(input)) {
+    return input.existingSessionHints;
+  }
+  const generated = await generateCodexSessionHintsFailOpen(input);
+  if (generated.length === 0) {
+    return [];
+  }
+  await replaceCodexSessionHints(input.projectMemoryRoot, {
+    sessionId: input.sessionId,
+    projectId: input.projectId,
+    hints: generated,
+    now: generated[0]?.createdAt
+  });
+  return generated;
+}
+function shouldGenerateCodexSessionHints(input) {
+  if (input.task === "planning" || input.task === "debugging") {
+    return true;
+  }
+  if (input.activeMemoryCount === 0) {
+    return true;
+  }
+  return /(?:similar project|project start|new project|architecture|implementation plan|类似项目|相似项目|新项目|架构|计划|规划)/i.test(input.query);
+}
+async function generateCodexSessionHintsFailOpen(input) {
+  try {
+    const roots = await codexMemoryIndexRoots(input.projectId);
+    const indexStatus = await readCodexMemoryIndexStatus(roots.map((root) => root.memoryRoot));
+    if (!isQueryableIndexStatus(indexStatus)) {
+      return [];
+    }
+    const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() });
+    try {
+      if (!adapter.diagnostics().available) {
+        return [];
+      }
+      const similarRetrieval = await retrieveSimilarProjectHints({
+        cwd: input.cwd,
+        projectId: input.projectId,
+        query: input.query,
+        task: input.task,
+        adapter
+      });
+      if (!similarRetrieval.similarHintGate.passed) {
+        return [];
+      }
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      return similarRetrieval.similarProjectHints.slice(0, 3).map((item) => ({
+        id: stableSessionHintId(item),
+        sourceProjectId: item.homeProjectId,
+        ...item.sourceProjectName === void 0 ? {} : { sourceProjectName: item.sourceProjectName },
+        summary: capSessionHintSummary(item.memory.content),
+        createdAt: now
+      }));
+    } finally {
+      adapter.close();
+    }
+  } catch {
+    return [];
+  }
+}
+function stableSessionHintId(item) {
+  return `session-hint-${createHash10("sha256").update(JSON.stringify({
+    sourceProjectId: item.homeProjectId,
+    memoryId: item.memory.id,
+    content: item.memory.content
+  })).digest("hex").slice(0, 16)}`;
+}
+function capSessionHintSummary(content) {
+  const cleaned = content.replace(/\s+/g, " ").trim();
+  return cleaned.length <= 500 ? cleaned : cleaned.slice(0, 500).trimEnd();
 }
 function emptySimilarRetrieval(reason) {
   return {
@@ -20795,7 +21001,7 @@ function asString(value) {
 }
 
 // src/codex/global-memory-capture.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|今后所有项目|所有项目|每个项目|all projects|every project|across projects|remember globally|(?:作为|写入|加入|保存到|记到).{0,8}全局记忆|全局(?:记住|保存|默认|规则|使用))/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
 var AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i;
@@ -20945,7 +21151,7 @@ function reviewActionForEvent(event) {
   return void 0;
 }
 function shortHash(value) {
-  return createHash10("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash11("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/hook-trace-store.ts
@@ -21053,7 +21259,7 @@ function cleanString(value, maxLength) {
   return maxLength === void 0 ? redacted : redacted.slice(0, maxLength);
 }
 function isCodexHookTraceRecord(value) {
-  if (!isPlainRecord2(value)) {
+  if (!isPlainRecord3(value)) {
     return false;
   }
   return isNonemptyString(value.id) && isValidTimestamp(value.createdAt) && typeof value.event === "string" && HOOK_TRACE_EVENTS.has(value.event) && typeof value.cwd === "string" && typeof value.summary === "string" && isStringArray(value.signals) && isOptionalString(value.sessionId) && isOptionalString(value.turnId) && isOptionalHookTraceTool(value.tool);
@@ -21062,12 +21268,12 @@ function isOptionalHookTraceTool(value) {
   if (value === void 0) {
     return true;
   }
-  if (!isPlainRecord2(value)) {
+  if (!isPlainRecord3(value)) {
     return false;
   }
   return typeof value.name === "string" && isOptionalString(value.useId) && isOptionalString(value.commandSummary) && (value.exitCode === void 0 || typeof value.exitCode === "number") && (value.touchedFiles === void 0 || isStringArray(value.touchedFiles)) && isOptionalString(value.outputSummary);
 }
-function isPlainRecord2(value) {
+function isPlainRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonemptyString(value) {
@@ -21098,7 +21304,7 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile3 } from "node:child_process";
@@ -21351,7 +21557,7 @@ function summarizeProjectFile(file, text) {
 function summarizeJsonFile(file, text, label) {
   try {
     const parsed = JSON.parse(text);
-    if (isPlainRecord3(parsed)) {
+    if (isPlainRecord4(parsed)) {
       const evidence = jsonFacts(parsed);
       return {
         summary: clean2(`${label} ${file}: ${firstLine(evidence)}`, SUMMARY_MAX_LENGTH3),
@@ -21374,10 +21580,10 @@ function jsonFacts(value) {
   if (typeof value.name === "string") facts.push(`name=${value.name}`);
   if (typeof value.version === "string") facts.push(`version=${value.version}`);
   if (typeof value.description === "string") facts.push(`description=${value.description}`);
-  if (isPlainRecord3(value.scripts)) facts.push(`scripts=${Object.keys(value.scripts).sort().slice(0, 8).join(",")}`);
+  if (isPlainRecord4(value.scripts)) facts.push(`scripts=${Object.keys(value.scripts).sort().slice(0, 8).join(",")}`);
   const dependencies = dependencyNames(value);
   if (dependencies.length > 0) facts.push(`dependencies=${dependencies.slice(0, 12).join(",")}`);
-  if (isPlainRecord3(value.compilerOptions)) {
+  if (isPlainRecord4(value.compilerOptions)) {
     const options = value.compilerOptions;
     const compilerFacts = [
       typeof options.target === "string" ? `target=${options.target}` : void 0,
@@ -21386,14 +21592,14 @@ function jsonFacts(value) {
     ].filter((item) => item !== void 0);
     if (compilerFacts.length > 0) facts.push(`compilerOptions=${compilerFacts.join(",")}`);
   }
-  if (isPlainRecord3(value.interface)) {
+  if (isPlainRecord4(value.interface)) {
     const pluginInterface = value.interface;
     if (typeof pluginInterface.displayName === "string") facts.push(`displayName=${pluginInterface.displayName}`);
     if (Array.isArray(pluginInterface.capabilities)) {
       facts.push(`capabilities=${pluginInterface.capabilities.filter(isString).slice(0, 8).join(",")}`);
     }
   }
-  if (isPlainRecord3(value.mcpServers)) {
+  if (isPlainRecord4(value.mcpServers)) {
     facts.push(`mcpServers=${Object.keys(value.mcpServers).sort().slice(0, 8).join(",")}`);
   }
   return facts.length === 0 ? "present" : facts.join("; ");
@@ -21406,7 +21612,7 @@ function dependencyNames(value) {
   }).sort();
 }
 function recordOrEmpty(value) {
-  return isPlainRecord3(value) ? value : {};
+  return isPlainRecord4(value) ? value : {};
 }
 function toHookTraceSignal(record2) {
   const touchedFiles = record2.tool?.touchedFiles?.slice(0, MAX_SIGNAL_FILES);
@@ -21485,7 +21691,7 @@ function cleanError(error2) {
   return "unknown error";
 }
 function isReviewSummaryRecord(value) {
-  if (!isPlainRecord3(value)) {
+  if (!isPlainRecord4(value)) {
     return false;
   }
   return isValidTimestamp2(value.createdAt) && (value.status === "ok" || value.status === "failed") && typeof value.summary === "string" && (value.id === void 0 || typeof value.id === "string") && (value.runId === void 0 || typeof value.runId === "string") && (value.failureReason === void 0 || typeof value.failureReason === "string") && isStringArray2(value.candidateIds);
@@ -21493,7 +21699,7 @@ function isReviewSummaryRecord(value) {
 function isValidTimestamp2(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
-function isPlainRecord3(value) {
+function isPlainRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isString(value) {
@@ -21813,7 +22019,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash11("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash12("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -21853,7 +22059,7 @@ function isRecord3(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash12, randomUUID as randomUUID15 } from "node:crypto";
+import { createHash as createHash13, randomUUID as randomUUID15 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile4 } from "node:fs/promises";
@@ -22139,7 +22345,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash12("sha256").update(JSON.stringify({
+  return createHash13("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -23260,7 +23466,7 @@ function errorMessage3(error2) {
 }
 
 // src/codex/codex-memory-lifecycle-daily.ts
-import { createHash as createHash13, randomUUID as randomUUID17 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID17 } from "node:crypto";
 import { readFile as readFile19 } from "node:fs/promises";
 import { join as join26 } from "node:path";
 
@@ -23274,6 +23480,26 @@ async function refreshGlobalFastSummaryProjection(input) {
     profileFastSummary,
     generatedAt: input.generatedAt
   });
+}
+async function refreshCodexFastSummaryProjection(input) {
+  const scope = input.scope ?? "project";
+  const generatedAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const project = scope === "project" ? await identifyCodexProject(input.cwd) : void 0;
+  const memoryRoot = project === void 0 ? codexGlobalMemoryRoot() : codexProjectMemoryRoot(project.projectId);
+  const memories = await readSemanticMemoriesFromRoot(memoryRoot);
+  await refreshGlobalFastSummaryProjection({
+    memoryRoot,
+    memories,
+    generatedAt
+  });
+  return {
+    action: "memory_summary_refresh",
+    scope,
+    memoryRoot,
+    ...project === void 0 ? {} : { projectId: project.projectId },
+    fastSummaryUpdated: true,
+    generatedAt
+  };
 }
 function buildGlobalFastSummary(memories) {
   return memories.filter(isFastSummaryGlobalMemory).slice(0, 8).map((memory) => `- ${memory.content}`).join("\n");
@@ -23623,7 +23849,7 @@ function distinctStructuredEvidenceCount(evidence) {
   const keys = /* @__PURE__ */ new Set();
   for (const entry of evidence) {
     const explicitKey = firstPresent(entry.id, entry.sourceRef, entry.whatHappened);
-    const key = explicitKey ?? createHash13("sha256").update(`${entry.sourceKind ?? ""}|${entry.when ?? ""}|${entry.whatHappened}|${entry.whyImportant}`).digest("hex");
+    const key = explicitKey ?? createHash14("sha256").update(`${entry.sourceKind ?? ""}|${entry.when ?? ""}|${entry.whatHappened}|${entry.whyImportant}`).digest("hex");
     keys.add(key);
   }
   return keys.size;
@@ -24569,7 +24795,7 @@ function errorMessage4(error2) {
 }
 
 // src/codex/codex-memory-lifecycle-weekly.ts
-import { createHash as createHash14, randomUUID as randomUUID20 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID20 } from "node:crypto";
 import { readFile as readFile21 } from "node:fs/promises";
 import { join as join29 } from "node:path";
 
@@ -25153,7 +25379,7 @@ function globalCoreMemoryFromProjectCore(sources, now) {
   const normalized = normalizeContent2(base.content);
   return {
     ...base,
-    id: `global-${createHash14("sha256").update(normalized).digest("hex").slice(0, 16)}`,
+    id: `global-${createHash15("sha256").update(normalized).digest("hex").slice(0, 16)}`,
     module: base.domain === "system" ? "system" : "global_policy",
     scope: "global",
     confidenceTier: "global_core",
@@ -25434,7 +25660,7 @@ async function readableMemoryRoot2(memoryRoot) {
 import { randomUUID as randomUUID21 } from "node:crypto";
 
 // src/codex/semantic-rewrite-validator.ts
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 function validateSemanticRewriteCandidate(input) {
   const beforeReadiness = activeReadinessForPending2(input.original);
   const afterReadiness = activeReadinessForPending2(input.next);
@@ -25475,7 +25701,7 @@ function validateSemanticRewriteCandidate(input) {
   };
 }
 function contentHashForSemanticRewrite(content) {
-  return createHash15("sha256").update(content).digest("hex");
+  return createHash16("sha256").update(content).digest("hex");
 }
 function activeReadinessForPending2(candidate) {
   return evaluateActiveMemoryReadiness({
@@ -30144,7 +30370,18 @@ async function runCodexMemoryAutomation(input) {
 // src/codex/memory-context-preview.ts
 async function runCodexMemoryContextPreview(input) {
   const task = input.task ?? "coding";
-  const mode = input.mode ?? "fast";
+  const policy = buildRetrievalPolicy({
+    mode: input.mode,
+    task,
+    userMessage: input.userMessage,
+    includeSimilarProjectHints: input.includeSimilarProjectHints,
+    includePendingDetails: input.includePendingDetails,
+    includePendingNotice: input.includePendingNotice,
+    includeDiagnostics: input.includeDiagnostics,
+    recordRetrievedEvents: input.recordRetrievedEvents,
+    maxTokens: input.maxTokens
+  });
+  const mode = policy.mode;
   const includeExclusionDetails = mode === "review" || input.includePendingDetails === true || input.includeDiagnostics === true;
   const project = await identifyCodexProject(input.cwd);
   const globalRoot = codexGlobalMemoryRoot();
@@ -30154,7 +30391,7 @@ async function runCodexMemoryContextPreview(input) {
       cwd: input.cwd,
       userMessage: input.userMessage,
       task,
-      mode,
+      mode: input.mode,
       includeSimilarProjectHints: input.includeSimilarProjectHints,
       includePendingDetails: input.includePendingDetails,
       includePendingNotice: input.includePendingNotice,
@@ -30259,7 +30496,7 @@ function archivedExclusion(memory, root) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash16, randomUUID as randomUUID24 } from "node:crypto";
+import { createHash as createHash17, randomUUID as randomUUID24 } from "node:crypto";
 import { lstat as lstat16, readFile as readFile23, rename as rename7, writeFile as writeFile12 } from "node:fs/promises";
 import { join as join31 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -30278,7 +30515,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash16("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash17("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -30786,7 +31023,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash17, randomUUID as randomUUID25 } from "node:crypto";
+import { createHash as createHash18, randomUUID as randomUUID25 } from "node:crypto";
 import { basename as basename6, dirname as dirname11 } from "node:path";
 function reviewHashForSimilarHintMemory(memory) {
   const payload = {
@@ -30803,7 +31040,7 @@ function reviewHashForSimilarHintMemory(memory) {
     updatedAt: memory.updatedAt,
     tags: memory.tags
   };
-  return createHash17("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash18("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -31096,6 +31333,14 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
+  if (command === "memory" && input.args[1] === "summary" && input.args[2] === "refresh") {
+    process.stdout.write(`${JSON.stringify(await refreshCodexFastSummaryProjection({
+      cwd: input.cwd,
+      scope: parseMemorySummaryRefreshScope(input.args)
+    }), null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "feedback") {
     const result2 = await recordCodexMemoryFeedback({
       cwd: input.cwd,
@@ -31340,7 +31585,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--max-tokens <n>]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -31420,6 +31665,13 @@ function parseMemoryAutomationJob(args) {
     return value;
   }
   throw new Error(`Invalid memory automation job: ${value}. Expected daily or weekly`);
+}
+function parseMemorySummaryRefreshScope(args) {
+  const value = parseOptionalOption(args, "--scope") ?? "project";
+  if (value === "project" || value === "global") {
+    return value;
+  }
+  throw new Error(`Invalid summary refresh scope: ${value}. Expected project or global`);
 }
 function parseContextPreviewTask(args) {
   const value = parseOptionalOption(args, "--task");
