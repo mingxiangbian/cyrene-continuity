@@ -7,6 +7,7 @@ import {
   runSimilarHintsEvalGate
 } from '../eval/eval-runner.js'
 import type {
+  EvalGateResult,
   MemoryRoutingActiveItem,
   MemoryRoutingPendingItem,
   MemoryRoutingSimilarHintItem
@@ -51,6 +52,12 @@ import { identifyCodexProject } from './project-id.js'
 import { appendActivationEventsFailOpen } from './memory-feedback.js'
 import type { CodexPendingReviewNotice } from './memory-review.js'
 import { buildMemoryActivations, type MemoryActivation } from './memory-activation.js'
+import {
+  buildRetrievalPolicy,
+  type ContextMode,
+  type RetrievalPolicy
+} from './context-policy.js'
+import { readFastSummaryProjection, type FastSummaryProjection } from './fast-summary-store.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
 
@@ -109,6 +116,13 @@ interface EvalGateDiagnostics {
   failedChecks: string[]
 }
 
+interface SimilarRetrievalResult {
+  similarProjectHints: IndexedSimilarMemory[]
+  similarHintGate: EvalGateResult
+  projectSimilarityDiagnostics: ProjectSimilarityDiagnostics
+}
+
+type MemoryIndexAdapter = Awaited<ReturnType<typeof openMemoryIndexAdapter>>
 type RetrievalSource = 'sqlite' | 'jsonl'
 type RetrievalRoute = 'global' | 'project' | 'pending' | 'similar_project'
 type RetrievalExcludedReason = 'pending_review_required' | 'domain_excluded' | 'tombstoned' | 'below_score_threshold'
@@ -191,13 +205,17 @@ export interface CodexContinuityContext {
       optionalFacets: RetrievalFacet[]
     }
     retrievalExcluded?: RetrievalExcludedMemory[]
+    contextPolicy?: {
+      mode: ContextMode
+      maxTokens: number
+    }
   }
   profile: {
     global?: string
     project?: string
     content: string
   }
-  pendingReview: CodexPendingReviewNotice
+  pendingReview: Partial<CodexPendingReviewNotice>
   strategy: {
     tone: string
     verbosity: string
@@ -216,10 +234,34 @@ export async function getCodexContinuityContext(input: {
   userMessage: string
   task?: CodexContinuityTask
   recordActivationEvents?: boolean
+  recordRetrievedEvents?: boolean
+  mode?: ContextMode
+  includeSimilarProjectHints?: boolean
+  includePendingDetails?: boolean
+  includePendingNotice?: boolean
+  includeDiagnostics?: boolean
+  includeSessionHints?: boolean
+  includeFullProfile?: boolean
+  includeFastSummaries?: boolean
+  allowJsonlFallback?: boolean
+  maxTokens?: number
 }): Promise<CodexContinuityContext> {
   const project = await identifyCodexProject(input.cwd)
   const config = createDefaultConfig(input.cwd)
   const task = input.task ?? 'coding'
+  const policy = buildRetrievalPolicy({
+    mode: input.mode,
+    maxTokens: input.maxTokens,
+    includePendingDetails: input.includePendingDetails,
+    includePendingNotice: input.includePendingNotice,
+    includeDiagnostics: input.includeDiagnostics,
+    includeSimilarProjectHints: input.includeSimilarProjectHints,
+    includeSessionHints: input.includeSessionHints,
+    includeFullProfile: input.includeFullProfile,
+    includeFastSummaries: input.includeFastSummaries,
+    allowJsonlFallback: input.allowJsonlFallback,
+    recordRetrievedEvents: input.recordRetrievedEvents ?? input.recordActivationEvents
+  })
   const globalMemoryRoot = codexGlobalMemoryRoot()
   const projectMemoryRoot = codexProjectMemoryRoot(project.projectId)
   const budget = memoryRetrievalBudgetForTask(task)
@@ -228,16 +270,17 @@ export async function getCodexContinuityContext(input: {
       cwd: input.cwd,
       userCyreneDir: config.userCyreneDir,
       memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-      extraMemories: await readLegacyGlobalCodexMemories(project.projectId),
+      extraMemories: policy.mode === 'fast' ? [] : await readLegacyGlobalCodexMemories(project.projectId),
       query: input.userMessage,
       task,
       maxItems: budget.maxItems,
-      maxTokens: budget.maxTokens
+      maxTokens: Math.min(budget.maxTokens, policy.maxTokens)
   }
-  const [pendingReview, globalProfile, projectProfile] = await Promise.all([
-    getCodexPendingReviewNotice({ cwd: input.cwd }),
-    readGlobalCodexProfileIfExists(),
-    readProjectCodexProfileIfExists(project.projectId)
+  const [pendingReview, fastSummary, globalProfile, projectProfile] = await Promise.all([
+    policy.includePendingNotice ? getCodexPendingReviewNotice({ cwd: input.cwd }) : Promise.resolve({}),
+    policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
+    policy.includeFullProfile ? readGlobalCodexProfileIfExists() : Promise.resolve(undefined),
+    policy.includeFullProfile ? readProjectCodexProfileIfExists(project.projectId) : Promise.resolve(undefined)
   ])
   const routedMemory = await retrieveRoutedMemory({
     cwd: input.cwd,
@@ -245,7 +288,8 @@ export async function getCodexContinuityContext(input: {
     query: input.userMessage,
     task,
     retrievalPlan,
-    fallback: legacyRetrievalInput
+    fallback: legacyRetrievalInput,
+    policy
   })
   const modelVisibleGlobalMemory = routedMemory.globalMemory.filter(isModelVisibleRoutedMemory)
   const modelVisibleProjectMemory = routedMemory.projectMemory.filter(isModelVisibleRoutedMemory)
@@ -259,7 +303,7 @@ export async function getCodexContinuityContext(input: {
     globalMemories: globalActivationMemories,
     projectMemories: projectActivationMemories
   })
-  if (input.recordActivationEvents !== false) {
+  if (policy.recordRetrievedEvents) {
     await Promise.all([
       appendActivationEventsFailOpen({
         memoryRoot: globalMemoryRoot,
@@ -278,8 +322,12 @@ export async function getCodexContinuityContext(input: {
     ])
   }
   const activeMemory = [...modelVisibleGlobalMemory, ...modelVisibleProjectMemory]
-  const retrievalExcluded = routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory)
-  const profileContent = [globalProfile, projectProfile].filter(Boolean).join('\n\n')
+  const retrievalExcluded = policy.includePendingDetails
+    ? routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory)
+    : []
+  const profileContent = policy.includeFullProfile
+    ? [globalProfile, projectProfile].filter(Boolean).join('\n\n')
+    : [fastSummary.globalFastSummary, fastSummary.profileFastSummary].filter(Boolean).join('\n\n')
   const snapshot = await buildContinuitySnapshot({
     config: {
       ...config,
@@ -315,7 +363,9 @@ export async function getCodexContinuityContext(input: {
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
-    pendingHypotheses: routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem),
+    pendingHypotheses: policy.includePendingDetails
+      ? routedMemory.pendingHypotheses.map(toPendingHypothesisDigestItem)
+      : [],
     similarProjectHints: routedMemory.similarProjectHints.map((item) => toSimilarProjectHintDigestItem(item, {
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
@@ -333,34 +383,40 @@ export async function getCodexContinuityContext(input: {
       ],
       rationale: snapshot.strategy.rationale
     },
-    reviewReminders: formatReviewReminders(pendingReview),
-    diagnostics: {
-      memoryIndex: {
-        available: routedMemory.diagnostics.available,
-        reason: routedMemory.diagnostics.reason,
-        ftsTokenizer: routedMemory.diagnostics.ftsTokenizer,
-        source: routedMemory.diagnostics.source,
-        routes: routedMemory.diagnostics.routes,
-        fallbackMode: routedMemory.diagnostics.fallbackMode,
-        freshness: routedMemory.diagnostics.freshness,
-        lastSyncAt: routedMemory.diagnostics.lastSyncAt,
-        sourceLatestAt: routedMemory.diagnostics.sourceLatestAt,
-        staleReason: routedMemory.diagnostics.staleReason
-      },
-      projectSimilarity: routedMemory.projectSimilarityDiagnostics,
-      evalGate: routedMemory.evalGateDiagnostics,
-      ...(routedMemory.diagnostics.embedding === undefined ? {} : { embedding: routedMemory.diagnostics.embedding }),
-      retrievalPlan: {
-        taskIntent: retrievalPlan.taskIntent,
-        memoryKinds: retrievalPlan.memoryKinds,
-        requiredFacets: retrievalPlan.requiredFacets,
-        optionalFacets: retrievalPlan.optionalFacets
-      },
-      ...(retrievalExcluded.length === 0 ? {} : { retrievalExcluded })
-    },
+    reviewReminders: policy.includePendingNotice ? formatReviewReminders(pendingReview) : [],
+    diagnostics: policy.includeDiagnostics
+      ? {
+          memoryIndex: {
+            available: routedMemory.diagnostics.available,
+            reason: routedMemory.diagnostics.reason,
+            ftsTokenizer: routedMemory.diagnostics.ftsTokenizer,
+            source: routedMemory.diagnostics.source,
+            routes: routedMemory.diagnostics.routes,
+            fallbackMode: routedMemory.diagnostics.fallbackMode,
+            freshness: routedMemory.diagnostics.freshness,
+            lastSyncAt: routedMemory.diagnostics.lastSyncAt,
+            sourceLatestAt: routedMemory.diagnostics.sourceLatestAt,
+            staleReason: routedMemory.diagnostics.staleReason
+          },
+          projectSimilarity: routedMemory.projectSimilarityDiagnostics,
+          evalGate: routedMemory.evalGateDiagnostics,
+          ...(routedMemory.diagnostics.embedding === undefined ? {} : { embedding: routedMemory.diagnostics.embedding }),
+          retrievalPlan: {
+            taskIntent: retrievalPlan.taskIntent,
+            memoryKinds: retrievalPlan.memoryKinds,
+            requiredFacets: retrievalPlan.requiredFacets,
+            optionalFacets: retrievalPlan.optionalFacets
+          },
+          contextPolicy: {
+            mode: policy.mode,
+            maxTokens: policy.maxTokens
+          },
+          ...(retrievalExcluded.length === 0 ? {} : { retrievalExcluded })
+        }
+      : undefined,
     profile: {
-      global: globalProfile,
-      project: projectProfile,
+      global: globalProfile ?? nonEmptyString(fastSummary.globalFastSummary),
+      project: projectProfile ?? nonEmptyString(fastSummary.profileFastSummary),
       content: profileContent
     },
     pendingReview,
@@ -417,11 +473,12 @@ async function retrieveRoutedMemory(input: {
   task: CodexContinuityTask
   retrievalPlan: RetrievalPlan
   fallback: RetrieveMemoriesInput
+  policy: RetrievalPolicy
 }): Promise<RoutedMemoryResult> {
   const roots = await codexMemoryIndexRoots(input.projectId)
   const indexStatus = await readCodexMemoryIndexStatus(roots.map((root) => root.memoryRoot))
   if (!isQueryableIndexStatus(indexStatus)) {
-    return fallbackRoutedMemory(input.fallback, jsonlRetrievalDiagnostics(indexStatus), input.projectId)
+    return fallbackRoutedMemory(input.fallback, jsonlRetrievalDiagnostics(indexStatus, input.policy), input.projectId, input.policy)
   }
 
   const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() })
@@ -436,46 +493,20 @@ async function retrieveRoutedMemory(input: {
           reason: diagnostics.reason,
           fallbackMode: 'jsonl',
           freshness: 'unavailable'
-        }, diagnostics),
-        input.projectId
+        }, input.policy, diagnostics),
+        input.projectId,
+        input.policy
       )
     }
-    const currentFingerprint = await buildCodexProjectFingerprint({
-      cwd: input.cwd,
-      project: await identifyCodexProject(input.cwd)
-    })
-    const metadata = await adapter.listProjectMetadata()
-    const selectedSimilarities = selectSimilarProjects({
-      source: currentFingerprint,
-      candidates: metadata,
-      minScore: 0.2,
-      maxProjects: 5,
-      now: new Date().toISOString()
-    })
-    const targetNames = new Map(metadata.map((project) => [project.projectId, project.displayName]))
-    const similarProjectHints = await adapter.querySimilarActive({
-      currentProjectId: input.projectId,
-      query: input.query,
-      targetProjects: selectedSimilarities.map((similarity) => ({
-        projectId: similarity.targetProjectId,
-        similarityScore: similarity.score,
-        displayName: targetNames.get(similarity.targetProjectId)
-      })),
-      task: input.task,
-      maxItems: 6,
-      maxTokens: 500
-    })
-    const similarHintGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
-      id: item.memory.id,
-      currentProjectId: input.projectId,
-      homeProjectId: item.homeProjectId,
-      domain: item.memory.domain,
-      portability: item.portability,
-      scope: item.memory.scope,
-      content: item.memory.content,
-      transferable: true,
-      notCurrentProjectFact: true
-    })))
+    const similarRetrieval = input.policy.includeSimilarProjectHints
+      ? await retrieveSimilarProjectHints({
+          cwd: input.cwd,
+          projectId: input.projectId,
+          query: input.query,
+          task: input.task,
+          adapter
+        })
+      : emptySimilarRetrieval('similar_project_hints_disabled')
     const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
@@ -493,22 +524,24 @@ async function retrieveRoutedMemory(input: {
         maxItems: 12,
         maxTokens: 900
       }),
-      adapter.queryPending({
-        currentProjectId: input.projectId,
-        query: input.query,
-        maxItems: 6,
-        maxTokens: 400
-      })
+      input.policy.includePendingDetails
+        ? adapter.queryPending({
+            currentProjectId: input.projectId,
+            query: input.query,
+            maxItems: 6,
+            maxTokens: 400
+          })
+        : Promise.resolve([])
     ])
     const memoryRoutingGate = runMemoryRoutingEvalGate({
       currentProjectId: input.projectId,
       globalMemory: globalMemory.map(toMemoryRoutingActiveItem),
       projectMemory: projectMemory.map(toMemoryRoutingActiveItem),
       pendingHypotheses: pendingHypotheses.map(toMemoryRoutingPendingItem),
-      similarProjectHints: similarProjectHints.map(toMemoryRoutingSimilarHintItem)
+      similarProjectHints: similarRetrieval.similarProjectHints.map(toMemoryRoutingSimilarHintItem)
     })
-    const evalGate = combineEvalGateResults([similarHintGate, memoryRoutingGate])
-    const safeSimilarProjectHints = evalGate.passed ? similarProjectHints : []
+    const evalGate = combineEvalGateResults([similarRetrieval.similarHintGate, memoryRoutingGate])
+    const safeSimilarProjectHints = evalGate.passed ? similarRetrieval.similarProjectHints : []
     const eligibleGlobalMemory = globalMemory.filter(({ memory }) => (
       isMemoryEligibleForRetrieval(memory, input.fallback, input.task) &&
       !input.retrievalPlan.excludeDomains.includes(memory.domain)
@@ -530,13 +563,8 @@ async function retrieveRoutedMemory(input: {
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
       graphEdgeTypesByMemoryKey,
-      diagnostics: sqliteRetrievalDiagnostics(indexStatus, diagnostics),
-      projectSimilarityDiagnostics: {
-        indexedProjects: metadata.length,
-        candidateProjects: metadata.filter((project) => project.projectId !== input.projectId).length,
-        selectedProjects: selectedSimilarities.length,
-        reason: projectSimilarityReason(metadata.length, selectedSimilarities.length)
-      },
+      diagnostics: sqliteRetrievalDiagnostics(indexStatus, diagnostics, input.policy),
+      projectSimilarityDiagnostics: similarRetrieval.projectSimilarityDiagnostics,
       evalGateDiagnostics: {
         passed: evalGate.passed,
         failedChecks: evalGate.failedChecks
@@ -551,8 +579,9 @@ async function retrieveRoutedMemory(input: {
         reason: error instanceof Error ? error.message : String(error),
         fallbackMode: 'jsonl',
         freshness: 'unavailable'
-      }),
-      input.projectId
+      }, input.policy),
+      input.projectId,
+      input.policy
     )
   } finally {
     adapter.close()
@@ -567,16 +596,29 @@ function isModelVisibleRoutedMemory(item: IndexedActiveMemory | RetrievedMemory)
   return item.memory.confidenceTier !== 'trial'
 }
 
+function emptyFastSummaryProjection(): FastSummaryProjection {
+  return {
+    globalFastSummary: '',
+    profileFastSummary: '',
+    generatedAt: undefined
+  }
+}
+
+function nonEmptyString(value: string): string | undefined {
+  return value.trim() === '' ? undefined : value
+}
+
 async function fallbackRoutedMemory(
   input: RetrieveMemoriesInput,
   diagnostics: RetrievalDiagnostics,
-  projectId: string
+  projectId: string,
+  policy: RetrievalPolicy
 ): Promise<RoutedMemoryResult> {
   const memories = await retrieveMemories(input)
   return {
     globalMemory: memories.filter(({ memory }) => memory.scope === 'global'),
     projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
-    pendingHypotheses: await readFallbackPendingHypotheses(input, projectId),
+    pendingHypotheses: policy.includePendingDetails ? await readFallbackPendingHypotheses(input, projectId) : [],
     similarProjectHints: [],
     graphEdgeTypesByMemoryKey: new Map(),
     diagnostics,
@@ -595,16 +637,102 @@ async function fallbackRoutedMemory(
 
 function sqliteRetrievalDiagnostics(
   status: CodexMemoryIndexStatus,
-  diagnostics: MemoryIndexDiagnostics
+  diagnostics: MemoryIndexDiagnostics,
+  policy: RetrievalPolicy
 ): RetrievalDiagnostics {
-  return retrievalDiagnosticsFromStatus(status, 'sqlite', ['global', 'project', 'pending', 'similar_project'], diagnostics)
+  return retrievalDiagnosticsFromStatus(status, 'sqlite', routesForPolicy('sqlite', policy), diagnostics)
 }
 
 function jsonlRetrievalDiagnostics(
   status: CodexMemoryIndexStatus,
+  policy: RetrievalPolicy,
   diagnostics: Partial<MemoryIndexDiagnostics> = {}
 ): RetrievalDiagnostics {
-  return retrievalDiagnosticsFromStatus(status, 'jsonl', ['global', 'project', 'pending'], diagnostics)
+  return retrievalDiagnosticsFromStatus(status, 'jsonl', routesForPolicy('jsonl', policy), diagnostics)
+}
+
+async function retrieveSimilarProjectHints(input: {
+  cwd: string
+  projectId: string
+  query: string
+  task: CodexContinuityTask
+  adapter: Pick<MemoryIndexAdapter, 'listProjectMetadata' | 'querySimilarActive'>
+}): Promise<SimilarRetrievalResult> {
+  const currentFingerprint = await buildCodexProjectFingerprint({
+    cwd: input.cwd,
+    project: await identifyCodexProject(input.cwd)
+  })
+  const metadata = await input.adapter.listProjectMetadata()
+  const selectedSimilarities = selectSimilarProjects({
+    source: currentFingerprint,
+    candidates: metadata,
+    minScore: 0.2,
+    maxProjects: 5,
+    now: new Date().toISOString()
+  })
+  const targetNames = new Map(metadata.map((project) => [project.projectId, project.displayName]))
+  const similarProjectHints = await input.adapter.querySimilarActive({
+    currentProjectId: input.projectId,
+    query: input.query,
+    targetProjects: selectedSimilarities.map((similarity) => ({
+      projectId: similarity.targetProjectId,
+      similarityScore: similarity.score,
+      displayName: targetNames.get(similarity.targetProjectId)
+    })),
+    task: input.task,
+    maxItems: 6,
+    maxTokens: 500
+  })
+  const similarHintGate = runSimilarHintsEvalGate(similarProjectHints.map((item) => ({
+    id: item.memory.id,
+    currentProjectId: input.projectId,
+    homeProjectId: item.homeProjectId,
+    domain: item.memory.domain,
+    portability: item.portability,
+    scope: item.memory.scope,
+    content: item.memory.content,
+    transferable: true,
+    notCurrentProjectFact: true
+  })))
+
+  return {
+    similarProjectHints,
+    similarHintGate,
+    projectSimilarityDiagnostics: {
+      indexedProjects: metadata.length,
+      candidateProjects: metadata.filter((project) => project.projectId !== input.projectId).length,
+      selectedProjects: selectedSimilarities.length,
+      reason: projectSimilarityReason(metadata.length, selectedSimilarities.length)
+    }
+  }
+}
+
+function emptySimilarRetrieval(reason: string): SimilarRetrievalResult {
+  return {
+    similarProjectHints: [],
+    similarHintGate: {
+      passed: true,
+      failedChecks: [],
+      results: []
+    },
+    projectSimilarityDiagnostics: {
+      indexedProjects: 0,
+      candidateProjects: 0,
+      selectedProjects: 0,
+      reason
+    }
+  }
+}
+
+function routesForPolicy(source: RetrievalSource, policy: RetrievalPolicy): RetrievalRoute[] {
+  const routes: RetrievalRoute[] = ['global', 'project']
+  if (policy.includePendingDetails) {
+    routes.push('pending')
+  }
+  if (source === 'sqlite' && policy.includeSimilarProjectHints) {
+    routes.push('similar_project')
+  }
+  return routes
 }
 
 function retrievalDiagnosticsFromStatus(
@@ -889,7 +1017,7 @@ function indexedMemoryGraphKey(scope: 'global' | 'project', projectId: string | 
   return JSON.stringify([scope, projectId, memoryId])
 }
 
-function formatReviewReminders(pendingReview: CodexPendingReviewNotice): ReviewReminder[] {
+function formatReviewReminders(pendingReview: Partial<CodexPendingReviewNotice>): ReviewReminder[] {
   if (pendingReview.newestCandidateId === undefined || pendingReview.newestPreview === undefined) {
     return []
   }

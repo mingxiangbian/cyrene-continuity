@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
+import { writeFastSummaryProjection } from '../src/codex/fast-summary-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import {
@@ -54,6 +55,152 @@ function parseJsonLines<T>(data: string | Uint8Array): T[] {
 }
 
 describe('Codex continuity context', () => {
+  it('defaults to fast mode without pending notice, similar hints, diagnostics, or retrieved events', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-fast-default-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-codex-continuity-fast-current-')
+    const otherRepo = await createTempDir('cyrene-codex-continuity-fast-other-')
+    await writeFile(join(currentRepo, 'package.json'), JSON.stringify({ dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' } }), 'utf8')
+    await writeFile(join(otherRepo, 'package.json'), JSON.stringify({ dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' } }), 'utf8')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    const currentRoot = codexProjectMemoryRoot(current.projectId)
+    const otherRoot = codexProjectMemoryRoot(other.projectId)
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(otherRoot, { recursive: true })
+    await writeFile(join(currentRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'fast-current-active',
+      content: 'Fast current active context memory.',
+      normalizedKey: 'fast-current-active'
+    })) + '\n')
+    await writeFile(join(currentRoot, 'review_queue.jsonl'), JSON.stringify(createPendingMemory()) + '\n')
+    await writeFile(join(otherRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'fast-portable-similar',
+      portability: 'similar_project',
+      domain: 'procedural',
+      content: 'Fast mode must not query similar project guidance.',
+      normalizedKey: 'fast-portable-similar'
+    })) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: otherRepo })
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
+
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'fast current active similar guidance',
+      task: 'coding'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).toContain('fast-current-active')
+    expect(context.similarProjectHints).toEqual([])
+    expect(context.pendingHypotheses).toEqual([])
+    expect(context.reviewReminders).toEqual([])
+    expect(context.pendingReview).toEqual({})
+    expect(context.diagnostics).toBeUndefined()
+    expect(await readActivationEventsFromRoot(currentRoot)).toEqual([])
+  })
+
+  it('uses fast summary projections without reading full profiles in default mode', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-fast-summary-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-fast-summary-repo-')
+    const identity = await identifyCodexProject(repo)
+    const globalMemoryRoot = codexGlobalMemoryRoot()
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(globalMemoryRoot, { recursive: true })
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFastSummaryProjection(globalMemoryRoot, {
+      globalFastSummary: 'Use fast global summary.',
+      profileFastSummary: 'Use fast profile summary.',
+      generatedAt: '2026-06-05T00:00:00.000Z'
+    })
+    await writeFile(join(globalMemoryRoot, 'MODEL_PROFILE.md'), '# Global Profile\n\nFull global profile must not be read.\n')
+    await writeFile(join(projectMemoryRoot, 'MODEL_PROFILE.md'), '# Project Profile\n\nFull project profile must not be read.\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'What continuity profile applies?',
+      task: 'coding'
+    })
+
+    expect(context.profile.global).toBe('Use fast global summary.')
+    expect(context.profile.project).toBe('Use fast profile summary.')
+    expect(context.profile.content).toBe('Use fast global summary.\n\nUse fast profile summary.')
+    expect(JSON.stringify(context.profile)).not.toContain('Full global profile')
+    expect(JSON.stringify(context.profile)).not.toContain('Full project profile')
+  })
+
+  it('review mode returns pending notice, pending hypotheses, diagnostics, and similar hints', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-review-mode-home-')
+    process.env.HOME = home
+    const currentRepo = await createTempDir('cyrene-codex-continuity-review-current-')
+    const otherRepo = await createTempDir('cyrene-codex-continuity-review-other-')
+    await writeFile(join(currentRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0' }
+    }), 'utf8')
+    await writeFile(join(currentRepo, 'package-lock.json'), '{}\n', 'utf8')
+    await writeFile(join(otherRepo, 'package.json'), JSON.stringify({
+      dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' },
+      devDependencies: { typescript: '^5.0.0' }
+    }), 'utf8')
+    await writeFile(join(otherRepo, 'package-lock.json'), '{}\n', 'utf8')
+    const current = await identifyCodexProject(currentRepo)
+    const other = await identifyCodexProject(otherRepo)
+    const currentRoot = codexProjectMemoryRoot(current.projectId)
+    const otherRoot = codexProjectMemoryRoot(other.projectId)
+    await mkdir(currentRoot, { recursive: true })
+    await mkdir(otherRoot, { recursive: true })
+    await writeFile(join(currentRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'review-current-active',
+      content: 'Review current active context memory.',
+      normalizedKey: 'review-current-active'
+    })) + '\n')
+    await writeFile(join(currentRoot, 'review_queue.jsonl'), JSON.stringify({
+      ...createPendingMemory(),
+      id: 'review-pending-context',
+      content: 'Review mode pending candidate can appear in review-only context.',
+      normalizedKey: 'review-pending-context'
+    }) + '\n')
+    await writeFile(join(otherRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'review-portable-similar',
+      portability: 'similar_project',
+      domain: 'procedural',
+      type: 'procedural_rule',
+      content: 'Review mode can inspect transferable similar project guidance.',
+      normalizedKey: 'review-portable-similar',
+      tags: ['mcp', 'plugin']
+    })) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: otherRepo })
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
+
+    const context = await getCodexContinuityContext({
+      cwd: currentRepo,
+      userMessage: 'review current active pending similar project guidance',
+      task: 'memory',
+      mode: 'review'
+    })
+
+    expect(context.pendingReview).toMatchObject({
+      count: 1,
+      hasItems: true,
+      newestCandidateId: 'review-pending-context'
+    })
+    expect(context.pendingHypotheses).toEqual([
+      expect.objectContaining({ id: 'review-pending-context', provisional: true, status: 'pending' })
+    ])
+    expect(context.diagnostics?.memoryIndex).toBeDefined()
+    expect(context.similarProjectHints).toEqual([
+      expect.objectContaining({
+        id: 'review-portable-similar',
+        sourceProjectId: other.projectId,
+        transferable: true,
+        notCurrentProjectFact: true
+      })
+    ])
+    expect(context.memory.items.map((item) => item.id)).not.toContain('review-pending-context')
+    expect(context.memory.items.map((item) => item.id)).not.toContain('review-portable-similar')
+  })
+
   it('returns compact project, memory, strategy, and dissent context', async () => {
     const home = await createTempDir('cyrene-codex-continuity-home-')
     process.env.HOME = home
@@ -69,7 +216,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'This is risky: should we skip the validator and write active affect memory?',
-      task: 'planning'
+      task: 'planning',
+      mode: 'review'
     })
 
     expect(context.project).toEqual({
@@ -108,7 +256,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'What continuity profile applies?',
-      task: 'coding'
+      task: 'coding',
+      mode: 'review'
     })
 
     expect(context.profile.global).toBe('# Global Profile\n\nUse global continuity.')
@@ -138,7 +287,8 @@ describe('Codex continuity context', () => {
     await expect(getCodexContinuityContext({
       cwd: repo,
       userMessage: 'What continuity profile applies?',
-      task: 'coding'
+      task: 'coding',
+      mode: 'review'
     })).rejects.toThrow(/Refusing.*symlink|symlink/i)
   })
 
@@ -209,7 +359,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'phase 3 affective memory validator',
-      task: 'coding'
+      task: 'coding',
+      recordRetrievedEvents: true
     })
 
     expect(context.projectMemory.map((item) => item.id)).toEqual(['memory-1'])
@@ -311,7 +462,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'legacy global old project root',
-      task: 'coding'
+      task: 'coding',
+      mode: 'balanced'
     })
 
     expect(context.globalMemory.map((item) => item.id)).toContain('legacy-global-memory')
@@ -349,7 +501,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'shared legacy activation phrase',
-      task: 'coding'
+      task: 'coding',
+      mode: 'balanced'
     })
 
     expect(context.globalMemory).toEqual(expect.arrayContaining([
@@ -374,7 +527,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'Review pending memory.',
-      task: 'memory'
+      task: 'memory',
+      mode: 'review'
     })
 
     expect(context.pendingReview).toEqual({
@@ -404,7 +558,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'Check pending review.',
-      task: 'memory'
+      task: 'memory',
+      mode: 'review'
     })
 
     expect(context.pendingReview).toMatchObject({
@@ -520,7 +675,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'active memory delete button does not work in Web UI route',
-      task: 'memory'
+      task: 'memory',
+      mode: 'review'
     })
 
     expect(context.diagnostics?.retrievalPlan).toMatchObject({
@@ -567,7 +723,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'lifecycle memory delete button does not work in Web UI route',
-      task: 'memory'
+      task: 'memory',
+      mode: 'review'
     })
 
     expect(context.projectMemory.map((item) => item.id)).toContain('lifecycle-route-memory')
@@ -614,7 +771,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'active memory route guidance',
-      task: 'memory'
+      task: 'memory',
+      includeDiagnostics: true
     })
 
     expect(context.diagnostics?.memoryIndex?.source).toBe('sqlite')
@@ -652,7 +810,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'unsafe scan guidance project memory',
-      task: 'planning'
+      task: 'planning',
+      includeDiagnostics: true
     })
 
     expect(context.diagnostics?.memoryIndex?.available).toBe(true)
@@ -756,7 +915,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'pending router clarification',
-      task: 'memory'
+      task: 'memory',
+      mode: 'review'
     })
 
     expect(context.pendingHypotheses).toHaveLength(1)
@@ -787,7 +947,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'fallback pending router candidate',
-      task: 'memory'
+      task: 'memory',
+      mode: 'review'
     })
 
     expect(context.diagnostics?.memoryIndex?.available).toBe(false)
@@ -824,7 +985,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'stale readonly memory',
-      task: 'coding'
+      task: 'coding',
+      mode: 'review'
     })
 
     const after = await stat(dbPath)
@@ -856,7 +1018,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: repo,
       userMessage: 'pending fallback provisional',
-      task: 'memory'
+      task: 'memory',
+      mode: 'review'
     })
 
     const memoryIndex = context.diagnostics?.memoryIndex as Record<string, unknown> | undefined
@@ -928,7 +1091,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
-      task: 'planning'
+      task: 'planning',
+      mode: 'review'
     })
 
     expect(context.similarProjectHints).toEqual([
@@ -993,7 +1157,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'For this MCP plugin runtime rebuild, what transferable guidance applies?',
-      task: 'planning'
+      task: 'planning',
+      mode: 'review'
     })
 
     expect(context.diagnostics?.memoryIndex?.available).toBe(true)
@@ -1040,7 +1205,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'What MCP plugin guidance applies?',
-      task: 'planning'
+      task: 'planning',
+      mode: 'review'
     })
 
     expect(context.similarProjectHints).toEqual([])
@@ -1070,7 +1236,8 @@ describe('Codex continuity context', () => {
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
       userMessage: 'What transferable guidance applies?',
-      task: 'planning'
+      task: 'planning',
+      mode: 'review'
     })
 
     expect(context.diagnostics?.projectSimilarity).toMatchObject({
