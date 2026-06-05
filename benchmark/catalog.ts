@@ -1,0 +1,157 @@
+import type { BenchmarkCase, BenchmarkMetricId, BenchmarkProfile, BenchmarkTier, HardGateRuleId } from './types.js'
+
+const DEFAULT_NOW = '2026-06-05T00:00:00.000Z'
+
+interface CatalogInput {
+  id: string
+  tier: BenchmarkTier
+  title: string
+  profiles: BenchmarkProfile[]
+  action: BenchmarkCase['action']
+  expectedMode?: 'fast' | 'balanced' | 'review'
+  expected: string[]
+  forbidden: string[]
+  metrics?: readonly BenchmarkMetricId[]
+  passFail?: readonly HardGateRuleId[]
+  adapter?: BenchmarkCase['adapter']
+}
+
+function action(kind: BenchmarkCase['action']['kind'], entrypoint: string, description: string): BenchmarkCase['action'] {
+  return { kind, entrypoint, description }
+}
+
+function defaultMetrics(tier: BenchmarkTier): BenchmarkMetricId[] {
+  if (tier === 'tier0') return ['modeAccuracy', 'pendingLeakageRate', 'crossProjectPollutionRate']
+  if (tier === 'tier1') return ['retrievalAccuracy', 'answerAccuracy', 'abstentionAccuracy']
+  if (tier === 'tier1_5') return ['lifecyclePromotionAccuracy', 'conflictResolutionAccuracy']
+  if (tier === 'tier1_6') return ['updateAccuracy', 'lifecyclePromotionAccuracy']
+  if (tier === 'tier2') return ['taskSuccessRate', 'toolCallCount', 'repeatedMistakeReduction']
+  if (tier === 'tier3') return ['continuityGetLatencyMs', 'tokenOverhead', 'sqliteHitRate']
+  return ['boundarySafetyRate', 'postToolUseHookP95Ms', 'adapterAvailability']
+}
+
+function defaultRules(tier: BenchmarkTier): HardGateRuleId[] {
+  if (tier === 'tier0') return ['pending_leakage', 'cross_project_pollution', 'unauthorized_promotion']
+  if (tier === 'tier1') return ['incorrect_memory_answer', 'fabricated_evidence']
+  if (tier === 'tier1_5') return ['unauthorized_promotion', 'hash_bypass']
+  if (tier === 'tier1_6') return ['secret_persistence', 'pending_active_bypass']
+  if (tier === 'tier2') return ['repeated_mistake_not_reduced', 'workflow_rule_ignored']
+  if (tier === 'tier3') return ['latency_threshold_breach', 'jsonl_hot_path_fallback']
+  return ['security_boundary_violation', 'hook_timeout_crash']
+}
+
+function caseSpec(input: CatalogInput): BenchmarkCase {
+  const expected = [...input.expected]
+  const forbidden = [...input.forbidden]
+  const metrics = [...(input.metrics ?? defaultMetrics(input.tier))]
+  const passFail = [...(input.passFail ?? defaultRules(input.tier))]
+
+  return {
+    id: input.id,
+    tier: input.tier,
+    title: input.title,
+    executionProfiles: input.profiles,
+    fixture: {
+      isolation: 'isolated temp HOME, temp project root, temp memory roots, temp SQLite db',
+      seed: `cyrene-benchmark-${input.id.toLowerCase()}`,
+      now: DEFAULT_NOW,
+      timezone: 'UTC',
+      groundTruth: [...expected],
+      expectedContext: [...expected],
+      expectedForbiddenContent: [...forbidden],
+      ...(input.expectedMode === undefined ? {} : { expectedMode: input.expectedMode }),
+      expectedMetrics: [...metrics],
+      passFailRule: [...passFail]
+    },
+    action: input.action,
+    expected: [...expected],
+    forbidden: [...forbidden],
+    metrics: [...metrics],
+    passFail: [...passFail],
+    ...(input.adapter === undefined ? {} : { adapter: input.adapter })
+  }
+}
+
+export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
+  caseSpec({
+    id: 'T0-MODE-FAST',
+    tier: 'tier0',
+    title: 'fast mode excludes review and similar hot paths',
+    profiles: ['smoke', 'gate', 'full'],
+    action: action('direct', 'getCodexContinuityContext', 'default coding context read'),
+    expectedMode: 'fast',
+    expected: ['project active memory', 'fast summary'],
+    forbidden: ['pending details', 'pending count', 'similar-project hints', 'full profile', 'retrieved event'],
+    metrics: ['modeAccuracy', 'fastTokenOverhead', 'continuityGetP95FastMs'],
+    passFail: ['pending_leakage', 'retrieved_default_write', 'forbidden_context_injection']
+  }),
+  caseSpec({
+    id: 'T0-MODE-BALANCED',
+    tier: 'tier0',
+    title: 'balanced mode reads full profile without pending details',
+    profiles: ['gate', 'full'],
+    action: action('direct', 'getCodexContinuityContext', 'balanced context read'),
+    expectedMode: 'balanced',
+    expected: ['full profile projection', 'session hints'],
+    forbidden: ['pending details', 'pending count', 'review hash'],
+    metrics: ['modeAccuracy', 'balancedTokenOverhead', 'continuityGetP95BalancedMs', 'pendingLeakageRate'],
+    passFail: ['pending_leakage', 'forbidden_context_injection']
+  }),
+  caseSpec({ id: 'T0-MODE-REVIEW', tier: 'tier0', title: 'review mode is the only mode that reads pending memories', profiles: ['gate', 'full'], action: action('direct', 'getCodexContinuityContext', 'review context read'), expectedMode: 'review', expected: ['pending review item', 'review hash'], forbidden: ['auto promoted pending memory'], metrics: ['modeAccuracy', 'pendingMisuseRate', 'continuityGetP95ReviewMs'], passFail: ['pending_active_bypass', 'unauthorized_promotion'] }),
+  caseSpec({ id: 'T0-PENDING-BOUNDARY', tier: 'tier0', title: 'pending does not leak into ordinary context', profiles: ['smoke', 'gate', 'full'], action: action('direct', 'getCodexContinuityContext', 'ordinary context read with pending fixture'), expectedMode: 'fast', expected: ['active memory only'], forbidden: ['pending memory content', 'review queue content'], metrics: ['pendingLeakageRate'], passFail: ['pending_leakage'] }),
+  caseSpec({ id: 'T0-SIMILAR-BOUNDARY', tier: 'tier0', title: 'similar project hints never cross project boundary as memory', profiles: ['gate', 'full'], action: action('direct', 'getCodexContinuityContext', 'similar project hint read'), expected: ['current project memory'], forbidden: ['foreign project active memory', 'similar hint promoted memory'], metrics: ['crossProjectPollutionRate', 'similarHintMigrationRate'], passFail: ['cross_project_pollution', 'similar_hint_migration'] }),
+  caseSpec({ id: 'T0-SESSION-HINTS', tier: 'tier0', title: 'session hints are transient and never migrate to memory', profiles: ['gate', 'full'], action: action('direct', 'getCodexContinuityContext', 'session hint read'), expected: ['session hint in context'], forbidden: ['session hint in active memory', 'session hint in pending memory'], metrics: ['similarHintMigrationRate', 'profilePollutionRate'], passFail: ['session_hint_migration'] }),
+  caseSpec({ id: 'T0-ACTIVATION-RETRIEVED', tier: 'tier0', title: 'activation event defaults do not write retrieved events', profiles: ['gate', 'full'], action: action('direct', 'recordMemoryEvent', 'retrieved activation default check'), expected: ['no retrieved event write'], forbidden: ['retrieved MemoryEvent'], metrics: ['retrievedDefaultWriteRate'], passFail: ['retrieved_default_write'] }),
+  caseSpec({ id: 'T0-SQLITE-HOT-PATH', tier: 'tier0', title: 'SQLite and FTS are the default hot path', profiles: ['smoke', 'gate', 'full'], action: action('direct', 'queryCodexMemoryIndex', 'fresh SQLite query'), expected: ['SQLite FTS result'], forbidden: ['JSONL fallback', 'hot path rebuild'], metrics: ['sqliteHitRateFreshIndex', 'jsonlFallbackRateHotPath', 'sqliteQueryP95Ms'], passFail: ['jsonl_hot_path_fallback', 'hot_path_rebuild'] }),
+  caseSpec({ id: 'T0-SURFACE-CONSISTENCY', tier: 'tier0', title: 'Skill, MCP, and CLI surfaces expose consistent behavior', profiles: ['gate', 'full'], action: action('cli', 'codex continuity get', 'surface consistency comparison'), expected: ['matching context payload'], forbidden: ['surface-specific pending leak'], metrics: ['surfaceConsistencyRate'], passFail: ['surface_contract_mismatch'] }),
+  caseSpec({ id: 'T1-FACT-EXTRACTION', tier: 'tier1', title: 'extract project facts from coding memories', profiles: ['full'], action: action('replay', 'memoryAbilityReplay', 'fact extraction question'), expected: ['adopted test command answer', 'project workflow fact'], forbidden: ['unrelated project fact', 'fabricated project tool'] }),
+  caseSpec({ id: 'T1-MULTI-SESSION-REASONING', tier: 'tier1', title: 'reason across multiple sessions', profiles: ['full'], action: action('replay', 'memoryAbilityReplay', 'multi-session question'), expected: ['session 1 decision combined with session 2 correction'], forbidden: ['single-session-only answer', 'missing later correction'] }),
+  caseSpec({ id: 'T1-TEMPORAL-ORDER', tier: 'tier1', title: 'answer temporal order questions', profiles: ['full'], action: action('replay', 'memoryAbilityReplay', 'temporal order question'), expected: ['newer rule follows older rule'], forbidden: ['older rule reported as current'] }),
+  caseSpec({ id: 'T1-KNOWLEDGE-UPDATE', tier: 'tier1', title: 'newer memories override stale rules', profiles: ['full'], action: action('replay', 'memoryAbilityReplay', 'knowledge update question'), expected: ['replacement rule answer'], forbidden: ['superseded rule answer'] }),
+  caseSpec({ id: 'T1-CONFLICT-HANDLING', tier: 'tier1', title: 'handle conflicting memories without double injection', profiles: ['full'], action: action('replay', 'memoryAbilityReplay', 'conflict handling question'), expected: ['single winning rule or abstain answer'], forbidden: ['old and new rule both injected'], passFail: ['conflicting_context_injection'] }),
+  caseSpec({ id: 'T1-ABSTAIN-NO-EVIDENCE', tier: 'tier1', title: 'abstain when memory evidence is absent', profiles: ['full'], action: action('replay', 'memoryAbilityReplay', 'abstention question'), expected: ['abstain answer'], forbidden: ['fabricated command'], metrics: ['abstentionAccuracy'], passFail: ['fabricated_evidence'] }),
+  caseSpec({ id: 'T1-EVENT-SUMMARY', tier: 'tier1', title: 'summarize project events from long session memory', profiles: ['full'], action: action('replay', 'memoryAbilityReplay', 'event summary question'), expected: ['ordered project event summary'], forbidden: ['invented event summary item'] }),
+  caseSpec({ id: 'T15-UPGRADE', tier: 'tier1_5', title: 'low-risk project memory can upgrade through policy', profiles: ['full'], action: action('direct', 'reviewPendingMemory', 'upgrade lifecycle transition'), expected: ['trial memory upgraded through named policy'], forbidden: ['approval without lifecycle receipt'], passFail: ['unauthorized_promotion'] }),
+  caseSpec({ id: 'T15-REPLACE', tier: 'tier1_5', title: 'replacement removes stale active rule from injection', profiles: ['full'], action: action('direct', 'reviewPendingMemory', 'replace lifecycle transition'), expected: ['replacement rule injected'], forbidden: ['stale rule remains injected'], passFail: ['duplicate_context_injection'] }),
+  caseSpec({ id: 'T15-MERGE', tier: 'tier1_5', title: 'merge combines compatible memory evidence', profiles: ['full'], action: action('direct', 'reviewPendingMemory', 'merge lifecycle transition'), expected: ['merged memory contains both compatible facts'], forbidden: ['duplicate separate memory injection'] }),
+  caseSpec({ id: 'T15-EXPIRE', tier: 'tier1_5', title: 'expired memories are excluded from active context', profiles: ['full'], action: action('direct', 'resolveMemoryLifecycle', 'expire lifecycle transition'), expected: ['non-expired memory remains visible'], forbidden: ['expired memory context'], passFail: ['expired_memory_injection'] }),
+  caseSpec({ id: 'T15-SUPERSEDE-HASH', tier: 'tier1_5', title: 'supersede requires valid review hash', profiles: ['full'], action: action('direct', 'reviewPendingMemory', 'supersede hash check'), expected: ['valid hash supersede receipt'], forbidden: ['stale hash accepted'], passFail: ['hash_bypass', 'stale_approval_success'] }),
+  caseSpec({ id: 'T15-CONFLICT-SINGLE-INJECTION', tier: 'tier1_5', title: 'conflicting old and new rules inject only one winner', profiles: ['full'], action: action('direct', 'getCodexContinuityContext', 'conflict single injection check'), expected: ['single resolved memory or abstain'], forbidden: ['conflicting rule pair'], passFail: ['conflicting_context_injection'] }),
+  caseSpec({ id: 'T16-PROPOSE-IMPORTANT', tier: 'tier1_6', title: 'important project evidence is proposed for review', profiles: ['gate', 'full'], action: action('direct', 'proposeMemory', 'important memory proposal'), expected: ['important project rule candidate'], forbidden: ['missed important project rule'] }),
+  caseSpec({ id: 'T16-PROPOSE-NOISE', tier: 'tier1_6', title: 'noise is not proposed as durable memory', profiles: ['gate', 'full'], action: action('direct', 'proposeMemory', 'noise proposal suppression'), expected: ['noise filtered decision'], forbidden: ['noise pending memory'], passFail: ['ordinary_hook_pending_review'] }),
+  caseSpec({ id: 'T16-PROPOSE-SENSITIVE', tier: 'tier1_6', title: 'sensitive content is never persisted', profiles: ['gate', 'full'], action: action('direct', 'proposeMemory', 'sensitive proposal suppression'), expected: ['sensitive content rejected or redacted'], forbidden: ['secret in memory store'], passFail: ['secret_persistence'] }),
+  caseSpec({ id: 'T16-PROPOSE-ASSISTANT-INFERENCE', tier: 'tier1_6', title: 'assistant-only inference is not promoted as user fact', profiles: ['gate', 'full'], action: action('direct', 'proposeMemory', 'assistant inference suppression'), expected: ['assistant inference deferred or rejected'], forbidden: ['assistant inference as durable fact'], passFail: ['unauthorized_promotion'] }),
+  caseSpec({ id: 'T16-ROUTING-NAMESPACE', tier: 'tier1_6', title: 'project and global namespace routing is correct', profiles: ['smoke', 'gate', 'full'], action: action('direct', 'proposeMemory', 'namespace routing check'), expected: ['project memory in project root', 'global memory in global root'], forbidden: ['project memory in global root'], metrics: ['lifecyclePromotionAccuracy'], passFail: ['wrong_namespace_routing'] }),
+  caseSpec({ id: 'T16-REVIEW-HASH-REQUIRED', tier: 'tier1_6', title: 'review approval requires review hash', profiles: ['gate', 'full'], action: action('direct', 'reviewPendingMemory', 'missing hash rejection'), expected: ['missing hash rejection'], forbidden: ['approval without hash'], passFail: ['hash_bypass'] }),
+  caseSpec({ id: 'T16-REVIEW-STALE-HASH', tier: 'tier1_6', title: 'stale review hash cannot approve pending memory', profiles: ['gate', 'full'], action: action('direct', 'reviewPendingMemory', 'stale hash rejection'), expected: ['stale hash rejection'], forbidden: ['stale hash accepted'], passFail: ['stale_approval_success'] }),
+  caseSpec({ id: 'T16-REVIEW-REJECT-DEFER', tier: 'tier1_6', title: 'reject and defer decisions do not activate memory', profiles: ['gate', 'full'], action: action('direct', 'reviewPendingMemory', 'reject and defer lifecycle check'), expected: ['reject and defer stay inactive'], forbidden: ['rejected memory activated'], passFail: ['rejected_memory_activation'] }),
+  caseSpec({ id: 'T16-REVIEW-EDIT-HASH', tier: 'tier1_6', title: 'edited review content gets a fresh hash contract', profiles: ['gate', 'full'], action: action('direct', 'reviewPendingMemory', 'edit hash lifecycle check'), expected: ['edited candidate receives new hash'], forbidden: ['edited content approved with stale hash'], passFail: ['hash_bypass'] }),
+  caseSpec({ id: 'T2-REMEMBER-TEST-COMMAND', tier: 'tier2', title: 'remember and reuse project test command', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'test command replay'), expected: ['remembered npm test command used'], forbidden: ['generic test command guessed'], adapter: { kind: 'deterministic' } }),
+  caseSpec({ id: 'T2-AVOID-REJECTED-APPROACH', tier: 'tier2', title: 'avoid an approach rejected in an earlier session', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'rejected approach replay'), expected: ['alternate accepted approach used'], forbidden: ['rejected approach retried'], adapter: { kind: 'deterministic' } }),
+  caseSpec({ id: 'T2-FOLLOW-WORKFLOW', tier: 'tier2', title: 'follow remembered project workflow', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'workflow replay'), expected: ['project workflow rule followed'], forbidden: ['workflow rule skipped'], adapter: { kind: 'deterministic' } }),
+  caseSpec({ id: 'T2-UPDATED-RULE', tier: 'tier2', title: 'use updated rule and stop using old rule', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'updated rule replay'), expected: ['updated rule applied'], forbidden: ['old rule applied'], adapter: { kind: 'deterministic' } }),
+  caseSpec({ id: 'T2-CROSS-SESSION-FIX', tier: 'tier2', title: 'apply cross-session fix memory to current task', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'cross-session fix replay'), expected: ['prior fix pattern applied'], forbidden: ['same defect reintroduced'], adapter: { kind: 'deterministic' } }),
+  caseSpec({ id: 'T2-REDUCE-REPEAT-MISTAKE', tier: 'tier2', title: 'memory reduces repeated mistakes and user corrections', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'repeat mistake reduction replay'), expected: ['fewer repeated mistakes with memory'], forbidden: ['same repeated mistake count'], metrics: ['taskSuccessRate', 'toolCallCount', 'withMemoryTaskSuccessRate', 'repeatedMistakeReduction', 'userCorrectionReduction', 'toolCallReduction'], adapter: { kind: 'deterministic' } }),
+  caseSpec({ id: 'T3-S-SCALE', tier: 'tier3', title: 'S scale fixture stays within latency and overhead thresholds', profiles: ['scale'], action: action('direct', 'runScaleFixture', 'S scale run'), expected: ['1 project with 50 active memories and 10 pending'], forbidden: ['fixture exceeds S scale budget'], metrics: ['continuityGetP50Ms', 'continuityGetP95Ms', 'memoryDbSizeBytes', 'memoryDbBytesPerMemory', 'scaleSRuntimeMs'] }),
+  caseSpec({ id: 'T3-M-SCALE', tier: 'tier3', title: 'M scale fixture stays within latency and overhead thresholds', profiles: ['scale'], action: action('direct', 'runScaleFixture', 'M scale run'), expected: ['5 projects with 500 active memories and 100 pending'], forbidden: ['fixture exceeds M scale budget'], metrics: ['continuityGetP50Ms', 'continuityGetP95Ms', 'memoryDbSizeBytes', 'memoryDbBytesPerMemory', 'scaleMRuntimeMs'] }),
+  caseSpec({ id: 'T3-L-SCALE', tier: 'tier3', title: 'L scale fixture stays within latency and overhead thresholds', profiles: ['scale'], action: action('direct', 'runScaleFixture', 'L scale run'), expected: ['20 projects with 5000 active memories and 1000 pending'], forbidden: ['fixture exceeds L scale budget'], metrics: ['continuityGetP95Ms', 'continuityGetP99Ms', 'indexStaleRate', 'memoryDbBytesPerMemory', 'scaleLRuntimeMs'] }),
+  caseSpec({ id: 'T3-XL-SCALE', tier: 'tier3', title: 'XL scale fixture reports efficiency without entering release gate hot path', profiles: ['scale'], action: action('direct', 'runScaleFixture', 'XL scale run'), expected: ['100 projects with 50000 active memories and 5000 pending'], forbidden: ['XL run included in gate profile'], metrics: ['scaleXLRuntimeMs', 'memoryDbSizeBytes', 'memoryDbBytesPerMemory', 'benchmarkRuntimeMs'] }),
+  caseSpec({ id: 'T3-RANKING', tier: 'tier3', title: 'ranking resists similar memory interference', profiles: ['full', 'scale'], action: action('direct', 'queryCodexMemoryIndex', 'ranking interference check'), expected: ['target project memory ranks above distractors'], forbidden: ['similar distractor top result'], metrics: ['recallAt3', 'mrr', 'wrongTop1Rate', 'irrelevantRetrievalRate', 'similarMemoryInterferenceRate'] }),
+  caseSpec({ id: 'T3-TOKEN-OVERHEAD', tier: 'tier3', title: 'token overhead stays inside profile budget', profiles: ['full', 'scale'], action: action('direct', 'getCodexContinuityContext', 'token overhead measurement'), expected: ['profile-specific token overhead recorded'], forbidden: ['unbounded context growth'], metrics: ['fastTokenOverhead', 'balancedTokenOverhead', 'reviewTokenOverhead'] }),
+  caseSpec({ id: 'T3-LATENCY', tier: 'tier3', title: 'latency percentiles are reported for continuity and hooks', profiles: ['full', 'scale'], action: action('direct', 'runLatencyProbe', 'latency percentile measurement'), expected: ['p50 p95 p99 latency metrics'], forbidden: ['missing percentile metrics'], metrics: ['continuityGetP50Ms', 'continuityGetP95Ms', 'continuityGetP99Ms', 'hookLatencyMs'] }),
+  caseSpec({ id: 'T3-INDEX-HEALTH', tier: 'tier3', title: 'index health reports SQLite hit, JSONL fallback, and stale rates', profiles: ['full', 'scale'], action: action('direct', 'inspectIndexHealth', 'index health measurement'), expected: ['SQLite hit rate and stale rate recorded'], forbidden: ['silent JSONL fallback'], metrics: ['sqliteHitRateFreshIndex', 'jsonlFallbackRateHotPath', 'indexStaleRate'] }),
+  caseSpec({ id: 'T4-SQLITE-UNAVAILABLE', tier: 'tier4', title: 'SQLite unavailable path reports fallback policy explicitly', profiles: ['full'], action: action('direct', 'inspectIndexHealth', 'SQLite unavailable check'), expected: ['explicit SQLite unavailable diagnostic'], forbidden: ['silent fallback success'] }),
+  caseSpec({ id: 'T4-JSONL-CORRUPT', tier: 'tier4', title: 'corrupt JSONL fixture fails closed with diagnostics', profiles: ['full'], action: action('direct', 'readMemoryStore', 'corrupt JSONL check'), expected: ['bounded corrupt JSONL diagnostic'], forbidden: ['corrupt memory accepted'] }),
+  caseSpec({ id: 'T4-PROFILE-MISSING', tier: 'tier4', title: 'missing profile does not pollute context', profiles: ['full'], action: action('direct', 'getCodexContinuityContext', 'missing profile check'), expected: ['context generated without profile'], forbidden: ['invented profile content'] }),
+  caseSpec({ id: 'T4-FAST-SUMMARY-MISSING-STALE', tier: 'tier4', title: 'missing or stale fast summary never triggers hot-path heavy rebuild', profiles: ['full'], action: action('direct', 'getCodexContinuityContext', 'stale fast summary check'), expected: ['stale fast summary skipped'], forbidden: ['hot path summary rebuild'], passFail: ['hot_path_summary_generation'] }),
+  caseSpec({ id: 'T4-SESSION-HINTS-EXPIRED', tier: 'tier4', title: 'expired session hints are ignored', profiles: ['full'], action: action('direct', 'getCodexContinuityContext', 'expired session hints check'), expected: ['expired session hints ignored'], forbidden: ['expired session hint injected'] }),
+  caseSpec({ id: 'T4-MCP-ERROR', tier: 'tier4', title: 'MCP error surface returns bounded diagnostics', profiles: ['full'], action: action('mcp', 'continuity_get', 'MCP error check'), expected: ['bounded MCP error response'], forbidden: ['partial unsafe write'] }),
+  caseSpec({ id: 'T4-AUTOMATION-INTERRUPT', tier: 'tier4', title: 'automation interruption does not leave memory partial writes', profiles: ['full'], action: action('direct', 'memoryLifecycleAutomation', 'automation interruption check'), expected: ['idempotent automation recovery'], forbidden: ['duplicate promotion receipt'] }),
+  caseSpec({ id: 'T4-HOOK-LIGHTWEIGHT', tier: 'tier4', title: 'hook path remains lightweight', profiles: ['gate', 'full'], action: action('direct', 'measureHookOverhead', 'hook lightweight check'), expected: ['PostToolUse avoids heavy retrieval'], forbidden: ['PostToolUse heavy operation', 'ordinary hook pending review'], metrics: ['postToolUseHookP95Ms'], passFail: ['post_tool_use_heavy_operation'] }),
+  caseSpec({ id: 'T4-HOOK-TIMEOUT', tier: 'tier4', title: 'hook timeout does not crash ordinary coding flow', profiles: ['full'], action: action('direct', 'measureHookOverhead', 'hook timeout check'), expected: ['hook timeout fail-open'], forbidden: ['hook timeout crash'], metrics: ['stopHookP95Ms'], passFail: ['hook_timeout_crash'] }),
+  caseSpec({ id: 'T4-SECURITY-SECRETS', tier: 'tier4', title: 'secrets are never persisted or reported as memory', profiles: ['gate', 'full'], action: action('direct', 'securityAdapter', 'secret persistence check'), expected: ['secret redacted or rejected'], forbidden: ['API key in memory', 'token in report'], passFail: ['secret_persistence'] }),
+  caseSpec({ id: 'T4-SECURITY-PROMPT-INJECTION', tier: 'tier4', title: 'prompt injection text cannot override benchmark or memory policy', profiles: ['gate', 'full'], action: action('direct', 'securityAdapter', 'prompt injection check'), expected: ['prompt injection memory write rejected'], forbidden: ['policy bypass instruction accepted'], passFail: ['prompt_injection_memory_write'] }),
+  caseSpec({ id: 'T4-SECURITY-GLOBAL-WRITE', tier: 'tier4', title: 'global writes require explicit allowed namespace and policy', profiles: ['gate', 'full'], action: action('direct', 'proposeMemory', 'global write security check'), expected: ['malicious project content stays project-scoped or rejected'], forbidden: ['unauthorized global write'], passFail: ['wrong_namespace_routing', 'unauthorized_promotion'] })
+]
+
+export const BENCHMARK_CASE_IDS: readonly string[] = Object.freeze(BENCHMARK_CASES.map((item) => item.id))
