@@ -1096,6 +1096,49 @@ describe('Codex continuity context', () => {
     })
   })
 
+  it('does not read JSONL fallback memory when fallback is disabled', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-fallback-disabled-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-fallback-disabled-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), JSON.stringify(createMemory({
+      id: 'fallback-disabled-active',
+      content: 'Disabled JSONL fallback active memory must stay hidden.',
+      normalizedKey: 'fallback-disabled-active'
+    })) + '\n')
+    await writeFile(join(projectMemoryRoot, 'review_queue.jsonl'), JSON.stringify({
+      ...createPendingMemory(),
+      id: 'fallback-disabled-pending',
+      content: 'Disabled JSONL fallback pending memory must stay hidden.',
+      normalizedKey: 'fallback-disabled-pending'
+    }) + '\n')
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'fallback disabled memory',
+      task: 'memory',
+      mode: 'review',
+      allowJsonlFallback: false
+    })
+
+    const memoryIndex = context.diagnostics?.memoryIndex as Record<string, unknown> | undefined
+    expect(context.memory.items).toEqual([])
+    expect(context.projectMemory).toEqual([])
+    expect(context.globalMemory).toEqual([])
+    expect(context.pendingHypotheses).toEqual([])
+    expect(memoryIndex).toMatchObject({
+      freshness: 'stale',
+      source: 'sqlite',
+      fallbackMode: 'sqlite',
+      reason: 'jsonl_fallback_disabled'
+    })
+    expect(context.diagnostics?.projectSimilarity).toMatchObject({
+      reason: 'jsonl_fallback_disabled'
+    })
+  })
+
   it('returns eligible similar-project hints without mixing them into active memory', async () => {
     const home = await createTempDir('cyrene-codex-continuity-similar-home-')
     process.env.HOME = home

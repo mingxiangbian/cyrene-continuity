@@ -18260,7 +18260,7 @@ async function getCodexContinuityContext(input) {
   const routedMemoryLatencyMs = elapsedSince(routedMemoryStart);
   const modelVisibleGlobalMemory = routedMemory.globalMemory.filter(isModelVisibleRoutedMemory);
   const modelVisibleProjectMemory = routedMemory.projectMemory.filter(isModelVisibleRoutedMemory);
-  const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot);
+  const canonicalGlobalMemorySignatures = modelVisibleGlobalMemory.some((item) => !("homeProjectId" in item)) ? await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot) : /* @__PURE__ */ new Set();
   const [projectActivationMemories, globalActivationMemories] = await Promise.all([
     runtimeActivationMemoriesForRoute(projectMemoryRoot, modelVisibleProjectMemory),
     runtimeActivationMemoriesForRoute(globalMemoryRoot, modelVisibleGlobalMemory)
@@ -18579,6 +18579,9 @@ function estimateContinuityContextTokens(context) {
   }));
 }
 async function fallbackRoutedMemory(input, diagnostics, projectId, policy) {
+  if (!policy.allowJsonlFallback) {
+    return emptyRoutedMemory(jsonlFallbackDisabledDiagnostics(diagnostics, policy), "jsonl_fallback_disabled");
+  }
   const memories = await retrieveMemories(input);
   let pendingLatencyMs = 0;
   const pendingHypotheses = policy.includePendingDetails ? await measureAsync(() => readFallbackPendingHypotheses(input, projectId), (latencyMs) => {
@@ -18605,6 +18608,38 @@ async function fallbackRoutedMemory(input, diagnostics, projectId, policy) {
       pendingLatencyMs,
       similarLatencyMs: 0
     }
+  };
+}
+function emptyRoutedMemory(diagnostics, reason) {
+  return {
+    globalMemory: [],
+    projectMemory: [],
+    pendingHypotheses: [],
+    similarProjectHints: [],
+    graphEdgeTypesByMemoryKey: /* @__PURE__ */ new Map(),
+    diagnostics,
+    projectSimilarityDiagnostics: {
+      indexedProjects: 0,
+      candidateProjects: 0,
+      selectedProjects: 0,
+      reason
+    },
+    evalGateDiagnostics: {
+      passed: true,
+      failedChecks: []
+    },
+    runtimeMetrics: {
+      pendingLatencyMs: 0,
+      similarLatencyMs: 0
+    }
+  };
+}
+function jsonlFallbackDisabledDiagnostics(diagnostics, policy) {
+  return {
+    ...diagnostics,
+    source: "sqlite",
+    routes: routesForPolicy("sqlite", policy),
+    reason: diagnostics.reason ?? "jsonl_fallback_disabled"
   };
 }
 function sqliteRetrievalDiagnostics(status, diagnostics, policy) {
