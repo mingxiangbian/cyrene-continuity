@@ -1,4 +1,4 @@
-import type { BenchmarkCase, BenchmarkMetricId, BenchmarkProfile, BenchmarkTier, HardGateRuleId } from './types.js'
+import type { BenchmarkCase, BenchmarkMetricId, BenchmarkPassFailRuleId, BenchmarkProfile, BenchmarkTier } from './types.js'
 
 const DEFAULT_NOW = '2026-06-05T00:00:00.000Z'
 
@@ -12,7 +12,7 @@ interface CatalogInput {
   expected: string[]
   forbidden: string[]
   metrics?: readonly BenchmarkMetricId[]
-  passFail?: readonly HardGateRuleId[]
+  passFail?: readonly BenchmarkPassFailRuleId[]
   adapter?: BenchmarkCase['adapter']
 }
 
@@ -30,7 +30,7 @@ function defaultMetrics(tier: BenchmarkTier): BenchmarkMetricId[] {
   return ['boundarySafetyRate', 'postToolUseHookP95Ms', 'adapterAvailability']
 }
 
-function defaultRules(tier: BenchmarkTier): HardGateRuleId[] {
+function defaultRules(tier: BenchmarkTier): BenchmarkPassFailRuleId[] {
   if (tier === 'tier0') return ['pending_leakage', 'cross_project_pollution', 'unauthorized_promotion']
   if (tier === 'tier1') return ['incorrect_memory_answer', 'fabricated_evidence']
   if (tier === 'tier1_5') return ['unauthorized_promotion', 'hash_bypass']
@@ -131,7 +131,7 @@ export const BENCHMARK_CASES: readonly BenchmarkCase[] = [
   caseSpec({ id: 'T2-FOLLOW-WORKFLOW', tier: 'tier2', title: 'follow remembered project workflow', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'workflow replay'), expected: ['project workflow rule followed'], forbidden: ['workflow rule skipped'], adapter: { kind: 'deterministic' } }),
   caseSpec({ id: 'T2-UPDATED-RULE', tier: 'tier2', title: 'use updated rule and stop using old rule', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'updated rule replay'), expected: ['updated rule applied'], forbidden: ['old rule applied'], adapter: { kind: 'deterministic' } }),
   caseSpec({ id: 'T2-CROSS-SESSION-FIX', tier: 'tier2', title: 'apply cross-session fix memory to current task', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'cross-session fix replay'), expected: ['prior fix pattern applied'], forbidden: ['same defect reintroduced'], adapter: { kind: 'deterministic' } }),
-  caseSpec({ id: 'T2-REDUCE-REPEAT-MISTAKE', tier: 'tier2', title: 'memory reduces repeated mistakes and user corrections', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'repeat mistake reduction replay'), expected: ['fewer repeated mistakes with memory'], forbidden: ['same repeated mistake count'], metrics: ['taskSuccessRate', 'toolCallCount', 'withMemoryTaskSuccessRate', 'repeatedMistakeReduction', 'userCorrectionReduction', 'toolCallReduction'], adapter: { kind: 'deterministic' } }),
+  caseSpec({ id: 'T2-REDUCE-REPEAT-MISTAKE', tier: 'tier2', title: 'memory reduces repeated mistakes and user corrections', profiles: ['full', 'llm'], action: action('replay', 'memoryToActionReplay', 'repeat mistake reduction replay'), expected: ['fewer repeated mistakes with memory'], forbidden: ['same repeated mistake count'], metrics: ['taskSuccessRate', 'toolCallCount', 'noMemoryTaskSuccessRate', 'withMemoryTaskSuccessRate', 'repeatedMistakeReduction', 'userCorrectionReduction', 'toolCallReduction'], passFail: ['repeated_mistake_not_reduced', 'withMemoryTaskSuccessRate', 'repeatedMistakeReduction', 'userCorrectionReduction', 'toolCallReduction'], adapter: { kind: 'deterministic' } }),
   caseSpec({ id: 'T3-S-SCALE', tier: 'tier3', title: 'S scale fixture stays within latency and overhead thresholds', profiles: ['scale'], action: action('direct', 'runScaleFixture', 'S scale run'), expected: ['1 project with 50 active memories and 10 pending'], forbidden: ['fixture exceeds S scale budget'], metrics: ['continuityGetP50Ms', 'continuityGetP95Ms', 'memoryDbSizeBytes', 'memoryDbBytesPerMemory', 'scaleSRuntimeMs'] }),
   caseSpec({ id: 'T3-M-SCALE', tier: 'tier3', title: 'M scale fixture stays within latency and overhead thresholds', profiles: ['scale'], action: action('direct', 'runScaleFixture', 'M scale run'), expected: ['5 projects with 500 active memories and 100 pending'], forbidden: ['fixture exceeds M scale budget'], metrics: ['continuityGetP50Ms', 'continuityGetP95Ms', 'memoryDbSizeBytes', 'memoryDbBytesPerMemory', 'scaleMRuntimeMs'] }),
   caseSpec({ id: 'T3-L-SCALE', tier: 'tier3', title: 'L scale fixture stays within latency and overhead thresholds', profiles: ['scale'], action: action('direct', 'runScaleFixture', 'L scale run'), expected: ['20 projects with 5000 active memories and 1000 pending'], forbidden: ['fixture exceeds L scale budget'], metrics: ['continuityGetP95Ms', 'continuityGetP99Ms', 'indexStaleRate', 'memoryDbBytesPerMemory', 'scaleLRuntimeMs'] }),

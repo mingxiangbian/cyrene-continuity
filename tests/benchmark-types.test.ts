@@ -134,6 +134,16 @@ describe('benchmark contract catalog', () => {
     }
   })
 
+  it('declares T2 utility thresholds as pass/fail rules for the repeat mistake case', () => {
+    const repeatMistakeCase = BENCHMARK_CASES.find((item) => item.id === 'T2-REDUCE-REPEAT-MISTAKE')
+    expect(repeatMistakeCase?.passFail).toEqual(expect.arrayContaining([
+      'withMemoryTaskSuccessRate',
+      'repeatedMistakeReduction',
+      'userCorrectionReduction',
+      'toolCallReduction'
+    ]))
+  })
+
   it('defines all execution profiles and centralized thresholds', () => {
     expect(EXECUTION_PROFILES).toEqual(['smoke', 'gate', 'full', 'scale', 'llm', 'external'])
     expect(SOFT_METRIC_THRESHOLDS.map((item) => item.metric)).toEqual(expect.arrayContaining([

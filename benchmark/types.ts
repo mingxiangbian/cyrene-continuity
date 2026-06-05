@@ -30,6 +30,7 @@ export const BENCHMARK_METRIC_IDS = [
   'memoryDbSizeBytes',
   'modeAccuracy',
   'mrr',
+  'noMemoryTaskSuccessRate',
   'pendingLeakageRate',
   'pendingMisuseRate',
   'postToolUseHookP95Ms',
@@ -104,6 +105,7 @@ export const HARD_GATE_RULE_IDS = [
   'security_boundary_violation'
 ] as const
 export type HardGateRuleId = typeof HARD_GATE_RULE_IDS[number]
+export type BenchmarkPassFailRuleId = HardGateRuleId | BenchmarkMetricId
 
 export type BenchmarkActionKind = 'direct' | 'cli' | 'mcp' | 'replay' | 'adapter'
 export type BenchmarkCaseStatus = 'passed' | 'failed' | 'skipped_with_reason' | 'not_supported_without_provider'
@@ -118,7 +120,19 @@ export interface BenchmarkFixtureSpec {
   expectedForbiddenContent: readonly string[]
   expectedMode?: 'fast' | 'balanced' | 'review'
   expectedMetrics: readonly BenchmarkMetricId[]
-  passFailRule: readonly HardGateRuleId[]
+  passFailRule: readonly BenchmarkPassFailRuleId[]
+}
+
+export interface BenchmarkFixtureRunMetadata {
+  root: string
+  home: string
+  cwd: string
+  seed: string
+  clock: string
+  timezone: 'UTC'
+  cleanupStatus: 'pending' | 'cleaned' | 'preserved' | 'failed'
+  preserveFixture: boolean
+  preserveReason?: string
 }
 
 export interface BenchmarkActionSpec {
@@ -145,7 +159,7 @@ export interface BenchmarkCase {
   expected: readonly string[]
   forbidden: readonly string[]
   metrics: readonly BenchmarkMetricId[]
-  passFail: readonly HardGateRuleId[]
+  passFail: readonly BenchmarkPassFailRuleId[]
   adapter?: BenchmarkAdapterSpec
 }
 
@@ -176,7 +190,7 @@ export interface BenchmarkCaseResult {
 export interface BenchmarkThreshold {
   metric: BenchmarkMetricId
   operator: '<=' | '>=' | '='
-  value: number
+  value: number | BenchmarkMetricId
   profiles: readonly BenchmarkProfile[]
 }
 
@@ -185,35 +199,63 @@ export interface BenchmarkThresholdBreach {
   metric: BenchmarkMetricId
   actual: number
   threshold: string
+  severity: 'warning' | 'error'
 }
 
 export interface BenchmarkReport {
   runId: string
   startedAt: string
-  finishedAt: string
+  completedAt: string
   profile: BenchmarkProfile
-  passed: boolean
-  summary: {
-    total: number
-    passed: number
-    failed: number
-    skipped: number
-    notSupported: number
+  spec: {
+    path: string
+    title: string
+    date: string
+    contentHash: string
   }
-  metadata: {
-    specPath: string
-    specHash: string
-    benchmarkVersion: string
+  benchmark: {
+    version: string
     thresholdVersion: string
-    packageVersion: string
+    caseCatalogHash: string
+  }
+  package: {
+    name: string
+    version: string
+  }
+  git: {
+    branch: string
+    commit: string
+    dirty: boolean
+    trackedChanges: readonly string[]
+  }
+  runtime: {
     nodeVersion: string
+    npmVersion?: string
     platform: string
     arch: string
-    gitBranch: string
-    gitCommit: string
-    gitDirty: boolean
   }
-  cases: readonly BenchmarkCaseResult[]
+  passed: boolean
+  summary: {
+    totalCases: number
+    passed: number
+    failed: number
+    skippedWithReason: number
+    notSupportedWithoutProvider: number
+  }
+  failedCases: readonly BenchmarkCaseResult[]
+  caseResults: readonly BenchmarkCaseResult[]
+  metrics: {
+    capability: Record<string, number>
+    boundarySafety: Record<string, number>
+    efficiency: Record<string, number>
+    taskUtility: Record<string, number>
+  }
   hardFailures: readonly HardGateRuleId[]
   thresholdBreaches: readonly BenchmarkThresholdBreach[]
+  fixtureRuns?: readonly BenchmarkFixtureRunMetadata[]
+  scaleResults?: Record<string, unknown>
+  regressionComparison?: {
+    baselineReportPath?: string
+    regressions: ReadonlyArray<{ metric: string; baseline: number; current: number; delta: number }>
+  }
 }
