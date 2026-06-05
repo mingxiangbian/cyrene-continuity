@@ -364,13 +364,19 @@ describe('cyrene-continuity codex CLI', () => {
         '--message',
         'context preview trial review',
         '--task',
-        'coding'
+        'coding',
+        '--allow-jsonl-fallback'
       ],
       { cwd: process.cwd(), env: cliEnv(home), timeout: 10_000 }
     )
     const preview = JSON.parse(result.stdout)
 
-    expect(preview.input).toEqual({ task: 'coding', userMessage: 'context preview trial review', mode: 'review' })
+    expect(preview.input).toEqual({
+      task: 'coding',
+      userMessage: 'context preview trial review',
+      mode: 'review',
+      allowJsonlFallback: true
+    })
     expect(preview.activeContext.projectMemory).toEqual([])
     expect(preview.activation.workflowHints).toEqual([])
     expect(preview.activation.planConstraints).toEqual([])

@@ -307,6 +307,31 @@ describe('weekly core and global consolidation job', () => {
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.toBe(profile)
   })
 
+  it('refreshes project fast summary after weekly project core profile regeneration', async () => {
+    const root = await createTempDir('cyrene-weekly-project-fast-summary-root-')
+    const projectCore = semanticMemory({
+      id: 'project-core-fast-summary',
+      confidenceTier: 'project_core',
+      content: 'Project weekly fast summary uses regenerated project profile.'
+    })
+    await writeSemanticMemoriesFromRoot(root, [projectCore])
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      apply: true,
+      now: NOW
+    })
+
+    expect(result.projectRoots[0]).toMatchObject({
+      promotedValidatedToProjectCore: 0,
+      fastSummaryUpdated: true
+    })
+    const summary = await readFastSummaryProjection(root)
+    expect(summary.generatedAt).toBe(NOW)
+    expect(summary.stale).toBe(false)
+    expect(summary.profileFastSummary).toContain('Project weekly fast summary uses regenerated project profile.')
+  })
+
   it('consolidates repeated low-risk project_core from two projects into one global_core and writes global profile and event', async () => {
     const projectA = await createTempDir('cyrene-weekly-project-a-')
     const projectB = await createTempDir('cyrene-weekly-project-b-')

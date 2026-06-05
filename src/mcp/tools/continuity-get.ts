@@ -14,6 +14,7 @@ export const continuityGetInputSchema = {
   includePendingNotice: z.boolean().optional(),
   includeDiagnostics: z.boolean().optional(),
   recordRetrievedEvents: z.boolean().optional(),
+  allowJsonlFallback: z.boolean().optional(),
   maxTokens: z.number().int().positive().optional()
 }
 
@@ -28,6 +29,7 @@ export async function handleContinuityGet(
     includePendingNotice?: boolean
     includeDiagnostics?: boolean
     recordRetrievedEvents?: boolean
+    allowJsonlFallback?: boolean
     maxTokens?: number
   },
   fallbackCwd: string
@@ -42,6 +44,7 @@ export async function handleContinuityGet(
     includePendingNotice: input.includePendingNotice,
     includeDiagnostics: input.includeDiagnostics,
     recordRetrievedEvents: input.recordRetrievedEvents,
+    allowJsonlFallback: input.allowJsonlFallback,
     maxTokens: input.maxTokens
   })
   return jsonText(context)

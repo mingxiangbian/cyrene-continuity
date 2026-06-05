@@ -37,7 +37,7 @@ JSONL fallback policy。
 - `session-hints` store 已支持 replace、read、clear、TTL expiry、session/project mismatch 隔离。
 - `cyrene_continuity_get` 不在 read path 生成 fast summary；summary 文件缺失时返回 empty projection。
 - continuity read path 会记录 `continuity_get` runtime metrics，包括 latency、JSONL fallback 和 stale index。
-- stale/unavailable SQLite index 不在 hot path rebuild；JSONL fallback 可用且可通过 policy 禁用。
+- stale/unavailable SQLite index 不在 hot path rebuild；JSONL fallback 默认禁用，只能通过 policy 显式启用。
 
 未满足或反向实现：
 
@@ -272,7 +272,7 @@ model-visible memory 时，应 mark stale 或直接 refresh。
 Hot path:
 
 - `cyrene_continuity_get` 优先 SQLite/FTS。
-- SQLite unavailable/stale 时允许 JSONL fallback，除非 policy 禁用。
+- SQLite unavailable/stale 时默认不读 JSONL fallback；只有 policy 显式启用时才 fallback。
 - JSONL fallback 必须在 diagnostics 和 runtime metrics 中记录。
 - stale index 必须在 diagnostics 和 runtime metrics 中记录。
 - hot path 不 rebuild DB。
@@ -387,8 +387,8 @@ README MCP tools 列表必须与 `src/mcp/mcp-server.ts` 注册工具一致。
 ### SQLite / JSONL
 
 - fresh SQLite index 使用 SQLite route。
-- stale index 走 JSONL fallback。
-- JSONL fallback disabled 时不读 JSONL。
+- stale index 默认不读 JSONL fallback。
+- JSONL fallback 显式启用时才读 JSONL。
 - hot path 不 rebuild stale index。
 - runtime metrics 记录 `jsonlFallback`、`indexStale`、latency。
 - manual db rebuild 记录结果。

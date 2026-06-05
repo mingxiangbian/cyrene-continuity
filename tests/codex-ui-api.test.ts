@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { handleCodexUiApiRequest } from '../src/codex/codex-ui-api.js'
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
@@ -440,6 +441,7 @@ describe('handleCodexUiApiRequest', () => {
     const home = await createTempDir('cyrene-ui-home-')
     vi.stubEnv('HOME', home)
     const { cwd } = await seedProject()
+    await rebuildCodexMemoryIndex({ cwd })
 
     const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/dashboard' })
 

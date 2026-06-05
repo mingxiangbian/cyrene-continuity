@@ -101,7 +101,7 @@ describe('Codex continuity context', () => {
     expect(await readActivationEventsFromRoot(currentRoot)).toEqual([])
   })
 
-  it('uses fast summary projections without reading full profiles in default mode', async () => {
+  it('uses global and project fast summary projections without reading full profiles in default mode', async () => {
     const home = await createTempDir('cyrene-codex-continuity-fast-summary-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-continuity-fast-summary-repo-')
@@ -112,7 +112,12 @@ describe('Codex continuity context', () => {
     await mkdir(projectMemoryRoot, { recursive: true })
     await writeFastSummaryProjection(globalMemoryRoot, {
       globalFastSummary: 'Use fast global summary.',
-      profileFastSummary: 'Use fast profile summary.',
+      profileFastSummary: 'Use fast global profile summary.',
+      generatedAt: '2026-06-05T00:00:00.000Z'
+    })
+    await writeFastSummaryProjection(projectMemoryRoot, {
+      globalFastSummary: '',
+      profileFastSummary: 'Use fast project profile summary.',
       generatedAt: '2026-06-05T00:00:00.000Z'
     })
     await writeFile(join(globalMemoryRoot, 'MODEL_PROFILE.md'), '# Global Profile\n\nFull global profile must not be read.\n')
@@ -125,8 +130,8 @@ describe('Codex continuity context', () => {
     })
 
     expect(context.profile.global).toBe('Use fast global summary.')
-    expect(context.profile.project).toBe('Use fast profile summary.')
-    expect(context.profile.content).toBe('Use fast global summary.\n\nUse fast profile summary.')
+    expect(context.profile.project).toBe('Use fast project profile summary.')
+    expect(context.profile.content).toBe('Use fast global summary.\n\nUse fast global profile summary.\n\nUse fast project profile summary.')
     expect(JSON.stringify(context.profile)).not.toContain('Full global profile')
     expect(JSON.stringify(context.profile)).not.toContain('Full project profile')
   })
@@ -231,7 +236,8 @@ describe('Codex continuity context', () => {
         summary: 'Transferable runtime rebuild guidance.',
         createdAt: '2026-06-05T00:00:00.000Z'
       }],
-      now: '2026-06-05T00:00:00.000Z'
+      now: '2026-06-05T00:00:00.000Z',
+      ttlMs: 365 * 24 * 60 * 60 * 1000
     })
 
     const context = await getCodexContinuityContext({
@@ -350,6 +356,7 @@ describe('Codex continuity context', () => {
     await mkdir(memoryRoot, { recursive: true })
     await writeFile(join(memoryRoot, 'index.jsonl'), JSON.stringify(createMemory()) + '\n')
     await writeFile(join(memoryRoot, 'MODEL_PROFILE.md'), '# Project Profile\n\nProject profile guidance.\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -453,6 +460,7 @@ describe('Codex continuity context', () => {
         normalizedKey: 'global-spec-plan-chinese'
       })) + '\n'
     )
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -493,6 +501,7 @@ describe('Codex continuity context', () => {
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     await mkdir(memoryRoot, { recursive: true })
     await writeFile(join(memoryRoot, 'index.jsonl'), JSON.stringify(createMemory()) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -554,6 +563,7 @@ describe('Codex continuity context', () => {
       activationPolicy: activationPolicyForConfidenceTier('validated'),
       content: 'Runtime activation validator changes require lifecycle checks.'
     })) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -601,7 +611,8 @@ describe('Codex continuity context', () => {
       cwd: repo,
       userMessage: 'legacy global old project root',
       task: 'coding',
-      mode: 'balanced'
+      mode: 'balanced',
+      allowJsonlFallback: true
     })
 
     expect(context.globalMemory.map((item) => item.id)).toContain('legacy-global-memory')
@@ -640,7 +651,8 @@ describe('Codex continuity context', () => {
       cwd: repo,
       userMessage: 'shared legacy activation phrase',
       task: 'coding',
-      mode: 'balanced'
+      mode: 'balanced',
+      allowJsonlFallback: true
     })
 
     expect(context.globalMemory).toEqual(expect.arrayContaining([
@@ -773,6 +785,7 @@ describe('Codex continuity context', () => {
       content: 'Project continuity router fact stays local.',
       normalizedKey: 'project-continuity-router-local'
     })) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -857,6 +870,7 @@ describe('Codex continuity context', () => {
       content: 'Review queue route guidance must not be treated as confirmed memory.',
       normalizedKey: 'review-queue-route-guidance-not-confirmed'
     }) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -944,6 +958,7 @@ describe('Codex continuity context', () => {
       content: 'Project unsafe scan memory should still be indexed.',
       normalizedKey: 'project-unsafe-scan-memory'
     })) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -982,6 +997,7 @@ describe('Codex continuity context', () => {
         })
       ].map((memory) => JSON.stringify(memory)).join('\n') + '\n'
     )
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -1026,6 +1042,7 @@ describe('Codex continuity context', () => {
         })
       ].map((memory) => JSON.stringify(memory)).join('\n') + '\n'
     )
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -1049,6 +1066,7 @@ describe('Codex continuity context', () => {
       content: 'Pending router candidate can guide clarification only.',
       normalizedKey: 'pending-router-clarification-only'
     }) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
 
     const context = await getCodexContinuityContext({
       cwd: repo,
@@ -1067,7 +1085,7 @@ describe('Codex continuity context', () => {
     expect(context.profile.content).not.toContain('Pending router candidate can guide clarification only.')
   })
 
-  it('returns pending hypotheses from JSONL fallback when SQLite is unavailable', async () => {
+  it('returns pending hypotheses from JSONL fallback when explicitly allowed and SQLite is unavailable', async () => {
     const home = await createTempDir('cyrene-codex-continuity-router-fallback-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-continuity-router-fallback-repo-')
@@ -1086,7 +1104,8 @@ describe('Codex continuity context', () => {
       cwd: repo,
       userMessage: 'fallback pending router candidate',
       task: 'memory',
-      mode: 'review'
+      mode: 'review',
+      allowJsonlFallback: true
     })
 
     expect(context.diagnostics?.memoryIndex?.available).toBe(false)
@@ -1124,7 +1143,8 @@ describe('Codex continuity context', () => {
       cwd: repo,
       userMessage: 'stale readonly memory',
       task: 'coding',
-      mode: 'review'
+      mode: 'review',
+      allowJsonlFallback: true
     })
 
     const after = await stat(dbPath)
@@ -1139,7 +1159,7 @@ describe('Codex continuity context', () => {
     expect(String(memoryIndex?.staleReason)).toContain('indexed source is newer')
   })
 
-  it('keeps JSONL fallback pending memory provisional without creating the index', async () => {
+  it('keeps JSONL fallback pending memory provisional when explicitly allowed without creating the index', async () => {
     const home = await createTempDir('cyrene-codex-continuity-pending-fallback-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-continuity-pending-fallback-repo-')
@@ -1157,7 +1177,8 @@ describe('Codex continuity context', () => {
       cwd: repo,
       userMessage: 'pending fallback provisional',
       task: 'memory',
-      mode: 'review'
+      mode: 'review',
+      allowJsonlFallback: true
     })
 
     const memoryIndex = context.diagnostics?.memoryIndex as Record<string, unknown> | undefined
@@ -1178,7 +1199,7 @@ describe('Codex continuity context', () => {
     })
   })
 
-  it('does not read JSONL fallback memory when fallback is disabled', async () => {
+  it('does not read JSONL fallback memory by default', async () => {
     const home = await createTempDir('cyrene-codex-continuity-fallback-disabled-home-')
     process.env.HOME = home
     const repo = await createTempDir('cyrene-codex-continuity-fallback-disabled-repo-')
@@ -1201,8 +1222,7 @@ describe('Codex continuity context', () => {
       cwd: repo,
       userMessage: 'fallback disabled memory',
       task: 'memory',
-      mode: 'review',
-      allowJsonlFallback: false
+      mode: 'review'
     })
 
     const memoryIndex = context.diagnostics?.memoryIndex as Record<string, unknown> | undefined
@@ -1454,6 +1474,7 @@ describe('Codex continuity context', () => {
       content: 'Other project local memory must not leak.',
       normalizedKey: 'other-project-local-memory'
     }))}\n`)
+    await rebuildCodexMemoryIndex({ cwd: currentRepo })
 
     const context = await getCodexContinuityContext({
       cwd: currentRepo,
