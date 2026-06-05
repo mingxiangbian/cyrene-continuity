@@ -1,6 +1,7 @@
 import { appendCodexHookTrace, type CodexHookTraceEventName, type CodexHookTraceTool } from './hook-trace-store.js'
 import { codexProjectMemoryRoot } from './codex-memory-root.js'
 import { identifyCodexProject } from './project-id.js'
+import { appendRuntimeMetric } from './runtime-metrics.js'
 import { clearCodexSessionHints } from './session-hints.js'
 
 export interface CodexHookCommandOutput {
@@ -19,11 +20,14 @@ export async function handleCodexHookTraceCommand(
   event: CodexLifecycleHookEvent,
   rawInput?: string
 ): Promise<string> {
+  const startedAt = Date.now()
+  let metricCwd: string | undefined
   try {
     const raw = rawInput ?? await readTextFromStdin()
     const payload = parsePayload(raw)
     if (payload !== undefined) {
       const traceInput = toTraceInput(event, payload)
+      metricCwd = traceInput.cwd
       await appendCodexHookTrace(traceInput)
       if (event === 'session_start') {
         await clearSessionHintsForProject(traceInput.cwd)
@@ -33,12 +37,33 @@ export async function handleCodexHookTraceCommand(
     // Codex lifecycle hooks must fail open.
   }
 
+  if (metricCwd !== undefined) {
+    await appendHookRuntimeMetricFailOpen(metricCwd, event, Date.now() - startedAt)
+  }
   return formatCodexHookTraceCommandOutput()
 }
 
 async function clearSessionHintsForProject(cwd: string): Promise<void> {
   const project = await identifyCodexProject(cwd)
   await clearCodexSessionHints(codexProjectMemoryRoot(project.projectId))
+}
+
+async function appendHookRuntimeMetricFailOpen(
+  cwd: string,
+  event: CodexLifecycleHookEvent,
+  latencyMs: number
+): Promise<void> {
+  try {
+    const project = await identifyCodexProject(cwd)
+    await appendRuntimeMetric(codexProjectMemoryRoot(project.projectId), {
+      event: 'hook',
+      hookEvent: event,
+      latencyMs: Math.max(0, latencyMs),
+      createdAt: new Date().toISOString()
+    })
+  } catch {
+    // Hook metrics are diagnostic only and must not block Codex hooks.
+  }
 }
 
 export function formatCodexHookTraceCommandOutput(): string {

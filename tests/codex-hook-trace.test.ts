@@ -7,6 +7,7 @@ import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { handleCodexHookTraceCommand } from '../src/codex/codex-hook-trace.js'
 import { readRecentCodexHookTrace } from '../src/codex/hook-trace-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { readRuntimeMetrics } from '../src/codex/runtime-metrics.js'
 import { readCodexSessionHints, replaceCodexSessionHints } from '../src/codex/session-hints.js'
 
 const originalHome = process.env.HOME
@@ -113,6 +114,22 @@ describe('Codex lifecycle hook trace command', () => {
         outputSummary: 'passed'
       }
     })
+  })
+
+  it('records hook latency metrics without raw prompt text', async () => {
+    const home = await createTempDir('cyrene-hook-metrics-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-hook-metrics-project-')
+
+    await handleCodexHookTraceCommand('user_prompt_submit', JSON.stringify({
+      cwd,
+      text: 'raw hook prompt text must not persist in metrics'
+    }))
+
+    const project = await identifyCodexProject(cwd)
+    const metrics = await readRuntimeMetrics(codexProjectMemoryRoot(project.projectId))
+    expect(metrics.some((metric) => metric.event === 'hook' && metric.hookEvent === 'user_prompt_submit')).toBe(true)
+    expect(JSON.stringify(metrics)).not.toContain('raw hook prompt text must not persist')
   })
 
   it('CLI recognizes all non-Stop lifecycle hook routes', async () => {

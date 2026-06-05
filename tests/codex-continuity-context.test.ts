@@ -9,6 +9,7 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { writeFastSummaryProjection } from '../src/codex/fast-summary-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { readRuntimeMetrics } from '../src/codex/runtime-metrics.js'
 import { replaceCodexSessionHints } from '../src/codex/session-hints.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import {
@@ -128,6 +129,25 @@ describe('Codex continuity context', () => {
     expect(context.profile.content).toBe('Use fast global summary.\n\nUse fast profile summary.')
     expect(JSON.stringify(context.profile)).not.toContain('Full global profile')
     expect(JSON.stringify(context.profile)).not.toContain('Full project profile')
+  })
+
+  it('records continuity latency and fallback metrics without raw prompt text', async () => {
+    const home = await createTempDir('cyrene-continuity-metrics-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-continuity-metrics-repo-')
+    const identity = await identifyCodexProject(repo)
+    const root = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(root, { recursive: true })
+
+    await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'raw prompt text must not persist in metrics',
+      task: 'coding'
+    })
+
+    const metrics = await readRuntimeMetrics(root)
+    expect(metrics.some((metric) => metric.event === 'continuity_get')).toBe(true)
+    expect(JSON.stringify(metrics)).not.toContain('raw prompt text must not persist')
   })
 
   it('review mode returns pending notice, pending hypotheses, diagnostics, and similar hints', async () => {

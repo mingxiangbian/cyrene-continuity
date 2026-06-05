@@ -58,6 +58,7 @@ import {
   type RetrievalPolicy
 } from './context-policy.js'
 import { readFastSummaryProjection, type FastSummaryProjection } from './fast-summary-store.js'
+import { appendRuntimeMetric, type RuntimeMetricEvent } from './runtime-metrics.js'
 import { readCodexSessionHints, type CodexSessionHint } from './session-hints.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
@@ -162,6 +163,11 @@ interface ReviewReminder {
   content: string
 }
 
+interface RoutedMemoryRuntimeMetrics {
+  pendingLatencyMs: number
+  similarLatencyMs: number
+}
+
 export interface CodexContinuityContext {
   project: {
     projectId: string
@@ -259,6 +265,7 @@ export async function getCodexContinuityContext(input: {
   allowJsonlFallback?: boolean
   maxTokens?: number
 }): Promise<CodexContinuityContext> {
+  const startedAt = Date.now()
   const project = await identifyCodexProject(input.cwd)
   const config = createDefaultConfig(input.cwd)
   const task = input.task ?? 'coding'
@@ -289,15 +296,21 @@ export async function getCodexContinuityContext(input: {
       maxItems: budget.maxItems,
       maxTokens: Math.min(budget.maxTokens, policy.maxTokens)
   }
-  const [pendingReview, fastSummary, globalProfile, projectProfile, sessionHints] = await Promise.all([
+  let profileReadLatencyMs = 0
+  const [pendingReview, [fastSummary, globalProfile, projectProfile], sessionHints] = await Promise.all([
     policy.includePendingNotice ? getCodexPendingReviewNotice({ cwd: input.cwd }) : Promise.resolve({}),
-    policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
-    policy.includeFullProfile ? readGlobalCodexProfileIfExists() : Promise.resolve(undefined),
-    policy.includeFullProfile ? readProjectCodexProfileIfExists(project.projectId) : Promise.resolve(undefined),
+    measureAsync(async () => Promise.all([
+      policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
+      policy.includeFullProfile ? readGlobalCodexProfileIfExists() : Promise.resolve(undefined),
+      policy.includeFullProfile ? readProjectCodexProfileIfExists(project.projectId) : Promise.resolve(undefined)
+    ]), (latencyMs) => {
+      profileReadLatencyMs = latencyMs
+    }),
     policy.includeSessionHints && input.sessionId !== undefined
       ? readCodexSessionHints(projectMemoryRoot, { sessionId: input.sessionId, projectId: project.projectId })
       : Promise.resolve([])
   ])
+  const routedMemoryStart = Date.now()
   const routedMemory = await retrieveRoutedMemory({
     cwd: input.cwd,
     projectId: project.projectId,
@@ -307,6 +320,7 @@ export async function getCodexContinuityContext(input: {
     fallback: legacyRetrievalInput,
     policy
   })
+  const routedMemoryLatencyMs = elapsedSince(routedMemoryStart)
   const modelVisibleGlobalMemory = routedMemory.globalMemory.filter(isModelVisibleRoutedMemory)
   const modelVisibleProjectMemory = routedMemory.projectMemory.filter(isModelVisibleRoutedMemory)
   const canonicalGlobalMemorySignatures = await readCanonicalGlobalMemorySignaturesFailOpen(globalMemoryRoot)
@@ -355,7 +369,7 @@ export async function getCodexContinuityContext(input: {
     generatedAt: new Date().toISOString()
   })
 
-  return {
+  const context: CodexContinuityContext = {
     project: {
       projectId: project.projectId,
       displayName: project.displayName
@@ -453,6 +467,20 @@ export async function getCodexContinuityContext(input: {
       reason: snapshot.dissent.reason
     }
   }
+  await appendContinuityRuntimeMetricFailOpen(projectMemoryRoot, {
+    event: 'continuity_get',
+    mode: policy.mode,
+    latencyMs: elapsedSince(startedAt),
+    sqliteLatencyMs: routedMemoryLatencyMs,
+    similarLatencyMs: routedMemory.runtimeMetrics.similarLatencyMs,
+    pendingLatencyMs: routedMemory.runtimeMetrics.pendingLatencyMs,
+    profileReadLatencyMs,
+    tokenOverhead: estimateContinuityContextTokens(context),
+    jsonlFallback: routedMemory.diagnostics.source === 'jsonl',
+    indexStale: routedMemory.diagnostics.freshness === 'stale',
+    createdAt: new Date().toISOString()
+  })
+  return context
 }
 
 async function runtimeActivationMemoriesForRoute(
@@ -481,6 +509,7 @@ interface RoutedMemoryResult {
   diagnostics: RetrievalDiagnostics
   projectSimilarityDiagnostics: ProjectSimilarityDiagnostics
   evalGateDiagnostics: EvalGateDiagnostics
+  runtimeMetrics: RoutedMemoryRuntimeMetrics
 }
 
 async function retrieveRoutedMemory(input: {
@@ -515,15 +544,29 @@ async function retrieveRoutedMemory(input: {
         input.policy
       )
     }
+    let similarLatencyMs = 0
     const similarRetrieval = input.policy.includeSimilarProjectHints
-      ? await retrieveSimilarProjectHints({
+      ? await measureAsync(() => retrieveSimilarProjectHints({
           cwd: input.cwd,
           projectId: input.projectId,
           query: input.query,
           task: input.task,
           adapter
+        }), (latencyMs) => {
+          similarLatencyMs = latencyMs
         })
       : emptySimilarRetrieval('similar_project_hints_disabled')
+    let pendingLatencyMs = 0
+    const pendingQuery = input.policy.includePendingDetails
+      ? measureAsync(() => adapter.queryPending({
+          currentProjectId: input.projectId,
+          query: input.query,
+          maxItems: 6,
+          maxTokens: 400
+        }), (latencyMs) => {
+          pendingLatencyMs = latencyMs
+        })
+      : Promise.resolve([])
     const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
@@ -541,14 +584,7 @@ async function retrieveRoutedMemory(input: {
         maxItems: 12,
         maxTokens: 900
       }),
-      input.policy.includePendingDetails
-        ? adapter.queryPending({
-            currentProjectId: input.projectId,
-            query: input.query,
-            maxItems: 6,
-            maxTokens: 400
-          })
-        : Promise.resolve([])
+      pendingQuery
     ])
     const memoryRoutingGate = runMemoryRoutingEvalGate({
       currentProjectId: input.projectId,
@@ -585,6 +621,10 @@ async function retrieveRoutedMemory(input: {
       evalGateDiagnostics: {
         passed: evalGate.passed,
         failedChecks: evalGate.failedChecks
+      },
+      runtimeMetrics: {
+        pendingLatencyMs,
+        similarLatencyMs
       }
     }
   } catch (error) {
@@ -625,6 +665,44 @@ function nonEmptyString(value: string): string | undefined {
   return value.trim() === '' ? undefined : value
 }
 
+async function measureAsync<T>(operation: () => Promise<T>, recordLatency: (latencyMs: number) => void): Promise<T> {
+  const startedAt = Date.now()
+  try {
+    return await operation()
+  } finally {
+    recordLatency(elapsedSince(startedAt))
+  }
+}
+
+function elapsedSince(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt)
+}
+
+async function appendContinuityRuntimeMetricFailOpen(
+  memoryRoot: string,
+  metric: RuntimeMetricEvent
+): Promise<void> {
+  try {
+    await appendRuntimeMetric(memoryRoot, metric)
+  } catch {
+    // Runtime metrics must never block continuity context.
+  }
+}
+
+function estimateContinuityContextTokens(context: CodexContinuityContext): number {
+  return estimateTokens(JSON.stringify({
+    globalMemory: context.globalMemory,
+    projectMemory: context.projectMemory,
+    pendingHypotheses: context.pendingHypotheses,
+    similarProjectHints: context.similarProjectHints,
+    sessionHints: context.sessionHints,
+    activation: context.activation,
+    profile: context.profile,
+    reviewReminders: context.reviewReminders,
+    diagnostics: context.diagnostics
+  }))
+}
+
 async function fallbackRoutedMemory(
   input: RetrieveMemoriesInput,
   diagnostics: RetrievalDiagnostics,
@@ -632,10 +710,16 @@ async function fallbackRoutedMemory(
   policy: RetrievalPolicy
 ): Promise<RoutedMemoryResult> {
   const memories = await retrieveMemories(input)
+  let pendingLatencyMs = 0
+  const pendingHypotheses = policy.includePendingDetails
+    ? await measureAsync(() => readFallbackPendingHypotheses(input, projectId), (latencyMs) => {
+        pendingLatencyMs = latencyMs
+      })
+    : []
   return {
     globalMemory: memories.filter(({ memory }) => memory.scope === 'global'),
     projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
-    pendingHypotheses: policy.includePendingDetails ? await readFallbackPendingHypotheses(input, projectId) : [],
+    pendingHypotheses,
     similarProjectHints: [],
     graphEdgeTypesByMemoryKey: new Map(),
     diagnostics,
@@ -648,6 +732,10 @@ async function fallbackRoutedMemory(
     evalGateDiagnostics: {
       passed: true,
       failedChecks: []
+    },
+    runtimeMetrics: {
+      pendingLatencyMs,
+      similarLatencyMs: 0
     }
   }
 }
