@@ -9,6 +9,7 @@ import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/code
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { writeFastSummaryProjection } from '../src/codex/fast-summary-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { replaceCodexSessionHints } from '../src/codex/session-hints.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import {
   readActivationEventsFromRoot,
@@ -199,6 +200,41 @@ describe('Codex continuity context', () => {
     ])
     expect(context.memory.items.map((item) => item.id)).not.toContain('review-pending-context')
     expect(context.memory.items.map((item) => item.id)).not.toContain('review-portable-similar')
+  })
+
+  it('balanced mode can project existing session hints without treating them as active memory', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-balanced-session-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-balanced-session-repo-')
+    const identity = await identifyCodexProject(repo)
+    const root = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(root, { recursive: true })
+    await replaceCodexSessionHints(root, {
+      sessionId: 'session-1',
+      projectId: identity.projectId,
+      hints: [{
+        id: 'hint-1',
+        sourceProjectId: 'other-project',
+        summary: 'Transferable runtime rebuild guidance.',
+        createdAt: '2026-06-05T00:00:00.000Z'
+      }],
+      now: '2026-06-05T00:00:00.000Z'
+    })
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime rebuild guidance',
+      task: 'planning',
+      mode: 'balanced',
+      includeSessionHints: true,
+      sessionId: 'session-1'
+    })
+
+    expect(context.similarProjectHints).toEqual([])
+    expect(context.sessionHints).toEqual([
+      expect.objectContaining({ id: 'hint-1', transferable: true, notCurrentProjectFact: true })
+    ])
+    expect(context.memory.items).toEqual([])
   })
 
   it('returns compact project, memory, strategy, and dissent context', async () => {

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { handleCodexHookTraceCommand } from '../src/codex/codex-hook-trace.js'
 import { readRecentCodexHookTrace } from '../src/codex/hook-trace-store.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
+import { readCodexSessionHints, replaceCodexSessionHints } from '../src/codex/session-hints.js'
 
 const originalHome = process.env.HOME
 const tempDirs: string[] = []
@@ -167,5 +168,36 @@ describe('Codex lifecycle hook trace command', () => {
     await expect(readFile(join(codexProjectMemoryRoot(project.projectId), 'hook-trace.jsonl'), 'utf8')).resolves.toContain(
       '"event":"user_prompt_submit"'
     )
+  })
+
+  it('clears session hints when a new session starts', async () => {
+    const home = await createTempDir('cyrene-hook-session-hints-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-hook-session-hints-project-')
+    const identity = await identifyCodexProject(cwd)
+    const root = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(root, { recursive: true })
+    await replaceCodexSessionHints(root, {
+      sessionId: 's1',
+      projectId: identity.projectId,
+      hints: [{
+        id: 'hint-before-session-start',
+        sourceProjectId: 'other-project',
+        summary: 'Session start must clear this hint.',
+        createdAt: '2026-06-05T00:00:00.000Z'
+      }],
+      now: '2026-06-05T00:00:00.000Z'
+    })
+
+    await handleCodexHookTraceCommand('session_start', JSON.stringify({
+      cwd,
+      session_id: 's2'
+    }))
+
+    await expect(readCodexSessionHints(root, {
+      sessionId: 's1',
+      projectId: identity.projectId,
+      now: '2026-06-05T00:01:00.000Z'
+    })).resolves.toEqual([])
   })
 })

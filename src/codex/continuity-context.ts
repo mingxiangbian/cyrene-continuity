@@ -58,6 +58,7 @@ import {
   type RetrievalPolicy
 } from './context-policy.js'
 import { readFastSummaryProjection, type FastSummaryProjection } from './fast-summary-store.js'
+import { readCodexSessionHints, type CodexSessionHint } from './session-hints.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
 
@@ -102,6 +103,16 @@ interface SimilarProjectHintDigestItem {
   notCurrentProjectFact: true
   rationale: string
   explain: string[]
+}
+
+interface SessionHintDigestItem {
+  id: string
+  sourceProjectId: string
+  sourceProjectName?: string
+  content: string
+  transferable: true
+  notCurrentProjectFact: true
+  rationale: string
 }
 
 interface ProjectSimilarityDiagnostics {
@@ -169,6 +180,7 @@ export interface CodexContinuityContext {
   projectMemory: RoutedMemoryDigestItem[]
   pendingHypotheses: PendingHypothesisDigestItem[]
   similarProjectHints: SimilarProjectHintDigestItem[]
+  sessionHints: SessionHintDigestItem[]
   activation: {
     workflowHints: MemoryActivation[]
     planConstraints: MemoryActivation[]
@@ -243,6 +255,7 @@ export async function getCodexContinuityContext(input: {
   includeSessionHints?: boolean
   includeFullProfile?: boolean
   includeFastSummaries?: boolean
+  sessionId?: string
   allowJsonlFallback?: boolean
   maxTokens?: number
 }): Promise<CodexContinuityContext> {
@@ -276,11 +289,14 @@ export async function getCodexContinuityContext(input: {
       maxItems: budget.maxItems,
       maxTokens: Math.min(budget.maxTokens, policy.maxTokens)
   }
-  const [pendingReview, fastSummary, globalProfile, projectProfile] = await Promise.all([
+  const [pendingReview, fastSummary, globalProfile, projectProfile, sessionHints] = await Promise.all([
     policy.includePendingNotice ? getCodexPendingReviewNotice({ cwd: input.cwd }) : Promise.resolve({}),
     policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
     policy.includeFullProfile ? readGlobalCodexProfileIfExists() : Promise.resolve(undefined),
-    policy.includeFullProfile ? readProjectCodexProfileIfExists(project.projectId) : Promise.resolve(undefined)
+    policy.includeFullProfile ? readProjectCodexProfileIfExists(project.projectId) : Promise.resolve(undefined),
+    policy.includeSessionHints && input.sessionId !== undefined
+      ? readCodexSessionHints(projectMemoryRoot, { sessionId: input.sessionId, projectId: project.projectId })
+      : Promise.resolve([])
   ])
   const routedMemory = await retrieveRoutedMemory({
     cwd: input.cwd,
@@ -370,6 +386,7 @@ export async function getCodexContinuityContext(input: {
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
+    sessionHints: sessionHints.map(toSessionHintDigestItem),
     activation,
     responseStrategy: {
       tone: snapshot.strategy.tone,
@@ -987,6 +1004,18 @@ function toSimilarProjectHintDigestItem(item: IndexedSimilarMemory, input: {
       transferability: true,
       score: item.score
     })
+  }
+}
+
+function toSessionHintDigestItem(hint: CodexSessionHint): SessionHintDigestItem {
+  return {
+    id: hint.id,
+    sourceProjectId: hint.sourceProjectId,
+    sourceProjectName: hint.sourceProjectName,
+    content: hint.summary,
+    transferable: true,
+    notCurrentProjectFact: true,
+    rationale: 'Session-local transferable guidance from a similar project; not a current project fact.'
   }
 }
 

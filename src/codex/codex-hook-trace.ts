@@ -1,4 +1,7 @@
 import { appendCodexHookTrace, type CodexHookTraceEventName, type CodexHookTraceTool } from './hook-trace-store.js'
+import { codexProjectMemoryRoot } from './codex-memory-root.js'
+import { identifyCodexProject } from './project-id.js'
+import { clearCodexSessionHints } from './session-hints.js'
 
 export interface CodexHookCommandOutput {
   continue: true
@@ -20,13 +23,22 @@ export async function handleCodexHookTraceCommand(
     const raw = rawInput ?? await readTextFromStdin()
     const payload = parsePayload(raw)
     if (payload !== undefined) {
-      await appendCodexHookTrace(toTraceInput(event, payload))
+      const traceInput = toTraceInput(event, payload)
+      await appendCodexHookTrace(traceInput)
+      if (event === 'session_start') {
+        await clearSessionHintsForProject(traceInput.cwd)
+      }
     }
   } catch {
     // Codex lifecycle hooks must fail open.
   }
 
   return formatCodexHookTraceCommandOutput()
+}
+
+async function clearSessionHintsForProject(cwd: string): Promise<void> {
+  const project = await identifyCodexProject(cwd)
+  await clearCodexSessionHints(codexProjectMemoryRoot(project.projectId))
 }
 
 export function formatCodexHookTraceCommandOutput(): string {
