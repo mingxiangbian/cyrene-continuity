@@ -193,6 +193,8 @@ soft threshold breaches, skipped cases, and provider-unsupported adapter cases.
 Use `smoke` for a quick sanity check and `gate` for release gate validation.
 Benchmark fixtures must use isolated temp HOME/project/memory/index paths and
 must not read or write real user memory.
+The 2026-06-06 local suite run is recorded in
+`docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md`.
 
 `cyrene-continuity codex ui` starts a local-only Web UI on
 `http://127.0.0.1:47833` by default. If that port is busy, the server tries the
