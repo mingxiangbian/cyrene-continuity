@@ -309,6 +309,7 @@ async function runProjectWeeklyLocked(input: {
       memoryRoot: input.root.memoryRoot,
       memory
     }))
+  let fastSummaryUpdated = false
 
   if (!input.dryRun) {
     if (coreMemories.length > 0) {
@@ -348,6 +349,12 @@ async function runProjectWeeklyLocked(input: {
         scope: 'project',
         memories: next
       })
+      await refreshGlobalFastSummaryProjection({
+        memoryRoot: input.root.memoryRoot,
+        memories: next,
+        generatedAt: input.now
+      })
+      fastSummaryUpdated = true
     }
   }
 
@@ -361,7 +368,7 @@ async function runProjectWeeklyLocked(input: {
       evalFailures,
       capExhausted,
       malformedSemanticMemories,
-      fastSummaryUpdated: false,
+      fastSummaryUpdated,
       indexHealthChecked,
       runtimeMetricsRecorded: 0
     },

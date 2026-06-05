@@ -18,7 +18,7 @@ describe('context policy', () => {
       includeFullProfile: false,
       includeFastSummaries: true,
       recordRetrievedEvents: false,
-      allowJsonlFallback: true,
+      allowJsonlFallback: false,
       allowHotPathIndexRebuild: false
     })
   })
@@ -34,7 +34,8 @@ describe('context policy', () => {
       includeSessionHints: true,
       includeFullProfile: true,
       includeFastSummaries: false,
-      recordRetrievedEvents: false
+      recordRetrievedEvents: false,
+      allowJsonlFallback: false
     })
   })
 
@@ -49,7 +50,8 @@ describe('context policy', () => {
       includeSessionHints: true,
       includeFullProfile: true,
       includeFastSummaries: false,
-      recordRetrievedEvents: false
+      recordRetrievedEvents: false,
+      allowJsonlFallback: false
     })
   })
 
@@ -59,13 +61,15 @@ describe('context policy', () => {
       includeDiagnostics: true,
       includeSimilarProjectHints: true,
       recordRetrievedEvents: true,
+      allowJsonlFallback: true,
       maxTokens: 333
     })).toMatchObject({
       mode: 'fast',
       maxTokens: 333,
       includeDiagnostics: true,
       includeSimilarProjectHints: true,
-      recordRetrievedEvents: true
+      recordRetrievedEvents: true,
+      allowJsonlFallback: true
     })
   })
 

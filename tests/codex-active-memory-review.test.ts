@@ -14,6 +14,7 @@ import { readFastSummaryProjection, writeFastSummaryProjection } from '../src/co
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { renderMemoryProjectionsFromRoot } from '../src/memory/memory-exporter.js'
+import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import { readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEvent, MemoryTombstone, PendingMemory } from '../src/memory/types.js'
 
@@ -332,7 +333,10 @@ describe('Codex active memory lifecycle', () => {
     const home = await createTempDir('cyrene-supersede-home-')
     vi.stubEnv('HOME', home)
     const cwd = await createTempDir('cyrene-supersede-project-')
-    const memory = active()
+    const memory = active({
+      confidenceTier: 'project_core',
+      activationPolicy: activationPolicyForConfidenceTier('project_core')
+    })
     const root = await seed(cwd, [memory])
     const proposed = await proposeEditCodexActiveMemory({
       cwd,
@@ -358,6 +362,10 @@ describe('Codex active memory lifecycle', () => {
     const activeLines = await readActiveMemoriesFromRoot(root)
     expect(activeLines.map((item) => item.content)).toEqual(['Replacement active memory.'])
     expect(activeLines[0]?.supersedes).toEqual([memory.id])
+    expect(activeLines[0]).toMatchObject({
+      confidenceTier: 'project_core',
+      activationPolicy: activationPolicyForConfidenceTier('project_core')
+    })
     expect(await readFile(join(root, 'review_queue.jsonl'), 'utf8')).toBe('')
     const tombstones = jsonl<MemoryTombstone>(await readFile(join(root, 'tombstones.jsonl'), 'utf8'))
     expect(tombstones[0]).toMatchObject({

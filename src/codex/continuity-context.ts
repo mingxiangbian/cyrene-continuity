@@ -293,17 +293,18 @@ export async function getCodexContinuityContext(input: {
       cwd: input.cwd,
       userCyreneDir: config.userCyreneDir,
       memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-      extraMemories: policy.mode === 'fast' ? [] : await readLegacyGlobalCodexMemories(project.projectId),
+      extraMemories: policy.mode === 'fast' || !policy.allowJsonlFallback ? [] : await readLegacyGlobalCodexMemories(project.projectId),
       query: input.userMessage,
       task,
       maxItems: budget.maxItems,
       maxTokens: Math.min(budget.maxTokens, policy.maxTokens)
   }
   let profileReadLatencyMs = 0
-  const [pendingReview, [fastSummary, globalProfile, projectProfile], storedSessionHints] = await Promise.all([
+  const [pendingReview, [globalFastSummary, projectFastSummary, globalProfile, projectProfile], storedSessionHints] = await Promise.all([
     policy.includePendingNotice ? getCodexPendingReviewNotice({ cwd: input.cwd }) : Promise.resolve({}),
     measureAsync(async () => Promise.all([
       policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
+      policy.includeFastSummaries ? readFastSummaryProjection(projectMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
       policy.includeFullProfile ? readGlobalCodexProfileIfExists() : Promise.resolve(undefined),
       policy.includeFullProfile ? readProjectCodexProfileIfExists(project.projectId) : Promise.resolve(undefined)
     ]), (latencyMs) => {
@@ -373,7 +374,11 @@ export async function getCodexContinuityContext(input: {
     : []
   const profileContent = policy.includeFullProfile
     ? [globalProfile, projectProfile].filter(Boolean).join('\n\n')
-    : [fastSummary.globalFastSummary, fastSummary.profileFastSummary].filter(Boolean).join('\n\n')
+    : [
+        globalFastSummary.globalFastSummary,
+        globalFastSummary.profileFastSummary,
+        projectFastSummary.profileFastSummary
+      ].filter(Boolean).join('\n\n')
   const snapshot = await buildContinuitySnapshot({
     config: {
       ...config,
@@ -462,8 +467,8 @@ export async function getCodexContinuityContext(input: {
         }
       : undefined,
     profile: {
-      global: globalProfile ?? nonEmptyString(fastSummary.globalFastSummary),
-      project: projectProfile ?? nonEmptyString(fastSummary.profileFastSummary),
+      global: globalProfile ?? nonEmptyString(globalFastSummary.globalFastSummary) ?? nonEmptyString(globalFastSummary.profileFastSummary),
+      project: projectProfile ?? nonEmptyString(projectFastSummary.profileFastSummary) ?? nonEmptyString(globalFastSummary.profileFastSummary),
       content: profileContent
     },
     pendingReview,

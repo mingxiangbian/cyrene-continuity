@@ -17168,6 +17168,66 @@ function isFileErrorCode10(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/memory/memory-lifecycle.ts
+var LOW_RISK_DOMAINS = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
+var LOW_RISK_MODULES = /* @__PURE__ */ new Set(["project_semantic", "procedural", "system", "global_policy"]);
+var NEGATIVE_EVENT_TYPES = /* @__PURE__ */ new Set(["corrected", "violated", "contradicted"]);
+function activationPolicyForConfidenceTier(tier) {
+  if (tier === "trial") {
+    return { allowedModes: ["workflow_hint"], maxRuntimeStrength: "hint" };
+  }
+  if (tier === "validated") {
+    return { allowedModes: ["workflow_hint", "plan_constraint", "checklist_item"], maxRuntimeStrength: "checklist" };
+  }
+  return { allowedModes: ["workflow_hint", "plan_constraint", "checklist_item"], maxRuntimeStrength: "profile" };
+}
+function validateSemanticMemoryLifecycle(memory) {
+  const findings = [];
+  if (memory.status !== "active") {
+    return findings;
+  }
+  if (memory.confidenceTier === void 0) {
+    findings.push("active memory is missing confidenceTier");
+  }
+  if (memory.activationPolicy === void 0) {
+    findings.push("active memory is missing activationPolicy");
+  }
+  if (memory.confidenceTier !== void 0 && memory.activationPolicy !== void 0 && !activationPolicyMatchesConfidenceTier(memory.confidenceTier, memory.activationPolicy)) {
+    findings.push(`activationPolicy does not match confidenceTier ${memory.confidenceTier}`);
+  }
+  if (memory.scope === "global" && memory.confidenceTier !== void 0 && memory.confidenceTier !== "global_core") {
+    findings.push("global memory must use confidenceTier global_core");
+  }
+  if (memory.scope === "project" && memory.confidenceTier === "global_core") {
+    findings.push("project memory cannot use confidenceTier global_core");
+  }
+  if (memory.confidenceTier === "trial" && memory.activationPolicy?.allowedModes.some((mode) => mode !== "workflow_hint")) {
+    findings.push("trial memory can only allow workflow_hint activation");
+  }
+  if ((memory.confidenceTier === "project_core" || memory.confidenceTier === "global_core") && memory.evidence.length === 0) {
+    findings.push("core memory requires evidence");
+  }
+  if (memory.confidenceTier === "global_core" && !isLowRiskLifecycleMemory(memory)) {
+    findings.push("global_core memory must be low risk");
+  }
+  return findings;
+}
+function isRuntimeActivatableSemanticMemory(memory) {
+  return memory.status === "active" && validateSemanticMemoryLifecycle(memory).length === 0;
+}
+function isLowRiskLifecycleMemory(memory) {
+  const scores = memory.reviewState?.scores;
+  const routingRisk = memory.routing?.risk;
+  return LOW_RISK_DOMAINS.has(memory.domain) && LOW_RISK_MODULES.has(memory.module) && (routingRisk === void 0 || routingRisk === "low") && (scores?.sensitivity ?? 0.2) <= 0.35 && (scores?.safety ?? 0.9) >= 0.8;
+}
+function isNegativeActivationEventType(event) {
+  return NEGATIVE_EVENT_TYPES.has(event);
+}
+function activationPolicyMatchesConfidenceTier(tier, policy) {
+  const expected = activationPolicyForConfidenceTier(tier);
+  return policy.maxRuntimeStrength === expected.maxRuntimeStrength && policy.allowedModes.length === expected.allowedModes.length && policy.allowedModes.every((mode, index) => mode === expected.allowedModes[index]);
+}
+
 // src/codex/active-memory-review.ts
 function contentHashForActiveMemory(memory) {
   return createHash7("sha256").update(JSON.stringify({
@@ -17382,6 +17442,7 @@ async function supersedeCodexActiveMemory(input) {
     const candidateForActivation = decision2.action === "pending" ? decision2.candidate : confirmedCandidate;
     const promoted = {
       ...activateCandidate(candidateForActivation, now),
+      ...inheritedLifecycleFields(memory),
       supersedes: uniqueInOrder2([...candidateForActivation.conflictsWith ?? [], memory.id])
     };
     const tombstone = tombstoneForActiveMemory(memory, {
@@ -17485,6 +17546,15 @@ async function refreshModelVisibleMemory(input) {
     sourceLatestAt: input.sourceLatestAt,
     now: input.sourceLatestAt
   });
+}
+function inheritedLifecycleFields(memory) {
+  if (memory.confidenceTier === void 0) {
+    return {};
+  }
+  return {
+    confidenceTier: memory.confidenceTier,
+    activationPolicy: activationPolicyForConfidenceTier(memory.confidenceTier)
+  };
 }
 function tombstoneForActiveMemory(memory, input) {
   return {
@@ -17866,68 +17936,6 @@ async function appendActivationEventsFailOpen(input) {
 
 // src/codex/memory-activation.ts
 import { createHash as createHash9 } from "node:crypto";
-
-// src/memory/memory-lifecycle.ts
-var LOW_RISK_DOMAINS = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
-var LOW_RISK_MODULES = /* @__PURE__ */ new Set(["project_semantic", "procedural", "system", "global_policy"]);
-var NEGATIVE_EVENT_TYPES = /* @__PURE__ */ new Set(["corrected", "violated", "contradicted"]);
-function activationPolicyForConfidenceTier(tier) {
-  if (tier === "trial") {
-    return { allowedModes: ["workflow_hint"], maxRuntimeStrength: "hint" };
-  }
-  if (tier === "validated") {
-    return { allowedModes: ["workflow_hint", "plan_constraint", "checklist_item"], maxRuntimeStrength: "checklist" };
-  }
-  return { allowedModes: ["workflow_hint", "plan_constraint", "checklist_item"], maxRuntimeStrength: "profile" };
-}
-function validateSemanticMemoryLifecycle(memory) {
-  const findings = [];
-  if (memory.status !== "active") {
-    return findings;
-  }
-  if (memory.confidenceTier === void 0) {
-    findings.push("active memory is missing confidenceTier");
-  }
-  if (memory.activationPolicy === void 0) {
-    findings.push("active memory is missing activationPolicy");
-  }
-  if (memory.confidenceTier !== void 0 && memory.activationPolicy !== void 0 && !activationPolicyMatchesConfidenceTier(memory.confidenceTier, memory.activationPolicy)) {
-    findings.push(`activationPolicy does not match confidenceTier ${memory.confidenceTier}`);
-  }
-  if (memory.scope === "global" && memory.confidenceTier !== void 0 && memory.confidenceTier !== "global_core") {
-    findings.push("global memory must use confidenceTier global_core");
-  }
-  if (memory.scope === "project" && memory.confidenceTier === "global_core") {
-    findings.push("project memory cannot use confidenceTier global_core");
-  }
-  if (memory.confidenceTier === "trial" && memory.activationPolicy?.allowedModes.some((mode) => mode !== "workflow_hint")) {
-    findings.push("trial memory can only allow workflow_hint activation");
-  }
-  if ((memory.confidenceTier === "project_core" || memory.confidenceTier === "global_core") && memory.evidence.length === 0) {
-    findings.push("core memory requires evidence");
-  }
-  if (memory.confidenceTier === "global_core" && !isLowRiskLifecycleMemory(memory)) {
-    findings.push("global_core memory must be low risk");
-  }
-  return findings;
-}
-function isRuntimeActivatableSemanticMemory(memory) {
-  return memory.status === "active" && validateSemanticMemoryLifecycle(memory).length === 0;
-}
-function isLowRiskLifecycleMemory(memory) {
-  const scores = memory.reviewState?.scores;
-  const routingRisk = memory.routing?.risk;
-  return LOW_RISK_DOMAINS.has(memory.domain) && LOW_RISK_MODULES.has(memory.module) && (routingRisk === void 0 || routingRisk === "low") && (scores?.sensitivity ?? 0.2) <= 0.35 && (scores?.safety ?? 0.9) >= 0.8;
-}
-function isNegativeActivationEventType(event) {
-  return NEGATIVE_EVENT_TYPES.has(event);
-}
-function activationPolicyMatchesConfidenceTier(tier, policy) {
-  const expected = activationPolicyForConfidenceTier(tier);
-  return policy.maxRuntimeStrength === expected.maxRuntimeStrength && policy.allowedModes.length === expected.allowedModes.length && policy.allowedModes.every((mode, index) => mode === expected.allowedModes[index]);
-}
-
-// src/codex/memory-activation.ts
 var DISTINCTIVE_TOKEN_LENGTH = 8;
 var DO_NOT_USE_BOUNDARY_TOKENS = /* @__PURE__ */ new Set([
   "avoid",
@@ -18084,7 +18092,7 @@ var MODE_DEFAULTS = {
     includeFullProfile: false,
     includeFastSummaries: true,
     recordRetrievedEvents: false,
-    allowJsonlFallback: true,
+    allowJsonlFallback: false,
     allowHotPathIndexRebuild: false
   },
   balanced: {
@@ -18098,7 +18106,7 @@ var MODE_DEFAULTS = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: true,
+    allowJsonlFallback: false,
     allowHotPathIndexRebuild: false
   },
   review: {
@@ -18112,7 +18120,7 @@ var MODE_DEFAULTS = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: true,
+    allowJsonlFallback: false,
     allowHotPathIndexRebuild: false
   }
 };
@@ -18351,17 +18359,18 @@ async function getCodexContinuityContext(input) {
     cwd: input.cwd,
     userCyreneDir: config2.userCyreneDir,
     memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-    extraMemories: policy.mode === "fast" ? [] : await readLegacyGlobalCodexMemories(project.projectId),
+    extraMemories: policy.mode === "fast" || !policy.allowJsonlFallback ? [] : await readLegacyGlobalCodexMemories(project.projectId),
     query: input.userMessage,
     task,
     maxItems: budget.maxItems,
     maxTokens: Math.min(budget.maxTokens, policy.maxTokens)
   };
   let profileReadLatencyMs = 0;
-  const [pendingReview, [fastSummary, globalProfile, projectProfile], storedSessionHints] = await Promise.all([
+  const [pendingReview, [globalFastSummary, projectFastSummary, globalProfile, projectProfile], storedSessionHints] = await Promise.all([
     policy.includePendingNotice ? getCodexPendingReviewNotice({ cwd: input.cwd }) : Promise.resolve({}),
     measureAsync(async () => Promise.all([
       policy.includeFastSummaries ? readFastSummaryProjection(globalMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
+      policy.includeFastSummaries ? readFastSummaryProjection(projectMemoryRoot) : Promise.resolve(emptyFastSummaryProjection()),
       policy.includeFullProfile ? readGlobalCodexProfileIfExists() : Promise.resolve(void 0),
       policy.includeFullProfile ? readProjectCodexProfileIfExists(project.projectId) : Promise.resolve(void 0)
     ]), (latencyMs) => {
@@ -18423,7 +18432,11 @@ async function getCodexContinuityContext(input) {
     activeMemoryCount: activeMemory.length
   });
   const retrievalExcluded = policy.includePendingDetails ? routedMemory.pendingHypotheses.map(toPendingRetrievalExcludedMemory) : [];
-  const profileContent = policy.includeFullProfile ? [globalProfile, projectProfile].filter(Boolean).join("\n\n") : [fastSummary.globalFastSummary, fastSummary.profileFastSummary].filter(Boolean).join("\n\n");
+  const profileContent = policy.includeFullProfile ? [globalProfile, projectProfile].filter(Boolean).join("\n\n") : [
+    globalFastSummary.globalFastSummary,
+    globalFastSummary.profileFastSummary,
+    projectFastSummary.profileFastSummary
+  ].filter(Boolean).join("\n\n");
   const snapshot = await buildContinuitySnapshot({
     config: {
       ...config2,
@@ -18507,8 +18520,8 @@ async function getCodexContinuityContext(input) {
       ...retrievalExcluded.length === 0 ? {} : { retrievalExcluded }
     } : void 0,
     profile: {
-      global: globalProfile ?? nonEmptyString2(fastSummary.globalFastSummary),
-      project: projectProfile ?? nonEmptyString2(fastSummary.profileFastSummary),
+      global: globalProfile ?? nonEmptyString2(globalFastSummary.globalFastSummary) ?? nonEmptyString2(globalFastSummary.profileFastSummary),
+      project: projectProfile ?? nonEmptyString2(projectFastSummary.profileFastSummary) ?? nonEmptyString2(globalFastSummary.profileFastSummary),
       content: profileContent
     },
     pendingReview,
@@ -25041,6 +25054,7 @@ async function runProjectWeeklyLocked(input) {
     memoryRoot: input.root.memoryRoot,
     memory
   }));
+  let fastSummaryUpdated = false;
   if (!input.dryRun) {
     if (coreMemories.length > 0) {
       await assertLifecycleProfileTargetSafe(input.root.memoryRoot);
@@ -25078,6 +25092,12 @@ async function runProjectWeeklyLocked(input) {
         scope: "project",
         memories: next
       });
+      await refreshGlobalFastSummaryProjection({
+        memoryRoot: input.root.memoryRoot,
+        memories: next,
+        generatedAt: input.now
+      });
+      fastSummaryUpdated = true;
     }
   }
   return {
@@ -25090,7 +25110,7 @@ async function runProjectWeeklyLocked(input) {
       evalFailures,
       capExhausted,
       malformedSemanticMemories,
-      fastSummaryUpdated: false,
+      fastSummaryUpdated,
       indexHealthChecked,
       runtimeMetricsRecorded: 0
     },
@@ -30379,6 +30399,7 @@ async function runCodexMemoryContextPreview(input) {
     includePendingNotice: input.includePendingNotice,
     includeDiagnostics: input.includeDiagnostics,
     recordRetrievedEvents: input.recordRetrievedEvents,
+    allowJsonlFallback: input.allowJsonlFallback,
     maxTokens: input.maxTokens
   });
   const mode = policy.mode;
@@ -30398,6 +30419,7 @@ async function runCodexMemoryContextPreview(input) {
       includeDiagnostics: input.includeDiagnostics,
       recordActivationEvents: false,
       recordRetrievedEvents: input.recordRetrievedEvents === true,
+      allowJsonlFallback: input.allowJsonlFallback,
       maxTokens: input.maxTokens
     }),
     includeExclusionDetails ? readPendingMemoriesFromRoot(globalRoot) : Promise.resolve([]),
@@ -30422,6 +30444,7 @@ async function runCodexMemoryContextPreview(input) {
       ...input.includePendingNotice === void 0 ? {} : { includePendingNotice: input.includePendingNotice },
       ...input.includeDiagnostics === void 0 ? {} : { includeDiagnostics: input.includeDiagnostics },
       ...input.recordRetrievedEvents === void 0 ? {} : { recordRetrievedEvents: input.recordRetrievedEvents },
+      ...input.allowJsonlFallback === void 0 ? {} : { allowJsonlFallback: input.allowJsonlFallback },
       ...input.maxTokens === void 0 ? {} : { maxTokens: input.maxTokens }
     },
     project: context.project,
@@ -31328,6 +31351,7 @@ async function handleCodexCommand(input) {
       includePendingNotice: parseOptionalBooleanFlag(input.args, "--include-pending-notice"),
       includeDiagnostics: parseOptionalBooleanFlag(input.args, "--include-diagnostics"),
       recordRetrievedEvents: parseOptionalBooleanFlag(input.args, "--record-retrieved-events"),
+      allowJsonlFallback: parseOptionalBooleanFlag(input.args, "--allow-jsonl-fallback"),
       maxTokens: parseContextMaxTokens(input.args)
     }), null, 2)}
 `);
@@ -31585,7 +31609,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -46022,6 +46046,7 @@ var continuityGetInputSchema = {
   includePendingNotice: external_exports.boolean().optional(),
   includeDiagnostics: external_exports.boolean().optional(),
   recordRetrievedEvents: external_exports.boolean().optional(),
+  allowJsonlFallback: external_exports.boolean().optional(),
   maxTokens: external_exports.number().int().positive().optional()
 };
 async function handleContinuityGet(input, fallbackCwd) {
@@ -46035,6 +46060,7 @@ async function handleContinuityGet(input, fallbackCwd) {
     includePendingNotice: input.includePendingNotice,
     includeDiagnostics: input.includeDiagnostics,
     recordRetrievedEvents: input.recordRetrievedEvents,
+    allowJsonlFallback: input.allowJsonlFallback,
     maxTokens: input.maxTokens
   });
   return jsonText(context);

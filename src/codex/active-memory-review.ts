@@ -11,6 +11,7 @@ import { reviewHashForPendingMemory, summarizePendingMemory, type CodexPendingMe
 import { identifyCodexProject } from './project-id.js'
 import { assertMemoryMaintenanceTargetsSafeFromRoot, withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
 import { renderMemoryProjectionsFromRoot } from '../memory/memory-exporter.js'
+import { activationPolicyForConfidenceTier } from '../memory/memory-lifecycle.js'
 import {
   appendMemoryEventFromRoot,
   appendTombstoneFromRoot,
@@ -373,6 +374,7 @@ export async function supersedeCodexActiveMemory(input: {
     const candidateForActivation = decision.action === 'pending' ? decision.candidate : confirmedCandidate
     const promoted: CyreneMemory = {
       ...activateCandidate(candidateForActivation, now),
+      ...inheritedLifecycleFields(memory),
       supersedes: uniqueInOrder([...(candidateForActivation.conflictsWith ?? []), memory.id])
     }
     const tombstone = tombstoneForActiveMemory(memory, {
@@ -499,6 +501,16 @@ async function refreshModelVisibleMemory(input: {
     sourceLatestAt: input.sourceLatestAt,
     now: input.sourceLatestAt
   })
+}
+
+function inheritedLifecycleFields(memory: CyreneMemory): Partial<Pick<CyreneMemory, 'confidenceTier' | 'activationPolicy'>> {
+  if (memory.confidenceTier === undefined) {
+    return {}
+  }
+  return {
+    confidenceTier: memory.confidenceTier,
+    activationPolicy: activationPolicyForConfidenceTier(memory.confidenceTier)
+  }
 }
 
 function tombstoneForActiveMemory(

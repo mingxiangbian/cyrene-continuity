@@ -76,6 +76,7 @@ export async function runCodexMemoryContextPreview(input: {
   includePendingNotice?: boolean
   includeDiagnostics?: boolean
   recordRetrievedEvents?: boolean
+  allowJsonlFallback?: boolean
   maxTokens?: number
 }): Promise<CodexMemoryContextPreview> {
   const task = input.task ?? 'coding'
@@ -88,6 +89,7 @@ export async function runCodexMemoryContextPreview(input: {
     includePendingNotice: input.includePendingNotice,
     includeDiagnostics: input.includeDiagnostics,
     recordRetrievedEvents: input.recordRetrievedEvents,
+    allowJsonlFallback: input.allowJsonlFallback,
     maxTokens: input.maxTokens
   })
   const mode = policy.mode
@@ -109,6 +111,7 @@ export async function runCodexMemoryContextPreview(input: {
         includeDiagnostics: input.includeDiagnostics,
         recordActivationEvents: false,
         recordRetrievedEvents: input.recordRetrievedEvents === true,
+        allowJsonlFallback: input.allowJsonlFallback,
         maxTokens: input.maxTokens
       }),
       includeExclusionDetails ? readPendingMemoriesFromRoot(globalRoot) : Promise.resolve([]),
@@ -135,6 +138,7 @@ export async function runCodexMemoryContextPreview(input: {
       ...(input.includePendingNotice === undefined ? {} : { includePendingNotice: input.includePendingNotice }),
       ...(input.includeDiagnostics === undefined ? {} : { includeDiagnostics: input.includeDiagnostics }),
       ...(input.recordRetrievedEvents === undefined ? {} : { recordRetrievedEvents: input.recordRetrievedEvents }),
+      ...(input.allowJsonlFallback === undefined ? {} : { allowJsonlFallback: input.allowJsonlFallback }),
       ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens })
     },
     project: context.project,

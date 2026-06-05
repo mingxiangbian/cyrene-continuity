@@ -472,6 +472,7 @@ describe('Cyrene MCP server', () => {
         includePendingNotice: expect.any(Object),
         includeDiagnostics: expect.any(Object),
         recordRetrievedEvents: expect.any(Object),
+        allowJsonlFallback: expect.any(Object),
         maxTokens: expect.any(Object)
       })
     } finally {
@@ -517,7 +518,7 @@ describe('Cyrene MCP server', () => {
         }
       }
       expect(parsed.diagnostics?.memoryIndex).toMatchObject({
-        source: 'jsonl',
+        source: 'sqlite',
         fallbackMode: 'sqlite',
         freshness: 'empty',
         routes: ['global', 'project', 'pending']

@@ -49,7 +49,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFullProfile: false,
     includeFastSummaries: true,
     recordRetrievedEvents: false,
-    allowJsonlFallback: true,
+    allowJsonlFallback: false,
     allowHotPathIndexRebuild: false
   },
   balanced: {
@@ -63,7 +63,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: true,
+    allowJsonlFallback: false,
     allowHotPathIndexRebuild: false
   },
   review: {
@@ -77,7 +77,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: true,
+    allowJsonlFallback: false,
     allowHotPathIndexRebuild: false
   }
 }
