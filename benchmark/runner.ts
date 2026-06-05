@@ -7,8 +7,10 @@ import { writeBenchmarkReports } from './report.js'
 import { scoreCaseResult, summarizeBenchmarkResults } from './scorer.js'
 import { BENCHMARK_VERSION, THRESHOLD_VERSION } from './thresholds.js'
 import { runTier0Case } from './cases/tier0-release-gate.js'
+import { runTier1Case } from './cases/tier1-memory-ability.js'
 import { runTier15Case } from './cases/tier1-5-lifecycle.js'
 import { runTier16Case } from './cases/tier1-6-core-mechanisms.js'
+import { runTier2Case } from './cases/tier2-memory-to-action.js'
 import { runTier4GateCase } from './cases/tier4-gate.js'
 import type {
   BenchmarkCase,
@@ -95,10 +97,14 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
 async function runRunnableCase(benchmarkCase: BenchmarkCase, options: BenchmarkRunOptions): Promise<BenchmarkCaseResult> {
   const tier0 = await runTier0Case(benchmarkCase, options)
   if (tier0 !== undefined) return tier0
+  const tier1 = await runTier1Case(benchmarkCase, options)
+  if (tier1 !== undefined) return tier1
   const tier15 = await runTier15Case(benchmarkCase, options)
   if (tier15 !== undefined) return tier15
   const tier16 = await runTier16Case(benchmarkCase, options)
   if (tier16 !== undefined) return tier16
+  const tier2 = await runTier2Case(benchmarkCase, options)
+  if (tier2 !== undefined) return tier2
   const tier4Gate = await runTier4GateCase(benchmarkCase, options)
   if (tier4Gate !== undefined) return tier4Gate
 
