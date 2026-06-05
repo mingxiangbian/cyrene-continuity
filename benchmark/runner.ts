@@ -11,6 +11,7 @@ import { runTier1Case } from './cases/tier1-memory-ability.js'
 import { runTier15Case } from './cases/tier1-5-lifecycle.js'
 import { runTier16Case } from './cases/tier1-6-core-mechanisms.js'
 import { runTier2Case } from './cases/tier2-memory-to-action.js'
+import { runTier3Case } from './cases/tier3-scale-efficiency.js'
 import { runTier4GateCase } from './cases/tier4-gate.js'
 import type {
   BenchmarkCase,
@@ -105,6 +106,8 @@ async function runRunnableCase(benchmarkCase: BenchmarkCase, options: BenchmarkR
   if (tier16 !== undefined) return tier16
   const tier2 = await runTier2Case(benchmarkCase, options)
   if (tier2 !== undefined) return tier2
+  const tier3 = await runTier3Case(benchmarkCase, options)
+  if (tier3 !== undefined) return tier3
   const tier4Gate = await runTier4GateCase(benchmarkCase, options)
   if (tier4Gate !== undefined) return tier4Gate
 
