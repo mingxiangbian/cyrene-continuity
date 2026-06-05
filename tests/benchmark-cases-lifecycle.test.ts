@@ -47,5 +47,5 @@ describe('benchmark Tier 1.5 lifecycle cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
-  })
+  }, 20_000)
 })

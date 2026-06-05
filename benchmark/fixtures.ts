@@ -11,6 +11,9 @@ import { writeActiveMemoriesFromRoot, writePendingMemoriesFromRoot } from '../sr
 import type { BenchmarkFixtureRunMetadata } from './types.js'
 import type { ConfidenceTier, CyreneMemory, MemoryScope, PendingMemory } from '../src/memory/types.js'
 
+const defaultProcessCwd = process.cwd()
+let fixtureEnvironmentQueue: Promise<void> = Promise.resolve()
+
 interface BenchmarkFixtureInputBase {
   caseId: string
   seed: string
@@ -47,6 +50,7 @@ export function seededId(seed: string, label: string): string {
 }
 
 export async function withFixtureEnvironment<T>(fixture: BenchmarkFixture, fn: () => Promise<T>): Promise<T> {
+  const release = await acquireFixtureEnvironmentLock()
   const previousHome = process.env.HOME
   const previousTz = process.env.TZ
   const previousCwd = process.cwd()
@@ -56,10 +60,22 @@ export async function withFixtureEnvironment<T>(fixture: BenchmarkFixture, fn: (
     process.chdir(fixture.cwd)
     return await fn()
   } finally {
-    process.chdir(previousCwd)
+    restoreCwd(previousCwd)
     restoreEnvValue('HOME', previousHome)
     restoreEnvValue('TZ', previousTz)
+    release()
   }
+}
+
+async function acquireFixtureEnvironmentLock(): Promise<() => void> {
+  let release: () => void = () => {}
+  const currentTurn = fixtureEnvironmentQueue
+  const nextTurn = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fixtureEnvironmentQueue = currentTurn.then(() => nextTurn, () => nextTurn)
+  await currentTurn.catch(() => undefined)
+  return release
 }
 
 export async function createBenchmarkFixture(input: BenchmarkFixtureInput): Promise<BenchmarkFixture> {
@@ -275,6 +291,14 @@ function confidenceTierForScope(scope: MemoryScope): ConfidenceTier {
 
 function portabilityForScope(scope: MemoryScope): CyreneMemory['portability'] {
   return scope === 'global' ? 'global' : 'local_only'
+}
+
+function restoreCwd(previousCwd: string): void {
+  try {
+    process.chdir(previousCwd)
+  } catch {
+    process.chdir(defaultProcessCwd)
+  }
 }
 
 function restoreEnvValue(name: 'HOME' | 'TZ', value: string | undefined): void {

@@ -45,6 +45,7 @@ Use `cyrene-continuity codex ui` when the user wants local visual review of the 
 26. When `cyrene_continuity_get` returns an active activation item with `memoryId` and `contentHash`, call `cyrene_memory_feedback` after the memory is actually applied, ignored, corrected, or violated. Feedback is active-memory evidence only: it must not include raw transcript/appshot/attachment content, must rely on `contentHash`, and must not be described as promotion.
 27. Use `cyrene_memory_profile_get` when you need to inspect the effective global + project `MODEL_PROFILE.md` context. Profile context is generated from core memory; project harvest creates project-scope trial memory by default for strict low-risk evidence, and review queue candidates for high-risk or ambiguous evidence.
 28. Use `cyrene_memory_automation_run` only for explicit daily/weekly lifecycle maintenance or verification tasks; running it is not a substitute for asking approve/reject/edit/defer on visible manual review candidates.
+29. Use `cyrene-continuity codex benchmark run --profile smoke` for quick benchmark sanity checks and `--profile gate` for release gate validation when benchmark behavior changes. Benchmark fixtures must remain isolated from real user memory.
 
 ## Boundaries
 

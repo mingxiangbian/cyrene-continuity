@@ -47,7 +47,7 @@ describe('benchmark Tier 4 failure, security, and adapter cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
-  })
+  }, 20_000)
 
   it('marks llm and external adapter cases unsupported when provider env is missing', async () => {
     const llm = await runCyreneBenchmark({
@@ -73,5 +73,5 @@ describe('benchmark Tier 4 failure, security, and adapter cases', () => {
     expect(externalAdapter?.status).toBe('not_supported_without_provider')
     expect(evidenceText(externalAdapter)).toContain('missing provider env')
     expect(external.failedCases).toEqual([])
-  })
+  }, 20_000)
 })

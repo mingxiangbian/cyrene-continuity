@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { BENCHMARK_CASES } from './catalog.js'
 import { writeBenchmarkReports } from './report.js'
@@ -25,6 +27,7 @@ import type {
 
 const execFileAsync = promisify(execFile)
 const SPEC_PATH = 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md'
+const BENCHMARK_SOURCE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<BenchmarkReport> {
   const startedAt = options.now ?? new Date().toISOString()
@@ -69,15 +72,15 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
       path: SPEC_PATH,
       title: 'Cyrene Benchmark Eval System Design',
       date: '2026-06-05',
-      contentHash: await fileHash(SPEC_PATH)
+      contentHash: await firstFileHash([join(resolve(options.cwd), SPEC_PATH), join(BENCHMARK_SOURCE_ROOT, SPEC_PATH)])
     },
     benchmark: {
       version: BENCHMARK_VERSION,
       thresholdVersion: THRESHOLD_VERSION,
       caseCatalogHash: createHash('sha256').update(JSON.stringify(BENCHMARK_CASES)).digest('hex')
     },
-    package: await packageMetadata(),
-    git: await gitMetadata(),
+    package: await packageMetadata([join(resolve(options.cwd), 'package.json'), join(BENCHMARK_SOURCE_ROOT, 'package.json')]),
+    git: await gitMetadata(resolve(options.cwd)),
     runtime: {
       nodeVersion: process.version,
       npmVersion: await npmVersion(),
@@ -271,20 +274,20 @@ function metricGroup(
   return groups.capability
 }
 
-async function fileHash(path: string): Promise<string> {
-  return createHash('sha256').update(await readFile(path)).digest('hex')
+async function firstFileHash(paths: readonly string[]): Promise<string> {
+  return createHash('sha256').update(await readFirstFileBuffer(paths)).digest('hex')
 }
 
-async function packageMetadata(): Promise<BenchmarkReport['package']> {
-  const parsed = JSON.parse(await readFile('package.json', 'utf8')) as { name?: string; version?: string }
+async function packageMetadata(paths: readonly string[]): Promise<BenchmarkReport['package']> {
+  const parsed = JSON.parse(await readFirstFileText(paths)) as { name?: string; version?: string }
   return { name: parsed.name ?? 'unknown', version: parsed.version ?? '0.0.0' }
 }
 
-async function gitMetadata(): Promise<BenchmarkReport['git']> {
+async function gitMetadata(cwd: string): Promise<BenchmarkReport['git']> {
   const [branch, commit, status] = await Promise.all([
-    git(['branch', '--show-current']),
-    git(['rev-parse', 'HEAD']),
-    git(['status', '--short'])
+    git(['branch', '--show-current'], cwd),
+    git(['rev-parse', 'HEAD'], cwd),
+    git(['status', '--short'], cwd)
   ])
   return {
     branch: branch.trim() || 'unknown',
@@ -302,12 +305,38 @@ async function npmVersion(): Promise<string | undefined> {
   }
 }
 
-async function git(args: string[]): Promise<string> {
+async function git(args: string[], cwd: string): Promise<string> {
   try {
-    return (await execFileAsync('git', args)).stdout
+    return (await execFileAsync('git', args, { cwd })).stdout
   } catch {
     return ''
   }
+}
+
+async function readFirstFileBuffer(paths: readonly string[]): Promise<Buffer> {
+  for (const path of paths) {
+    try {
+      return await readFile(path)
+    } catch (error) {
+      if (!isFileErrorCode(error, 'ENOENT')) throw error
+    }
+  }
+  throw new Error(`None of the benchmark metadata files exist: ${paths.join(', ')}`)
+}
+
+async function readFirstFileText(paths: readonly string[]): Promise<string> {
+  for (const path of paths) {
+    try {
+      return await readFile(path, 'utf8')
+    } catch (error) {
+      if (!isFileErrorCode(error, 'ENOENT')) throw error
+    }
+  }
+  throw new Error(`None of the benchmark metadata files exist: ${paths.join(', ')}`)
+}
+
+function isFileErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code
 }
 
 function uniqueValues<T extends string>(values: readonly T[]): T[] {

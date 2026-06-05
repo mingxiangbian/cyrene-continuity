@@ -147,6 +147,12 @@ npm run dev -- codex project status
 npm run dev -- codex project list
 npm run dev -- codex project alias <projectId> <alias>
 npm run dev -- codex project merge <fromProjectId> <toProjectId>
+npm run dev -- codex benchmark run --profile smoke
+npm run dev -- codex benchmark run --profile gate
+npm run dev -- codex benchmark run --profile full
+npm run dev -- codex benchmark run --profile scale
+npm run dev -- codex benchmark run --profile llm
+npm run dev -- codex benchmark run --profile external
 npm run dev -- codex eval run --check similar-hints
 npm run dev -- codex eval run --check release
 npm run dev -- codex memory status
@@ -171,6 +177,22 @@ npm run dev -- codex profile apply --candidate <candidateId> --review-hash <hash
 npm run dev -- codex similar-hints explain --source-project-id <projectId>
 npm run dev -- codex similar-hints mark-transferable --memory-id <memoryId> --review-hash <hash>
 ```
+
+## Benchmark Eval
+
+Run benchmark profiles with `cyrene-continuity codex benchmark run --profile
+<smoke|gate|full|scale|llm|external>` or the source checkout equivalent
+`npm run dev -- codex benchmark run --profile <profile>`.
+
+Every run writes `benchmark_report.json` and `benchmark_report.md` to
+`benchmark-results/` unless `--output-dir <path>` is provided. Reports include
+the spec hash, benchmark version, threshold version, package version, git
+branch/commit/dirty status, runtime metadata, case results, hard rule failures,
+soft threshold breaches, skipped cases, and provider-unsupported adapter cases.
+
+Use `smoke` for a quick sanity check and `gate` for release gate validation.
+Benchmark fixtures must use isolated temp HOME/project/memory/index paths and
+must not read or write real user memory.
 
 `cyrene-continuity codex ui` starts a local-only Web UI on
 `http://127.0.0.1:47833` by default. If that port is busy, the server tries the

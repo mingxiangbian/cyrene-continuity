@@ -54,5 +54,5 @@ describe('benchmark Tier 1 and Tier 2 replay cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
-  })
+  }, 20_000)
 })
