@@ -259,3 +259,13 @@ export interface BenchmarkReport {
     regressions: ReadonlyArray<{ metric: string; baseline: number; current: number; delta: number }>
   }
 }
+
+export interface BenchmarkRunOptions {
+  cwd: string
+  profile: BenchmarkProfile
+  outputDir: string
+  seed?: string
+  now?: string
+  baselineReportPath?: string
+  preserveFixtures?: boolean
+}

@@ -1,5 +1,6 @@
 import { formatCodexDoctor } from './codex-doctor.js'
 import { runCodexReleaseEval, runCodexSimilarHintsEval } from './codex-eval.js'
+import { runCodexBenchmark } from './codex-benchmark.js'
 import { formatCodexStopHookInstall, installCodexStopHook } from './codex-hook-install.js'
 import { handleCodexStopHookCommand } from './codex-hook-stop.js'
 import { handleCodexHookTraceCommand } from './codex-hook-trace.js'
@@ -55,6 +56,7 @@ import {
   type CodexFastSummaryRefreshScope
 } from './fast-summary-maintenance.js'
 import type { MemoryConflictResolution } from '../memory/types.js'
+import type { BenchmarkProfile } from '../../benchmark/types.js'
 import { createDefaultConfig } from '../config.js'
 import { callModel as defaultCallModel } from '../llm-client.js'
 import { runCodexProjectMemoryHarvest } from './project-memory-harvester.js'
@@ -151,6 +153,17 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     input.args[3] === 'similar-hints'
   ) {
     process.stdout.write(`${JSON.stringify(await runCodexSimilarHintsEval({ cwd: input.cwd }), null, 2)}\n`)
+    return
+  }
+
+  if (command === 'benchmark' && input.args[1] === 'run') {
+    process.stdout.write(`${JSON.stringify(await runCodexBenchmark({
+      cwd: input.cwd,
+      profile: parseBenchmarkProfile(input.args),
+      outputDir: parseOptionalOption(input.args, '--output-dir'),
+      baselineReportPath: parseOptionalOption(input.args, '--baseline'),
+      preserveFixtures: input.args.includes('--preserve-fixtures')
+    }), null, 2)}\n`)
     return
   }
 
@@ -472,7 +485,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|llm|external [--output-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -560,6 +573,14 @@ function parseMemoryAutomationJob(args: string[]): CodexMemoryAutomationJob {
     return value
   }
   throw new Error(`Invalid memory automation job: ${value}. Expected daily or weekly`)
+}
+
+function parseBenchmarkProfile(args: string[]): BenchmarkProfile {
+  const value = parseRequiredOption(args, '--profile', 'benchmark profile')
+  if (value === 'smoke' || value === 'gate' || value === 'full' || value === 'scale' || value === 'llm' || value === 'external') {
+    return value
+  }
+  throw new Error(`Invalid benchmark profile: ${value}. Expected smoke, gate, full, scale, llm, or external`)
 }
 
 function parseMemorySummaryRefreshScope(args: string[]): CodexFastSummaryRefreshScope {
