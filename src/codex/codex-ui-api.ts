@@ -938,7 +938,9 @@ async function readDashboard(cwd: string, now: string | undefined, request: Code
   const continuity = await getCodexContinuityContext({
     cwd,
     userMessage: 'memory review web ui route button',
-    task: 'memory'
+    task: 'memory',
+    mode: 'review',
+    recordRetrievedEvents: false
   })
   const selection = await resolveSelection(cwd, request)
   const [status, pending, active, reviewSummaries, projectMemory, automation, profile, signals, projects] = await Promise.all([

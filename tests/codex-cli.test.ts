@@ -995,6 +995,7 @@ describe('cyrene-continuity codex CLI', () => {
       expect(stderr).toContain('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
       expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply] [--all-projects]')
       expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply] [--all-projects]')
+      expect(stderr).toContain('[--include-pending-notice]')
       expect(stderr).toContain('ui [--port <n>]')
     }
   })
