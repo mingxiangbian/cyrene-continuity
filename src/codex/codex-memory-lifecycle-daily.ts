@@ -32,6 +32,10 @@ import {
   codexProjectMemoryRoot,
   getReadableCodexProjectMemoryRoots
 } from './codex-memory-root.js'
+import {
+  checkCodexMemoryIndexHealth,
+  refreshGlobalFastSummaryProjection
+} from './fast-summary-maintenance.js'
 import { identifyCodexProject } from './project-id.js'
 
 const PROJECT_AUTO_PROMOTION_POLICY_ID = 'low_risk_project_memory_v1'
@@ -65,6 +69,9 @@ export interface DailyLifecycleRootResult {
   malformedJsonLines?: number
   evalFailures: number
   capExhausted: number
+  fastSummaryUpdated: boolean
+  indexHealthChecked: boolean
+  runtimeMetricsRecorded: number
   skipped?: boolean
   reason?: string
 }
@@ -182,6 +189,7 @@ async function runDailyForReadableRoot(
     usedToday: countSameDayAutoPromotions(memoryEvents, input.now),
     dailyCap: root.scope === 'project' ? input.projectDailyCap : input.globalDailyCap
   }
+  state.result.indexHealthChecked = await checkCodexMemoryIndexHealth([root.memoryRoot])
   const next: SemanticMemory[] = []
 
   for (const memory of memories) {
@@ -208,6 +216,14 @@ async function runDailyForReadableRoot(
     }
     if (changed) {
       await writeSemanticMemoriesFromRoot(root.memoryRoot, next)
+    }
+    if (root.scope === 'global') {
+      await refreshGlobalFastSummaryProjection({
+        memoryRoot: root.memoryRoot,
+        memories: next,
+        generatedAt: input.now
+      })
+      state.result.fastSummaryUpdated = true
     }
   }
 
@@ -386,7 +402,10 @@ function baseRootResult(root: LifecycleRootSpec): DailyLifecycleRootResult {
     invalidMemories: 0,
     needsMigration: 0,
     evalFailures: 0,
-    capExhausted: 0
+    capExhausted: 0,
+    fastSummaryUpdated: false,
+    indexHealthChecked: false,
+    runtimeMetricsRecorded: 0
   }
 }
 

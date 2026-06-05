@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { runCodexMemoryLifecycleDaily } from '../src/codex/codex-memory-lifecycle-daily.js'
+import { readFastSummaryProjection } from '../src/codex/fast-summary-store.js'
 import { recordCodexMemoryFeedback } from '../src/codex/memory-feedback.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
@@ -463,6 +464,50 @@ describe('daily memory lifecycle automation', () => {
         confidenceTier: 'global_core'
       }
     })
+  })
+
+  it('updates fast summaries from active global memory and confirmed profile only', async () => {
+    const home = await createTempDir('cyrene-daily-fast-summary-home-')
+    vi.stubEnv('HOME', home)
+    const globalRoot = codexGlobalMemoryRoot()
+    await mkdir(globalRoot, { recursive: true })
+    await writeSemanticMemoriesFromRoot(globalRoot, [
+      globalCandidate({
+        id: 'global-core-fast-summary',
+        status: 'active',
+        confidenceTier: 'global_core',
+        activationPolicy: activationPolicyForConfidenceTier('global_core'),
+        content: 'Use surgical changes across repositories.'
+      }),
+      globalCandidate({
+        id: 'global-pending-noise',
+        domain: 'project',
+        content: 'PENDING SHOULD NOT ENTER FAST SUMMARY',
+        reviewState: {
+          ...globalCandidate().reviewState,
+          normalizedKey: 'global-pending-noise'
+        }
+      })
+    ])
+    await writeFile(join(globalRoot, 'MODEL_PROFILE.md'), '# Profile\n\nPrefer concise engineering Chinese.\n', 'utf8')
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [],
+      includeGlobalRoot: true,
+      apply: true,
+      now: '2026-06-05T00:00:00.000Z'
+    })
+
+    expect(result.roots.find((rootResult) => rootResult.scope === 'global')).toMatchObject({
+      fastSummaryUpdated: true,
+      indexHealthChecked: true,
+      runtimeMetricsRecorded: 0
+    })
+    const summary = await readFastSummaryProjection(globalRoot)
+    expect(summary.generatedAt).toBe('2026-06-05T00:00:00.000Z')
+    expect(summary.globalFastSummary).toContain('Use surgical changes across repositories.')
+    expect(summary.globalFastSummary).not.toContain('PENDING SHOULD NOT ENTER FAST SUMMARY')
+    expect(summary.profileFastSummary).toContain('Prefer concise engineering Chinese.')
   })
 
   it('recommends review-derived global candidates instead of auto-promoting them during daily processing', async () => {

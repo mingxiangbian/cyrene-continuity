@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
-import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
+import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { runCodexMemoryLifecycleWeekly } from '../src/codex/codex-memory-lifecycle-weekly.js'
+import { readFastSummaryProjection } from '../src/codex/fast-summary-store.js'
 import { recordCodexMemoryFeedback } from '../src/codex/memory-feedback.js'
 import { writeLifecycleProfileFromCoreMemory } from '../src/codex/memory-lifecycle-profile.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
@@ -351,6 +352,53 @@ describe('weekly core and global consolidation job', () => {
         evalGate: expect.objectContaining({ passed: true })
       })
     }))
+  })
+
+  it('refreshes global fast summary without promoting pending or similar-project content', async () => {
+    const home = await createTempDir('cyrene-weekly-fast-summary-home-')
+    process.env.HOME = home
+    const projectRoot = await createTempDir('cyrene-weekly-fast-summary-project-')
+    const globalRoot = codexGlobalMemoryRoot()
+    await writeSemanticMemoriesFromRoot(projectRoot, [])
+    await writeSemanticMemoriesFromRoot(globalRoot, [
+      semanticMemory({
+        id: 'weekly-global-core',
+        scope: 'global',
+        confidenceTier: 'global_core',
+        content: 'Use weekly fast summary refresh.'
+      }),
+      semanticMemory({
+        id: 'weekly-similar-project-noise',
+        scope: 'global',
+        confidenceTier: 'global_core',
+        content: 'Similar project candidate must not enter fast summary.'
+      }),
+      semanticMemory({
+        id: 'weekly-pending-noise',
+        status: 'pending',
+        scope: 'global',
+        confidenceTier: undefined,
+        activationPolicy: undefined,
+        content: 'PENDING weekly content must not enter fast summary.'
+      })
+    ])
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: projectRoot }],
+      apply: true,
+      now: NOW
+    })
+
+    expect(result.global).toMatchObject({
+      fastSummaryUpdated: true,
+      indexHealthChecked: true,
+      runtimeMetricsRecorded: 0
+    })
+    const summary = await readFastSummaryProjection(globalRoot)
+    expect(summary.generatedAt).toBe(NOW)
+    expect(summary.globalFastSummary).toContain('Use weekly fast summary refresh.')
+    expect(summary.globalFastSummary).not.toContain('Similar project candidate')
+    expect(summary.globalFastSummary).not.toContain('PENDING weekly content')
   })
 
   it('does not consolidate high-risk personal affective or project-specific content into global_core and produces recommendation only', async () => {

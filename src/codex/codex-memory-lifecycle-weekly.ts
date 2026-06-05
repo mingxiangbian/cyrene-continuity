@@ -35,6 +35,10 @@ import {
   getReadableCodexProjectMemoryRoots
 } from './codex-memory-root.js'
 import {
+  checkCodexMemoryIndexHealth,
+  refreshGlobalFastSummaryProjection
+} from './fast-summary-maintenance.js'
+import {
   assertLifecycleProfileTargetSafe,
   writeLifecycleProfileFromCoreMemory
 } from './memory-lifecycle-profile.js'
@@ -59,6 +63,9 @@ export interface WeeklyProjectRootResult {
   evalFailures: number
   capExhausted: number
   malformedSemanticMemories: number
+  fastSummaryUpdated: boolean
+  indexHealthChecked: boolean
+  runtimeMetricsRecorded: number
 }
 export interface WeeklyGlobalResult {
   memoryRoot: string
@@ -68,6 +75,9 @@ export interface WeeklyGlobalResult {
   evalFailures: number
   capExhausted: number
   malformedSemanticMemories: number
+  fastSummaryUpdated: boolean
+  indexHealthChecked: boolean
+  runtimeMetricsRecorded: number
 }
 export interface WeeklyLifecycleResult {
   action: 'memory_lifecycle_weekly'
@@ -166,9 +176,13 @@ async function runProjectWeeklyLocked(input: {
   now: string
   dailyCap: number
 }): Promise<{ result: WeeklyProjectRootResult; coreMemories: ProjectCoreMemory[] }> {
+  const indexHealthChecked = await checkCodexMemoryIndexHealth([input.root.memoryRoot])
   const strictSemantic = await readSemanticMemoriesStrictFromRoot(input.root.memoryRoot)
   if (strictSemantic.malformedLines > 0) {
-    const result = malformedProjectResult(input.root, strictSemantic.malformedLines)
+    const result = {
+      ...malformedProjectResult(input.root, strictSemantic.malformedLines),
+      indexHealthChecked
+    }
     if (!input.dryRun) {
       await appendMemoryEventFromRoot(input.root.memoryRoot, malformedSemanticMemoryEvent({
         root: input.root,
@@ -346,7 +360,10 @@ async function runProjectWeeklyLocked(input: {
       invalidMemories,
       evalFailures,
       capExhausted,
-      malformedSemanticMemories
+      malformedSemanticMemories,
+      fastSummaryUpdated: false,
+      indexHealthChecked,
+      runtimeMetricsRecorded: 0
     },
     coreMemories
   }
@@ -386,9 +403,13 @@ async function runGlobalWeeklyLocked(input: {
   now: string
   dailyCap: number
 }): Promise<WeeklyGlobalResult> {
+  const indexHealthChecked = await checkCodexMemoryIndexHealth([input.memoryRoot])
   const strictSemantic = await readSemanticMemoriesStrictFromRoot(input.memoryRoot)
   if (strictSemantic.malformedLines > 0) {
-    const result = malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines)
+    const result = {
+      ...malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines),
+      indexHealthChecked
+    }
     if (!input.dryRun) {
       await appendMemoryEventFromRoot(input.memoryRoot, malformedSemanticMemoryEvent({
         root: { memoryRoot: input.memoryRoot },
@@ -526,6 +547,7 @@ async function runGlobalWeeklyLocked(input: {
   }
 
   const next = [...existing, ...candidates.map((candidate) => candidate.memory)]
+  let fastSummaryUpdated = false
   const hasGlobalProfileContent = next.some((memory) =>
     memory.status === 'active' &&
     memory.confidenceTier === 'global_core' &&
@@ -577,6 +599,12 @@ async function runGlobalWeeklyLocked(input: {
         memories: next
       })
     }
+    await refreshGlobalFastSummaryProjection({
+      memoryRoot: input.memoryRoot,
+      memories: next,
+      generatedAt: input.now
+    })
+    fastSummaryUpdated = true
   }
 
   return {
@@ -586,7 +614,10 @@ async function runGlobalWeeklyLocked(input: {
     invalidMemories,
     evalFailures,
     capExhausted,
-    malformedSemanticMemories
+    malformedSemanticMemories,
+    fastSummaryUpdated,
+    indexHealthChecked,
+    runtimeMetricsRecorded: 0
   }
 }
 
@@ -900,7 +931,10 @@ function malformedProjectResult(root: WeeklyProjectRootInput, malformedSemanticM
     invalidMemories: malformedSemanticMemories,
     evalFailures: 0,
     capExhausted: 0,
-    malformedSemanticMemories
+    malformedSemanticMemories,
+    fastSummaryUpdated: false,
+    indexHealthChecked: false,
+    runtimeMetricsRecorded: 0
   }
 }
 
@@ -912,7 +946,10 @@ function malformedGlobalResult(memoryRoot: string, malformedSemanticMemories: nu
     invalidMemories: malformedSemanticMemories,
     evalFailures: 0,
     capExhausted: 0,
-    malformedSemanticMemories
+    malformedSemanticMemories,
+    fastSummaryUpdated: false,
+    indexHealthChecked: false,
+    runtimeMetricsRecorded: 0
   }
 }
 
