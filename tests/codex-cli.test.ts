@@ -354,6 +354,8 @@ describe('cyrene-continuity codex CLI', () => {
         'codex',
         'memory',
         'context-preview',
+        '--mode',
+        'review',
         '--message',
         'context preview trial review',
         '--task',
@@ -363,7 +365,7 @@ describe('cyrene-continuity codex CLI', () => {
     )
     const preview = JSON.parse(result.stdout)
 
-    expect(preview.input).toEqual({ task: 'coding', userMessage: 'context preview trial review' })
+    expect(preview.input).toEqual({ task: 'coding', userMessage: 'context preview trial review', mode: 'review' })
     expect(preview.activeContext.projectMemory).toEqual([])
     expect(preview.activation.workflowHints).toEqual([])
     expect(preview.activation.planConstraints).toEqual([])
@@ -395,6 +397,47 @@ describe('cyrene-continuity codex CLI', () => {
     expect(activeAndActivation).not.toContain('DO NOT LEAK PROJECT PENDING CONTENT')
     expect(activeAndActivation).not.toContain('DO NOT LEAK GLOBAL PENDING CONTENT')
     expect(activeAndActivation).not.toContain('DO NOT LEAK ARCHIVED CONTENT')
+    expect(await readActivationEventsFromRoot(projectRoot)).toEqual([])
+  })
+
+  it('defaults context-preview to fast visibility without pending exclusions', async () => {
+    const home = await createTempDir('cyrene-codex-cli-context-preview-fast-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-context-preview-fast-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'context-preview-fast-cli-test' }), 'utf8')
+    const identity = await identifyCodexProject(cwd)
+    const projectRoot = codexProjectMemoryRoot(identity.projectId)
+    await writePendingMemoriesFromRoot(projectRoot, [
+      createPending({
+        id: 'preview-fast-pending-1',
+        content: 'DO NOT LEAK FAST PENDING CONTENT',
+        normalizedKey: 'preview-fast-pending'
+      })
+    ])
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        '--cwd',
+        cwd,
+        'codex',
+        'memory',
+        'context-preview',
+        '--message',
+        'context preview fast pending'
+      ],
+      { cwd: process.cwd(), env: cliEnv(home), timeout: 10_000 }
+    )
+    const preview = JSON.parse(result.stdout)
+
+    expect(preview.input).toEqual({ task: 'coding', userMessage: 'context preview fast pending', mode: 'fast' })
+    expect(preview.exclusions.pendingReview).toEqual({})
+    expect(preview.exclusions.tombstones).toEqual([])
+    expect(preview.exclusions.archived).toEqual([])
+    expect(preview.diagnostics.pendingReview).toBeUndefined()
+    expect(JSON.stringify(preview)).not.toContain('DO NOT LEAK FAST PENDING CONTENT')
     expect(await readActivationEventsFromRoot(projectRoot)).toEqual([])
   })
 

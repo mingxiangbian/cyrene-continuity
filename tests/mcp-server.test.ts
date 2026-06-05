@@ -450,6 +450,17 @@ describe('Cyrene MCP server', () => {
       ]) {
         expect(schemasByName.get(toolName)?.properties ?? {}).not.toHaveProperty('cwd')
       }
+      expect(schemasByName.get('cyrene_continuity_get')?.properties ?? {}).toMatchObject({
+        userMessage: expect.any(Object),
+        task: expect.any(Object),
+        mode: expect.any(Object),
+        includeSimilarProjectHints: expect.any(Object),
+        includePendingDetails: expect.any(Object),
+        includePendingNotice: expect.any(Object),
+        includeDiagnostics: expect.any(Object),
+        recordRetrievedEvents: expect.any(Object),
+        maxTokens: expect.any(Object)
+      })
     } finally {
       await client.close()
     }
@@ -475,7 +486,9 @@ describe('Cyrene MCP server', () => {
         arguments: {
           cwd,
           userMessage: 'read continuity diagnostics',
-          task: 'coding'
+          task: 'coding',
+          mode: 'review',
+          includeDiagnostics: true
         }
       })
       const content = result.content as Array<{ type: string; text?: string }>

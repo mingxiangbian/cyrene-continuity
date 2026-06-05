@@ -2,6 +2,7 @@ import { readPendingMemoriesFromRoot, readSemanticMemoriesFromRoot, readTombston
 import type { MemoryTombstone, PendingMemory, SemanticMemory } from '../memory/types.js'
 import type { RetrieveMemoriesInput } from '../memory/memory-retriever.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from './codex-memory-root.js'
+import type { ContextMode } from './context-policy.js'
 import { getCodexContinuityContext, type CodexContinuityContext } from './continuity-context.js'
 import { identifyCodexProject } from './project-id.js'
 
@@ -13,6 +14,13 @@ export interface CodexMemoryContextPreview {
   input: {
     task: CodexMemoryContextPreviewTask
     userMessage: string
+    mode: ContextMode
+    includeSimilarProjectHints?: boolean
+    includePendingDetails?: boolean
+    includePendingNotice?: boolean
+    includeDiagnostics?: boolean
+    recordRetrievedEvents?: boolean
+    maxTokens?: number
   }
   project: {
     projectId: string
@@ -26,15 +34,15 @@ export interface CodexMemoryContextPreview {
   activation: CodexContinuityContext['activation']
   exclusions: {
     pendingReview: {
-      count: number
-      items: PreviewExclusion[]
+      count?: number
+      items?: PreviewExclusion[]
     }
     tombstones: PreviewExclusion[]
     archived: PreviewExclusion[]
   }
   diagnostics: {
     memoryIndex?: CodexMemoryContextPreviewIndexDiagnostic
-    pendingReview: {
+    pendingReview?: {
       hasItems: boolean
       count: number
     }
@@ -62,8 +70,17 @@ export async function runCodexMemoryContextPreview(input: {
   cwd: string
   userMessage: string
   task?: CodexMemoryContextPreviewTask
+  mode?: ContextMode
+  includeSimilarProjectHints?: boolean
+  includePendingDetails?: boolean
+  includePendingNotice?: boolean
+  includeDiagnostics?: boolean
+  recordRetrievedEvents?: boolean
+  maxTokens?: number
 }): Promise<CodexMemoryContextPreview> {
   const task = input.task ?? 'coding'
+  const mode = input.mode ?? 'fast'
+  const includeExclusionDetails = mode === 'review' || input.includePendingDetails === true || input.includeDiagnostics === true
   const project = await identifyCodexProject(input.cwd)
   const globalRoot = codexGlobalMemoryRoot()
   const projectRoot = codexProjectMemoryRoot(project.projectId)
@@ -74,14 +91,21 @@ export async function runCodexMemoryContextPreview(input: {
         cwd: input.cwd,
         userMessage: input.userMessage,
         task,
-        recordActivationEvents: false
+        mode,
+        includeSimilarProjectHints: input.includeSimilarProjectHints,
+        includePendingDetails: input.includePendingDetails,
+        includePendingNotice: input.includePendingNotice,
+        includeDiagnostics: input.includeDiagnostics,
+        recordActivationEvents: false,
+        recordRetrievedEvents: input.recordRetrievedEvents === true,
+        maxTokens: input.maxTokens
       }),
-      readPendingMemoriesFromRoot(globalRoot),
-      readPendingMemoriesFromRoot(projectRoot),
-      readTombstonesFromRoot(globalRoot),
-      readTombstonesFromRoot(projectRoot),
-      readSemanticMemoriesFromRoot(globalRoot),
-      readSemanticMemoriesFromRoot(projectRoot)
+      includeExclusionDetails ? readPendingMemoriesFromRoot(globalRoot) : Promise.resolve([]),
+      includeExclusionDetails ? readPendingMemoriesFromRoot(projectRoot) : Promise.resolve([]),
+      includeExclusionDetails ? readTombstonesFromRoot(globalRoot) : Promise.resolve([]),
+      includeExclusionDetails ? readTombstonesFromRoot(projectRoot) : Promise.resolve([]),
+      includeExclusionDetails ? readSemanticMemoriesFromRoot(globalRoot) : Promise.resolve([]),
+      includeExclusionDetails ? readSemanticMemoriesFromRoot(projectRoot) : Promise.resolve([])
     ])
 
   const pendingReviewItems = [
@@ -93,7 +117,14 @@ export async function runCodexMemoryContextPreview(input: {
     version: 1,
     input: {
       task,
-      userMessage: input.userMessage
+      userMessage: input.userMessage,
+      mode,
+      ...(input.includeSimilarProjectHints === undefined ? {} : { includeSimilarProjectHints: input.includeSimilarProjectHints }),
+      ...(input.includePendingDetails === undefined ? {} : { includePendingDetails: input.includePendingDetails }),
+      ...(input.includePendingNotice === undefined ? {} : { includePendingNotice: input.includePendingNotice }),
+      ...(input.includeDiagnostics === undefined ? {} : { includeDiagnostics: input.includeDiagnostics }),
+      ...(input.recordRetrievedEvents === undefined ? {} : { recordRetrievedEvents: input.recordRetrievedEvents }),
+      ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens })
     },
     project: context.project,
     activeContext: {
@@ -103,10 +134,12 @@ export async function runCodexMemoryContextPreview(input: {
     },
     activation: context.activation,
     exclusions: {
-      pendingReview: {
-        count: pendingReviewItems.length,
-        items: pendingReviewItems
-      },
+      pendingReview: includeExclusionDetails
+        ? {
+            count: pendingReviewItems.length,
+            items: pendingReviewItems
+          }
+        : {},
       tombstones: [
         ...globalTombstones.map((memory) => tombstoneExclusion(memory, 'global')),
         ...projectTombstones.map((memory) => tombstoneExclusion(memory, 'project'))
@@ -118,10 +151,14 @@ export async function runCodexMemoryContextPreview(input: {
     },
     diagnostics: {
       ...(context.diagnostics?.memoryIndex === undefined ? {} : { memoryIndex: context.diagnostics.memoryIndex }),
-      pendingReview: {
-        hasItems: pendingReviewItems.length > 0,
-        count: pendingReviewItems.length
-      }
+      ...(includeExclusionDetails
+        ? {
+            pendingReview: {
+              hasItems: pendingReviewItems.length > 0,
+              count: pendingReviewItems.length
+            }
+          }
+        : {})
     }
   }
 }

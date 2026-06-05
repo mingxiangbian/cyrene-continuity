@@ -32,6 +32,7 @@ import {
   runCodexMemoryMaintenance
 } from './memory-dream.js'
 import { runCodexMemoryAutomation, type CodexMemoryAutomationJob } from './memory-automation.js'
+import { parseContextMode, type ContextMode } from './context-policy.js'
 import { runCodexMemoryContextPreview, type CodexMemoryContextPreviewTask } from './memory-context-preview.js'
 import { runCodexMemoryDistill } from './memory-distill.js'
 import { recordCodexMemoryFeedback, type PublicActivationFeedbackEvent } from './memory-feedback.js'
@@ -190,7 +191,14 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     process.stdout.write(`${JSON.stringify(await runCodexMemoryContextPreview({
       cwd: input.cwd,
       userMessage: parseRequiredOption(input.args, '--message', 'context preview message'),
-      task: parseContextPreviewTask(input.args)
+      task: parseContextPreviewTask(input.args),
+      mode: parseContextModeOption(input.args),
+      includeSimilarProjectHints: parseOptionalBooleanFlag(input.args, '--include-similar-project-hints'),
+      includePendingDetails: parseOptionalBooleanFlag(input.args, '--include-pending-details'),
+      includePendingNotice: parseOptionalBooleanFlag(input.args, '--include-pending-notice'),
+      includeDiagnostics: parseOptionalBooleanFlag(input.args, '--include-diagnostics'),
+      recordRetrievedEvents: parseOptionalBooleanFlag(input.args, '--record-retrieved-events'),
+      maxTokens: parseContextMaxTokens(input.args)
     }), null, 2)}\n`)
     return
   }
@@ -451,7 +459,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-diagnostics] [--record-retrieved-events] [--max-tokens <n>]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -556,6 +564,34 @@ function parseContextPreviewTask(args: string[]): CodexMemoryContextPreviewTask 
     return value
   }
   throw new Error(`Invalid --task: ${value}. Expected coding, planning, debugging, conversation, or memory`)
+}
+
+function parseContextModeOption(args: string[]): ContextMode | undefined {
+  const value = parseOptionalOption(args, '--mode')
+  if (value === undefined) {
+    return undefined
+  }
+  return parseContextMode(value)
+}
+
+function parseOptionalBooleanFlag(args: string[], option: string): boolean | undefined {
+  const negativeOption = `--no-${option.slice('--'.length)}`
+  const enabled = args.includes(option)
+  const disabled = args.includes(negativeOption)
+  if (enabled && disabled) {
+    throw new Error(`Invalid ${option}: cannot combine ${option} and ${negativeOption}`)
+  }
+  if (enabled) {
+    return true
+  }
+  if (disabled) {
+    return false
+  }
+  return undefined
+}
+
+function parseContextMaxTokens(args: string[]): number | undefined {
+  return parseOptionalPositiveInteger(args, '--max-tokens')
 }
 
 function parsePublicActivationFeedbackEvent(args: string[]): PublicActivationFeedbackEvent {
