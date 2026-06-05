@@ -66,7 +66,7 @@ describe('benchmark runner', () => {
     expect(second.runId).toBe(first.runId)
   })
 
-  it('reports external profile as unsupported instead of passing with zero runnable cases', async () => {
+  it('reports external adapter cases as unsupported when provider env is missing', async () => {
     const report = await runCyreneBenchmark({
       cwd: process.cwd(),
       profile: 'external',
@@ -76,9 +76,10 @@ describe('benchmark runner', () => {
     })
 
     expect(report.passed).toBe(false)
-    expect(report.summary.notSupportedWithoutProvider).toBe(report.summary.totalCases)
-    expect(report.summary.skippedWithReason).toBe(0)
+    expect(report.summary.notSupportedWithoutProvider).toBeGreaterThan(0)
+    expect(report.summary.skippedWithReason).toBeGreaterThan(0)
     expect(report.failedCases).toEqual([])
-    expect(report.caseResults.every((item) => item.status === 'not_supported_without_provider')).toBe(true)
+    expect(report.caseResults.find((item) => item.caseId === 'T4-SQLITE-UNAVAILABLE')?.status)
+      .toBe('not_supported_without_provider')
   })
 })

@@ -334,6 +334,8 @@ export async function getCodexContinuityContext(input: {
     runtimeActivationMemoriesForRoute(projectMemoryRoot, modelVisibleProjectMemory),
     runtimeActivationMemoriesForRoute(globalMemoryRoot, modelVisibleGlobalMemory)
   ])
+  const visibleGlobalFastSummary = skipStaleFastSummary(globalFastSummary)
+  const visibleProjectFastSummary = skipStaleFastSummary(projectFastSummary)
   const activation = buildMemoryActivations({
     query: input.userMessage,
     globalMemories: globalActivationMemories,
@@ -375,9 +377,9 @@ export async function getCodexContinuityContext(input: {
   const profileContent = policy.includeFullProfile
     ? [globalProfile, projectProfile].filter(Boolean).join('\n\n')
     : [
-        globalFastSummary.globalFastSummary,
-        globalFastSummary.profileFastSummary,
-        projectFastSummary.profileFastSummary
+        visibleGlobalFastSummary.globalFastSummary,
+        visibleGlobalFastSummary.profileFastSummary,
+        visibleProjectFastSummary.profileFastSummary
       ].filter(Boolean).join('\n\n')
   const snapshot = await buildContinuitySnapshot({
     config: {
@@ -467,8 +469,8 @@ export async function getCodexContinuityContext(input: {
         }
       : undefined,
     profile: {
-      global: globalProfile ?? nonEmptyString(globalFastSummary.globalFastSummary) ?? nonEmptyString(globalFastSummary.profileFastSummary),
-      project: projectProfile ?? nonEmptyString(projectFastSummary.profileFastSummary) ?? nonEmptyString(globalFastSummary.profileFastSummary),
+      global: globalProfile ?? nonEmptyString(visibleGlobalFastSummary.globalFastSummary) ?? nonEmptyString(visibleGlobalFastSummary.profileFastSummary),
+      project: projectProfile ?? nonEmptyString(visibleProjectFastSummary.profileFastSummary) ?? nonEmptyString(visibleGlobalFastSummary.profileFastSummary),
       content: profileContent
     },
     pendingReview,
@@ -680,6 +682,10 @@ function emptyFastSummaryProjection(): FastSummaryProjection {
     profileFastSummary: '',
     generatedAt: undefined
   }
+}
+
+function skipStaleFastSummary(projection: FastSummaryProjection): FastSummaryProjection {
+  return projection.stale === true ? emptyFastSummaryProjection() : projection
 }
 
 function nonEmptyString(value: string): string | undefined {

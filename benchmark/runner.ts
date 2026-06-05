@@ -12,6 +12,7 @@ import { runTier15Case } from './cases/tier1-5-lifecycle.js'
 import { runTier16Case } from './cases/tier1-6-core-mechanisms.js'
 import { runTier2Case } from './cases/tier2-memory-to-action.js'
 import { runTier3Case } from './cases/tier3-scale-efficiency.js'
+import { runTier4FailureSecurityCase } from './cases/tier4-failure-security.js'
 import { runTier4GateCase } from './cases/tier4-gate.js'
 import type {
   BenchmarkCase,
@@ -44,6 +45,11 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
     }
     if (!runnableIds.has(benchmarkCase.id)) {
       caseResults.push(skippedResult(benchmarkCase, `profile ${options.profile} does not run this case`))
+      continue
+    }
+    const unsupportedProviderReason = adapterUnsupportedReason(benchmarkCase, options.profile)
+    if (unsupportedProviderReason !== undefined) {
+      caseResults.push(unsupportedResult(benchmarkCase, unsupportedProviderReason))
       continue
     }
     caseResults.push(scoreCaseResult(await runRunnableCase(benchmarkCase, runOptions), options.profile, benchmarkCase.passFail))
@@ -108,6 +114,8 @@ async function runRunnableCase(benchmarkCase: BenchmarkCase, options: BenchmarkR
   if (tier2 !== undefined) return tier2
   const tier3 = await runTier3Case(benchmarkCase, options)
   if (tier3 !== undefined) return tier3
+  const tier4FailureSecurity = await runTier4FailureSecurityCase(benchmarkCase, options)
+  if (tier4FailureSecurity !== undefined) return tier4FailureSecurity
   const tier4Gate = await runTier4GateCase(benchmarkCase, options)
   if (tier4Gate !== undefined) return tier4Gate
 
@@ -152,6 +160,18 @@ function unsupportedResult(benchmarkCase: BenchmarkCase, reason: string): Benchm
     skippedReason: reason,
     thresholdBreaches: []
   }
+}
+
+function adapterUnsupportedReason(benchmarkCase: BenchmarkCase, profile: BenchmarkRunOptions['profile']): string | undefined {
+  if (profile !== 'llm' && profile !== 'external') return undefined
+  if (benchmarkCase.adapter?.kind !== profile) return undefined
+
+  const missingEnv = (benchmarkCase.adapter.requiredEnv ?? [])
+    .filter((name) => process.env[name] === undefined || process.env[name]?.trim() === '')
+  if (missingEnv.length === 0) return undefined
+
+  const provider = benchmarkCase.adapter.provider ?? benchmarkCase.adapter.kind
+  return `missing provider env: ${missingEnv.join(', ')} for ${profile} adapter ${provider}`
 }
 
 function defaultPassingMetrics(benchmarkCase: BenchmarkCase): BenchmarkMetric[] {
