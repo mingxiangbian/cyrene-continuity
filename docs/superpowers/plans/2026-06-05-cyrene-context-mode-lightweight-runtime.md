@@ -56,7 +56,7 @@ Use workers only with disjoint write sets. Workers are not alone in the codebase
 - Create: `src/codex/context-policy.ts`
 - Test: `tests/codex-context-policy.test.ts`
 
-- [ ] **Step 1: Write failing policy tests**
+- [x] **Step 1: Write failing policy tests**
 
 Create `tests/codex-context-policy.test.ts`:
 
@@ -153,7 +153,7 @@ describe('context policy', () => {
 })
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -163,7 +163,7 @@ npm test -- tests/codex-context-policy.test.ts
 
 Expected: FAIL because `src/codex/context-policy.ts` does not exist.
 
-- [ ] **Step 3: Implement context policy module**
+- [x] **Step 3: Implement context policy module**
 
 Create `src/codex/context-policy.ts`:
 
@@ -314,7 +314,7 @@ function definedOnly<T extends Record<string, unknown>>(input: T): Partial<T> {
 }
 ```
 
-- [ ] **Step 4: Run policy tests**
+- [x] **Step 4: Run policy tests**
 
 Run:
 
@@ -325,7 +325,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit policy contract**
+- [x] **Step 5: Commit policy contract**
 
 Run:
 
@@ -346,7 +346,7 @@ Expected: commit succeeds.
 - Test: `tests/codex-session-hints.test.ts`
 - Test: `tests/codex-runtime-metrics.test.ts`
 
-- [ ] **Step 1: Write failing projection store tests**
+- [x] **Step 1: Write failing projection store tests**
 
 Create `tests/codex-fast-summary-store.test.ts`:
 
@@ -511,7 +511,7 @@ describe('runtime metrics', () => {
 })
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -521,7 +521,7 @@ npm test -- tests/codex-fast-summary-store.test.ts tests/codex-session-hints.tes
 
 Expected: FAIL because the three modules do not exist.
 
-- [ ] **Step 3: Implement fast summary store**
+- [x] **Step 3: Implement fast summary store**
 
 Create `src/codex/fast-summary-store.ts`:
 
@@ -599,7 +599,7 @@ function isFileErrorCode(error: unknown, code: string): boolean {
 }
 ```
 
-- [ ] **Step 4: Implement session hints and metrics modules**
+- [x] **Step 4: Implement session hints and metrics modules**
 
 Create `src/codex/session-hints.ts` with `replaceCodexSessionHints`, `readCodexSessionHints`, `clearCodexSessionHints`, file name `session_hints.json`, TTL default 8 hours, and project/session matching. Create `src/codex/runtime-metrics.ts` with JSONL file `runtime_metrics.jsonl`, `appendRuntimeMetric`, and `readRuntimeMetrics`.
 
@@ -634,7 +634,7 @@ export interface RuntimeMetricEvent {
 }
 ```
 
-- [ ] **Step 5: Run projection tests**
+- [x] **Step 5: Run projection tests**
 
 Run:
 
@@ -645,7 +645,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit projection stores**
+- [x] **Step 6: Commit projection stores**
 
 Run:
 
@@ -663,7 +663,7 @@ Expected: commit succeeds.
 - Test: `tests/codex-continuity-context.test.ts`
 - Test: `tests/codex-memory-feedback.test.ts`
 
-- [ ] **Step 1: Write failing fast-mode tests**
+- [x] **Step 1: Write failing fast-mode tests**
 
 In `tests/codex-continuity-context.test.ts`, add tests that assert default fast behavior:
 
@@ -790,7 +790,7 @@ it('review mode returns pending notice, pending hypotheses, diagnostics, and sim
 })
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -800,7 +800,7 @@ npm test -- tests/codex-continuity-context.test.ts
 
 Expected: FAIL because `getCodexContinuityContext` does not accept mode and still returns pending/diagnostics by default.
 
-- [ ] **Step 3: Extend public context input and output types**
+- [x] **Step 3: Extend public context input and output types**
 
 In `src/codex/continuity-context.ts`:
 
@@ -839,7 +839,7 @@ contextPolicy: {
 
 - Keep existing response fields but project fast/balanced to empty arrays or omitted diagnostics.
 
-- [ ] **Step 4: Gate pending/profile/similar/diagnostics/activation writes by policy**
+- [x] **Step 4: Gate pending/profile/similar/diagnostics/activation writes by policy**
 
 Use one policy instance:
 
@@ -866,7 +866,7 @@ Write `retrieved` events only when `policy.recordRetrievedEvents` is true.
 
 Return `diagnostics: undefined` unless `policy.includeDiagnostics` is true.
 
-- [ ] **Step 5: Pass policy into routed retrieval**
+- [x] **Step 5: Pass policy into routed retrieval**
 
 Extend `retrieveRoutedMemory(input)` with `policy: RetrievalPolicy`.
 
@@ -880,7 +880,7 @@ Rules:
 - `sqliteRetrievalDiagnostics` routes omit `pending` and `similar_project` when disabled.
 - `jsonlRetrievalDiagnostics` routes omit `pending` when disabled.
 
-- [ ] **Step 6: Run runtime verification**
+- [x] **Step 6: Run runtime verification**
 
 Run:
 
@@ -891,7 +891,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit runtime integration**
+- [x] **Step 7: Commit runtime integration**
 
 Run:
 
@@ -911,7 +911,7 @@ Expected: commit succeeds.
 - Test: `tests/mcp-server.test.ts`
 - Test: `tests/codex-cli.test.ts`
 
-- [ ] **Step 1: Write failing CLI/MCP tests**
+- [x] **Step 1: Write failing CLI/MCP tests**
 
 In `tests/mcp-server.test.ts`, update the continuity tool test to call:
 
@@ -954,7 +954,7 @@ it('defaults context-preview to fast visibility without pending exclusions', asy
 })
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -964,7 +964,7 @@ npm test -- tests/mcp-server.test.ts tests/codex-cli.test.ts
 
 Expected: FAIL because schema and CLI flags are not implemented.
 
-- [ ] **Step 3: Update MCP schema and handler**
+- [x] **Step 3: Update MCP schema and handler**
 
 In `src/mcp/tools/continuity-get.ts`, add:
 
@@ -986,7 +986,7 @@ export const continuityGetInputSchema = {
 
 Forward all fields to `getCodexContinuityContext`. Keep `cwd` accepted by `handleContinuityGet` for compatibility, but do not expose it in `continuityGetInputSchema`.
 
-- [ ] **Step 4: Update CLI parsing**
+- [x] **Step 4: Update CLI parsing**
 
 In `src/codex/codex-cli.ts`:
 
@@ -1001,7 +1001,7 @@ In `src/codex/codex-cli.ts`:
 memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-diagnostics] [--record-retrieved-events] [--max-tokens <n>]
 ```
 
-- [ ] **Step 5: Update context-preview projection**
+- [x] **Step 5: Update context-preview projection**
 
 In `src/codex/memory-context-preview.ts`:
 
@@ -1020,7 +1020,7 @@ exclusions: {
 
 and omit `diagnostics.pendingReview`.
 
-- [ ] **Step 6: Run surface verification**
+- [x] **Step 6: Run surface verification**
 
 Run:
 
@@ -1031,7 +1031,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit CLI/MCP surfaces**
+- [x] **Step 7: Commit CLI/MCP surfaces**
 
 Run:
 
@@ -1052,7 +1052,7 @@ Expected: commit succeeds.
 - Test: `tests/codex-hook-trace.test.ts`
 - Test: `tests/similar-hints-review.test.ts`
 
-- [ ] **Step 1: Write failing session/similar boundary tests**
+- [x] **Step 1: Write failing session/similar boundary tests**
 
 Add a continuity test:
 
@@ -1123,7 +1123,7 @@ it('clears session hints when a new session starts', async () => {
 })
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -1133,7 +1133,7 @@ npm test -- tests/codex-continuity-context.test.ts tests/codex-hook-trace.test.t
 
 Expected: FAIL because `sessionHints` and session clearing are not integrated.
 
-- [ ] **Step 3: Add session hints to continuity context**
+- [x] **Step 3: Add session hints to continuity context**
 
 In `src/codex/continuity-context.ts`:
 
@@ -1156,11 +1156,11 @@ sessionHints: Array<{
 - Read hints only when `policy.includeSessionHints` and `input.sessionId` are both present.
 - Do not pass session hints into activation, active memory, profile, or retrieved event logic.
 
-- [ ] **Step 4: Clear hints on session start**
+- [x] **Step 4: Clear hints on session start**
 
 In `src/codex/codex-hook-trace.ts`, when event is `session_start`, identify the project root and call `clearCodexSessionHints(root)` after appending the trace. Hook failures still fail open.
 
-- [ ] **Step 5: Run session/similar verification**
+- [x] **Step 5: Run session/similar verification**
 
 Run:
 
@@ -1171,7 +1171,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit session boundary integration**
+- [x] **Step 6: Commit session boundary integration**
 
 Run:
 
@@ -1191,7 +1191,7 @@ Expected: commit succeeds.
 - Test: `tests/codex-memory-lifecycle-daily.test.ts`
 - Test: `tests/codex-memory-lifecycle-weekly.test.ts`
 
-- [ ] **Step 1: Write failing automation tests**
+- [x] **Step 1: Write failing automation tests**
 
 In `tests/codex-memory-lifecycle-daily.test.ts`, add:
 
@@ -1238,7 +1238,7 @@ it('daily updates fast summaries from active memory and confirmed profile only',
 
 In weekly tests, add an assertion that weekly refreshes summaries without promoting similar hints or pending high-risk content.
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -1248,7 +1248,7 @@ npm test -- tests/codex-memory-lifecycle-daily.test.ts tests/codex-memory-lifecy
 
 Expected: FAIL because automation does not update fast summaries.
 
-- [ ] **Step 3: Implement deterministic summary refresh**
+- [x] **Step 3: Implement deterministic summary refresh**
 
 In `src/codex/codex-memory-lifecycle-daily.ts`:
 
@@ -1273,7 +1273,7 @@ function buildGlobalFastSummary(memories: SemanticMemory[]): string {
 }
 ```
 
-- [ ] **Step 4: Add metrics to automation result**
+- [x] **Step 4: Add metrics to automation result**
 
 Extend daily/weekly root result with:
 
@@ -1285,7 +1285,7 @@ runtimeMetricsRecorded: number
 
 Append a `continuity_get` or `hook` metric only when a real runtime event occurs; automation maintenance should record `indexStale` and `jsonlFallback` rates as maintenance metrics without raw prompt text.
 
-- [ ] **Step 5: Run automation verification**
+- [x] **Step 5: Run automation verification**
 
 Run:
 
@@ -1296,7 +1296,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit automation maintenance**
+- [x] **Step 6: Commit automation maintenance**
 
 Run:
 
@@ -1316,7 +1316,7 @@ Expected: commit succeeds.
 - Test: `tests/codex-hook-trace.test.ts`
 - Test: `tests/codex-runtime-metrics.test.ts`
 
-- [ ] **Step 1: Write failing metrics integration tests**
+- [x] **Step 1: Write failing metrics integration tests**
 
 Add a continuity test:
 
@@ -1341,7 +1341,7 @@ it('records continuity latency and fallback metrics without raw prompt text', as
 })
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -1351,7 +1351,7 @@ npm test -- tests/codex-continuity-context.test.ts tests/codex-hook-trace.test.t
 
 Expected: FAIL because runtime metrics are not appended from continuity/hook paths.
 
-- [ ] **Step 3: Record continuity metrics**
+- [x] **Step 3: Record continuity metrics**
 
 In `src/codex/continuity-context.ts`, measure:
 
@@ -1366,11 +1366,11 @@ In `src/codex/continuity-context.ts`, measure:
 
 Append one metric to current project memory root via `appendRuntimeMetric`. Fail open on metric write errors.
 
-- [ ] **Step 4: Record hook latency metrics**
+- [x] **Step 4: Record hook latency metrics**
 
 In `src/codex/codex-hook-trace.ts`, measure handler latency and append a `hook` metric with `hookEvent`. Fail open.
 
-- [ ] **Step 5: Run metrics verification**
+- [x] **Step 5: Run metrics verification**
 
 Run:
 
@@ -1381,7 +1381,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit runtime metrics**
+- [x] **Step 6: Commit runtime metrics**
 
 Run:
 
@@ -1402,7 +1402,7 @@ Expected: commit succeeds.
 - Test: `tests/mcp-server.test.ts`
 - Test: `tests/plugin-runtime.test.ts`
 
-- [ ] **Step 1: Write failing docs/skill assertions**
+- [x] **Step 1: Write failing docs/skill assertions**
 
 In `tests/mcp-server.test.ts`, change the Skill test assertions:
 
@@ -1417,7 +1417,7 @@ expect(source).not.toContain('Do not wait for the user to ask to review them')
 expect(source).not.toContain('immediately call `cyrene_memory_pending_list`')
 ```
 
-- [ ] **Step 2: Run RED verification**
+- [x] **Step 2: Run RED verification**
 
 Run:
 
@@ -1427,7 +1427,7 @@ npm test -- tests/mcp-server.test.ts tests/plugin-runtime.test.ts
 
 Expected: FAIL because Skill still documents immediate pending review.
 
-- [ ] **Step 3: Update Skill**
+- [x] **Step 3: Update Skill**
 
 Modify `plugin/skills/cyrene-continuity/SKILL.md`:
 
@@ -1446,7 +1446,7 @@ Similar-project hints are transferable guidance, not current-project facts. Sess
 Activation events are not memory. `retrieved` is disabled by default; record `applied`, `ignored`, `corrected`, `violated`, or `stale` only when the memory is actually used or explicitly evaluated.
 ```
 
-- [ ] **Step 4: Update README and release notes**
+- [x] **Step 4: Update README and release notes**
 
 Add README sections for:
 
@@ -1471,7 +1471,7 @@ Date: 2026-06-05
 - Use `mode=review` or `memory context-preview --mode review` for pending review diagnostics.
 ```
 
-- [ ] **Step 5: Rebuild and validate plugin**
+- [x] **Step 5: Rebuild and validate plugin**
 
 Run:
 
@@ -1482,7 +1482,7 @@ python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plu
 
 Expected: both commands PASS.
 
-- [ ] **Step 6: Run docs/runtime tests**
+- [x] **Step 6: Run docs/runtime tests**
 
 Run:
 
@@ -1493,7 +1493,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit docs and plugin runtime**
+- [x] **Step 7: Commit docs and plugin runtime**
 
 Run:
 
@@ -1509,7 +1509,7 @@ Expected: commit succeeds.
 **Files:**
 - Modify only files needed to fix verification failures found in this task.
 
-- [ ] **Step 1: Run full test suite**
+- [x] **Step 1: Run full test suite**
 
 Run:
 
@@ -1519,7 +1519,7 @@ npm test
 
 Expected: PASS.
 
-- [ ] **Step 2: Run typecheck**
+- [x] **Step 2: Run typecheck**
 
 Run:
 
@@ -1529,7 +1529,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 3: Rebuild plugin runtime**
+- [x] **Step 3: Rebuild plugin runtime**
 
 Run:
 
@@ -1539,7 +1539,7 @@ npm run build:plugin
 
 Expected: PASS and `plugin/runtime/cyrene-continuity.mjs` matches source.
 
-- [ ] **Step 4: Validate plugin**
+- [x] **Step 4: Validate plugin**
 
 Run:
 
@@ -1549,7 +1549,7 @@ python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plu
 
 Expected: PASS.
 
-- [ ] **Step 5: Run release evals**
+- [x] **Step 5: Run release evals**
 
 Run:
 
@@ -1560,7 +1560,7 @@ npm run dev -- codex eval run --check release
 
 Expected: both commands return JSON with passing eval gates and no failed checks.
 
-- [ ] **Step 6: Check repository diff hygiene**
+- [x] **Step 6: Check repository diff hygiene**
 
 Run:
 
@@ -1571,7 +1571,7 @@ git status --short
 
 Expected: `git diff --check` returns no output. `git status --short` shows only intentional tracked changes before the final commit, or clean after the final commit.
 
-- [ ] **Step 7: Audit against spec acceptance criteria**
+- [x] **Step 7: Audit against spec acceptance criteria**
 
 For each item in `docs/superpowers/specs/2026-06-05-cyrene-context-mode-lightweight-runtime-design.md`, record evidence from tests, docs, source, CLI/MCP schemas, plugin validation, and eval output. The audit must prove:
 
@@ -1586,7 +1586,7 @@ For each item in `docs/superpowers/specs/2026-06-05-cyrene-context-mode-lightwei
 - Skill no longer interrupts ordinary work for pending review.
 - Metrics cover continuity, SQLite, similar, pending, profile, fallback, stale index, and hook latency.
 
-- [ ] **Step 8: Commit final integration fixes**
+- [x] **Step 8: Commit final integration fixes**
 
 If Step 1-7 required changes, commit them:
 
@@ -1598,7 +1598,7 @@ git commit -m "test: verify context mode runtime completion"
 
 Expected: commit succeeds or there are no changes to commit.
 
-- [ ] **Step 9: Report completion evidence**
+- [x] **Step 9: Report completion evidence**
 
 Summarize:
 
@@ -1607,3 +1607,53 @@ Summarize:
 - verification commands and status.
 - spec acceptance audit result.
 - remaining risks, if any.
+
+## Completion Evidence
+
+Final branch:
+
+- `codex/context-mode-lightweight-runtime`
+
+Implementation commits:
+
+- `c2b7934 docs: add context mode lightweight runtime design`
+- `9e53216 docs: add context mode runtime implementation plan`
+- `37c6b57 feat: add context retrieval policy`
+- `3965e4b feat: add fast summary and session hint stores`
+- `8e60755 feat: gate continuity context by mode policy`
+- `7a85e94 feat: expose context modes in CLI and MCP`
+- `460bf57 feat: keep similar hints session-local`
+- `49a933f feat: refresh fast summaries in memory automation`
+- `14ec71f feat: record continuity runtime metrics`
+- `6c36adb docs: document context mode runtime behavior`
+- `717461b test: verify context mode runtime completion`
+
+Plan completion state is recorded by the docs commit that contains this section.
+
+Final verification run:
+
+- `npm test`: PASS. 69 test files, 815 tests.
+- `npm run typecheck`: PASS.
+- `npm run build:plugin`: PASS.
+- `python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin`: PASS.
+- `npm run dev -- codex eval run --check similar-hints`: PASS, `failedChecks: []`.
+- `npm run dev -- codex eval run --check release`: PASS, all minimum gates passed and `failedChecks: []`.
+- `git diff --check`: PASS.
+- `git status --short`: clean after final integration commit.
+
+Spec acceptance audit:
+
+- Default ordinary coding mode is `fast`: covered by `src/codex/context-policy.ts` defaults and `tests/codex-context-policy.test.ts`.
+- Fast mode hides pending notice/count/content, similar hints, diagnostics, and `retrieved` writes: covered by `tests/codex-continuity-context.test.ts` and `tests/codex-cli.test.ts`.
+- Balanced mode keeps pending review hidden and uses richer/session context only through policy: covered by `tests/codex-context-policy.test.ts` and `tests/codex-continuity-context.test.ts`.
+- Review mode is the pending visibility path: covered by `tests/codex-continuity-context.test.ts`, `tests/codex-cli.test.ts`, `tests/mcp-server.test.ts`, and Web UI dashboard review diagnostics in `tests/codex-ui-api.test.ts`.
+- Daily/weekly automation refreshes fast summaries without migrating pending or similar-project content: covered by `tests/codex-memory-lifecycle-daily.test.ts` and `tests/codex-memory-lifecycle-weekly.test.ts`.
+- Similar hints never auto-migrate into current project memory: covered by `tests/codex-continuity-context.test.ts`, `tests/codex-session-hints.test.ts`, and `npm run dev -- codex eval run --check similar-hints`.
+- Session hints do not enter durable memory: covered by `src/codex/session-hints.ts`, `tests/codex-session-hints.test.ts`, and continuity context tests.
+- SQLite/FTS remains the runtime hot path; JSONL fallback and stale index are monitored without hot-path rebuild: covered by `tests/codex-continuity-context.test.ts`, `tests/mcp-server.test.ts`, and runtime metrics tests.
+- Skill no longer interrupts ordinary work for pending review: covered by `plugin/skills/cyrene-continuity/SKILL.md` and `tests/mcp-server.test.ts` Skill assertions.
+- Runtime metrics cover continuity, SQLite, similar, pending, profile, fallback, stale index, and hook latency without raw prompt text: covered by `src/codex/runtime-metrics.ts`, `src/codex/continuity-context.ts`, `src/codex/codex-hook-trace.ts`, `tests/codex-runtime-metrics.test.ts`, `tests/codex-continuity-context.test.ts`, and `tests/codex-hook-trace.test.ts`.
+
+Remaining risks:
+
+- No known required work remains for this spec.
