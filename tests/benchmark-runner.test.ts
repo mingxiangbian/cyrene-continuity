@@ -32,7 +32,9 @@ describe('benchmark runner', () => {
     expect(report.caseResults.map((item) => item.caseId)).toContain('T0-MODE-FAST')
     expect(report.caseResults.map((item) => item.caseId)).toContain('T1-FACT-EXTRACTION')
     expect(report.failedCases).toEqual([])
-    expect(report.fixtureRuns).toEqual([])
+    expect(report.fixtureRuns?.length).toBeGreaterThan(0)
+    expect(report.fixtureRuns?.every((fixture) => fixture.timezone === 'UTC')).toBe(true)
+    expect(report.fixtureRuns?.every((fixture) => fixture.cleanupStatus === 'cleaned')).toBe(true)
     expect(report.spec.contentHash).toMatch(/^[a-f0-9]{64}$/)
     expect(report.benchmark.caseCatalogHash).toMatch(/^[a-f0-9]{64}$/)
 
@@ -40,5 +42,43 @@ describe('benchmark runner', () => {
     const markdown = await readFile(join(outputDir, 'benchmark_report.md'), 'utf8')
     expect(json).toContain('"profile": "smoke"')
     expect(markdown).toContain('# Cyrene Benchmark Report')
+  })
+
+  it('uses the injected clock for deterministic report timestamps', async () => {
+    const first = await runCyreneBenchmark({
+      cwd: process.cwd(),
+      profile: 'smoke',
+      outputDir: await tempDir(),
+      seed: 'deterministic-seed',
+      now: '2026-06-05T00:00:00.000Z'
+    })
+    const second = await runCyreneBenchmark({
+      cwd: process.cwd(),
+      profile: 'smoke',
+      outputDir: await tempDir(),
+      seed: 'deterministic-seed',
+      now: '2026-06-05T00:00:00.000Z'
+    })
+
+    expect(first.startedAt).toBe('2026-06-05T00:00:00.000Z')
+    expect(first.completedAt).toBe('2026-06-05T00:00:00.000Z')
+    expect(second.completedAt).toBe(first.completedAt)
+    expect(second.runId).toBe(first.runId)
+  })
+
+  it('reports external profile as unsupported instead of passing with zero runnable cases', async () => {
+    const report = await runCyreneBenchmark({
+      cwd: process.cwd(),
+      profile: 'external',
+      outputDir: await tempDir(),
+      seed: 'external-seed',
+      now: '2026-06-05T00:00:00.000Z'
+    })
+
+    expect(report.passed).toBe(false)
+    expect(report.summary.notSupportedWithoutProvider).toBe(report.summary.totalCases)
+    expect(report.summary.skippedWithReason).toBe(0)
+    expect(report.failedCases).toEqual([])
+    expect(report.caseResults.every((item) => item.status === 'not_supported_without_provider')).toBe(true)
   })
 })

@@ -268,4 +268,5 @@ export interface BenchmarkRunOptions {
   now?: string
   baselineReportPath?: string
   preserveFixtures?: boolean
+  fixtureRuns?: BenchmarkFixtureRunMetadata[]
 }

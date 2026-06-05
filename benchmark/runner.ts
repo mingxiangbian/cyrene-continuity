@@ -6,9 +6,13 @@ import { BENCHMARK_CASES } from './catalog.js'
 import { writeBenchmarkReports } from './report.js'
 import { scoreCaseResult, summarizeBenchmarkResults } from './scorer.js'
 import { BENCHMARK_VERSION, THRESHOLD_VERSION } from './thresholds.js'
+import { runTier0Case } from './cases/tier0-release-gate.js'
+import { runTier16Case } from './cases/tier1-6-core-mechanisms.js'
+import { runTier4GateCase } from './cases/tier4-gate.js'
 import type {
   BenchmarkCase,
   BenchmarkCaseResult,
+  BenchmarkFixtureRunMetadata,
   BenchmarkMetric,
   BenchmarkReport,
   BenchmarkRunOptions
@@ -19,23 +23,31 @@ const SPEC_PATH = 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-syste
 
 export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<BenchmarkReport> {
   const startedAt = options.now ?? new Date().toISOString()
+  const fixtureRuns: BenchmarkFixtureRunMetadata[] = []
+  const runOptions: BenchmarkRunOptions = { ...options, fixtureRuns }
   const runnableIds = new Set(
     BENCHMARK_CASES
       .filter((benchmarkCase) => benchmarkCase.executionProfiles.includes(options.profile))
       .map((benchmarkCase) => benchmarkCase.id)
   )
+  const unsupportedExternalProfile = options.profile === 'external' && runnableIds.size === 0
   const caseResults: BenchmarkCaseResult[] = []
 
   for (const benchmarkCase of BENCHMARK_CASES) {
+    if (unsupportedExternalProfile) {
+      caseResults.push(unsupportedResult(benchmarkCase, 'external benchmark adapters are not configured'))
+      continue
+    }
     if (!runnableIds.has(benchmarkCase.id)) {
       caseResults.push(skippedResult(benchmarkCase, `profile ${options.profile} does not run this case`))
       continue
     }
-    caseResults.push(scoreCaseResult(await runRunnableCase(benchmarkCase), options.profile, benchmarkCase.passFail))
+    caseResults.push(scoreCaseResult(await runRunnableCase(benchmarkCase, runOptions), options.profile, benchmarkCase.passFail))
   }
 
-  const completedAt = new Date().toISOString()
+  const completedAt = options.now ?? new Date().toISOString()
   const failedCases = caseResults.filter((item) => item.status === 'failed')
+  const executedCases = caseResults.filter((item) => item.status === 'passed' || item.status === 'failed')
   const hardFailures = uniqueValues(caseResults.flatMap((item) => item.hardFailures))
   const thresholdBreaches = caseResults.flatMap((item) => item.thresholdBreaches)
   const report: BenchmarkReport = {
@@ -62,14 +74,14 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
       platform: process.platform,
       arch: process.arch
     },
-    passed: failedCases.length === 0,
+    passed: failedCases.length === 0 && executedCases.length > 0,
     summary: summarizeBenchmarkResults(caseResults),
     failedCases,
     caseResults,
     metrics: aggregateMetricGroups(caseResults),
     hardFailures,
     thresholdBreaches,
-    fixtureRuns: [],
+    fixtureRuns,
     ...(options.baselineReportPath === undefined
       ? {}
       : { regressionComparison: { baselineReportPath: options.baselineReportPath, regressions: [] } })
@@ -79,7 +91,14 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
   return report
 }
 
-async function runRunnableCase(benchmarkCase: BenchmarkCase): Promise<BenchmarkCaseResult> {
+async function runRunnableCase(benchmarkCase: BenchmarkCase, options: BenchmarkRunOptions): Promise<BenchmarkCaseResult> {
+  const tier0 = await runTier0Case(benchmarkCase, options)
+  if (tier0 !== undefined) return tier0
+  const tier16 = await runTier16Case(benchmarkCase, options)
+  if (tier16 !== undefined) return tier16
+  const tier4Gate = await runTier4GateCase(benchmarkCase, options)
+  if (tier4Gate !== undefined) return tier4Gate
+
   return {
     caseId: benchmarkCase.id,
     title: benchmarkCase.title,
@@ -99,6 +118,21 @@ function skippedResult(benchmarkCase: BenchmarkCase, reason: string): BenchmarkC
     title: benchmarkCase.title,
     tier: benchmarkCase.tier,
     status: 'skipped_with_reason',
+    passed: false,
+    hardFailures: [],
+    metrics: [],
+    evidence: [{ summary: reason }],
+    skippedReason: reason,
+    thresholdBreaches: []
+  }
+}
+
+function unsupportedResult(benchmarkCase: BenchmarkCase, reason: string): BenchmarkCaseResult {
+  return {
+    caseId: benchmarkCase.id,
+    title: benchmarkCase.title,
+    tier: benchmarkCase.tier,
+    status: 'not_supported_without_provider',
     passed: false,
     hardFailures: [],
     metrics: [],

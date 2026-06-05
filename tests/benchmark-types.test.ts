@@ -144,6 +144,12 @@ describe('benchmark contract catalog', () => {
     ]))
   })
 
+  it('makes hook latency threshold a release-gate failure for the lightweight hook case', () => {
+    const hookCase = BENCHMARK_CASES.find((item) => item.id === 'T4-HOOK-LIGHTWEIGHT')
+    expect(hookCase?.metrics).toContain('postToolUseHookP95Ms')
+    expect(hookCase?.passFail).toContain('postToolUseHookP95Ms')
+  })
+
   it('defines all execution profiles and centralized thresholds', () => {
     expect(EXECUTION_PROFILES).toEqual(['smoke', 'gate', 'full', 'scale', 'llm', 'external'])
     expect(SOFT_METRIC_THRESHOLDS.map((item) => item.metric)).toEqual(expect.arrayContaining([
