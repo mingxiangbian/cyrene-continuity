@@ -19,7 +19,7 @@ Cyrene 已经有一批分散的 eval gate 和 unit tests，覆盖 memory routing
 
 1. 建立完整 benchmark/eval 系统，评估 Cyrene 的 memory ability、boundary safety、task utility、runtime efficiency 和 scale stability。
 2. 用统一 case catalog 描述所有 benchmark case；所有 case 都必须写入 spec，不用 P0/P1/P2 或 deferred phase 分层。
-3. 支持多种 execution profile：`gate`、`full`、`scale`、`llm`、`external`。profile 只决定运行方式，不决定 case 是否存在。
+3. 支持多种 execution profile：`smoke`、`gate`、`full`、`scale`、`llm`、`external`。profile 只决定运行方式，不决定 case 是否存在。
 4. 生成 `benchmark_report.json` 和 `benchmark_report.md`，包含 pass/fail、失败证据、指标、scale 结果和 regression comparison。
 5. 将关键 deterministic safety case 接入 release gate，同时保留 `full`、`scale`、`llm`、`external` 的完整运行入口。
 6. 让 multi-agent 可以按 case pack 并行实现，且共享 contract 明确、写入边界清楚。
@@ -36,7 +36,7 @@ Cyrene 已经有一批分散的 eval gate 和 unit tests，覆盖 memory routing
 ## 设计原则
 
 - **完整 catalog**：所有 case 都写入 spec，并有 fixture、action、expected、forbidden、metrics、pass/fail rule。
-- **确定性优先**：CI gate 默认跑 deterministic case；LLM/agent case 必须有单独 profile，避免 flakiness 污染 release gate。
+- **确定性优先**：`smoke` 和 CI gate 默认跑 deterministic case；LLM/agent case 必须有单独 profile，避免 flakiness 污染 release gate。
 - **复用现有规则**：scorer 优先复用 `src/eval/eval-runner.ts`、`src/codex/continuity-context.ts`、`src/codex/memory-review.ts`、`src/codex/memory-propose.ts`、`src/memory/memory-index.ts` 等现有 contract。
 - **黑盒与白盒结合**：CLI/MCP/Skill consistency 使用 surface-level assertions；routing、lifecycle、index consistency 可以直接调用 helper 做精确检查。
 - **报告不可省略**：未运行 case 只能显示为 `skipped_with_reason` 或 `not_supported_without_provider`，不能从 report 消失。
@@ -72,6 +72,7 @@ benchmark/
 CLI 入口：
 
 ```text
+cyrene-continuity codex benchmark run --profile smoke
 cyrene-continuity codex benchmark run --profile gate
 cyrene-continuity codex benchmark run --profile full
 cyrene-continuity codex benchmark run --profile scale
@@ -90,6 +91,7 @@ benchmark_report.md
 
 `executionProfiles` 是 case 的运行标签，不是实现阶段。
 
+- `smoke`：最快 sanity profile。只跑少量 deterministic contract checks，验证 benchmark runner、fixture isolation、report generation 和最关键 context boundary 可以工作。
 - `gate`：release gate 默认运行。只包含 deterministic、稳定、成本低、边界关键的 case。
 - `full`：本地完整 deterministic/replay benchmark。包含 gate 外的能力、lifecycle、failure recovery、hook 和 replay case。
 - `scale`：运行 S/M/L/XL scale fixture 和 efficiency metrics。
@@ -107,18 +109,22 @@ interface BenchmarkCase {
   id: string
   tier: 'tier0' | 'tier1' | 'tier1_5' | 'tier1_6' | 'tier2' | 'tier3' | 'tier4'
   title: string
-  executionProfiles: Array<'gate' | 'full' | 'scale' | 'llm' | 'external'>
+  executionProfiles: Array<'smoke' | 'gate' | 'full' | 'scale' | 'llm' | 'external'>
   fixture: BenchmarkFixtureSpec
   action: BenchmarkActionSpec
   expected: BenchmarkExpectedSpec
   forbidden: BenchmarkForbiddenSpec
   metrics: BenchmarkMetricSpec[]
   passFail: BenchmarkPassFailRule[]
+  adapter?: BenchmarkAdapterSpec
 }
 ```
 
 每个 fixture 必须包含：
 
+- `isolation`
+- `clock`
+- `seed`
 - `groundTruth`
 - `expectedContext`
 - `expectedForbiddenContent`
@@ -142,13 +148,52 @@ fixture 可以 seed：
 - CLI/MCP input/output snapshots
 - transcript/action replay logs
 
+## Fixture Isolation And Determinism
+
+Fixture isolation 是硬规则，不是实现细节。
+
+每个 case 必须：
+
+- 使用独立 temp `HOME`、temp project root、temp global memory root、temp project memory root 和独立 SQLite `memory.db`。
+- 禁止读取或写入用户真实 `~/.cyrene`、真实 repo memory root、真实 plugin runtime state。
+- 禁止复用其他 case 的 SQLite db、JSONL files、profile projection、fast summary、session-hints 或 hook trace。
+- 在 report 中记录 fixture root、seed、clock、cleanup status。
+- case 结束后清理 temp root；如果为了 debug 保留，必须显式标记 `preserveFixture=true` 且 report 写出原因。
+
+Fixture isolation 失败属于 hard failure：
+
+- case 写到 fixture root 之外。
+- case 从真实用户 memory 读取数据。
+- case 之间共享 mutable memory/index/profile/session state。
+- cleanup 失败且未在 report 中记录。
+
+Determinism 也是硬规则。
+
+每个 case 必须注入：
+
+```ts
+interface BenchmarkDeterminismSpec {
+  seed: string
+  now: string
+  timezone: 'UTC'
+}
+```
+
+要求：
+
+- fixture generator、scale generator、transcript replay、action replay 必须使用注入的 deterministic seed。
+- case 逻辑不能直接依赖 `Date.now()`、`new Date()`、`Math.random()` 或当前 timezone；必须通过 injected clock/random source。
+- `now` 默认使用 ISO timestamp，report 原样记录。
+- scale fixture 的 memory ids、project ids、timestamps、query order 必须由 seed 稳定生成。
+- LLM/external adapter 允许 provider 返回非确定内容，但 request envelope、fixture setup、expected scorer 和 random seed 必须稳定。
+
 ## Case Catalog
 
 ### Tier 0: Release Gate / Boundary Safety
 
 #### T0-MODE-FAST
 
-- `executionProfiles`: `gate`, `full`
+- `executionProfiles`: `smoke`, `gate`, `full`
 - 目标：验证普通 coding 默认走 `fast` lightweight runtime。
 - fixture：当前 project active memory、pending candidate、similar-project memory、full profile、fast summary、fresh SQLite index。
 - action：调用 `cyrene_continuity_get` 或 `memory context-preview`，不显式传 mode。
@@ -181,7 +226,7 @@ fixture 可以 seed：
 
 #### T0-PENDING-BOUNDARY
 
-- `executionProfiles`: `gate`, `full`
+- `executionProfiles`: `smoke`, `gate`, `full`
 - 目标：pending 不污染普通 context。
 - fixture：active memory 和内容相近 pending memory。
 - action：分别运行 `fast`、`balanced`、`review` context。
@@ -225,7 +270,7 @@ fixture 可以 seed：
 
 #### T0-SQLITE-HOT-PATH
 
-- `executionProfiles`: `gate`, `full`
+- `executionProfiles`: `smoke`, `gate`, `full`
 - 目标：SQLite/FTS 是 hot path，JSONL fallback 默认不走。
 - fixture：fresh SQLite index、JSONL source、fallback disabled。
 - action：运行 continuity context。
@@ -440,7 +485,7 @@ fixture 可以 seed：
 
 #### T16-ROUTING-NAMESPACE
 
-- `executionProfiles`: `gate`, `full`
+- `executionProfiles`: `smoke`, `gate`, `full`
 - 目标：memory 进入正确 namespace 和层级。
 - fixture：project/global/similar/profile/pending 混合 candidates。
 - action：propose、routing、index sync。
@@ -830,10 +875,54 @@ fixture 可以 seed：
 - `toolCallCount`
 - `timeToCompleteMs`
 
+## Soft Metric Thresholds
+
+Soft metrics 必须有默认阈值。Soft threshold breach 不等同 hard gate failure，除非 case 的 `passFail` 把该指标声明为硬条件；但所有 breach 必须写入 `benchmark_report.json`、`benchmark_report.md` 和 regression comparison。
+
+默认阈值：
+
+| Metric | Threshold | Scope |
+| --- | --- | --- |
+| `fastTokenOverhead` | `<= 800` tokens | `smoke`, `gate`, `full` |
+| `balancedTokenOverhead` | `<= 1200` tokens | `gate`, `full` |
+| `reviewTokenOverhead` | `<= 4000` tokens | `full` |
+| `continuityGetP95FastMs` | `<= 300` ms | `smoke`, `gate`, `full` |
+| `continuityGetP95BalancedMs` | `<= 600` ms | `gate`, `full` |
+| `continuityGetP95ReviewMs` | `<= 1000` ms | `full` |
+| `postToolUseHookP95Ms` | `<= 100` ms | `gate`, `full` |
+| `stopHookP95Ms` | `<= 5000` ms | `full` |
+| `sqliteQueryP95Ms` | `<= 100` ms | `gate`, `full` |
+| `sqliteHitRateFreshIndex` | `>= 1.0` | `smoke`, `gate`, `full` |
+| `jsonlFallbackRateHotPath` | `= 0` | `smoke`, `gate`, `full` |
+| `recallAt3` | `>= 0.90` | `full`, `scale` |
+| `mrr` | `>= 0.80` | `full`, `scale` |
+| `wrongTop1Rate` | `<= 0.10` | `full`, `scale` |
+| `irrelevantRetrievalRate` | `<= 0.05` | `full`, `scale` |
+| `scaleSRuntimeMs` | `<= 30000` ms | `scale` |
+| `scaleMRuntimeMs` | `<= 120000` ms | `scale` |
+| `scaleLRuntimeMs` | `<= 600000` ms | `scale` |
+| `scaleXLRuntimeMs` | `<= 1800000` ms | `scale` |
+| `memoryDbBytesPerMemory` | `<= 8192` bytes | `scale` |
+| `withMemoryTaskSuccessRate` | `>= noMemoryTaskSuccessRate` | `llm` |
+| `repeatedMistakeReduction` | `>= 0.30` | `llm` |
+| `userCorrectionReduction` | `>= 0.20` | `llm` |
+| `toolCallReduction` | `>= 0.10` | `llm` |
+
+Threshold governance：
+
+- Thresholds 必须集中定义在 benchmark contract 中，不能散落在 case implementation。
+- 调整 threshold 必须改 spec 或 benchmark version，并在 report metadata 中记录。
+- Regression comparison 使用当前 threshold 和 baseline delta 同时报错。
+- 对 `llm` profile，threshold breach 必须区分 provider variance、adapter error 和 Cyrene memory failure。
+
 ## Hard Gate Rules
 
 以下规则为硬失败：
 
+- `fixture isolation violation = 0`
+- `real user memory read/write = 0`
+- `cross-case mutable state reuse = 0`
+- `non-deterministic fixture generation = 0`
 - `pending leakage = 0`
 - `cross-project pollution = 0`
 - `unauthorized promotion = 0`
@@ -876,7 +965,34 @@ interface BenchmarkReport {
   runId: string
   startedAt: string
   completedAt: string
-  profile: 'gate' | 'full' | 'scale' | 'llm' | 'external'
+  profile: 'smoke' | 'gate' | 'full' | 'scale' | 'llm' | 'external'
+  spec: {
+    path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md'
+    title: 'Cyrene Benchmark Eval System Design'
+    date: '2026-06-05'
+    contentHash: string
+  }
+  benchmark: {
+    version: string
+    thresholdVersion: string
+    caseCatalogHash: string
+  }
+  package: {
+    name: string
+    version: string
+  }
+  git: {
+    branch: string
+    commit: string
+    dirty: boolean
+    trackedChanges: string[]
+  }
+  runtime: {
+    nodeVersion: string
+    npmVersion?: string
+    platform: string
+    arch: string
+  }
   passed: boolean
   summary: {
     totalCases: number
@@ -893,6 +1009,12 @@ interface BenchmarkReport {
     efficiency: Record<string, number>
     taskUtility: Record<string, number>
   }
+  thresholdBreaches: Array<{
+    metric: string
+    threshold: number | string
+    actual: number | string
+    severity: 'warning' | 'error'
+  }>
   scaleResults?: Record<string, unknown>
   regressionComparison?: {
     baselineReportPath?: string
@@ -913,6 +1035,50 @@ interface BenchmarkReport {
 - scale results
 - regression comparison
 - per-case evidence
+- spec path/date/hash
+- benchmark version and threshold version
+- package version
+- git branch/commit/dirty status
+- runtime Node/npm/platform metadata
+
+## LLM And External Adapter Contract
+
+`llm` 和 `external` profile 必须通过 adapter 运行，case 不能直接调用 provider、shell wrapper 或外部 CLI。
+
+```ts
+interface BenchmarkAdapterSpec {
+  kind: 'deterministic' | 'llm' | 'external'
+  provider?: string
+  requiredEnv?: string[]
+  requiredCommands?: string[]
+  supportsDeterministicReplay: boolean
+}
+
+interface BenchmarkAdapter {
+  id: string
+  kind: 'llm' | 'external'
+  healthCheck(): Promise<BenchmarkAdapterHealth>
+  runCase(input: BenchmarkAdapterRunInput): Promise<BenchmarkAdapterRunResult>
+}
+```
+
+LLM adapter 必须：
+
+- 接收固定 `systemPrompt`、`userPrompt`、fixture snapshot、deterministic `seed`、deterministic `now`。
+- 记录 request metadata，但不得把 secret、raw credential 或 provider token 写入 report。
+- 返回 bounded transcript、tool call summary、final answer、usage、latency、provider metadata。
+- 支持 deterministic transcript/action replay；真实 provider run 只在 `llm` profile 中执行。
+- 在 provider 缺失、env 缺失、quota 不足、auth 失败时返回 `not_supported_without_provider`，不能让 case silently pass。
+
+External adapter 必须：
+
+- 为 Claude Code memory、Hermes memory、Mem0、Zep 等外部对照定义统一 `setup`、`run`、`teardown`。
+- 将外部 system 的 memory write/read 路径限制在 fixture root。
+- 禁止外部 adapter 写入 Cyrene 真实 memory root 或用户真实 provider state。
+- 输出同预算指标：token budget、tool budget、time budget、memory size、retrieval latency、task result。
+- 缺少外部 tool、账号或 provider 时返回 `not_supported_without_provider`。
+
+Adapter isolation 是 hard rule。Adapter 违反 fixture isolation、写入真实用户状态、泄露 secret 或绕过 report metadata，case 必须失败。
 
 ## CLI / MCP / Skill Consistency
 
@@ -995,6 +1161,7 @@ npm test
 npm run typecheck
 npm run build:plugin
 python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin
+cyrene-continuity codex benchmark run --profile smoke
 cyrene-continuity codex benchmark run --profile gate
 ```
 
@@ -1009,11 +1176,13 @@ git diff --check
 release gate 默认运行：
 
 ```text
+cyrene-continuity codex benchmark run --profile smoke
 cyrene-continuity codex benchmark run --profile gate
 ```
 
 CI gate 失败条件：
 
+- 任意 `smoke` profile case failed。
 - 任意 `gate` profile case failed。
 - 任意 hard gate metric 违反。
 - report 缺少 catalog 中的 case。
@@ -1025,7 +1194,7 @@ CI gate 失败条件：
 
 ## External Comparison
 
-外部对照不在初始 gate 中运行，但 case catalog 必须保留：
+外部对照不在 `smoke` 或 `gate` 中默认运行，但 case catalog 必须保留：
 
 - no memory
 - old all-in context behavior
