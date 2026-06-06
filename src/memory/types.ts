@@ -136,6 +136,55 @@ export type SemanticRewriteReceiptAction = typeof SEMANTIC_REWRITE_RECEIPT_ACTIO
 export const SEMANTIC_REWRITE_METHODS = ['deterministic', 'llm', 'deterministic_fallback'] as const
 export type SemanticRewriteMethod = typeof SEMANTIC_REWRITE_METHODS[number]
 
+export const MEMORY_RELATION_TYPES = [
+  'supports',
+  'contradicts',
+  'supersedes',
+  'refines',
+  'derived_from',
+  'similar_to',
+  'warns_against',
+  'transfers_to'
+] as const
+export type MemoryRelationType = typeof MEMORY_RELATION_TYPES[number]
+
+export const MEMORY_EDGE_STATUSES = ['trial', 'validated', 'rejected', 'expired', 'superseded'] as const
+export type MemoryEdgeStatus = typeof MEMORY_EDGE_STATUSES[number]
+
+export const MEMORY_EDGE_ORIGINS = ['deterministic', 'model', 'operation'] as const
+export type MemoryEdgeOrigin = typeof MEMORY_EDGE_ORIGINS[number]
+
+export const MEMORY_EDGE_EVIDENCE_KINDS = [
+  'normalized_key',
+  'content_hash',
+  'review_hash',
+  'activation_feedback',
+  'distillation_input',
+  'project_similarity',
+  'model_hint'
+] as const
+export type MemoryEdgeEvidenceKind = typeof MEMORY_EDGE_EVIDENCE_KINDS[number]
+
+export interface MemoryEdge {
+  id: string
+  fromMemoryId: string
+  toMemoryId: string
+  fromScope: MemoryScope
+  toScope: MemoryScope
+  fromProjectId?: string
+  toProjectId?: string
+  relationType: MemoryRelationType
+  status: MemoryEdgeStatus
+  confidence: number
+  origin: MemoryEdgeOrigin
+  reason: string
+  evidenceId?: string
+  evidenceKind?: MemoryEdgeEvidenceKind
+  createdAt: string
+  updatedAt: string
+  lastUsedAt?: string
+}
+
 export interface MemoryScores {
   evidenceStrength: number
   stability: number

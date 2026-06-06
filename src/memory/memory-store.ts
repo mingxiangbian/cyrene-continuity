@@ -16,6 +16,8 @@ import type {
   DistillationInput,
   EpisodeMemory,
   MemoryEvidence,
+  MemoryEdge,
+  MemoryEdgeStatus,
   MemoryEvent,
   MemoryScores,
   MemoryTombstone,
@@ -40,6 +42,7 @@ const REVIEW_DECISIONS_FILE = 'review_decisions.jsonl'
 const ACTIVATION_EVENTS_FILE = 'activation_events.jsonl'
 const REFLECTION_CANDIDATES_FILE = 'reflection_candidates.jsonl'
 const SEMANTIC_REWRITE_RECEIPTS_FILE = 'semantic_rewrite_receipts.jsonl'
+const MEMORY_EDGES_FILE = 'memory_edges.jsonl'
 const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
@@ -324,6 +327,63 @@ export async function readSemanticRewriteReceiptsFromRoot(memoryRoot: string): P
   return readJsonLines<SemanticRewriteReceipt>(join(memoryRoot, SEMANTIC_REWRITE_RECEIPTS_FILE))
 }
 
+export async function readMemoryEdgesFromRoot(memoryRoot: string): Promise<MemoryEdge[]> {
+  const readable = await isReadableMemoryRoot(memoryRoot)
+  if (!readable) {
+    return []
+  }
+  return readJsonLines<MemoryEdge>(join(memoryRoot, MEMORY_EDGES_FILE))
+}
+
+export async function writeMemoryEdgesFromRoot(memoryRoot: string, edges: MemoryEdge[]): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  await writeJsonLinesAtomic(join(root, MEMORY_EDGES_FILE), edges)
+}
+
+export async function upsertMemoryEdgeFromRoot(memoryRoot: string, edge: MemoryEdge): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  const current = await readMemoryEdgesFromRoot(root)
+  await writeMemoryEdgesFromRoot(root, upsertMemoryEdges(current, [edge]))
+}
+
+export async function transitionMemoryEdgeStatusFromRoot(
+  memoryRoot: string,
+  input: {
+    id: string
+    status: MemoryEdgeStatus
+    now: string
+    reason: string
+    details?: Record<string, unknown>
+  }
+): Promise<void> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  const current = await readMemoryEdgesFromRoot(root)
+  const edge = current.find((item) => item.id === input.id)
+  if (edge === undefined) {
+    throw new Error(`Memory edge not found: ${input.id}`)
+  }
+
+  await writeMemoryEdgesFromRoot(root, current.map((item) => item.id === input.id
+    ? { ...item, status: input.status, updatedAt: input.now }
+    : item
+  ))
+  await appendMemoryEventFromRoot(root, {
+    id: randomUUID(),
+    action: 'audit',
+    at: input.now,
+    reason: input.reason,
+    memoryId: input.id,
+    details: {
+      relationType: edge.relationType,
+      fromMemoryId: edge.fromMemoryId,
+      toMemoryId: edge.toMemoryId,
+      previousStatus: edge.status,
+      nextStatus: input.status,
+      ...(input.details ?? {})
+    }
+  })
+}
+
 export async function appendRoutingDecisionFromRoot(
   memoryRoot: string,
   decision: RoutingDecision
@@ -546,6 +606,22 @@ function upsertSemanticMemories(current: SemanticMemory[], replacements: Semanti
     }
   }
   return next
+}
+
+function upsertMemoryEdges(current: MemoryEdge[], replacements: MemoryEdge[]): MemoryEdge[] {
+  const next = [...current]
+  for (const replacement of replacements) {
+    const index = next.findIndex((edge) => edge.id === replacement.id)
+    if (index < 0) {
+      next.push(replacement)
+    } else {
+      next[index] = replacement
+    }
+  }
+  return next.sort((left, right) => {
+    const createdAtDiff = left.createdAt.localeCompare(right.createdAt)
+    return createdAtDiff === 0 ? left.id.localeCompare(right.id) : createdAtDiff
+  })
 }
 
 async function semanticMemoryStoreExists(memoryRoot: string): Promise<boolean> {

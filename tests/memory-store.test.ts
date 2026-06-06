@@ -4,11 +4,15 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   readActiveMemoriesFromRoot,
+  readMemoryEdgesFromRoot,
+  readMemoryEventsFromRoot,
   readPendingMemoriesFromRoot,
+  transitionMemoryEdgeStatusFromRoot,
+  upsertMemoryEdgeFromRoot,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../src/memory/memory-store.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import type { CyreneMemory, MemoryEdge, PendingMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
 
@@ -59,6 +63,56 @@ describe('memory store JSONL reads', () => {
     await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toContain('review-1')
     await expect(readFile(join(memoryRoot, 'pending.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readPendingMemoriesFromRoot(memoryRoot)).resolves.toMatchObject([{ id: 'review-1' }])
+  })
+
+  it('stores memory relation edges as durable JSONL records', async () => {
+    const memoryRoot = await createTempDir('cyrene-memory-store-root-')
+    const edge = createMemoryEdge({
+      id: 'edge-replacement-old',
+      fromMemoryId: 'replacement',
+      toMemoryId: 'old',
+      relationType: 'supersedes',
+      status: 'validated',
+      origin: 'operation',
+      evidenceKind: 'review_hash'
+    })
+
+    await upsertMemoryEdgeFromRoot(memoryRoot, edge)
+
+    await expect(readMemoryEdgesFromRoot(memoryRoot)).resolves.toEqual([edge])
+    await expect(readFile(join(memoryRoot, 'memory_edges.jsonl'), 'utf8')).resolves.toContain('edge-replacement-old')
+  })
+
+  it('marks a validated relation rejected and records an invalidation receipt', async () => {
+    const memoryRoot = await createTempDir('cyrene-memory-store-root-')
+    await upsertMemoryEdgeFromRoot(memoryRoot, createMemoryEdge({ id: 'edge-bad', status: 'validated' }))
+
+    await transitionMemoryEdgeStatusFromRoot(memoryRoot, {
+      id: 'edge-bad',
+      status: 'rejected',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'relation_edge_invalidated',
+      details: { reviewer: 'benchmark' }
+    })
+
+    expect((await readMemoryEdgesFromRoot(memoryRoot))[0]).toMatchObject({
+      id: 'edge-bad',
+      status: 'rejected',
+      updatedAt: '2026-06-07T00:00:00.000Z'
+    })
+    expect(await readMemoryEventsFromRoot(memoryRoot)).toEqual([
+      expect.objectContaining({
+        action: 'audit',
+        reason: 'relation_edge_invalidated',
+        memoryId: 'edge-bad',
+        details: expect.objectContaining({
+          fromMemoryId: 'memory-from',
+          toMemoryId: 'memory-to',
+          previousStatus: 'validated',
+          nextStatus: 'rejected'
+        })
+      })
+    ])
   })
 })
 
@@ -112,6 +166,28 @@ function createPending(overrides: Partial<PendingMemory> = {}): PendingMemory {
     lastSeenAt: '2026-05-29T00:00:00.000Z',
     expiresAt: '2026-06-29T00:00:00.000Z',
     tags: ['review'],
+    ...overrides
+  }
+}
+
+function createMemoryEdge(overrides: Partial<MemoryEdge> = {}): MemoryEdge {
+  return {
+    id: 'edge-1',
+    fromMemoryId: 'memory-from',
+    toMemoryId: 'memory-to',
+    fromScope: 'project',
+    toScope: 'project',
+    fromProjectId: 'project-1',
+    toProjectId: 'project-1',
+    relationType: 'supports',
+    status: 'trial',
+    confidence: 0.8,
+    origin: 'deterministic',
+    reason: 'test relation',
+    evidenceId: 'evidence-1',
+    evidenceKind: 'normalized_key',
+    createdAt: '2026-06-07T00:00:00.000Z',
+    updatedAt: '2026-06-07T00:00:00.000Z',
     ...overrides
   }
 }
