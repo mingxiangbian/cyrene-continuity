@@ -75,7 +75,15 @@ describe('benchmark Tier 0 cases', () => {
       ['T0-CROSS-PROJECT-ADVERSARIAL', 'adversarial cross-project boundary ok'],
       ['T0-CROSS-PROJECT-PROMPT-INJECTION', 'promptInjectionInjected=0'],
       ['T0-SESSION-HINTS', 'pending migration=0'],
-      ['T16-ROUTING-NAMESPACE', 'namespace routing ok']
+      ['T16-ROUTING-NAMESPACE', 'namespace routing ok'],
+      ['T16-REL-SUPERSEDES-DIRECTION', 'supersedes direction ok; staleLeakage=0'],
+      ['T16-REL-SIMILAR-NO-EXPANSION', 'similar relation diagnostics-only; expansion=0'],
+      ['T16-REL-DERIVED-TRIAL-BLOCK', 'derived trial relation blocked; activeHintLeakage=0'],
+      ['T16-REL-TRANSFER-HINT-ONLY', 'transfer relation hint-only; migration=0'],
+      ['T16-REL-TRIAL-HINT-EXCLUSION', 'trial relation hint excluded from runtime; diagnosticsOnly=1'],
+      ['T16-REL-EDGE-INVALIDATION', 'relation edge invalidation ok; expired=1'],
+      ['T16-REL-FALLBACK-SCOPE-GUARD', 'JSONL fallback scope guard ok; crossProjectPollution=0'],
+      ['T16-REL-LASTUSED-HOTPATH', 'relation hot path read-only; lastUsedWrites=0']
     ] as const) {
       const result = report.caseResults.find((item) => item.caseId === caseId)
       expect(result?.status).toBe('passed')
@@ -104,6 +112,13 @@ describe('benchmark Tier 0 cases', () => {
     expect(promptInjection.get('crossProjectPollutionRate')).toBe(0)
     expect(promptInjection.get('similarHintMigrationRate')).toBe(0)
     expect(promptInjection.get('profilePollutionRate')).toBe(0)
+    const relationSupersedes = metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-SUPERSEDES-DIRECTION'))
+    expect(relationSupersedes.get('replacementAccuracy')).toBe(1)
+    expect(relationSupersedes.get('staleMemoryLeakageRate')).toBe(0)
+    expect(relationSupersedes.get('duplicateActiveMemoryRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-TRANSFER-HINT-ONLY')).get('similarHintMigrationRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-FALLBACK-SCOPE-GUARD')).get('crossProjectPollutionRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-LASTUSED-HOTPATH')).get('retrievedDefaultWriteRate')).toBe(0)
   }, 20_000)
 
   it('checks surface consistency across policy, context-preview, MCP, and skill contracts', async () => {
@@ -136,7 +151,18 @@ describe('benchmark Tier 0 cases', () => {
     const first = await runCyreneBenchmark({ ...options, outputDir: await outputDir() })
     const second = await runCyreneBenchmark({ ...options, outputDir: await outputDir() })
 
-    for (const caseId of ['T16-REVIEW-HASH-REQUIRED', 'T16-ROUTING-NAMESPACE'] as const) {
+    for (const caseId of [
+      'T16-REVIEW-HASH-REQUIRED',
+      'T16-ROUTING-NAMESPACE',
+      'T16-REL-SUPERSEDES-DIRECTION',
+      'T16-REL-SIMILAR-NO-EXPANSION',
+      'T16-REL-DERIVED-TRIAL-BLOCK',
+      'T16-REL-TRANSFER-HINT-ONLY',
+      'T16-REL-TRIAL-HINT-EXCLUSION',
+      'T16-REL-EDGE-INVALIDATION',
+      'T16-REL-FALLBACK-SCOPE-GUARD',
+      'T16-REL-LASTUSED-HOTPATH'
+    ] as const) {
       const firstEvidence = evidenceText(first.caseResults.find((item) => item.caseId === caseId))
       const secondEvidence = evidenceText(second.caseResults.find((item) => item.caseId === caseId))
       expect(firstEvidence).toBe(secondEvidence)
