@@ -24,6 +24,7 @@ v1.6 要实现 `/Users/phoenix/Downloads/cyrene_memory_upgrade_plan.md` 中的�
 5. 只让 validated 且安全的 relation edge 影响 retrieval expansion、context-preview 和 profile projection。
 6. 保留 v5/v1.5 memory safety model：pending memory 不进入 runtime，高风险或 ambiguous memory 不绕过 explicit approval 和 review-hash validation。
 7. 新增 relation-aware benchmark cases，验证 retrieval accuracy、profile pollution、cross-project leakage、supersede handling、derived memory safety 和 token / latency cost。
+8. 将后续实现拆成 multi-agent execution lanes，每个 lane 有明确 owner、输入、输出、验证命令和 handoff checkpoint。
 
 ## 非目标
 
@@ -494,6 +495,23 @@ Add relation-aware cases to the benchmark catalog:
 - automation rejects unsafe relation。
 - operation-backed supersede edge validates without edge review。
 
+Relation quality gate cases must be deterministic. `gate` profile 不依赖 LLM provider；LLM-assisted cases 只能在 `llm` / `full` profile 作为附加诊断，缺 provider 时报告 `needs_model_config`，不能让 release gate 变成非确定性。
+
+Add these concrete `tier1_6` gate cases:
+
+| Case id | Profiles | Assertion | Metrics | Hard gate mapping |
+| --- | --- | --- | --- | --- |
+| `T16-REL-SUPERSEDES-DIRECTION` | `gate`, `full` | old memory 作为 seed 时必须带出 replacement；old 不得作为 active truth 注入。 | `retrievalAccuracy`, `staleMemoryLeakageRate`, `replacementAccuracy` | `conflicting_context_injection`, `expired_memory_injection` |
+| `T16-REL-SIMILAR-NO-EXPANSION` | `gate`, `full` | validated `similar_to` 只用于 dedupe/diagnostics，不参与 ordinary runtime 1-hop expansion。 | `irrelevantRetrievalRate`, `duplicateActiveMemoryRate`, `tokenOverhead` | `duplicate_context_injection` |
+| `T16-REL-DERIVED-TRIAL-BLOCK` | `gate`, `full` | `derived_from` edge 不会把 derived memory 自动变成 validated/core/profile line。 | `profilePollutionRate`, `promotionAccuracy` | `unauthorized_promotion`, `profile_pollution` |
+| `T16-REL-TRANSFER-HINT-ONLY` | `gate`, `full` | `transfers_to` 只能显示为 transferable guidance，不迁移成 current-project memory/profile/session。 | `crossProjectPollutionRate`, `similarHintMigrationRate`, `profilePollutionRate` | `cross_project_pollution`, `similar_hint_migration`, `profile_pollution` |
+| `T16-REL-TRIAL-HINT-EXCLUSION` | `gate`, `full` | model/trial edge 不进入 fast/balanced runtime、profile、hard constraints、checklists 或 normal `session_hints`。 | `pendingLeakageRate`, `profilePollutionRate`, `sessionHintsCount` | `pending_leakage`, `profile_pollution`, `session_hint_migration` |
+| `T16-REL-EDGE-INVALIDATION` | `gate`, `full` | `validated -> rejected` plus `relation_edge_invalidated` 后停止 expansion，并保留 receipt。 | `staleMemoryLeakageRate`, `auditLogGrowth` | `conflicting_context_injection` |
+| `T16-REL-FALLBACK-SCOPE-GUARD` | `gate`, `full` | SQLite stale/unavailable 时，JSONL fallback 仍校验 edge scope/project 和 joined memory metadata。 | `crossProjectPollutionRate`, `jsonlFallbackRateHotPath`, `indexSourceMismatchCount` | `cross_project_pollution`, `jsonl_hot_path_fallback`, `index_source_mismatch` |
+| `T16-REL-LASTUSED-HOTPATH` | `gate`, `full` | retrieval hot path 不直接重写 durable `memory_edges.jsonl` 的 `lastUsedAt`。 | `retrievedDefaultWriteRate`, `hotPathRebuildCount`, `activationEventGrowth` | `retrieved_default_write`, `hot_path_rebuild` |
+
+If implementation needs a new metric id for relation-specific precision, add it explicitly to `benchmark/types.ts`; otherwise prefer existing metric ids above so gate wiring stays small。
+
 ### Success Criteria
 
 The upgrade is acceptable only if:
@@ -526,37 +544,56 @@ Files likely to change during implementation:
 
 Generated plugin runtime files are not edited directly. If future implementation changes `plugin/skills/cyrene-continuity/SKILL.md`, run `npm run build:plugin` and plugin validation per `AGENTS.md`; this design does not require that skill change.
 
-## Execution Model
+## Multi-Agent Execution Spec
 
-This is a non-trivial spec/plan and future implementation should use an explicit multi-agent execution model when the plan is written.
+This is a non-trivial implementation. The execution plan should be written and run as a coordinated multi-agent project, with one integration captain and bounded ownership lanes. Agents may work in parallel only after the shared data contract is frozen.
 
-Parallelizable work:
+### Agent Lanes
 
-- Edge store and type foundation。
-- Deterministic relation detector and edge lifecycle helper。
-- SQLite projection and retrieval expansion。
-- Daily / weekly automation integration。
-- Relation-aware benchmark cases。
+| Lane | Owner responsibility | Primary files | Deliverable | Verification |
+| --- | --- | --- | --- | --- |
+| Contract Agent | Define `MemoryRelationType`, `MemoryEdge`, lifecycle receipts, JSONL validation, migration compatibility with `SemanticMemory.supersedes` / `conflictsWith`。 | `src/memory/types.ts`, `src/memory/memory-store.ts` | Durable edge contract and focused unit tests。 | `npm run typecheck`; edge contract tests |
+| Edge Store Agent | Implement durable edge read/write/upsert/status transition, receipt emission, malformed JSONL fail-closed behavior。 | `src/memory/memory-store.ts`, new helper under `src/memory/` | Edge store APIs and transition helpers。 | edge store tests; malformed JSONL tests |
+| Relation Detector Agent | Implement deterministic relation detection and operation-backed validation rules. No LLM calls in synchronous admission path。 | new helper under `src/memory/` or `src/codex/`, admission/lifecycle touchpoints | Detector output with trial/validated/rejected status semantics。 | detector tests; operation-backed validation tests |
+| Index/Retrieval Agent | Project durable edges into SQLite and implement relation-specific 1-hop expansion with direction filters。 | `src/memory/memory-index.ts`, `src/memory/memory-retriever.ts`, `src/codex/continuity-context.ts` | SQLite projection plus runtime expansion。 | projection rebuild tests; context output tests |
+| Preview/Profile Agent | Add relation-aware context-preview explanations and profile projection filters. Trial/model-only/derived-unvalidated edges stay out。 | `src/codex/memory-context-preview.ts`, `src/codex/memory-lifecycle-profile.ts` | Explainable inclusion/filtering and safe profile output。 | preview snapshot tests; profile pollution tests |
+| Automation Agent | Add daily edge maintenance, LLM hint fallback reporting, weekly cluster/profile refresh wiring。 | `src/codex/codex-memory-lifecycle-daily.ts`, `src/codex/codex-memory-lifecycle-weekly.ts` | Dry-run/apply actions with auditable `MemoryEvent` receipts。 | daily/weekly dry-run tests; receipt tests |
+| Benchmark Agent | Wire relation quality cases into catalog/scorer/report and keep gate deterministic。 | `benchmark/types.ts`, benchmark catalog/cases/scorer/report tests | `tier1_6` relation gate cases and report assertions。 | `cyrene-continuity codex benchmark run --profile smoke`; `--profile gate` |
+| Integration Captain | Own sequencing, conflict resolution, final verification matrix, and keeping generated runtime / `REVIEW_REPORT.md` untouched。 | cross-cutting | Merge-ready branch with all lanes reconciled。 | full verification plan below |
 
-Dependencies:
+### Dependency Graph
 
-- Retrieval, automation, profile projection, and benchmark implementation all depend on the edge data contract.
-- SQLite projection depends on durable edge store APIs.
-- Profile projection depends on validated edge semantics and safety filters.
-- Benchmark implementation can start with contract cases but final scorer assertions depend on runtime integration.
+```text
+Contract Agent
+  -> Edge Store Agent
+  -> Relation Detector Agent
+  -> Index/Retrieval Agent
+      -> Preview/Profile Agent
+      -> Benchmark Agent
+  -> Automation Agent
+      -> Preview/Profile Agent
+      -> Benchmark Agent
+Integration Captain coordinates all handoffs.
+```
 
-Conflict risks:
+Benchmark Agent can draft fixture cases after Contract Agent freezes the edge shape, but final pass/fail assertions wait for Index/Retrieval and Preview/Profile integration.
 
-- `memory-store.ts` and `memory-index.ts` are shared write hotspots and should have clear ownership.
-- `continuity-context.ts` already contains retrieval/index/preview glue; relation expansion should be implemented through small helpers rather than a broad inline rewrite.
-- Existing `SemanticMemory.supersedes` and pending `conflictsWith` should be bridged into edges without deleting them until compatibility is proven.
+### Handoff Checkpoints
 
-Verification roles:
+1. Contract checkpoint: edge types, lifecycle state machine, receipt reason codes, and compatibility bridge are reviewed before other agents edit dependent code。
+2. Store checkpoint: durable edge APIs pass local tests and expose stable helper names before detector/index agents depend on them。
+3. Runtime checkpoint: relation expansion proves direction filters, `similar_to` exclusion, scope/project guards, and hot-path no-write behavior。
+4. Automation checkpoint: daily/weekly jobs produce receipts and do not validate model-only/high-impact edges without allowed evidence。
+5. Benchmark checkpoint: `T16-REL-*` cases fail against a deliberately unsafe fixture and pass against the integrated implementation。
+6. Integration checkpoint: run full verification matrix, inspect changed files for ownership drift, and ensure generated plugin runtime files were not edited directly。
 
-- Type/data-contract owner verifies `npm run typecheck` and relation unit tests.
-- Retrieval owner verifies context-preview and runtime output, not only internal tests.
-- Automation owner verifies daily/weekly dry-run and apply receipts.
-- Benchmark owner verifies `cyrene-continuity codex benchmark run --profile smoke` and `--profile gate` after relation cases are wired.
+### Conflict Controls
+
+- `src/memory/memory-store.ts` is owned by Contract/Edge Store until the store checkpoint; other agents call exported helpers instead of editing storage internals。
+- `src/memory/memory-index.ts` is owned by Index/Retrieval; Contract/Edge Store changes must expose projection-ready data rather than patching index logic。
+- `src/codex/continuity-context.ts` is a shared hotspot; relation expansion should live in small helpers, with the file limited to orchestration glue。
+- Existing `SemanticMemory.supersedes` and pending `conflictsWith` must be bridged into edges without deleting compatibility fields until benchmark and migration checks pass。
+- Benchmark fixtures must not read or write real user memory; preserve fixture isolation hard gates。
 
 ## Verification Plan
 
@@ -570,7 +607,8 @@ Future implementation verification:
 
 ```text
 npm run typecheck
-npm run test -- tests/<relation-focused-tests>
+npm run test -- tests/memory-store.test.ts tests/memory-index.test.ts tests/memory-retriever.test.ts tests/codex-continuity-context.test.ts
+npm run test -- tests/codex-memory-lifecycle-daily.test.ts tests/codex-memory-lifecycle-weekly.test.ts tests/benchmark-runner.test.ts tests/benchmark-cases-lifecycle.test.ts
 cyrene-continuity codex benchmark run --profile smoke
 cyrene-continuity codex benchmark run --profile gate
 ```
