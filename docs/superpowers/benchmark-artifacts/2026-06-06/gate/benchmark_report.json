@@ -1,0 +1,2137 @@
+{
+  "runId": "e99c2ecaa916b3a5",
+  "startedAt": "2026-06-06T00:00:00.000Z",
+  "completedAt": "2026-06-06T00:00:00.000Z",
+  "profile": "gate",
+  "spec": {
+    "path": "docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md",
+    "title": "Cyrene Benchmark Eval System Design",
+    "date": "2026-06-05",
+    "contentHash": "25332433ee74d0a5170ae1523cb3a2ff96da00ca08533e915604c0e969b20058"
+  },
+  "benchmark": {
+    "version": "1.0.0",
+    "thresholdVersion": "2026-06-06",
+    "caseCatalogHash": "3f822e847b5de4abe84f466e695cf6b82a1a64fb70b87bfe4681ace13b8bc618"
+  },
+  "package": {
+    "name": "cyrene-continuity",
+    "version": "0.1.0"
+  },
+  "git": {
+    "branch": "main",
+    "commit": "827bcb856cbe60706621b9c8135111eb1f627a91",
+    "dirty": true,
+    "trackedChanges": [
+      "M benchmark/cases/tier0-release-gate.ts",
+      "M benchmark/cases/tier1-5-lifecycle.ts",
+      "M benchmark/cases/tier1-memory-ability.ts",
+      "M benchmark/cases/tier2-memory-to-action.ts",
+      "M benchmark/cases/tier3-scale-efficiency.ts",
+      "M benchmark/cases/tier4-failure-security.ts",
+      "M benchmark/catalog.ts",
+      "M benchmark/report.ts",
+      "M benchmark/runner.ts",
+      "M benchmark/thresholds.ts",
+      "M benchmark/types.ts",
+      "M docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md",
+      "M plugin/runtime/cyrene-continuity.mjs",
+      "M src/codex/codex-benchmark.ts",
+      "M src/codex/codex-cli.ts",
+      "M src/codex/context-policy.ts",
+      "M src/codex/memory-context-preview.ts",
+      "M tests/benchmark-cases-ability-action.test.ts",
+      "M tests/benchmark-cases-failure-security.test.ts",
+      "M tests/benchmark-cases-lifecycle.test.ts",
+      "M tests/benchmark-cases-scale.test.ts",
+      "M tests/benchmark-cases-tier0.test.ts",
+      "M tests/benchmark-cli.test.ts",
+      "M tests/benchmark-report.test.ts",
+      "M tests/benchmark-runner.test.ts",
+      "M tests/benchmark-types.test.ts",
+      "M tests/codex-context-policy.test.ts",
+      "?? benchmark/artifacts.ts",
+      "?? docs/superpowers/benchmark-artifacts/",
+      "?? docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md",
+      "?? tests/benchmark-cases-real-replay.test.ts"
+    ]
+  },
+  "runtime": {
+    "nodeVersion": "v25.9.0",
+    "npmVersion": "11.12.1",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "passed": true,
+  "summary": {
+    "totalCases": 67,
+    "passed": 24,
+    "failed": 0,
+    "skippedWithReason": 43,
+    "notSupportedWithoutProvider": 0
+  },
+  "failedCases": [],
+  "caseResults": [
+    {
+      "caseId": "T0-MODE-FAST",
+      "title": "fast mode excludes review and similar hot paths",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "modeAccuracy",
+          "value": 1
+        },
+        {
+          "name": "fastTokenOverhead",
+          "value": 580
+        },
+        {
+          "name": "continuityGetP95FastMs",
+          "value": 24
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "mode=fast; pending leakage=0; similar hints=0; full profile read=0; retrieved default writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-MODE-BALANCED",
+      "title": "balanced mode reads full profile without pending details",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "modeAccuracy",
+          "value": 1
+        },
+        {
+          "name": "balancedTokenOverhead",
+          "value": 601
+        },
+        {
+          "name": "continuityGetP95BalancedMs",
+          "value": 20
+        },
+        {
+          "name": "pendingLeakageRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "mode=balanced; full profile read=1; pending leakage=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-MODE-REVIEW",
+      "title": "review mode is the only mode that reads pending memories",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "modeAccuracy",
+          "value": 1
+        },
+        {
+          "name": "pendingMisuseRate",
+          "value": 0
+        },
+        {
+          "name": "continuityGetP95ReviewMs",
+          "value": 37
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "mode=review; pending details visible; pending active injection=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-PENDING-BOUNDARY",
+      "title": "pending does not leak into ordinary context",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "pendingLeakageRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "pending leakage=0; review pending visibility=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SIMILAR-BOUNDARY",
+      "title": "similar project hints never cross project boundary as memory",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "crossProjectPollutionRate",
+          "value": 0
+        },
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "similar boundary ok; hints=1; foreign active in memory=0; hintVisible=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-CROSS-PROJECT-ADVERSARIAL",
+      "title": "adversarial similar project memory stays hint-only",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "crossProjectPollutionRate",
+          "value": 0
+        },
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        },
+        {
+          "name": "profilePollutionRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "adversarial cross-project boundary ok; current=1; foreign active in memory=0; hintVisible=1; migration=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-CROSS-PROJECT-PROMPT-INJECTION",
+      "title": "foreign prompt-injection memory stays non-current-project hint only",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "crossProjectPollutionRate",
+          "value": 0
+        },
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        },
+        {
+          "name": "profilePollutionRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "cross-project prompt injection boundary ok; current=1; promptInjectionInjected=0; hintVisible=1; migration=0; profilePollution=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SESSION-HINTS",
+      "title": "session hints are transient and never migrate to memory",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        },
+        {
+          "name": "profilePollutionRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "session hints transient; active migration=0; pending migration=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-ACTIVATION-RETRIEVED",
+      "title": "activation event defaults do not write retrieved events",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievedDefaultWriteRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "retrieved default writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SQLITE-HOT-PATH",
+      "title": "SQLite and FTS are the default hot path",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sqliteHitRateFreshIndex",
+          "value": 1
+        },
+        {
+          "name": "jsonlFallbackRateHotPath",
+          "value": 0
+        },
+        {
+          "name": "sqliteQueryP95Ms",
+          "value": 20
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "source=sqlite; fallback=sqlite; retrieved=1; SQLite/FTS hot path ok"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SURFACE-CONSISTENCY",
+      "title": "Skill, MCP, and CLI surfaces expose consistent behavior",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "surfaceConsistencyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "policy surface=1; context-preview surface=1; MCP surface=1; skill surface=1; fast/balanced/review contracts aligned"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-FACT-EXTRACTION",
+      "title": "extract project facts from coding memories",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-MULTI-SESSION-REASONING",
+      "title": "reason across multiple sessions",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-TEMPORAL-ORDER",
+      "title": "answer temporal order questions",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-KNOWLEDGE-UPDATE",
+      "title": "newer memories override stale rules",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-CONFLICT-HANDLING",
+      "title": "handle conflicting memories without double injection",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ADVERSARIAL-RETRIEVAL",
+      "title": "retrieve target memory over adversarial distractors",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ADVERSARIAL-MULTI-DISTRACTOR",
+      "title": "answer target memory while rejecting stale pending personal global and foreign distractors",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ABSTAIN-NO-EVIDENCE",
+      "title": "abstain when memory evidence is absent",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-EVENT-SUMMARY",
+      "title": "summarize project events from long session memory",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-UPGRADE",
+      "title": "low-risk project memory can upgrade through policy",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-REPLACE",
+      "title": "replacement removes stale active rule from injection",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-MERGE",
+      "title": "merge combines compatible memory evidence",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-EXPIRE",
+      "title": "expired memories are excluded from active context",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-SUPERSEDE-HASH",
+      "title": "supersede requires valid review hash",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-CONFLICT-SINGLE-INJECTION",
+      "title": "conflicting old and new rules inject only one winner",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-ADVERSARIAL-CONFLICT",
+      "title": "adversarial normalized-key conflict requires explicit supersede",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD",
+      "title": "explicit supersede beats a strong stale adversarial rule",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-IMPORTANT",
+      "title": "important project evidence is proposed for review",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "importantMemoryMissedRate",
+          "value": 0
+        },
+        {
+          "name": "proposalPrecision",
+          "value": 1
+        },
+        {
+          "name": "proposalRecall",
+          "value": 1
+        },
+        {
+          "name": "pendingGeneratedCount",
+          "value": 1
+        },
+        {
+          "name": "pendingCandidatesPerSession",
+          "value": 1
+        },
+        {
+          "name": "pendingCandidatesPerDay",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "important project rule candidate proposed for review"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-NOISE",
+      "title": "noise is not proposed as durable memory",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "noiseProposalRate",
+          "value": 0
+        },
+        {
+          "name": "temporaryStateProposalRate",
+          "value": 0
+        },
+        {
+          "name": "proposalPrecision",
+          "value": 1
+        },
+        {
+          "name": "pendingGeneratedCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "noise filtered decision; pending noise=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-SENSITIVE",
+      "title": "sensitive content is never persisted",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sensitiveProposalRate",
+          "value": 0
+        },
+        {
+          "name": "proposalPrecision",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "sensitive content rejected; secret persistence=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-ASSISTANT-INFERENCE",
+      "title": "assistant-only inference is not promoted as user fact",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "assistantInferenceAutoActiveRate",
+          "value": 0
+        },
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "pendingGeneratedCount",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "assistant inference deferred for review; active inference=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-ROUTING-NAMESPACE",
+      "title": "project and global namespace routing is correct",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "lifecyclePromotionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "namespace routing ok; project and global roots isolated"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-HASH-REQUIRED",
+      "title": "review approval requires review hash",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "approveCount",
+          "value": 0
+        },
+        {
+          "name": "reviewFalsePositiveRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "review hash required; missing reviewHash rejected"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-STALE-HASH",
+      "title": "stale review hash cannot approve pending memory",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "stalePendingCount",
+          "value": 0
+        },
+        {
+          "name": "reviewFalsePositiveRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "stale hash rejected; active writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-REJECT-DEFER",
+      "title": "reject and defer decisions do not activate memory",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 2
+        },
+        {
+          "name": "rejectCount",
+          "value": 1
+        },
+        {
+          "name": "deferCount",
+          "value": 1
+        },
+        {
+          "name": "pendingReviewedCount",
+          "value": 2
+        },
+        {
+          "name": "stalePendingCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "reject and defer stay inactive; active writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-EDIT-HASH",
+      "title": "edited review content gets a fresh hash contract",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "editCount",
+          "value": 1
+        },
+        {
+          "name": "averageReviewTimeMs",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "edited candidate receives new hash; stale edit hash rejected"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REMEMBER-TEST-COMMAND",
+      "title": "remember and reuse project test command",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-AVOID-REJECTED-APPROACH",
+      "title": "avoid an approach rejected in an earlier session",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-FOLLOW-WORKFLOW",
+      "title": "follow remembered project workflow",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-UPDATED-RULE",
+      "title": "use updated rule and stop using old rule",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-CROSS-SESSION-FIX",
+      "title": "apply cross-session fix memory to current task",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REDUCE-REPEAT-MISTAKE",
+      "title": "memory reduces repeated mistakes and user corrections",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-PROJECT-REPLAY",
+      "title": "real project replay validates coding task utility on repo-grounded fixture",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-UPDATED-WORKFLOW-REPLAY",
+      "title": "real project replay stops using superseded workflow command",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-MULTI-FILE-FIX-REPLAY",
+      "title": "real project replay applies prior multi-file fix path",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-DOCS-ONLY-REPLAY",
+      "title": "real project replay keeps docs-only work on docs verification path",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-S-SCALE",
+      "title": "S scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-M-SCALE",
+      "title": "M scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-L-SCALE",
+      "title": "L scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-XL-SCALE",
+      "title": "XL scale fixture reports efficiency without entering release gate hot path",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-RANKING",
+      "title": "ranking resists similar memory interference",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-TOKEN-OVERHEAD",
+      "title": "token overhead stays inside profile budget",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-LATENCY",
+      "title": "latency percentiles are reported for continuity and hooks",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-INDEX-HEALTH",
+      "title": "index health reports SQLite hit, JSONL fallback, and stale rates",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SQLITE-UNAVAILABLE",
+      "title": "SQLite unavailable path reports fallback policy explicitly",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-JSONL-CORRUPT",
+      "title": "corrupt JSONL fixture fails closed with diagnostics",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-PROFILE-MISSING",
+      "title": "missing profile does not pollute context",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-FAST-SUMMARY-MISSING-STALE",
+      "title": "missing or stale fast summary never triggers hot-path heavy rebuild",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SESSION-HINTS-EXPIRED",
+      "title": "expired session hints are ignored",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-MCP-ERROR",
+      "title": "MCP error surface returns bounded diagnostics",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-AUTOMATION-INTERRUPT",
+      "title": "automation interruption does not leave memory partial writes",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-HOOK-LIGHTWEIGHT",
+      "title": "non-Stop lifecycle hook path remains lightweight",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sessionStartHookP50Ms",
+          "value": 36
+        },
+        {
+          "name": "sessionStartHookP95Ms",
+          "value": 36
+        },
+        {
+          "name": "sessionStartHookP99Ms",
+          "value": 36
+        },
+        {
+          "name": "userPromptSubmitHookP50Ms",
+          "value": 18
+        },
+        {
+          "name": "userPromptSubmitHookP95Ms",
+          "value": 18
+        },
+        {
+          "name": "userPromptSubmitHookP99Ms",
+          "value": 18
+        },
+        {
+          "name": "postToolUseHookP50Ms",
+          "value": 18
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 18
+        },
+        {
+          "name": "postToolUseHookP99Ms",
+          "value": 18
+        },
+        {
+          "name": "postToolUseHeavyOperationCount",
+          "value": 0
+        },
+        {
+          "name": "ordinaryHookPendingReviewCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "non-Stop hook lightweight; hook events=3; hook metric=post_tool_use; continuity metrics=0; ordinary pending review=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-HOOK-TIMEOUT",
+      "title": "hook timeout does not crash ordinary coding flow",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile gate does not run this case"
+        }
+      ],
+      "skippedReason": "profile gate does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-SECRETS",
+      "title": "secrets are never persisted or reported as memory",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "secret persistence=0; propose action=reject"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-PROMPT-INJECTION",
+      "title": "prompt injection text cannot override benchmark or memory policy",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "prompt injection rejected by propose path; active writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-GLOBAL-WRITE",
+      "title": "global writes require explicit allowed namespace and policy",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "unauthorized global write=0; propose action=reject"
+        }
+      ],
+      "thresholdBreaches": []
+    }
+  ],
+  "metrics": {
+    "capability": {
+      "modeAccuracy": 1,
+      "retrievedDefaultWriteRate": 0,
+      "surfaceConsistencyRate": 1,
+      "importantMemoryMissedRate": 0,
+      "proposalPrecision": 1,
+      "proposalRecall": 1,
+      "pendingGeneratedCount": 1,
+      "pendingCandidatesPerSession": 1,
+      "pendingCandidatesPerDay": 1,
+      "manualReviewCount": 2,
+      "lifecyclePromotionAccuracy": 1,
+      "approveCount": 0,
+      "reviewFalsePositiveRate": 0,
+      "stalePendingCount": 0,
+      "rejectCount": 1,
+      "deferCount": 1,
+      "pendingReviewedCount": 2,
+      "editCount": 1,
+      "averageReviewTimeMs": 0,
+      "postToolUseHeavyOperationCount": 0
+    },
+    "boundarySafety": {
+      "pendingLeakageRate": 0,
+      "pendingMisuseRate": 0,
+      "crossProjectPollutionRate": 0,
+      "similarHintMigrationRate": 0,
+      "profilePollutionRate": 0,
+      "noiseProposalRate": 0,
+      "temporaryStateProposalRate": 0,
+      "sensitiveProposalRate": 0,
+      "assistantInferenceAutoActiveRate": 0,
+      "boundarySafetyRate": 1
+    },
+    "efficiency": {
+      "fastTokenOverhead": 580,
+      "continuityGetP95FastMs": 24,
+      "balancedTokenOverhead": 601,
+      "continuityGetP95BalancedMs": 20,
+      "continuityGetP95ReviewMs": 37,
+      "sqliteHitRateFreshIndex": 1,
+      "jsonlFallbackRateHotPath": 0,
+      "sqliteQueryP95Ms": 20,
+      "sessionStartHookP50Ms": 36,
+      "sessionStartHookP95Ms": 36,
+      "sessionStartHookP99Ms": 36,
+      "userPromptSubmitHookP50Ms": 18,
+      "userPromptSubmitHookP95Ms": 18,
+      "userPromptSubmitHookP99Ms": 18,
+      "postToolUseHookP50Ms": 18,
+      "postToolUseHookP95Ms": 18,
+      "postToolUseHookP99Ms": 18,
+      "ordinaryHookPendingReviewCount": 0
+    },
+    "taskUtility": {}
+  },
+  "metricAggregation": {
+    "modeAccuracy": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T0-MODE-FAST",
+        "T0-MODE-BALANCED",
+        "T0-MODE-REVIEW"
+      ]
+    },
+    "fastTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-MODE-FAST"
+      ]
+    },
+    "continuityGetP95FastMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-MODE-FAST"
+      ]
+    },
+    "balancedTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-MODE-BALANCED"
+      ]
+    },
+    "continuityGetP95BalancedMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-MODE-BALANCED"
+      ]
+    },
+    "pendingLeakageRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-MODE-BALANCED",
+        "T0-PENDING-BOUNDARY"
+      ]
+    },
+    "pendingMisuseRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-MODE-REVIEW"
+      ]
+    },
+    "continuityGetP95ReviewMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-MODE-REVIEW"
+      ]
+    },
+    "crossProjectPollutionRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T0-SIMILAR-BOUNDARY",
+        "T0-CROSS-PROJECT-ADVERSARIAL",
+        "T0-CROSS-PROJECT-PROMPT-INJECTION"
+      ]
+    },
+    "similarHintMigrationRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T0-SIMILAR-BOUNDARY",
+        "T0-CROSS-PROJECT-ADVERSARIAL",
+        "T0-CROSS-PROJECT-PROMPT-INJECTION",
+        "T0-SESSION-HINTS"
+      ]
+    },
+    "profilePollutionRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T0-CROSS-PROJECT-ADVERSARIAL",
+        "T0-CROSS-PROJECT-PROMPT-INJECTION",
+        "T0-SESSION-HINTS"
+      ]
+    },
+    "retrievedDefaultWriteRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-ACTIVATION-RETRIEVED"
+      ]
+    },
+    "sqliteHitRateFreshIndex": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-SQLITE-HOT-PATH"
+      ]
+    },
+    "jsonlFallbackRateHotPath": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-SQLITE-HOT-PATH"
+      ]
+    },
+    "sqliteQueryP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-SQLITE-HOT-PATH"
+      ]
+    },
+    "surfaceConsistencyRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-SURFACE-CONSISTENCY"
+      ]
+    },
+    "importantMemoryMissedRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "proposalPrecision": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT",
+        "T16-PROPOSE-NOISE",
+        "T16-PROPOSE-SENSITIVE"
+      ]
+    },
+    "proposalRecall": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "pendingGeneratedCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT",
+        "T16-PROPOSE-NOISE",
+        "T16-PROPOSE-ASSISTANT-INFERENCE"
+      ]
+    },
+    "pendingCandidatesPerSession": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "pendingCandidatesPerDay": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "noiseProposalRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-NOISE"
+      ]
+    },
+    "temporaryStateProposalRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-NOISE"
+      ]
+    },
+    "sensitiveProposalRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-SENSITIVE"
+      ]
+    },
+    "assistantInferenceAutoActiveRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-ASSISTANT-INFERENCE"
+      ]
+    },
+    "manualReviewCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 5,
+      "sourceCaseIds": [
+        "T16-PROPOSE-ASSISTANT-INFERENCE",
+        "T16-REVIEW-HASH-REQUIRED",
+        "T16-REVIEW-STALE-HASH",
+        "T16-REVIEW-REJECT-DEFER",
+        "T16-REVIEW-EDIT-HASH"
+      ]
+    },
+    "lifecyclePromotionAccuracy": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-ROUTING-NAMESPACE"
+      ]
+    },
+    "approveCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-HASH-REQUIRED"
+      ]
+    },
+    "reviewFalsePositiveRate": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T16-REVIEW-HASH-REQUIRED",
+        "T16-REVIEW-STALE-HASH"
+      ]
+    },
+    "stalePendingCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T16-REVIEW-STALE-HASH",
+        "T16-REVIEW-REJECT-DEFER"
+      ]
+    },
+    "rejectCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-REJECT-DEFER"
+      ]
+    },
+    "deferCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-REJECT-DEFER"
+      ]
+    },
+    "pendingReviewedCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-REJECT-DEFER"
+      ]
+    },
+    "editCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-EDIT-HASH"
+      ]
+    },
+    "averageReviewTimeMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-EDIT-HASH"
+      ]
+    },
+    "sessionStartHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "sessionStartHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "sessionStartHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "userPromptSubmitHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "userPromptSubmitHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "userPromptSubmitHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "postToolUseHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "postToolUseHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "postToolUseHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "postToolUseHeavyOperationCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "ordinaryHookPendingReviewCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "boundarySafetyRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T4-SECURITY-SECRETS",
+        "T4-SECURITY-PROMPT-INJECTION",
+        "T4-SECURITY-GLOBAL-WRITE"
+      ]
+    }
+  },
+  "hardFailures": [],
+  "thresholdBreaches": [],
+  "fixtureRuns": [
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qMl5Oc",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qMl5Oc/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qMl5Oc/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4jXvqk",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4jXvqk/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4jXvqk/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-5BH0E1",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-5BH0E1/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-5BH0E1/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-WCcE8L",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-WCcE8L/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-WCcE8L/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TYTDNN",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TYTDNN/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TYTDNN/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-gm9CFm",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-gm9CFm/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-gm9CFm/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-IjlPFg",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-IjlPFg/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-IjlPFg/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-XlYlkj",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-XlYlkj/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-XlYlkj/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6IpDoO",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6IpDoO/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6IpDoO/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-W3eJCy",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-W3eJCy/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-W3eJCy/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-pMxte3",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-pMxte3/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-pMxte3/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-swovYU",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-swovYU/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-swovYU/cyrene-benchmark-project-731db66f684f2e4d",
+      "seed": "stats-fix-gate-seed:T16-PROPOSE-IMPORTANT",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TdAQOH",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TdAQOH/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TdAQOH/cyrene-benchmark-project-d657459135b61b45",
+      "seed": "stats-fix-gate-seed:T16-PROPOSE-NOISE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-G0PKdX",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-G0PKdX/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-G0PKdX/cyrene-benchmark-project-4152cf29d83de419",
+      "seed": "stats-fix-gate-seed:T16-PROPOSE-SENSITIVE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-SPtwvu",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-SPtwvu/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-SPtwvu/cyrene-benchmark-project-a08ecbf51d577b54",
+      "seed": "stats-fix-gate-seed:T16-PROPOSE-ASSISTANT-INFERENCE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ajHQOz",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ajHQOz/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ajHQOz/cyrene-benchmark-project-a27671b433d4084c",
+      "seed": "stats-fix-gate-seed:T16-ROUTING-NAMESPACE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-T7csoi",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-T7csoi/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-T7csoi/cyrene-benchmark-project-924be735410b59cc",
+      "seed": "stats-fix-gate-seed:T16-REVIEW-HASH-REQUIRED",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Yqaa57",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Yqaa57/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Yqaa57/cyrene-benchmark-project-acc11a831c7473e8",
+      "seed": "stats-fix-gate-seed:T16-REVIEW-STALE-HASH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-R5tJ6Z",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-R5tJ6Z/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-R5tJ6Z/cyrene-benchmark-project-b0211d7ce63971c7",
+      "seed": "stats-fix-gate-seed:T16-REVIEW-REJECT-DEFER",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TeZTZ8",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TeZTZ8/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-TeZTZ8/cyrene-benchmark-project-3671c99321cfa311",
+      "seed": "stats-fix-gate-seed:T16-REVIEW-EDIT-HASH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-wcyRPI",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-wcyRPI/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-wcyRPI/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6fpIHb",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6fpIHb/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6fpIHb/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-hRCKuH",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-hRCKuH/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-hRCKuH/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6T54Gn",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6T54Gn/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-6T54Gn/cyrene-benchmark-project-ab2a70a4654bc736",
+      "seed": "stats-fix-gate-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    }
+  ]
+}

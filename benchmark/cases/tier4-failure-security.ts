@@ -377,7 +377,7 @@ async function runAutomationInterrupt(
         automationInterruptRecoveryTimeMs
       }),
       evidence: [{
-        summary: `automation idempotent; first promotions=${first.roots[0]?.promotedTrialToValidated ?? 'missing'}; second promotions=${second.roots[0]?.promotedTrialToValidated ?? 'missing'}; weekly dry-run candidates=${weeklyCoreCandidateCount}; dry-run writes=${dryRunWriteCount}; duplicate promotion=${promoteEvents.length === 1 ? 0 : 1}`
+        summary: `automation idempotent; automationFixtureScale=toy; first promotions=${first.roots[0]?.promotedTrialToValidated ?? 'missing'}; second promotions=${second.roots[0]?.promotedTrialToValidated ?? 'missing'}; weekly dry-run candidates=${weeklyCoreCandidateCount}; dry-run writes=${dryRunWriteCount}; duplicate promotion=${promoteEvents.length === 1 ? 0 : 1}`
       }]
     }
   })
@@ -402,11 +402,13 @@ async function runHookTimeout(
         stopHookP50Ms: latencyMs,
         stopHookP95Ms: latencyMs,
         stopHookP99Ms: latencyMs,
-        hookTimeoutCount: 1,
-        hookFailOpenCount: parsed.continue === true && parsed.suppressOutput === true ? 1 : 0
+        simulatedHookTimeoutCount: 1,
+        simulatedHookFailOpenCount: parsed.continue === true && parsed.suppressOutput === true ? 1 : 0,
+        runtimeHookTimeoutCount: 0,
+        runtimeHookFailOpenCount: 0
       }),
       evidence: [{
-        summary: `hook timeout fail-open; continue=${parsed.continue === true ? 1 : 0}; suppressOutput=${parsed.suppressOutput === true ? 1 : 0}; latencyMs=${latencyMs}`
+        summary: `hook timeout fail-open; timeoutSource=simulated_invalid_payload; runtimeHookTimeout=0; continue=${parsed.continue === true ? 1 : 0}; suppressOutput=${parsed.suppressOutput === true ? 1 : 0}; latencyMs=${latencyMs}`
       }]
     }
   })

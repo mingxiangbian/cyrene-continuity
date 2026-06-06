@@ -1,4 +1,4 @@
-export const EXECUTION_PROFILES = ['smoke', 'gate', 'full', 'scale', 'llm', 'external'] as const
+export const EXECUTION_PROFILES = ['smoke', 'gate', 'full', 'scale', 'real-replay', 'llm', 'external'] as const
 export type BenchmarkProfile = typeof EXECUTION_PROFILES[number]
 
 export const BENCHMARK_TIERS = ['tier0', 'tier1', 'tier1_5', 'tier1_6', 'tier2', 'tier3', 'tier4'] as const
@@ -9,9 +9,14 @@ export const BENCHMARK_METRIC_IDS = [
   'adapterAvailability',
   'answerAccuracy',
   'balancedTokenOverhead',
+  'balancedDiagnosticsTokens',
+  'balancedPendingTokens',
   'benchmarkRuntimeMs',
   'boundarySafetyRate',
   'continuityGetLatencyMs',
+  'continuityGetMaxMs',
+  'continuityGetMeanMs',
+  'continuityGetMinMs',
   'continuityGetP50BalancedMs',
   'continuityGetP50FastMs',
   'continuityGetP50Ms',
@@ -24,6 +29,7 @@ export const BENCHMARK_METRIC_IDS = [
   'continuityGetP99FastMs',
   'continuityGetP99Ms',
   'continuityGetP99ReviewMs',
+  'continuityGetSampleCount',
   'contextItemCount',
   'crossProjectPollutionRate',
   'fastTokenOverhead',
@@ -50,11 +56,14 @@ export const BENCHMARK_METRIC_IDS = [
   'fastSummaryReadLatencyMs',
   'fastSummarySizeGrowthBytes',
   'fastSummaryTokens',
+  'fastDiagnosticsTokens',
+  'fastPendingTokens',
   'feedbackEventGrowth',
   'fullProfileTokens',
   'globalProfileTokens',
   'hookFailOpenCount',
   'hookLatencyMs',
+  'hookSampleCount',
   'hookTimeoutCount',
   'hotPathRebuildCount',
   'importantMemoryMissedRate',
@@ -63,12 +72,16 @@ export const BENCHMARK_METRIC_IDS = [
   'indexStaleRate',
   'irrelevantRetrievalRate',
   'jsonlSizeBytes',
+  'jsonlRecordCount',
   'jsonlFallbackRateHotPath',
   'lifecyclePromotionAccuracy',
   'manualReviewCount',
   'memoryDbBytesPerMemory',
   'memoryDbSizeBytes',
   'memoryItemCount',
+  'materializedActiveMemoryCount',
+  'materializedPendingMemoryCount',
+  'materializedProjectCount',
   'mergeAccuracy',
   'modeAccuracy',
   'mrr',
@@ -86,6 +99,9 @@ export const BENCHMARK_METRIC_IDS = [
   'pendingQueryLatencyMs',
   'pendingReviewedCount',
   'pendingTokens',
+  'runtimeHookFailOpenCount',
+  'runtimeHookTimeoutCount',
+  'runtimeSourceIsMaterialized',
   'postToolUseHeavyOperationCount',
   'postToolUseHookP50Ms',
   'postToolUseHookP95Ms',
@@ -109,6 +125,8 @@ export const BENCHMARK_METRIC_IDS = [
   'retrievalAccuracy',
   'retrievedDefaultWriteRate',
   'reviewTokenOverhead',
+  'reviewDiagnosticsTokens',
+  'reviewPendingTokens',
   'reviewFalsePositiveRate',
   'rollbackSuccessRate',
   'scaleLRuntimeMs',
@@ -127,6 +145,10 @@ export const BENCHMARK_METRIC_IDS = [
   'similarHintsTokens',
   'similarMemoryInterferenceRate',
   'similarQueryLatencyMs',
+  'simulatedHookFailOpenCount',
+  'simulatedHookTimeoutCount',
+  'sqliteIndexedActiveCount',
+  'sqliteIndexedPendingCount',
   'sqliteHitRate',
   'sqliteHitRateFreshIndex',
   'sqliteQueryP95Ms',
@@ -139,6 +161,9 @@ export const BENCHMARK_METRIC_IDS = [
   'summaryStalePropagationAccuracy',
   'surfaceConsistencyRate',
   'taskSuccessRate',
+  'targetActiveMemoryCount',
+  'targetPendingMemoryCount',
+  'targetProjectCount',
   'temporaryStateProposalRate',
   'top1Accuracy',
   'tokenOverhead',
@@ -345,6 +370,12 @@ export interface BenchmarkReport {
     efficiency: Record<string, number>
     taskUtility: Record<string, number>
   }
+  metricAggregation?: Record<string, {
+    group: 'capability' | 'boundarySafety' | 'efficiency' | 'taskUtility'
+    strategy: 'min' | 'max' | 'single'
+    sampleCount: number
+    sourceCaseIds: readonly string[]
+  }>
   hardFailures: readonly HardGateRuleId[]
   thresholdBreaches: readonly BenchmarkThresholdBreach[]
   fixtureRuns?: readonly BenchmarkFixtureRunMetadata[]
@@ -359,6 +390,7 @@ export interface BenchmarkRunOptions {
   cwd: string
   profile: BenchmarkProfile
   outputDir: string
+  artifactArchiveDir?: string
   seed?: string
   now?: string
   baselineReportPath?: string

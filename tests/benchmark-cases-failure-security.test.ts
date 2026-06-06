@@ -67,11 +67,18 @@ describe('benchmark Tier 4 failure, security, and adapter cases', () => {
     ]) {
       expect(automation.has(metric)).toBe(true)
     }
+    expect(evidenceText(report.caseResults.find((item) => item.caseId === 'T4-AUTOMATION-INTERRUPT'))).toContain('automationFixtureScale=toy')
 
     const hook = metricMap(report.caseResults.find((item) => item.caseId === 'T4-HOOK-TIMEOUT'))
-    expect(hook.get('hookTimeoutCount')).toBe(1)
-    expect(hook.get('hookFailOpenCount')).toBe(1)
+    expect(hook.has('hookTimeoutCount')).toBe(false)
+    expect(hook.has('hookFailOpenCount')).toBe(false)
+    expect(hook.get('simulatedHookTimeoutCount')).toBe(1)
+    expect(hook.get('simulatedHookFailOpenCount')).toBe(1)
+    expect(hook.get('runtimeHookTimeoutCount')).toBe(0)
+    expect(hook.get('runtimeHookFailOpenCount')).toBe(0)
     expect(hook.has('stopHookP95Ms')).toBe(true)
+    expect(report.metrics.efficiency.runtimeHookTimeoutCount).toBe(0)
+    expect(report.metrics.efficiency.simulatedHookTimeoutCount).toBe(1)
   }, 20_000)
 
   it('marks llm and external adapter cases unsupported when provider env is missing', async () => {

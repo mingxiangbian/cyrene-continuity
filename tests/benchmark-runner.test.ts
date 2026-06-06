@@ -44,6 +44,31 @@ describe('benchmark runner', () => {
     expect(markdown).toContain('# Cyrene Benchmark Report')
   })
 
+  it('archives reports to the repo artifact target when requested', async () => {
+    const outputDir = await tempDir()
+    const artifactRoot = await tempDir()
+    const report = await runCyreneBenchmark({
+      cwd: process.cwd(),
+      profile: 'smoke',
+      outputDir,
+      artifactArchiveDir: artifactRoot,
+      seed: 'runner-archive-seed',
+      now: '2026-06-05T00:00:00.000Z'
+    })
+
+    const outputJson = await readFile(join(outputDir, 'benchmark_report.json'), 'utf8')
+    const archivedJson = await readFile(join(artifactRoot, 'smoke', 'benchmark_report.json'), 'utf8')
+    const archivedMarkdown = await readFile(join(artifactRoot, 'smoke', 'benchmark_report.md'), 'utf8')
+
+    expect(outputJson).toContain('"profile": "smoke"')
+    expect(JSON.parse(archivedJson)).toEqual(expect.objectContaining({
+      runId: report.runId,
+      profile: 'smoke'
+    }))
+    expect(archivedMarkdown).toContain('# Cyrene Benchmark Report')
+    expect(archivedMarkdown).not.toContain('preserved fixture content')
+  })
+
   it('uses the injected clock for deterministic report timestamps', async () => {
     const first = await runCyreneBenchmark({
       cwd: process.cwd(),

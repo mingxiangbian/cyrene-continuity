@@ -10,6 +10,7 @@ const requiredCaseIds = [
   'T0-PENDING-BOUNDARY',
   'T0-SIMILAR-BOUNDARY',
   'T0-CROSS-PROJECT-ADVERSARIAL',
+  'T0-CROSS-PROJECT-PROMPT-INJECTION',
   'T0-SESSION-HINTS',
   'T0-ACTIVATION-RETRIEVED',
   'T0-SQLITE-HOT-PATH',
@@ -20,6 +21,7 @@ const requiredCaseIds = [
   'T1-KNOWLEDGE-UPDATE',
   'T1-CONFLICT-HANDLING',
   'T1-ADVERSARIAL-RETRIEVAL',
+  'T1-ADVERSARIAL-MULTI-DISTRACTOR',
   'T1-ABSTAIN-NO-EVIDENCE',
   'T1-EVENT-SUMMARY',
   'T15-UPGRADE',
@@ -29,6 +31,7 @@ const requiredCaseIds = [
   'T15-SUPERSEDE-HASH',
   'T15-CONFLICT-SINGLE-INJECTION',
   'T15-ADVERSARIAL-CONFLICT',
+  'T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD',
   'T16-PROPOSE-IMPORTANT',
   'T16-PROPOSE-NOISE',
   'T16-PROPOSE-SENSITIVE',
@@ -44,6 +47,10 @@ const requiredCaseIds = [
   'T2-UPDATED-RULE',
   'T2-CROSS-SESSION-FIX',
   'T2-REDUCE-REPEAT-MISTAKE',
+  'T2-REAL-PROJECT-REPLAY',
+  'T2-REAL-UPDATED-WORKFLOW-REPLAY',
+  'T2-REAL-MULTI-FILE-FIX-REPLAY',
+  'T2-REAL-DOCS-ONLY-REPLAY',
   'T3-S-SCALE',
   'T3-M-SCALE',
   'T3-L-SCALE',
@@ -154,7 +161,7 @@ describe('benchmark contract catalog', () => {
   })
 
   it('defines all execution profiles and centralized thresholds', () => {
-    expect(EXECUTION_PROFILES).toEqual(['smoke', 'gate', 'full', 'scale', 'llm', 'external'])
+    expect(EXECUTION_PROFILES).toEqual(['smoke', 'gate', 'full', 'scale', 'real-replay', 'llm', 'external'])
     expect(SOFT_METRIC_THRESHOLDS.map((item) => item.metric)).toEqual(expect.arrayContaining([
       'fastTokenOverhead',
       'continuityGetP95FastMs',
@@ -165,6 +172,14 @@ describe('benchmark contract catalog', () => {
       'scaleXLRuntimeMs',
       'withMemoryTaskSuccessRate'
     ]))
+    for (const metric of [
+      'withMemoryTaskSuccessRate',
+      'repeatedMistakeReduction',
+      'userCorrectionReduction',
+      'toolCallReduction'
+    ] as const) {
+      expect(SOFT_METRIC_THRESHOLDS.find((item) => item.metric === metric)?.profiles).toContain('real-replay')
+    }
     expect(HARD_GATE_RULE_IDS).toEqual(expect.arrayContaining([
       'fixture_isolation_violation',
       'pending_leakage',
@@ -189,12 +204,17 @@ describe('benchmark contract catalog', () => {
       'continuityGetP99BalancedMs',
       'continuityGetP50ReviewMs',
       'continuityGetP99ReviewMs',
+      'continuityGetSampleCount',
+      'continuityGetMinMs',
+      'continuityGetMeanMs',
+      'continuityGetMaxMs',
       'profileReadLatencyMs',
       'fastSummaryReadLatencyMs',
       'sessionHintsReadLatencyMs',
       'similarQueryLatencyMs',
       'pendingQueryLatencyMs',
       'diagnosticsAssemblyLatencyMs',
+      'hookSampleCount',
       'sessionStartHookP50Ms',
       'sessionStartHookP95Ms',
       'sessionStartHookP99Ms',
@@ -207,6 +227,10 @@ describe('benchmark contract catalog', () => {
       'stopHookP99Ms',
       'hookTimeoutCount',
       'hookFailOpenCount',
+      'simulatedHookTimeoutCount',
+      'simulatedHookFailOpenCount',
+      'runtimeHookTimeoutCount',
+      'runtimeHookFailOpenCount',
       'postToolUseHeavyOperationCount',
       'ordinaryHookPendingReviewCount',
       'projectMemoryTokens',
@@ -217,6 +241,12 @@ describe('benchmark contract catalog', () => {
       'similarHintsTokens',
       'pendingTokens',
       'diagnosticsTokens',
+      'fastPendingTokens',
+      'fastDiagnosticsTokens',
+      'balancedPendingTokens',
+      'balancedDiagnosticsTokens',
+      'reviewPendingTokens',
+      'reviewDiagnosticsTokens',
       'contextItemCount',
       'memoryItemCount',
       'profileSectionCount',
@@ -255,6 +285,16 @@ describe('benchmark contract catalog', () => {
       'undetectedStaleIndexCount',
       'activeMemoryGrowthPerRun',
       'pendingGrowthPerRun',
+      'targetProjectCount',
+      'targetActiveMemoryCount',
+      'targetPendingMemoryCount',
+      'materializedProjectCount',
+      'materializedActiveMemoryCount',
+      'materializedPendingMemoryCount',
+      'runtimeSourceIsMaterialized',
+      'jsonlRecordCount',
+      'sqliteIndexedActiveCount',
+      'sqliteIndexedPendingCount',
       'profileSizeGrowthBytes',
       'fastSummarySizeGrowthBytes',
       'sessionHintsSizeBytes',

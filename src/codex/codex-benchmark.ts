@@ -10,12 +10,17 @@ export interface CodexBenchmarkRunResult {
     jsonPath: string
     markdownPath: string
   }
+  artifactPaths?: {
+    jsonPath: string
+    markdownPath: string
+  }
 }
 
 export async function runCodexBenchmark(input: {
   cwd: string
   profile: BenchmarkProfile
   outputDir?: string
+  artifactArchiveDir?: string
   baselineReportPath?: string
   preserveFixtures?: boolean
 }): Promise<CodexBenchmarkRunResult> {
@@ -24,9 +29,16 @@ export async function runCodexBenchmark(input: {
     cwd: input.cwd,
     profile: input.profile,
     outputDir,
+    artifactArchiveDir: input.artifactArchiveDir,
     baselineReportPath: input.baselineReportPath,
     preserveFixtures: input.preserveFixtures
   })
+  const artifactPaths = input.artifactArchiveDir === undefined
+    ? undefined
+    : {
+        jsonPath: join(input.artifactArchiveDir, input.profile, 'benchmark_report.json'),
+        markdownPath: join(input.artifactArchiveDir, input.profile, 'benchmark_report.md')
+      }
   return {
     profile: report.profile,
     passed: report.passed,
@@ -34,6 +46,7 @@ export async function runCodexBenchmark(input: {
     reportPaths: {
       jsonPath: join(outputDir, 'benchmark_report.json'),
       markdownPath: join(outputDir, 'benchmark_report.md')
-    }
+    },
+    ...(artifactPaths === undefined ? {} : { artifactPaths })
   }
 }

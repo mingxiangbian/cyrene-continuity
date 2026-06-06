@@ -99,6 +99,35 @@ describe('context policy', () => {
     })
   })
 
+  it('lets review signals outrank diagnostics-only inference', () => {
+    expect(buildRetrievalPolicy({
+      userMessage: 'review pending memory candidates',
+      includeDiagnostics: true
+    })).toMatchObject({
+      mode: 'review',
+      includePendingDetails: true,
+      includeDiagnostics: true
+    })
+  })
+
+  it('uses env and explicit include flags during automatic mode inference', () => {
+    vi.stubEnv('CYRENE_CONTEXT_INCLUDE_PENDING_DETAILS', 'true')
+
+    expect(buildRetrievalPolicy({})).toMatchObject({
+      mode: 'review',
+      includePendingDetails: true
+    })
+
+    expect(buildRetrievalPolicy({
+      includePendingDetails: false,
+      includeSimilarProjectHints: true
+    })).toMatchObject({
+      mode: 'balanced',
+      includePendingDetails: false,
+      includeSimilarProjectHints: true
+    })
+  })
+
   it('keeps ordinary coding context in fast mode when no review signal exists', () => {
     expect(buildRetrievalPolicy({
       task: 'coding',

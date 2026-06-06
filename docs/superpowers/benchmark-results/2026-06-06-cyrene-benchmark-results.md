@@ -3,15 +3,20 @@
 This record captures the benchmark suite runs from 2026-06-06 Asia/Shanghai. It
 includes the follow-up metric pass, a clean-git baseline rerun, and the
 adversarial fixture verification added for retrieval, conflict handling, and
-cross-project boundaries.
+cross-project boundaries. It also records the post-commit clean gate/full rerun
+and the real-project replay benchmark profile. The final expansion pass records
+repo-archived report artifacts plus materialized S/M scale runtime evidence.
 
 ## Metadata
 
 - Benchmark version: `1.0.0`
-- Threshold version: `2026-06-05`
+- Threshold version: `2026-06-06` for the real-project replay rerun;
+  earlier metric/adversarial reports used `2026-06-05`
 - Metric pass case catalog hash: `e1e12842c080bb3eb3ac6354ac6abb058787f49cbffaee86cd557be19b436988`
 - Clean HEAD case catalog hash: `5ed2880982e940c4c8c2c6a83fd0f571a425f4b990ea39f317cfd69f8020f9cf`
 - Current adversarial case catalog hash: `88d2e90484e01f2af7b9bcddaa0c4a58d5c013ce5f257241f86f8f0ea2a65725`
+- Real replay case catalog hash: `d8664ca503a04aaa54bba2080ccceef99752d6af4d4d909334f0cc3391d61c09`
+- Expanded artifact case catalog hash: `59658b414730ab004d3f8a50fba841a40b1e08f7ca08c4740f64269ced81c219`
 - Spec: `docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md`
 - Implementation plan:
   `docs/superpowers/plans/2026-06-05-cyrene-benchmark-eval-system-implementation-plan.md`
@@ -23,6 +28,15 @@ cross-project boundaries.
   `plugin/runtime/cyrene-continuity.mjs`, `src/codex/context-policy.ts`,
   `src/codex/memory-context-preview.ts`, and
   `tests/codex-context-policy.test.ts`.
+
+The adversarial fixture commit is
+`827bcb856cbe60706621b9c8135111eb1f627a91`
+(`test: add benchmark metrics and adversarial fixtures`).
+
+The expanded artifact reports also recorded commit
+`827bcb856cbe60706621b9c8135111eb1f627a91` with `git.dirty=true` because the
+real-replay expansion, scale runtime update, repo artifact helper, CLI archive
+flag, and unrelated pre-existing local changes were present in the working tree.
 
 ## Metric Profile Results
 
@@ -74,6 +88,79 @@ report metadata.
 | `T0-CROSS-PROJECT-ADVERSARIAL` | `current=1`, `foreign active in memory=0`, `hintVisible=1`, `migration=0` | `crossProjectPollutionRate=0`, `similarHintMigrationRate=0`, `profilePollutionRate=0` |
 | `T1-ADVERSARIAL-RETRIEVAL` | `target retrieved=1`, `stale/pending/personal/global distractors=0` | `retrievalAccuracy=1`, `answerAccuracy=1`, `similarMemoryInterferenceRate=0` |
 | `T15-ADVERSARIAL-CONFLICT` | `explicit resolution required=1`, `stale prompt injection=0`, `single resolved injection=1` | `conflictResolutionAccuracy=1`, `staleMemoryLeakageRate=0`, `duplicateActiveMemoryRate=0` |
+
+## Post-Commit Clean Adversarial Rerun
+
+After committing the adversarial fixtures, gate and full were rerun from the
+temporary clean worktree `.worktrees/clean-adversarial-827bcb8` at commit
+`827bcb856cbe60706621b9c8135111eb1f627a91`. Both reports recorded
+`git.dirty=false`, `trackedChanges=[]`, `hardFailures=0`, and
+`thresholdBreaches=0`. The temporary worktree was removed after the run.
+
+| Profile | Run ID | Passed | Total cases | Passed cases | Failed | Skipped | Unsupported | Report dir |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| gate | `bc6f94f5f76e92c6` | true | 60 | 23 | 0 | 37 | 0 | `/tmp/cyrene-benchmark-clean-adversarial-20260606-gate` |
+| full | `56738768f7c74de8` | true | 60 | 56 | 0 | 4 | 0 | `/tmp/cyrene-benchmark-clean-adversarial-20260606-full` |
+
+## Real Project Replay Profile
+
+`real-replay` is an isolated deterministic profile for repo-grounded coding
+task utility. The first case, `T2-REAL-PROJECT-REPLAY`, creates a temporary
+cyrene-continuity-like fixture with `AGENTS.md`, `package.json`,
+`src/codex/context-policy.ts`, `tests/codex-context-policy.test.ts`, and the
+generated `plugin/runtime/cyrene-continuity.mjs` file. The replay requires the
+agent to inspect source and project instructions, run the targeted test command,
+run typecheck, and leave generated runtime unchanged.
+
+| Profile | Run ID | Passed | Total cases | Passed cases | Failed | Skipped | Unsupported | Report dir |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| real-replay | `1588d75736dabd54` | true | 61 | 1 | 0 | 60 | 0 | `/tmp/cyrene-benchmark-real-replay-20260606` |
+
+| Case | Evidence | Metric result |
+| --- | --- | --- |
+| `T2-REAL-PROJECT-REPLAY` | `real project replay ok`, `fixture files verified`, `noMemory tools=13`, `withMemory tools=8` | `taskSuccessRate=1`, `noMemoryTaskSuccessRate=0`, `withMemoryTaskSuccessRate=1`, `repeatedMistakeReduction=0.75`, `userCorrectionReduction=0.75`, `toolCallReduction=0.38461538461538464` |
+
+## Expanded Artifact Archive Rerun
+
+The expanded rerun archives only `benchmark_report.json` and
+`benchmark_report.md` into the repository under
+`docs/superpowers/benchmark-artifacts/2026-06-06/<profile>/`. Temporary fixture
+roots are not copied into the archive.
+
+| Profile | Run ID | Passed | Total cases | Passed cases | Failed | Skipped | Unsupported | Archived report |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| gate | `e99c2ecaa916b3a5` | true | 67 | 24 | 0 | 43 | 0 | `docs/superpowers/benchmark-artifacts/2026-06-06/gate/benchmark_report.json` |
+| full | `b69cc461c862d088` | true | 67 | 59 | 0 | 8 | 0 | `docs/superpowers/benchmark-artifacts/2026-06-06/full/benchmark_report.json` |
+| scale | `5fffd288214e9caa` | true | 67 | 8 | 0 | 59 | 0 | `docs/superpowers/benchmark-artifacts/2026-06-06/scale/benchmark_report.json` |
+| real-replay | `06cf0c1deb5a7bdc` | true | 67 | 4 | 0 | 63 | 0 | `docs/superpowers/benchmark-artifacts/2026-06-06/real-replay/benchmark_report.json` |
+
+The archived reports were rerun after the metric semantics audit. The scale
+reports now separate target counts from capped materialized fixture counts, use
+`runtimeSourceIsMaterialized=0` for synthetic L/XL runtime, report
+`jsonlRecordCount` and SQLite indexed counts separately, and keep
+`indexStaleRate=0` unless stale evidence is observed. Hook timeout metrics are
+split into `simulatedHook*` and `runtimeHook*`; current runtime hook timeout and
+fail-open counts are both `0`. Token overhead now includes per-mode pending and
+diagnostic token fields, with `contextShape=compact` in the evidence. Aggregate
+metrics include `metricAggregation` provenance so repeated metric names are not
+silently overwritten.
+
+The expanded full/gate reports include the more toxic adversarial fixtures:
+
+| Case | Evidence | Metric result |
+| --- | --- | --- |
+| `T0-CROSS-PROJECT-PROMPT-INJECTION` | `promptInjectionInjected=0`, `hintVisible=1`, `migration=0`, `profilePollution=0` | `crossProjectPollutionRate=0`, `similarHintMigrationRate=0`, `profilePollutionRate=0` |
+| `T1-ADVERSARIAL-MULTI-DISTRACTOR` | `target retrieved=1`, `stalePendingAnswer=0`, `personalDistractorAnswer=0`, `globalDistractorAnswer=0`, `foreignDistractorAnswer=0` | `retrievalAccuracy=1`, `answerAccuracy=1`, `similarMemoryInterferenceRate=0` |
+| `T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD` | `strongOldRuleInjected=0`, `explicitSupersedeHonored=1`, `single resolved injection=1` | `conflictResolutionAccuracy=1`, `staleMemoryLeakageRate=0`, `duplicateActiveMemoryRate=0` |
+
+The expanded real-replay profile now runs four repo-grounded cases:
+
+| Case | Evidence | Metric result |
+| --- | --- | --- |
+| `T2-REAL-PROJECT-REPLAY` | `fixture files verified`, `noMemory tools=13`, `withMemory tools=8` | `taskSuccessRate=1`, `withMemoryTaskSuccessRate=1`, `repeatedMistakeReduction=0.75`, `userCorrectionReduction=0.75`, `toolCallReduction=0.38461538461538464` |
+| `T2-REAL-UPDATED-WORKFLOW-REPLAY` | `updated workflow command applied`, `noMemory tools=12`, `withMemory tools=7` | `taskSuccessRate=1`, `withMemoryTaskSuccessRate=1`, `repeatedMistakeReduction=0.75`, `userCorrectionReduction=0.75`, `toolCallReduction=0.4166666666666667` |
+| `T2-REAL-MULTI-FILE-FIX-REPLAY` | `source test and docs updated together`, `noMemory tools=14`, `withMemory tools=8` | `taskSuccessRate=1`, `withMemoryTaskSuccessRate=1`, `repeatedMistakeReduction=0.8`, `userCorrectionReduction=0.8`, `toolCallReduction=0.42857142857142855` |
+| `T2-REAL-DOCS-ONLY-REPLAY` | `docs-only verification applied`, `noMemory tools=9`, `withMemory tools=4` | `taskSuccessRate=1`, `withMemoryTaskSuccessRate=1`, `repeatedMistakeReduction=1`, `userCorrectionReduction=1`, `toolCallReduction=0.5555555555555556` |
 
 ## Release Gate Snapshot
 
@@ -128,32 +215,33 @@ breakdown, index health, and storage size from real fixture runs.
 
 | Area | Metric result |
 | --- | --- |
-| Continuity latency, full | `continuityGetP50Ms=18`, `continuityGetP95Ms=34`, `continuityGetP99Ms=34` |
-| Fast latency, full | `continuityGetP50FastMs=18`, `continuityGetP95FastMs=18`, `continuityGetP99FastMs=18` |
-| Balanced latency, full | `continuityGetP50BalancedMs=18`, `continuityGetP95BalancedMs=18`, `continuityGetP99BalancedMs=18` |
-| Review latency, full | `continuityGetP50ReviewMs=34`, `continuityGetP95ReviewMs=34`, `continuityGetP99ReviewMs=34` |
-| Read-path components | `profileReadLatencyMs=1`, `fastSummaryReadLatencyMs=0`, `sessionHintsReadLatencyMs=0`, `similarQueryLatencyMs=0`, `pendingQueryLatencyMs=0`, `diagnosticsAssemblyLatencyMs=1` |
-| Hook components, full | `sessionStartHookP95Ms=35`, `userPromptSubmitHookP95Ms=17`, `postToolUseHookP95Ms=17`, `hookTimeoutCount=1`, `hookFailOpenCount=1` |
-| Token breakdown | `fastTokenOverhead=586`, `balancedTokenOverhead=781`, `reviewTokenOverhead=946`, `projectMemoryTokens=77`, `pendingTokens=64`, `diagnosticsTokens=230` |
+| Continuity latency, full | `continuityGetSampleCount=9`, `continuityGetP50Ms=20`, `continuityGetP95Ms=38`, `continuityGetP99Ms=38`, `continuityGetMinMs=17`, `continuityGetMeanMs=24`, `continuityGetMaxMs=38` |
+| Fast latency, full | `continuityGetP50FastMs=18`, `continuityGetP95FastMs=20`, `continuityGetP99FastMs=20` |
+| Balanced latency, full | `continuityGetP50BalancedMs=19`, `continuityGetP95BalancedMs=20`, `continuityGetP99BalancedMs=20` |
+| Review latency, full | `continuityGetP50ReviewMs=35`, `continuityGetP95ReviewMs=38`, `continuityGetP99ReviewMs=38` |
+| Read-path components | `profileReadLatencyMs=2`, `fastSummaryReadLatencyMs=1`, `sessionHintsReadLatencyMs=0`, `similarQueryLatencyMs=0`, `pendingQueryLatencyMs=0`, `diagnosticsAssemblyLatencyMs=1` |
+| Hook components, full | `hookSampleCount=3`, `sessionStartHookP95Ms=39`, `userPromptSubmitHookP95Ms=21`, `postToolUseHookP95Ms=19`, `runtimeHookTimeoutCount=0`, `runtimeHookFailOpenCount=0` |
+| Hook timeout simulation, full | `simulatedHookTimeoutCount=1`, `simulatedHookFailOpenCount=1`, `runtimeHookTimeoutCount=0`, `runtimeHookFailOpenCount=0` |
+| Token breakdown | `fastTokenOverhead=586`, `balancedTokenOverhead=595`, `reviewTokenOverhead=946`, `fastPendingTokens=0`, `fastDiagnosticsTokens=0`, `balancedPendingTokens=0`, `balancedDiagnosticsTokens=0`, `reviewPendingTokens=64`, `reviewDiagnosticsTokens=230`, `balancedDiagnosticsVisible=0` |
 | Context shape | `contextItemCount=1`, `memoryItemCount=1`, `profileSectionCount=1`, `sessionHintsCount=0`, `diagnosticsItemCount=7` |
 | Size growth | `profileSizeGrowthBytes=40`, `fastSummarySizeGrowthBytes=26`, `sessionHintsSizeBytes=2` |
 | Index/storage | `sqliteHitRate=1`, `sqliteHitRateFreshIndex=1`, `jsonlFallbackRateHotPath=0`, `indexStaleRate=0`, `indexRebuildTimeMs=24`, `dbRebuildTimeMs=24`, `memoryDbSizeBytes=77824`, `jsonlSizeBytes=1393` |
 
 ## Scale Metrics
 
-Scale profile passed all Tier 3 scale cases. Deterministic scale runtime targets
-remain synthetic first-version values, while DB and JSONL size now come from the
-materialized fixture.
+Scale profile passed all Tier 3 scale cases. S and M runtime metrics now use
+measured materialized fixture runtime. L and XL remain synthetic first-version
+targets and explicitly mark `runtimeSource=synthetic` in evidence.
 
 | Scale area | Metric result |
 | --- | --- |
-| S | `scaleSRuntimeMs=1200`, `activeMemoryGrowthPerRun=240`, `pendingGrowthPerRun=240`, `jsonlSizeBytes=1393` |
-| M | `scaleMRuntimeMs=7500` |
-| L | `scaleLRuntimeMs=45000` |
-| XL | `scaleXLRuntimeMs=180000`, `benchmarkRuntimeMs=180000` |
-| Storage | `memoryDbSizeBytes=77824`, `memoryDbBytesPerMemory=2654`, `jsonlSizeBytes=1393` |
-| Scale latency | `continuityGetP50Ms=24`, `continuityGetP95Ms=45`, `continuityGetP99Ms=45` |
-| Scale hook | `sessionStartHookP95Ms=41`, `userPromptSubmitHookP95Ms=22`, `postToolUseHookP95Ms=25` |
+| S | `runtimeSourceIsMaterialized=1`, `scaleSRuntimeMs=76`, `targetProjectCount=1`, `targetActiveMemoryCount=50`, `targetPendingMemoryCount=10`, `materializedActiveMemoryCount=50`, `materializedPendingMemoryCount=10`, `jsonlRecordCount=60` |
+| M | `runtimeSourceIsMaterialized=1`, `scaleMRuntimeMs=223`, `targetProjectCount=5`, `targetActiveMemoryCount=500`, `targetPendingMemoryCount=100`, `materializedActiveMemoryCount=240`, `materializedPendingMemoryCount=100`, `jsonlRecordCount=340` |
+| L | `runtimeSourceIsMaterialized=0`, `scaleLRuntimeMs=45000`, `targetProjectCount=20`, `targetActiveMemoryCount=5000`, `targetPendingMemoryCount=1000`, `materializedActiveMemoryCount=240`, `materializedPendingMemoryCount=240`, `indexStaleRate=0` |
+| XL | `runtimeSourceIsMaterialized=0`, `scaleXLRuntimeMs=180000`, `benchmarkRuntimeMs=180000`, `targetProjectCount=100`, `targetActiveMemoryCount=50000`, `targetPendingMemoryCount=5000`, `materializedActiveMemoryCount=240`, `materializedPendingMemoryCount=240` |
+| Storage | `memoryDbBytesPerMemory` ranges from `2646` to `4096` across scale size cases |
+| Scale latency | `continuityGetP50Ms=18`, `continuityGetP95Ms=36`, `continuityGetP99Ms=56` |
+| Scale hook | `sessionStartHookP95Ms=40`, `userPromptSubmitHookP95Ms=21`, `postToolUseHookP95Ms=22` |
 
 ## Task Utility Metrics
 
@@ -185,7 +273,24 @@ npx tsx src/main.ts codex benchmark run --profile scale --output-dir /tmp/cyrene
 # adversarial fixture verification
 npx tsx src/main.ts codex benchmark run --profile gate --output-dir /tmp/cyrene-benchmark-20260606-adversarial-gate
 npx tsx src/main.ts codex benchmark run --profile full --output-dir /tmp/cyrene-benchmark-20260606-adversarial-full
+
+# post-commit clean adversarial rerun
+npx tsx src/main.ts codex benchmark run --profile gate --output-dir /tmp/cyrene-benchmark-clean-adversarial-20260606-gate
+npx tsx src/main.ts codex benchmark run --profile full --output-dir /tmp/cyrene-benchmark-clean-adversarial-20260606-full
+
+# real project replay
+npx tsx src/main.ts codex benchmark run --profile real-replay --output-dir /tmp/cyrene-benchmark-real-replay-20260606
+
+# expanded artifact archive rerun
+# final archived reports used runCyreneBenchmark with fixed seed/clock;
+# this is the equivalent CLI shape after adding the archive flag.
+npx tsx src/main.ts codex benchmark run --profile gate --output-dir /tmp/cyrene-benchmark-20260606-expanded-gate --artifact-archive-dir docs/superpowers/benchmark-artifacts/2026-06-06
+npx tsx src/main.ts codex benchmark run --profile full --output-dir /tmp/cyrene-benchmark-20260606-expanded-full --artifact-archive-dir docs/superpowers/benchmark-artifacts/2026-06-06
+npx tsx src/main.ts codex benchmark run --profile scale --output-dir /tmp/cyrene-benchmark-20260606-expanded-scale --artifact-archive-dir docs/superpowers/benchmark-artifacts/2026-06-06
+npx tsx src/main.ts codex benchmark run --profile real-replay --output-dir /tmp/cyrene-benchmark-20260606-expanded-real-replay --artifact-archive-dir docs/superpowers/benchmark-artifacts/2026-06-06
 ```
 
 Each output directory contains `benchmark_report.json` and
 `benchmark_report.md`, including the generated `Case Metric Details` section.
+Expanded reports are also archived under
+`docs/superpowers/benchmark-artifacts/2026-06-06/`.

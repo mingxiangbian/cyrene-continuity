@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { archiveBenchmarkReports } from '../benchmark/artifacts.js'
 import { writeBenchmarkReports } from '../benchmark/report.js'
 import { scoreCaseResult, summarizeBenchmarkResults } from '../benchmark/scorer.js'
 import type { BenchmarkCaseResult, BenchmarkReport } from '../benchmark/types.js'
@@ -95,6 +96,35 @@ describe('benchmark scorer and report', () => {
       threshold: '>= noMemoryTaskSuccessRate',
       severity: 'error'
     }])
+  })
+
+  it('enforces task utility thresholds for real-replay pass/fail metrics', () => {
+    const scored = scoreCaseResult(result({
+      caseId: 'T2-REAL-PROJECT-REPLAY',
+      tier: 'tier2',
+      metrics: [
+        { name: 'noMemoryTaskSuccessRate', value: 1 },
+        { name: 'withMemoryTaskSuccessRate', value: 0 },
+        { name: 'repeatedMistakeReduction', value: 0 },
+        { name: 'userCorrectionReduction', value: 0 },
+        { name: 'toolCallReduction', value: 0 }
+      ]
+    }), 'real-replay', [
+      'withMemoryTaskSuccessRate',
+      'repeatedMistakeReduction',
+      'userCorrectionReduction',
+      'toolCallReduction'
+    ])
+
+    expect(scored.status).toBe('failed')
+    expect(scored.passed).toBe(false)
+    expect(scored.thresholdBreaches.map((item) => item.metric)).toEqual([
+      'withMemoryTaskSuccessRate',
+      'repeatedMistakeReduction',
+      'userCorrectionReduction',
+      'toolCallReduction'
+    ])
+    expect(scored.thresholdBreaches.every((item) => item.severity === 'error')).toBe(true)
   })
 
   it('summarizes passed, failed, skipped, and unsupported case results', () => {
@@ -331,5 +361,91 @@ describe('benchmark scorer and report', () => {
     expect(markdown).toContain('spec-hash')
     expect(markdown).toContain('2026-06-05')
     expect(markdown).toContain('10.0.0')
+  })
+
+  it('archives only sanitized report artifacts under the profile directory', async () => {
+    const outputDir = await createTempDir()
+    const artifactRoot = await createTempDir()
+    const secretResult = result({
+      evidence: [{ summary: 'report mentions provider token sk-test-secret-123' }]
+    })
+    const report: BenchmarkReport = {
+      runId: 'run-archive',
+      startedAt: '2026-06-05T00:00:00.000Z',
+      completedAt: '2026-06-05T00:00:01.000Z',
+      profile: 'smoke',
+      spec: {
+        path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md',
+        title: 'Cyrene Benchmark Eval System Design',
+        date: '2026-06-05',
+        contentHash: 'spec-hash'
+      },
+      benchmark: {
+        version: '1.0.0',
+        thresholdVersion: '2026-06-05',
+        caseCatalogHash: 'catalog-hash'
+      },
+      package: {
+        name: 'cyrene-continuity',
+        version: '0.1.0'
+      },
+      git: {
+        branch: 'main',
+        commit: 'abc123',
+        dirty: false,
+        trackedChanges: []
+      },
+      runtime: {
+        nodeVersion: process.version,
+        npmVersion: '10.0.0',
+        platform: process.platform,
+        arch: process.arch
+      },
+      passed: true,
+      summary: { totalCases: 1, passed: 1, failed: 0, skippedWithReason: 0, notSupportedWithoutProvider: 0 },
+      failedCases: [],
+      caseResults: [secretResult],
+      metrics: {
+        capability: {},
+        boundarySafety: {},
+        efficiency: {},
+        taskUtility: {}
+      },
+      hardFailures: [],
+      thresholdBreaches: [],
+      fixtureRuns: [{
+        root: '/tmp/cyrene-preserved-fixture',
+        home: '/tmp/cyrene-preserved-fixture/home',
+        cwd: '/tmp/cyrene-preserved-fixture/project',
+        seed: 'seed-a',
+        clock: '2026-06-05T00:00:00.000Z',
+        timezone: 'UTC',
+        cleanupStatus: 'preserved',
+        preserveFixture: true,
+        preserveReason: 'debug fixture'
+      }]
+    }
+    const paths = await writeBenchmarkReports(outputDir, report)
+    await writeFile(join(outputDir, 'preserved-fixture-content.txt'), 'preserved fixture content with sk-test-secret-123', 'utf8')
+
+    const archived = await archiveBenchmarkReports({
+      outputDir,
+      artifactRoot,
+      profile: report.profile
+    })
+
+    expect(archived).toEqual({
+      jsonPath: join(artifactRoot, 'smoke', 'benchmark_report.json'),
+      markdownPath: join(artifactRoot, 'smoke', 'benchmark_report.md')
+    })
+    expect(archived.jsonPath).not.toBe(paths.jsonPath)
+    const archivedJson = await readFile(archived.jsonPath, 'utf8')
+    const archivedMarkdown = await readFile(archived.markdownPath, 'utf8')
+    expect(archivedJson).toContain('"profile": "smoke"')
+    expect(archivedMarkdown).toContain('# Cyrene Benchmark Report')
+    expect(archivedJson).not.toContain('sk-test-secret-123')
+    expect(archivedMarkdown).not.toContain('sk-test-secret-123')
+    expect(archivedJson).not.toContain('preserved fixture content')
+    expect(archivedMarkdown).not.toContain('preserved fixture content')
   })
 })

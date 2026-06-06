@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { archiveBenchmarkReports } from './artifacts.js'
 import { BENCHMARK_CASES } from './catalog.js'
 import { writeBenchmarkReports } from './report.js'
 import { scoreCaseResult, summarizeBenchmarkResults } from './scorer.js'
@@ -63,6 +64,7 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
   const executedCases = caseResults.filter((item) => item.status === 'passed' || item.status === 'failed')
   const hardFailures = uniqueValues(caseResults.flatMap((item) => item.hardFailures))
   const thresholdBreaches = caseResults.flatMap((item) => item.thresholdBreaches)
+  const aggregatedMetrics = aggregateMetricGroups(caseResults)
   const report: BenchmarkReport = {
     runId: createHash('sha256').update(`${startedAt}:${options.profile}:${options.seed ?? ''}`).digest('hex').slice(0, 16),
     startedAt,
@@ -91,7 +93,8 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
     summary: summarizeBenchmarkResults(caseResults),
     failedCases,
     caseResults,
-    metrics: aggregateMetricGroups(caseResults),
+    metrics: aggregatedMetrics.metrics,
+    metricAggregation: aggregatedMetrics.metricAggregation,
     hardFailures,
     thresholdBreaches,
     fixtureRuns,
@@ -101,6 +104,13 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
   }
 
   await writeBenchmarkReports(options.outputDir, report)
+  if (options.artifactArchiveDir !== undefined) {
+    await archiveBenchmarkReports({
+      outputDir: options.outputDir,
+      artifactRoot: options.artifactArchiveDir,
+      profile: options.profile
+    })
+  }
   return report
 }
 
@@ -241,24 +251,75 @@ function defaultPassingMetricValue(metric: BenchmarkMetric['name']): number {
   return 1
 }
 
-function aggregateMetricGroups(results: readonly BenchmarkCaseResult[]): BenchmarkReport['metrics'] {
-  const capability: Record<string, number> = {}
-  const boundarySafety: Record<string, number> = {}
-  const efficiency: Record<string, number> = {}
-  const taskUtility: Record<string, number> = {}
+type MetricGroupName = keyof BenchmarkReport['metrics']
+type MetricAggregation = NonNullable<BenchmarkReport['metricAggregation']>
+type MetricAggregationStrategy = MetricAggregation[string]['strategy']
 
-  for (const metric of results.flatMap((result) => result.metrics)) {
-    const target = metricGroup(metric.name, { capability, boundarySafety, efficiency, taskUtility })
-    target[metric.name] = metric.value
+function aggregateMetricGroups(
+  results: readonly BenchmarkCaseResult[]
+): { metrics: BenchmarkReport['metrics']; metricAggregation: MetricAggregation } {
+  const metrics: BenchmarkReport['metrics'] = {
+    capability: {},
+    boundarySafety: {},
+    efficiency: {},
+    taskUtility: {}
+  }
+  const buckets = new Map<BenchmarkMetric['name'], {
+    group: MetricGroupName
+    samples: Array<{ caseId: string; value: number }>
+  }>()
+
+  for (const result of results) {
+    for (const metric of result.metrics) {
+      const group = metricGroupName(metric.name)
+      const existing = buckets.get(metric.name)
+      if (existing === undefined) {
+        buckets.set(metric.name, { group, samples: [{ caseId: result.caseId, value: metric.value }] })
+      } else {
+        existing.samples.push({ caseId: result.caseId, value: metric.value })
+      }
+    }
   }
 
-  return { capability, boundarySafety, efficiency, taskUtility }
+  const metricAggregation: MetricAggregation = {}
+  for (const [name, bucket] of buckets) {
+    const strategy = bucket.samples.length === 1 ? 'single' : metricAggregationStrategy(name)
+    metrics[bucket.group][name] = aggregateMetricValue(bucket.samples.map((sample) => sample.value), strategy)
+    metricAggregation[name] = {
+      group: bucket.group,
+      strategy,
+      sampleCount: bucket.samples.length,
+      sourceCaseIds: uniqueValues(bucket.samples.map((sample) => sample.caseId))
+    }
+  }
+
+  return { metrics, metricAggregation }
 }
 
-function metricGroup(
-  metric: BenchmarkMetric['name'],
-  groups: BenchmarkReport['metrics']
-): Record<string, number> {
+function aggregateMetricValue(values: readonly number[], strategy: MetricAggregationStrategy): number {
+  if (values.length === 0) return 0
+  if (strategy === 'single') return values[0]
+  if (strategy === 'min') return Math.min(...values)
+  return Math.max(...values)
+}
+
+function metricAggregationStrategy(metric: BenchmarkMetric['name']): Extract<MetricAggregationStrategy, 'min' | 'max'> {
+  const normalized = metric.toLowerCase()
+  if (
+    normalized.includes('accuracy') ||
+    normalized.includes('success') ||
+    normalized.includes('recall') ||
+    normalized.includes('hit') ||
+    normalized.includes('precision') ||
+    normalized.includes('reduction') ||
+    metric === 'mrr'
+  ) {
+    return 'min'
+  }
+  return 'max'
+}
+
+function metricGroupName(metric: BenchmarkMetric['name']): MetricGroupName {
   const normalized = metric.toLowerCase()
   if (
     normalized.includes('leakage') ||
@@ -272,7 +333,7 @@ function metricGroup(
     normalized.includes('temporary') ||
     normalized.includes('noiseproposal')
   ) {
-    return groups.boundarySafety
+    return 'boundarySafety'
   }
   if (
     normalized.includes('latency') ||
@@ -290,10 +351,14 @@ function metricGroup(
     normalized.includes('tokens') ||
     normalized.includes('size') ||
     normalized.includes('growth') ||
+    normalized.includes('samplecount') ||
+    normalized.includes('recordcount') ||
+    normalized.startsWith('target') ||
+    normalized.startsWith('materialized') ||
     normalized.includes('hook') ||
     normalized.includes('automation')
   ) {
-    return groups.efficiency
+    return 'efficiency'
   }
   if (
     normalized.includes('task') ||
@@ -302,9 +367,9 @@ function metricGroup(
     normalized.includes('toolcall') ||
     metric === 'taskSuccessRate'
   ) {
-    return groups.taskUtility
+    return 'taskUtility'
   }
-  return groups.capability
+  return 'capability'
 }
 
 async function firstFileHash(paths: readonly string[]): Promise<string> {

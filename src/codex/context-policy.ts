@@ -94,22 +94,32 @@ export function parseContextMode(value: string | undefined): ContextMode | undef
 
 export function buildRetrievalPolicy(input: BuildRetrievalPolicyInput): RetrievalPolicy {
   const env = input.env ?? process.env
-  const mode = parseContextMode(input.mode) ?? parseContextMode(env.CYRENE_CONTEXT_MODE) ?? inferContextMode(input) ?? 'fast'
+  const envFlags = definedOnly(envPolicyFlags(env))
+  const explicitFlags = definedOnly({
+    maxTokens: input.maxTokens,
+    includePendingDetails: input.includePendingDetails,
+    includePendingNotice: input.includePendingNotice,
+    includeDiagnostics: input.includeDiagnostics,
+    includeSimilarProjectHints: input.includeSimilarProjectHints,
+    includeSessionHints: input.includeSessionHints,
+    includeFullProfile: input.includeFullProfile,
+    includeFastSummaries: input.includeFastSummaries,
+    recordRetrievedEvents: input.recordRetrievedEvents,
+    allowJsonlFallback: input.allowJsonlFallback
+  })
+  const mode = parseContextMode(input.mode) ??
+    parseContextMode(env.CYRENE_CONTEXT_MODE) ??
+    inferContextMode({
+      ...envFlags,
+      ...explicitFlags,
+      task: input.task,
+      userMessage: input.userMessage
+    }) ??
+    'fast'
   return {
     ...MODE_DEFAULTS[mode],
-    ...definedOnly(envPolicyFlags(env)),
-    ...definedOnly({
-      maxTokens: input.maxTokens,
-      includePendingDetails: input.includePendingDetails,
-      includePendingNotice: input.includePendingNotice,
-      includeDiagnostics: input.includeDiagnostics,
-      includeSimilarProjectHints: input.includeSimilarProjectHints,
-      includeSessionHints: input.includeSessionHints,
-      includeFullProfile: input.includeFullProfile,
-      includeFastSummaries: input.includeFastSummaries,
-      recordRetrievedEvents: input.recordRetrievedEvents,
-      allowJsonlFallback: input.allowJsonlFallback
-    }),
+    ...envFlags,
+    ...explicitFlags,
     mode,
     allowHotPathIndexRebuild: false
   }
@@ -122,19 +132,19 @@ export function inferContextMode(input: Pick<BuildRetrievalPolicyInput, 'task' |
   ) {
     return 'review'
   }
-  if (input.includeDiagnostics === true) {
-    return 'balanced'
-  }
 
   const message = normalizeMessage(input.userMessage)
   if (hasReviewSignal(message)) {
     return 'review'
   }
-  if (hasBalancedSignal(message)) {
-    return 'balanced'
-  }
   if (input.task === 'memory') {
     return 'review'
+  }
+  if (input.includeDiagnostics === true || input.includeSimilarProjectHints === true) {
+    return 'balanced'
+  }
+  if (hasBalancedSignal(message)) {
+    return 'balanced'
   }
   if (input.task === 'planning' || input.task === 'debugging') {
     return 'balanced'

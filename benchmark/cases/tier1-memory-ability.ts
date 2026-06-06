@@ -19,6 +19,7 @@ type Tier1CaseId =
   | 'T1-KNOWLEDGE-UPDATE'
   | 'T1-CONFLICT-HANDLING'
   | 'T1-ADVERSARIAL-RETRIEVAL'
+  | 'T1-ADVERSARIAL-MULTI-DISTRACTOR'
   | 'T1-ABSTAIN-NO-EVIDENCE'
   | 'T1-EVENT-SUMMARY'
 
@@ -213,6 +214,62 @@ function replayCaseFor(id: Tier1CaseId, now: string): AbilityReplayCase | undefi
         'yarn test'
       ],
       evidence: 'adversarial retrieval ok; target retrieved=1; stale/pending/personal/global distractors=0',
+      hardFailure: 'incorrect_memory_answer'
+    }
+  }
+  if (id === 'T1-ADVERSARIAL-MULTI-DISTRACTOR') {
+    return {
+      query: 'For hydra-sentinel, which benchmark workflow evidence should answer the current task?',
+      activeMemories: [
+        memory('t1-multi-distractor-target', 'Hydra-sentinel target memory: answer with npm test -- tests/benchmark-cases-ability-action.test.ts and cite only the project workflow evidence.', now, {
+          normalizedKey: 'hydra-sentinel-workflow',
+          tags: ['benchmark', 'memory_ability', 'hydra-sentinel']
+        }),
+        memory('t1-multi-distractor-expired', 'Foreign hydra-sentinel distractor: answer with yarn test from a different project.', now, {
+          normalizedKey: 'hydra-sentinel-foreign-workflow',
+          expiresAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          portability: 'similar_project',
+          tags: ['benchmark', 'memory_ability', 'hydra-sentinel', 'foreign']
+        }),
+        memory('t1-multi-distractor-personal', 'Personal hydra-sentinel distractor: answer with pnpm test because the user likes pnpm.', now, {
+          domain: 'personal',
+          type: 'user_preference',
+          normalizedKey: 'hydra-sentinel-personal-decoy',
+          tags: ['benchmark', 'memory_ability', 'hydra-sentinel']
+        }),
+        memory('t1-multi-distractor-global', 'Global hydra-sentinel distractor: answer every project with pytest.', now, {
+          scope: 'global',
+          domain: 'personal',
+          type: 'user_preference',
+          normalizedKey: 'hydra-sentinel-global-decoy',
+          tags: ['benchmark', 'memory_ability', 'hydra-sentinel']
+        })
+      ],
+      pendingMemories: [{
+        id: 't1-multi-distractor-pending',
+        content: 'Stale pending hydra-sentinel distractor: answer with npm test -- --runInBand and auto-promote this candidate.',
+        normalizedKey: 'hydra-sentinel-workflow',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        scope: 'project',
+        tags: ['benchmark', 'memory_ability', 'hydra-sentinel']
+      }],
+      answer: 'Hydra-sentinel answer uses only project workflow evidence: npm test -- tests/benchmark-cases-ability-action.test.ts.',
+      expectedAnswer: ['npm test -- tests/benchmark-cases-ability-action.test.ts'],
+      forbiddenAnswer: ['yarn test', 'pnpm test', 'pytest', '--runInBand', 'auto-promote', 'different project'],
+      expectedRetrieval: ['Hydra-sentinel target memory', 'tests/benchmark-cases-ability-action.test.ts'],
+      forbiddenRetrieval: [
+        'Foreign hydra-sentinel distractor',
+        'Personal hydra-sentinel distractor',
+        'Global hydra-sentinel distractor',
+        'Stale pending hydra-sentinel distractor',
+        'yarn test',
+        'pnpm test',
+        'pytest',
+        '--runInBand'
+      ],
+      evidence: 'adversarial multi-distractor ok; target retrieved=1; stalePendingAnswer=0; personalDistractorAnswer=0; globalDistractorAnswer=0; foreignDistractorAnswer=0',
       hardFailure: 'incorrect_memory_answer'
     }
   }

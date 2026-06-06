@@ -62,8 +62,10 @@ async function runScaleCase(
   options: BenchmarkRunOptions,
   target: ScaleTarget
 ): Promise<BenchmarkCaseResult> {
+  const startedAt = Date.now()
   const materializedActive = materializedCount(target.active)
   const materializedPending = materializedCount(target.pending)
+  const materializedProjects = target.projects === 0 ? 0 : Math.min(target.projects, 1)
   return withTier3Fixture(benchmarkCase, options, {
     activeMemories: generateActiveMemories(benchmarkCase.id, materializedActive, options.now ?? benchmarkCase.fixture.now),
     pendingMemories: generatePendingMemories(benchmarkCase.id, materializedPending, options.now ?? benchmarkCase.fixture.now)
@@ -73,15 +75,23 @@ async function runScaleCase(
     const jsonlSize = await memoryJsonlSize(fixture.projectMemoryRoot)
     const indexed = materializedActive + materializedPending
     const bytesPerMemory = indexed === 0 ? 0 : Math.ceil(dbSize / indexed)
+    const materializedRuntimeMs = Math.max(1, Date.now() - startedAt)
+    const runtimeSource = materializedRuntimeTarget(target) ? 'materialized' : 'synthetic'
+    const storageSource = target.active === materializedActive && target.pending === materializedPending
+      ? 'full-target-materialized-fixture'
+      : 'capped-materialized-fixture'
     const hardFailures: HardGateRuleId[] = rebuild.diagnostics.available ? [] : ['index_source_mismatch']
     return result(benchmarkCase, hardFailures, scaleMetrics(benchmarkCase, target, {
       dbSize,
       bytesPerMemory,
       active: materializedActive,
       pending: materializedPending,
-      jsonlSize
+      projects: materializedProjects,
+      jsonlSize,
+      materializedRuntimeMs,
+      sqliteAvailable: rebuild.diagnostics.available
     }), [{
-      summary: `scale ${target.label} ok; target projects=${target.projects}; target active=${target.active}; target pending=${target.pending}; materialized active=${materializedActive}; materialized pending=${materializedPending}; sqlite=${rebuild.diagnostics.available ? 1 : 0}`
+      summary: `scale ${target.label} ok; runtimeSource=${runtimeSource}; storageSource=${storageSource}; runtimeMs=${runtimeMsForTarget(target, materializedRuntimeMs)}; target projects=${target.projects}; target active=${target.active}; target pending=${target.pending}; materialized projects=${materializedProjects}; materialized active=${materializedActive}; materialized pending=${materializedPending}; sqlite=${rebuild.diagnostics.available ? 1 : 0}`
     }])
   })
 }
@@ -146,13 +156,19 @@ async function runTokenOverheadCase(benchmarkCase: BenchmarkCase, options: Bench
     await rebuildCodexMemoryIndex({ cwd: fixture.cwd })
     const [fast, balanced, review] = await Promise.all([
       getCodexContinuityContext({ cwd: fixture.cwd, userMessage: 'Token overhead active memory', task: 'coding', mode: 'fast' }),
-      getCodexContinuityContext({ cwd: fixture.cwd, userMessage: 'Token overhead active memory', task: 'planning', mode: 'balanced', includeDiagnostics: true, includeSessionHints: true }),
+      getCodexContinuityContext({ cwd: fixture.cwd, userMessage: 'Token overhead active memory', task: 'planning', mode: 'balanced', includeSessionHints: true }),
       getCodexContinuityContext({ cwd: fixture.cwd, userMessage: 'Token overhead pending review', task: 'memory', mode: 'review', includeDiagnostics: true })
     ])
     return result(benchmarkCase, [], [
       { name: 'fastTokenOverhead', value: approxTokens(fast) },
       { name: 'balancedTokenOverhead', value: approxTokens(balanced) },
       { name: 'reviewTokenOverhead', value: approxTokens(review) },
+      { name: 'fastPendingTokens', value: optionalContextTokens(fast.pendingHypotheses) },
+      { name: 'fastDiagnosticsTokens', value: optionalContextTokens(fast.diagnostics ?? {}) },
+      { name: 'balancedPendingTokens', value: optionalContextTokens(balanced.pendingHypotheses) },
+      { name: 'balancedDiagnosticsTokens', value: optionalContextTokens(balanced.diagnostics ?? {}) },
+      { name: 'reviewPendingTokens', value: optionalContextTokens(review.pendingHypotheses) },
+      { name: 'reviewDiagnosticsTokens', value: optionalContextTokens(review.diagnostics ?? {}) },
       { name: 'projectMemoryTokens', value: approxTokens(review.projectMemory) },
       { name: 'globalProfileTokens', value: approxTokens(balanced.profile.global ?? '') },
       { name: 'fastSummaryTokens', value: approxTokens(fast.profile.content) },
@@ -169,7 +185,7 @@ async function runTokenOverheadCase(benchmarkCase: BenchmarkCase, options: Bench
       { name: 'profileSizeGrowthBytes', value: balanced.profile.content.length },
       { name: 'fastSummarySizeGrowthBytes', value: fast.profile.content.length },
       { name: 'sessionHintsSizeBytes', value: JSON.stringify(balanced.sessionHints).length }
-    ], [{ summary: 'profile token overhead recorded; fast/balanced/review bounded' }])
+    ], [{ summary: `profile token overhead recorded; contextShape=compact; balancedDiagnosticsVisible=${balanced.diagnostics === undefined ? 0 : 1}; fast/balanced/review bounded` }])
   })
 }
 
@@ -203,7 +219,13 @@ async function runLatencyCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
     const similarRead = continuityMetrics.map((metric) => metric.similarLatencyMs ?? 0)
     const pendingRead = continuityMetrics.map((metric) => metric.pendingLatencyMs ?? 0)
     const sqliteRead = continuityMetrics.map((metric) => metric.sqliteLatencyMs ?? 0)
+    const allHook = hookMetrics.map((metric) => metric.latencyMs)
     return result(benchmarkCase, [], [
+      { name: 'continuityGetSampleCount', value: allContinuity.length },
+      { name: 'hookSampleCount', value: hookMetrics.length },
+      { name: 'continuityGetMinMs', value: minimum(allContinuity) },
+      { name: 'continuityGetMaxMs', value: maximum(allContinuity) },
+      { name: 'continuityGetMeanMs', value: mean(allContinuity) },
       { name: 'continuityGetP50Ms', value: percentile(allContinuity, 0.5) },
       { name: 'continuityGetP95Ms', value: percentile(allContinuity, 0.95) },
       { name: 'continuityGetP99Ms', value: percentile(allContinuity, 0.99) },
@@ -222,7 +244,7 @@ async function runLatencyCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
       { name: 'similarQueryLatencyMs', value: percentile(similarRead, 0.95) },
       { name: 'pendingQueryLatencyMs', value: percentile(pendingRead, 0.95) },
       { name: 'diagnosticsAssemblyLatencyMs', value: percentile(sqliteRead, 0.95) },
-      { name: 'hookLatencyMs', value: percentile(hookMetrics.map((metric) => metric.latencyMs), 0.95) },
+      { name: 'hookLatencyMs', value: percentile(allHook, 0.95) },
       { name: 'sessionStartHookP50Ms', value: percentile(byHook('session_start'), 0.5) },
       { name: 'sessionStartHookP95Ms', value: percentile(byHook('session_start'), 0.95) },
       { name: 'sessionStartHookP99Ms', value: percentile(byHook('session_start'), 0.99) },
@@ -235,11 +257,11 @@ async function runLatencyCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
       { name: 'stopHookP50Ms', value: 0 },
       { name: 'stopHookP95Ms', value: 0 },
       { name: 'stopHookP99Ms', value: 0 },
-      { name: 'hookTimeoutCount', value: 0 },
-      { name: 'hookFailOpenCount', value: 0 },
+      { name: 'runtimeHookTimeoutCount', value: 0 },
+      { name: 'runtimeHookFailOpenCount', value: 0 },
       { name: 'postToolUseHeavyOperationCount', value: 0 },
       { name: 'ordinaryHookPendingReviewCount', value: 0 }
-    ], [{ summary: 'latency p50/p95/p99 recorded; hook latency recorded' }])
+    ], [{ summary: 'latency p50/p95/p99 recorded; hook latency recorded; componentZeroMeans=not_executed_or_below_timer_resolution' }])
   })
 }
 
@@ -317,21 +339,49 @@ async function withTier3Fixture(
 function scaleMetrics(
   benchmarkCase: BenchmarkCase,
   target: ScaleTarget,
-  measured: { dbSize: number; bytesPerMemory: number; active: number; pending: number; jsonlSize: number }
+  measured: {
+    dbSize: number
+    bytesPerMemory: number
+    active: number
+    pending: number
+    projects: number
+    jsonlSize: number
+    materializedRuntimeMs: number
+    sqliteAvailable: boolean
+  }
 ): BenchmarkMetric[] {
+  const runtimeMs = runtimeMsForTarget(target, measured.materializedRuntimeMs)
+  const runtimeSourceIsMaterialized = materializedRuntimeTarget(target) ? 1 : 0
   return benchmarkCase.metrics.map((metric) => {
-    if (metric === target.runtimeMetric) return { name: metric, value: target.runtimeMs }
-    if (metric === 'benchmarkRuntimeMs') return { name: metric, value: target.runtimeMs }
+    if (metric === target.runtimeMetric) return { name: metric, value: runtimeMs }
+    if (metric === 'benchmarkRuntimeMs') return { name: metric, value: runtimeMs }
     if (metric === 'memoryDbSizeBytes') return { name: metric, value: measured.dbSize }
     if (metric === 'memoryDbBytesPerMemory') return { name: metric, value: measured.bytesPerMemory }
-    if (metric === 'activeMemoryGrowthPerRun') return { name: metric, value: measured.active }
-    if (metric === 'pendingGrowthPerRun') return { name: metric, value: measured.pending }
+    if (metric === 'targetProjectCount') return { name: metric, value: target.projects }
+    if (metric === 'targetActiveMemoryCount') return { name: metric, value: target.active }
+    if (metric === 'targetPendingMemoryCount') return { name: metric, value: target.pending }
+    if (metric === 'materializedProjectCount') return { name: metric, value: measured.projects }
+    if (metric === 'materializedActiveMemoryCount') return { name: metric, value: measured.active }
+    if (metric === 'materializedPendingMemoryCount') return { name: metric, value: measured.pending }
+    if (metric === 'runtimeSourceIsMaterialized') return { name: metric, value: runtimeSourceIsMaterialized }
+    if (metric === 'jsonlRecordCount') return { name: metric, value: measured.active + measured.pending }
+    if (metric === 'sqliteIndexedActiveCount') return { name: metric, value: measured.sqliteAvailable ? measured.active : 0 }
+    if (metric === 'sqliteIndexedPendingCount') return { name: metric, value: measured.sqliteAvailable ? measured.pending : 0 }
     if (metric === 'jsonlSizeBytes') return { name: metric, value: measured.jsonlSize }
     if (metric === 'continuityGetP50Ms') return { name: metric, value: 12 + Math.min(measured.active, 100) / 20 }
     if (metric === 'continuityGetP95Ms') return { name: metric, value: 24 + Math.min(measured.active, 100) / 10 }
     if (metric === 'continuityGetP99Ms') return { name: metric, value: 36 + Math.min(measured.active, 100) / 5 }
-    return { name: metric, value: 1 }
+    if (metric === 'indexStaleRate') return { name: metric, value: 0 }
+    return { name: metric, value: 0 }
   })
+}
+
+function runtimeMsForTarget(target: ScaleTarget, materializedRuntimeMs: number): number {
+  return materializedRuntimeTarget(target) ? materializedRuntimeMs : target.runtimeMs
+}
+
+function materializedRuntimeTarget(target: ScaleTarget): boolean {
+  return target.label === 'S' || target.label === 'M'
 }
 
 function result(
@@ -422,4 +472,31 @@ function percentile(values: readonly number[], p: number): number {
   const sorted = [...values].sort((a, b) => a - b)
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * p) - 1))
   return Math.max(0, Math.round(sorted[index] ?? 0))
+}
+
+function optionalContextTokens(value: unknown): number {
+  if (Array.isArray(value) && value.length === 0) return 0
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    Object.keys(value).length === 0
+  ) {
+    return 0
+  }
+  return approxTokens(value)
+}
+
+function minimum(values: readonly number[]): number {
+  if (values.length === 0) return 0
+  return Math.max(0, Math.round(Math.min(...values)))
+}
+
+function maximum(values: readonly number[]): number {
+  if (values.length === 0) return 0
+  return Math.max(0, Math.round(Math.max(...values)))
+}
+
+function mean(values: readonly number[]): number {
+  if (values.length === 0) return 0
+  return Math.max(0, Math.round(values.reduce((sum, value) => sum + value, 0) / values.length))
 }

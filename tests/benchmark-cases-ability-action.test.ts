@@ -44,6 +44,7 @@ describe('benchmark Tier 1 and Tier 2 replay cases', () => {
       ['T1-KNOWLEDGE-UPDATE', 'superseded rule excluded'],
       ['T1-CONFLICT-HANDLING', 'single selected rule'],
       ['T1-ADVERSARIAL-RETRIEVAL', 'adversarial retrieval ok'],
+      ['T1-ADVERSARIAL-MULTI-DISTRACTOR', 'foreignDistractorAnswer=0'],
       ['T1-ABSTAIN-NO-EVIDENCE', 'abstain=1'],
       ['T1-EVENT-SUMMARY', 'summary includes decision/failure/fix/verification'],
       ['T2-REMEMBER-TEST-COMMAND', 'with-memory command reused'],
@@ -64,5 +65,9 @@ describe('benchmark Tier 1 and Tier 2 replay cases', () => {
     expect(adversarialRetrieval.get('retrievalAccuracy')).toBe(1)
     expect(adversarialRetrieval.get('answerAccuracy')).toBe(1)
     expect(adversarialRetrieval.get('similarMemoryInterferenceRate')).toBe(0)
+    const multiDistractor = metricMap(report.caseResults.find((item) => item.caseId === 'T1-ADVERSARIAL-MULTI-DISTRACTOR'))
+    expect(multiDistractor.get('retrievalAccuracy')).toBe(1)
+    expect(multiDistractor.get('answerAccuracy')).toBe(1)
+    expect(multiDistractor.get('similarMemoryInterferenceRate')).toBe(0)
   }, 20_000)
 })

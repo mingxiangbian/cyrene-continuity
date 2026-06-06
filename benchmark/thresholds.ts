@@ -2,7 +2,7 @@ import type { BenchmarkThreshold } from './types.js'
 export { HARD_GATE_RULE_IDS } from './types.js'
 
 export const BENCHMARK_VERSION = '1.0.0'
-export const THRESHOLD_VERSION = '2026-06-05'
+export const THRESHOLD_VERSION = '2026-06-06'
 
 export const SOFT_METRIC_THRESHOLDS: BenchmarkThreshold[] = [
   { metric: 'fastTokenOverhead', operator: '<=', value: 800, profiles: ['smoke', 'gate', 'full'] },
@@ -42,8 +42,8 @@ export const SOFT_METRIC_THRESHOLDS: BenchmarkThreshold[] = [
   { metric: 'scaleLRuntimeMs', operator: '<=', value: 600000, profiles: ['scale'] },
   { metric: 'scaleXLRuntimeMs', operator: '<=', value: 1800000, profiles: ['scale'] },
   { metric: 'memoryDbBytesPerMemory', operator: '<=', value: 8192, profiles: ['scale'] },
-  { metric: 'withMemoryTaskSuccessRate', operator: '>=', value: 'noMemoryTaskSuccessRate', profiles: ['llm'] },
-  { metric: 'repeatedMistakeReduction', operator: '>=', value: 0.3, profiles: ['llm'] },
-  { metric: 'userCorrectionReduction', operator: '>=', value: 0.2, profiles: ['llm'] },
-  { metric: 'toolCallReduction', operator: '>=', value: 0.1, profiles: ['llm'] }
+  { metric: 'withMemoryTaskSuccessRate', operator: '>=', value: 'noMemoryTaskSuccessRate', profiles: ['real-replay', 'llm'] },
+  { metric: 'repeatedMistakeReduction', operator: '>=', value: 0.3, profiles: ['real-replay', 'llm'] },
+  { metric: 'userCorrectionReduction', operator: '>=', value: 0.2, profiles: ['real-replay', 'llm'] },
+  { metric: 'toolCallReduction', operator: '>=', value: 0.1, profiles: ['real-replay', 'llm'] }
 ]

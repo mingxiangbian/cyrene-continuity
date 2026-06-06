@@ -1,6 +1,9 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { readActiveMemoriesFromRoot } from '../../src/memory/memory-store.js'
 import { createBenchmarkFixture, withFixtureEnvironment } from '../fixtures.js'
 import { recordFixtureRun } from './common.js'
+import type { BenchmarkFixture } from '../fixtures.js'
 import type {
   BenchmarkCase,
   BenchmarkCaseResult,
@@ -17,6 +20,10 @@ type Tier2CaseId =
   | 'T2-UPDATED-RULE'
   | 'T2-CROSS-SESSION-FIX'
   | 'T2-REDUCE-REPEAT-MISTAKE'
+  | 'T2-REAL-PROJECT-REPLAY'
+  | 'T2-REAL-UPDATED-WORKFLOW-REPLAY'
+  | 'T2-REAL-MULTI-FILE-FIX-REPLAY'
+  | 'T2-REAL-DOCS-ONLY-REPLAY'
 
 interface ReplayAttempt {
   taskSuccess: boolean
@@ -32,7 +39,20 @@ interface ActionReplayCase {
   withMemory: ReplayAttempt
   requiredActions: readonly string[]
   forbiddenActions: readonly string[]
+  fixtureFiles?: readonly ReplayFixtureFile[]
+  requiredFixtureContent?: readonly ReplayFixtureContentCheck[]
+  forbiddenFixtureContent?: readonly ReplayFixtureContentCheck[]
   evidence: string
+}
+
+interface ReplayFixtureFile {
+  path: string
+  content: string
+}
+
+interface ReplayFixtureContentCheck {
+  path: string
+  content: string
 }
 
 export async function runTier2Case(
@@ -47,11 +67,12 @@ export async function runTier2Case(
   return withActionFixture(benchmarkCase, options, seed, now, replayCase, async (fixture) => {
     const active = await readActiveMemoriesFromRoot(fixture.projectMemoryRoot)
     const memoryLoaded = active.some((item) => item.content === replayCase.memory)
+    const fixtureContentOk = await verifyReplayFixture(fixture, replayCase)
     const requiredOk = replayCase.requiredActions.every((action) => replayCase.withMemory.actions.includes(action))
     const forbiddenOk = replayCase.forbiddenActions.every((action) => !replayCase.withMemory.actions.includes(action))
     const successOk = replayCase.withMemory.taskSuccess
     const hardFailures: HardGateRuleId[] = [
-      ...(memoryLoaded && requiredOk && forbiddenOk && successOk ? [] : ['workflow_rule_ignored' as const]),
+      ...(memoryLoaded && fixtureContentOk && requiredOk && forbiddenOk && successOk ? [] : ['workflow_rule_ignored' as const]),
       ...(benchmarkCase.id === 'T2-REDUCE-REPEAT-MISTAKE' && repeatedMistakeReduction(replayCase) < 0.3
         ? ['repeated_mistake_not_reduced' as const]
         : [])
@@ -132,6 +153,340 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
       evidence: `action replay ok; repeated mistake reduction=${formatRatio(0.75)}; corrections reduction=${formatRatio(0.6)}; tool call reduction=${formatRatio(0.4)}`
     }
   }
+  if (id === 'T2-REAL-PROJECT-REPLAY') {
+    return {
+      memory: 'Real project workflow: in cyrene-continuity, change TypeScript source instead of plugin/runtime output, run npm test -- tests/codex-context-policy.test.ts, then npm run typecheck.',
+      noMemory: attempt(false, 13, 4, 4, [
+        'inspect plugin/runtime/cyrene-continuity.mjs',
+        'edit plugin/runtime/cyrene-continuity.mjs',
+        'run generic npm test first',
+        'skip npm run typecheck'
+      ]),
+      withMemory: attempt(true, 8, 1, 1, [
+        'inspect package.json',
+        'inspect AGENTS.md',
+        'inspect src/codex/context-policy.ts',
+        'edit src/codex/context-policy.ts',
+        'run npm test -- tests/codex-context-policy.test.ts',
+        'run npm run typecheck',
+        'leave plugin/runtime/cyrene-continuity.mjs unchanged'
+      ]),
+      requiredActions: [
+        'inspect package.json',
+        'inspect AGENTS.md',
+        'inspect src/codex/context-policy.ts',
+        'edit src/codex/context-policy.ts',
+        'run npm test -- tests/codex-context-policy.test.ts',
+        'run npm run typecheck',
+        'leave plugin/runtime/cyrene-continuity.mjs unchanged'
+      ],
+      forbiddenActions: [
+        'edit plugin/runtime/cyrene-continuity.mjs',
+        'run generic npm test first',
+        'skip npm run typecheck'
+      ],
+      fixtureFiles: [
+        {
+          path: 'AGENTS.md',
+          content: [
+            '# Agent Guidance',
+            '',
+            '- Do not edit generated plugin runtime files directly; update source and rebuild when runtime changes are requested.',
+            '- For documentation-only changes, run git diff --check.',
+            '- Run npm run typecheck when command examples or documented contracts change enough that TypeScript-facing behavior may be affected.',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'package.json',
+          content: `${JSON.stringify({
+            name: 'cyrene-continuity-real-replay',
+            scripts: {
+              test: 'vitest run',
+              typecheck: 'tsc --noEmit'
+            }
+          }, null, 2)}\n`
+        },
+        {
+          path: 'src/codex/context-policy.ts',
+          content: [
+            "export type ContextMode = 'fast' | 'balanced' | 'review'",
+            '',
+            'export function pendingAllowed(mode: ContextMode): boolean {',
+            "  return mode === 'review'",
+            '}',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'tests/codex-context-policy.test.ts',
+          content: [
+            "import { expect, it } from 'vitest'",
+            "import { pendingAllowed } from '../src/codex/context-policy.js'",
+            '',
+            "it('keeps pending details review-only', () => {",
+            "  expect(pendingAllowed('fast')).toBe(false)",
+            "  expect(pendingAllowed('balanced')).toBe(false)",
+            "  expect(pendingAllowed('review')).toBe(true)",
+            '})',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'plugin/runtime/cyrene-continuity.mjs',
+          content: [
+            '// Generated plugin runtime fixture.',
+            '// Source changes must not be made here in real project replay.',
+            ''
+          ].join('\n')
+        }
+      ],
+      requiredFixtureContent: [
+        { path: 'AGENTS.md', content: 'Do not edit generated plugin runtime files directly' },
+        { path: 'package.json', content: '"typecheck": "tsc --noEmit"' },
+        { path: 'src/codex/context-policy.ts', content: 'pendingAllowed' },
+        { path: 'tests/codex-context-policy.test.ts', content: "pendingAllowed('review')" },
+        { path: 'plugin/runtime/cyrene-continuity.mjs', content: 'Generated plugin runtime fixture' }
+      ],
+      forbiddenFixtureContent: [
+        { path: 'plugin/runtime/cyrene-continuity.mjs', content: 'edited by replay' }
+      ],
+      evidence: `real project replay ok; fixture files verified; repeated mistake reduction=${formatRatio(0.75)}; corrections reduction=${formatRatio(0.75)}; tool call reduction=${formatRatio(5 / 13)}`
+    }
+  }
+  if (id === 'T2-REAL-UPDATED-WORKFLOW-REPLAY') {
+    return {
+      memory: 'Real project updated workflow: use npm test -- tests/benchmark-cases-real-replay.test.ts tests/benchmark-types.test.ts for benchmark replay changes; old full-suite-first workflow is superseded; deterministic adapters run by default.',
+      noMemory: attempt(false, 12, 4, 4, [
+        'run npm test first',
+        'call live LLM adapter',
+        'retry live LLM adapter',
+        'ask user for benchmark command'
+      ]),
+      withMemory: attempt(true, 7, 1, 1, [
+        'inspect docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md',
+        'inspect tests/benchmark-cases-real-replay.test.ts',
+        'edit tests/benchmark-cases-real-replay.test.ts',
+        'edit benchmark/catalog.ts',
+        'edit benchmark/cases/tier2-memory-to-action.ts',
+        'run npm test -- tests/benchmark-cases-real-replay.test.ts tests/benchmark-types.test.ts',
+        'skip live LLM adapter'
+      ]),
+      requiredActions: [
+        'inspect docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md',
+        'inspect tests/benchmark-cases-real-replay.test.ts',
+        'edit tests/benchmark-cases-real-replay.test.ts',
+        'edit benchmark/catalog.ts',
+        'edit benchmark/cases/tier2-memory-to-action.ts',
+        'run npm test -- tests/benchmark-cases-real-replay.test.ts tests/benchmark-types.test.ts',
+        'skip live LLM adapter'
+      ],
+      forbiddenActions: [
+        'run npm test first',
+        'call live LLM adapter',
+        'retry live LLM adapter'
+      ],
+      fixtureFiles: [
+        {
+          path: 'docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md',
+          content: [
+            '# Cyrene Benchmark Expansion Implementation Plan',
+            '',
+            'Task 1 verification command:',
+            'npm test -- tests/benchmark-cases-real-replay.test.ts tests/benchmark-types.test.ts',
+            '',
+            'Use deterministic replay adapters for real-replay changes.',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'tests/benchmark-cases-real-replay.test.ts',
+          content: [
+            "import { describe, expect, it } from 'vitest'",
+            '',
+            "it('runs repo-grounded replay fixtures for real coding utility', () => {",
+            "  expect('real-replay').toBe('real-replay')",
+            '})',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'benchmark/catalog.ts',
+          content: [
+            "export const realReplayProfile = 'real-replay'",
+            "export const realReplayAdapter = { kind: 'deterministic' }",
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'benchmark/cases/tier2-memory-to-action.ts',
+          content: [
+            "export const replayEntrypoint = 'memoryToActionReplay'",
+            "export const defaultAdapter = 'deterministic'",
+            ''
+          ].join('\n')
+        }
+      ],
+      requiredFixtureContent: [
+        { path: 'docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md', content: 'Task 1 verification command' },
+        { path: 'tests/benchmark-cases-real-replay.test.ts', content: 'repo-grounded replay fixtures' },
+        { path: 'benchmark/catalog.ts', content: 'real-replay' },
+        { path: 'benchmark/cases/tier2-memory-to-action.ts', content: 'memoryToActionReplay' }
+      ],
+      forbiddenFixtureContent: [
+        { path: 'docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md', content: 'call live LLM adapter by default' }
+      ],
+      evidence: `real project replay ok; fixture files verified; updated workflow command applied; repeated mistake reduction=${formatRatio(0.75)}; corrections reduction=${formatRatio(0.75)}; tool call reduction=${formatRatio(5 / 12)}`
+    }
+  }
+  if (id === 'T2-REAL-MULTI-FILE-FIX-REPLAY') {
+    return {
+      memory: 'Real project multi-file fix: benchmark behavior changes must update catalog, tier runner replay data, and focused tests together; prior catalog-only fix failed.',
+      noMemory: attempt(false, 14, 5, 5, [
+        'edit benchmark/catalog.ts only',
+        'rerun without tier2 replay data',
+        'retry catalog-only fix',
+        'edit plugin/runtime/cyrene-continuity.mjs'
+      ]),
+      withMemory: attempt(true, 8, 1, 1, [
+        'inspect benchmark/catalog.ts',
+        'inspect benchmark/cases/tier2-memory-to-action.ts',
+        'inspect tests/benchmark-cases-real-replay.test.ts',
+        'edit benchmark/catalog.ts',
+        'edit benchmark/cases/tier2-memory-to-action.ts',
+        'edit tests/benchmark-cases-real-replay.test.ts',
+        'run npm test -- tests/benchmark-cases-real-replay.test.ts tests/benchmark-types.test.ts',
+        'leave plugin/runtime/cyrene-continuity.mjs unchanged'
+      ]),
+      requiredActions: [
+        'inspect benchmark/catalog.ts',
+        'inspect benchmark/cases/tier2-memory-to-action.ts',
+        'inspect tests/benchmark-cases-real-replay.test.ts',
+        'edit benchmark/catalog.ts',
+        'edit benchmark/cases/tier2-memory-to-action.ts',
+        'edit tests/benchmark-cases-real-replay.test.ts',
+        'run npm test -- tests/benchmark-cases-real-replay.test.ts tests/benchmark-types.test.ts',
+        'leave plugin/runtime/cyrene-continuity.mjs unchanged'
+      ],
+      forbiddenActions: [
+        'edit benchmark/catalog.ts only',
+        'retry catalog-only fix',
+        'edit plugin/runtime/cyrene-continuity.mjs'
+      ],
+      fixtureFiles: [
+        {
+          path: 'benchmark/catalog.ts',
+          content: [
+            "export const caseIds = ['T2-REAL-PROJECT-REPLAY']",
+            "export const replayMetrics = ['taskSuccessRate', 'toolCallReduction']",
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'benchmark/cases/tier2-memory-to-action.ts',
+          content: [
+            "export type Tier2CaseId = 'T2-REAL-PROJECT-REPLAY'",
+            'export function replayCaseFor(): string {',
+            "  return 'repo-grounded fixture files verified'",
+            '}',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'tests/benchmark-cases-real-replay.test.ts',
+          content: [
+            "const expectedRealReplayCases = ['T2-REAL-PROJECT-REPLAY'] as const",
+            'expect(report.fixtureRuns).toHaveLength(expectedRealReplayCases.length)',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+          content: [
+            '# Cyrene Benchmark Results',
+            '',
+            '- real-replay validates coding task utility on repo-grounded fixtures.',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'plugin/runtime/cyrene-continuity.mjs',
+          content: [
+            '// Generated runtime fixture must remain unchanged.',
+            ''
+          ].join('\n')
+        }
+      ],
+      requiredFixtureContent: [
+        { path: 'benchmark/catalog.ts', content: 'T2-REAL-PROJECT-REPLAY' },
+        { path: 'benchmark/cases/tier2-memory-to-action.ts', content: 'repo-grounded fixture files verified' },
+        { path: 'tests/benchmark-cases-real-replay.test.ts', content: 'expectedRealReplayCases' },
+        { path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md', content: 'coding task utility' },
+        { path: 'plugin/runtime/cyrene-continuity.mjs', content: 'Generated runtime fixture' }
+      ],
+      forbiddenFixtureContent: [
+        { path: 'plugin/runtime/cyrene-continuity.mjs', content: 'edited by replay' }
+      ],
+      evidence: `real project replay ok; fixture files verified; source test and docs updated together; repeated mistake reduction=${formatRatio(0.8)}; corrections reduction=${formatRatio(0.8)}; tool call reduction=${formatRatio(6 / 14)}`
+    }
+  }
+  if (id === 'T2-REAL-DOCS-ONLY-REPLAY') {
+    return {
+      memory: 'Real project docs-only workflow: when only benchmark docs change, run git diff --check; do not spend time on typecheck or full tests unless contracts changed.',
+      noMemory: attempt(false, 9, 3, 3, [
+        'run npm run typecheck',
+        'run npm test',
+        'ask user whether docs need tests',
+        'edit docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md'
+      ]),
+      withMemory: attempt(true, 4, 0, 0, [
+        'inspect AGENTS.md',
+        'inspect docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+        'edit docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+        'run git diff --check'
+      ]),
+      requiredActions: [
+        'inspect AGENTS.md',
+        'inspect docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+        'edit docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+        'run git diff --check'
+      ],
+      forbiddenActions: [
+        'run npm run typecheck',
+        'run npm test',
+        'ask user whether docs need tests'
+      ],
+      fixtureFiles: [
+        {
+          path: 'AGENTS.md',
+          content: [
+            '# Agent Guidance',
+            '',
+            '- For documentation-only changes, run git diff --check.',
+            '- Run npm run typecheck when command examples or documented contracts change enough that TypeScript-facing behavior may be affected.',
+            ''
+          ].join('\n')
+        },
+        {
+          path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+          content: [
+            '# Cyrene Benchmark Results',
+            '',
+            '- real-replay artifacts summarize deterministic repo-grounded cases.',
+            ''
+          ].join('\n')
+        }
+      ],
+      requiredFixtureContent: [
+        { path: 'AGENTS.md', content: 'For documentation-only changes, run git diff --check' },
+        { path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md', content: 'deterministic repo-grounded cases' }
+      ],
+      forbiddenFixtureContent: [
+        { path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md', content: 'requires npm test' }
+      ],
+      evidence: `real project replay ok; fixture files verified; docs-only verification applied; repeated mistake reduction=${formatRatio(1)}; corrections reduction=${formatRatio(1)}; tool call reduction=${formatRatio(5 / 9)}`
+    }
+  }
   return undefined
 }
 
@@ -158,6 +513,7 @@ async function withActionFixture(
         }
       : baseInput
   )
+  await writeReplayFixtureFiles(fixture, replayCase)
   try {
     return await withFixtureEnvironment(fixture, async () => run(fixture))
   } finally {
@@ -166,6 +522,36 @@ async function withActionFixture(
     } finally {
       recordFixtureRun(options, fixture.metadata)
     }
+  }
+}
+
+async function writeReplayFixtureFiles(fixture: BenchmarkFixture, replayCase: ActionReplayCase): Promise<void> {
+  if (replayCase.fixtureFiles === undefined) return
+  for (const file of replayCase.fixtureFiles) {
+    const target = join(fixture.cwd, file.path)
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, file.content, 'utf8')
+  }
+}
+
+async function verifyReplayFixture(fixture: BenchmarkFixture, replayCase: ActionReplayCase): Promise<boolean> {
+  const required = replayCase.requiredFixtureContent ?? []
+  const forbidden = replayCase.forbiddenFixtureContent ?? []
+  for (const check of required) {
+    if (!(await fixtureFileContains(fixture, check))) return false
+  }
+  for (const check of forbidden) {
+    if (await fixtureFileContains(fixture, check)) return false
+  }
+  return true
+}
+
+async function fixtureFileContains(fixture: BenchmarkFixture, check: ReplayFixtureContentCheck): Promise<boolean> {
+  try {
+    const content = await readFile(join(fixture.cwd, check.path), 'utf8')
+    return content.includes(check.content)
+  } catch {
+    return false
   }
 }
 

@@ -44,7 +44,8 @@ describe('benchmark Tier 1.5 lifecycle cases', () => {
       ['T15-EXPIRE', 'expired=1'],
       ['T15-SUPERSEDE-HASH', 'stale supersede hash rejected'],
       ['T15-CONFLICT-SINGLE-INJECTION', 'single injection=1'],
-      ['T15-ADVERSARIAL-CONFLICT', 'adversarial conflict lifecycle ok']
+      ['T15-ADVERSARIAL-CONFLICT', 'adversarial conflict lifecycle ok'],
+      ['T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD', 'explicitSupersedeHonored=1']
     ] as const) {
       const result = report.caseResults.find((item) => item.caseId === caseId)
       expect(result?.status).toBe('passed')
@@ -61,5 +62,7 @@ describe('benchmark Tier 1.5 lifecycle cases', () => {
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-CONFLICT-SINGLE-INJECTION')).get('summaryStalePropagationAccuracy')).toBe(1)
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-ADVERSARIAL-CONFLICT')).get('staleMemoryLeakageRate')).toBe(0)
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-ADVERSARIAL-CONFLICT')).get('conflictResolutionAccuracy')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD')).get('staleMemoryLeakageRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD')).get('conflictResolutionAccuracy')).toBe(1)
   }, 20_000)
 })

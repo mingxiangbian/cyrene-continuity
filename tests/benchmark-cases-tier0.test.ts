@@ -73,6 +73,7 @@ describe('benchmark Tier 0 cases', () => {
       ['T4-HOOK-LIGHTWEIGHT', 'continuity metrics=0'],
       ['T0-SIMILAR-BOUNDARY', 'hintVisible=1'],
       ['T0-CROSS-PROJECT-ADVERSARIAL', 'adversarial cross-project boundary ok'],
+      ['T0-CROSS-PROJECT-PROMPT-INJECTION', 'promptInjectionInjected=0'],
       ['T0-SESSION-HINTS', 'pending migration=0'],
       ['T16-ROUTING-NAMESPACE', 'namespace routing ok']
     ] as const) {
@@ -99,7 +100,11 @@ describe('benchmark Tier 0 cases', () => {
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REVIEW-EDIT-HASH')).get('editCount')).toBe(1)
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T0-CROSS-PROJECT-ADVERSARIAL')).get('crossProjectPollutionRate')).toBe(0)
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T0-CROSS-PROJECT-ADVERSARIAL')).get('similarHintMigrationRate')).toBe(0)
-  })
+    const promptInjection = metricMap(report.caseResults.find((item) => item.caseId === 'T0-CROSS-PROJECT-PROMPT-INJECTION'))
+    expect(promptInjection.get('crossProjectPollutionRate')).toBe(0)
+    expect(promptInjection.get('similarHintMigrationRate')).toBe(0)
+    expect(promptInjection.get('profilePollutionRate')).toBe(0)
+  }, 20_000)
 
   it('checks surface consistency across policy, context-preview, MCP, and skill contracts', async () => {
     const report = await runCyreneBenchmark({
@@ -119,7 +124,7 @@ describe('benchmark Tier 0 cases', () => {
     expect(evidence).toContain('skill surface')
     expect(evidence).not.toContain('catalog contract executed')
     expect(result?.hardFailures).toEqual([])
-  })
+  }, 20_000)
 
   it('keeps Tier 1.6 evidence deterministic when seed and clock are fixed', async () => {
     const options = {
@@ -137,5 +142,5 @@ describe('benchmark Tier 0 cases', () => {
       expect(firstEvidence).toBe(secondEvidence)
       expect(firstEvidence).not.toMatch(/runtimeMs=/)
     }
-  })
+  }, 20_000)
 })

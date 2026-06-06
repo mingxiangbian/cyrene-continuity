@@ -19,9 +19,9 @@ Cyrene 已经有一批分散的 eval gate 和 unit tests，覆盖 memory routing
 
 1. 建立完整 benchmark/eval 系统，评估 Cyrene 的 memory ability、boundary safety、task utility、runtime efficiency 和 scale stability。
 2. 用统一 case catalog 描述所有 benchmark case；所有 case 都必须写入 spec，不用 P0/P1/P2 或 deferred phase 分层。
-3. 支持多种 execution profile：`smoke`、`gate`、`full`、`scale`、`llm`、`external`。profile 只决定运行方式，不决定 case 是否存在。
-4. 生成 `benchmark_report.json` 和 `benchmark_report.md`，包含 pass/fail、失败证据、指标、scale 结果和 regression comparison。
-5. 将关键 deterministic safety case 接入 release gate，同时保留 `full`、`scale`、`llm`、`external` 的完整运行入口。
+3. 支持多种 execution profile：`smoke`、`gate`、`full`、`scale`、`real-replay`、`llm`、`external`。profile 只决定运行方式，不决定 case 是否存在。
+4. 生成 `benchmark_report.json` 和 `benchmark_report.md`，包含 pass/fail、失败证据、指标、scale 结果、metric aggregation provenance 和 regression comparison。
+5. 将关键 deterministic safety case 接入 release gate，同时保留 `full`、`scale`、`real-replay`、`llm`、`external` 的完整运行入口。
 6. 让 multi-agent 可以按 case pack 并行实现，且共享 contract 明确、写入边界清楚。
 
 ## 非目标
@@ -76,6 +76,7 @@ cyrene-continuity codex benchmark run --profile smoke
 cyrene-continuity codex benchmark run --profile gate
 cyrene-continuity codex benchmark run --profile full
 cyrene-continuity codex benchmark run --profile scale
+cyrene-continuity codex benchmark run --profile real-replay
 cyrene-continuity codex benchmark run --profile llm
 cyrene-continuity codex benchmark run --profile external
 ```
@@ -95,7 +96,8 @@ benchmark_report.md
 - `gate`：release gate 默认运行。只包含 deterministic、稳定、成本低、边界关键的 case。
 - `full`：本地完整 deterministic/replay benchmark。包含 gate 外的能力、lifecycle、failure recovery、hook 和 replay case。
 - `scale`：运行 S/M/L/XL scale fixture 和 efficiency metrics。
-- `llm`：运行真实 LLM/agent 多 session task utility eval。
+- `real-replay`：运行真实 repo material 的 deterministic replay task utility eval。
+- `llm`：运行 provider-backed LLM/agent adapter case；缺少 provider env 时报告为 `not_supported_without_provider`，不能被解读为已完成全部 live LLM 对照。
 - `external`：运行 Claude Code memory、Hermes memory、Mem0、Zep 等外部对照。
 
 报告必须列出所有 case。未被当前 profile 运行的 case 标为 `skipped_with_reason`，缺少 provider/account/tool 的 case 标为 `not_supported_without_provider`。
@@ -109,7 +111,7 @@ interface BenchmarkCase {
   id: string
   tier: 'tier0' | 'tier1' | 'tier1_5' | 'tier1_6' | 'tier2' | 'tier3' | 'tier4'
   title: string
-  executionProfiles: Array<'smoke' | 'gate' | 'full' | 'scale' | 'llm' | 'external'>
+  executionProfiles: Array<'smoke' | 'gate' | 'full' | 'scale' | 'real-replay' | 'llm' | 'external'>
   fixture: BenchmarkFixtureSpec
   action: BenchmarkActionSpec
   expected: BenchmarkExpectedSpec
@@ -856,14 +858,39 @@ interface BenchmarkDeterminismSpec {
 ### Efficiency
 
 - `continuityGetLatencyMs`
+- `continuityGetSampleCount`
+- `continuityGetMinMs`
+- `continuityGetMeanMs`
+- `continuityGetMaxMs`
 - `hookLatencyMs`
+- `hookSampleCount`
+- `runtimeHookTimeoutCount`
+- `runtimeHookFailOpenCount`
+- `simulatedHookTimeoutCount`
+- `simulatedHookFailOpenCount`
 - `sqliteQueryLatencyMs`
 - `similarQueryLatencyMs`
 - `pendingQueryLatencyMs`
 - `tokenOverhead`
+- `fastPendingTokens`
+- `fastDiagnosticsTokens`
+- `balancedPendingTokens`
+- `balancedDiagnosticsTokens`
+- `reviewPendingTokens`
+- `reviewDiagnosticsTokens`
 - `jsonlFallbackRate`
 - `indexStaleRate`
 - `memoryDbSizeBytes`
+- `targetProjectCount`
+- `targetActiveMemoryCount`
+- `targetPendingMemoryCount`
+- `materializedProjectCount`
+- `materializedActiveMemoryCount`
+- `materializedPendingMemoryCount`
+- `runtimeSourceIsMaterialized`
+- `jsonlRecordCount`
+- `sqliteIndexedActiveCount`
+- `sqliteIndexedPendingCount`
 - `benchmarkRuntimeMs`
 
 ### Task Utility
@@ -903,16 +930,17 @@ Soft metrics 必须有默认阈值。Soft threshold breach 不等同 hard gate f
 | `scaleLRuntimeMs` | `<= 600000` ms | `scale` |
 | `scaleXLRuntimeMs` | `<= 1800000` ms | `scale` |
 | `memoryDbBytesPerMemory` | `<= 8192` bytes | `scale` |
-| `withMemoryTaskSuccessRate` | `>= noMemoryTaskSuccessRate` | `llm` |
-| `repeatedMistakeReduction` | `>= 0.30` | `llm` |
-| `userCorrectionReduction` | `>= 0.20` | `llm` |
-| `toolCallReduction` | `>= 0.10` | `llm` |
+| `withMemoryTaskSuccessRate` | `>= noMemoryTaskSuccessRate` | `real-replay`, `llm` |
+| `repeatedMistakeReduction` | `>= 0.30` | `real-replay`, `llm` |
+| `userCorrectionReduction` | `>= 0.20` | `real-replay`, `llm` |
+| `toolCallReduction` | `>= 0.10` | `real-replay`, `llm` |
 
 Threshold governance：
 
 - Thresholds 必须集中定义在 benchmark contract 中，不能散落在 case implementation。
 - 调整 threshold 必须改 spec 或 benchmark version，并在 report metadata 中记录。
 - Regression comparison 使用当前 threshold 和 baseline delta 同时报错。
+- 对 `real-replay` profile，threshold breach 必须区分 replay fixture failure 和 Cyrene memory failure。
 - 对 `llm` profile，threshold breach 必须区分 provider variance、adapter error 和 Cyrene memory failure。
 
 ## Hard Gate Rules
@@ -950,7 +978,7 @@ Threshold governance：
 Mode-specific hard rules：
 
 - `fast` 不读 pending、similar-project hints、full profile。
-- `balanced` 必须读 full profile，不读 pending details。
+- `balanced` 必须读 full profile，不读 pending details，不读 diagnostics。
 - `review` 才能读 pending details。
 - activation event 默认不写 `retrieved`。
 - SQLite/FTS 是默认 hot path。
@@ -965,7 +993,7 @@ interface BenchmarkReport {
   runId: string
   startedAt: string
   completedAt: string
-  profile: 'smoke' | 'gate' | 'full' | 'scale' | 'llm' | 'external'
+  profile: 'smoke' | 'gate' | 'full' | 'scale' | 'real-replay' | 'llm' | 'external'
   spec: {
     path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md'
     title: 'Cyrene Benchmark Eval System Design'
@@ -1009,6 +1037,12 @@ interface BenchmarkReport {
     efficiency: Record<string, number>
     taskUtility: Record<string, number>
   }
+  metricAggregation?: Record<string, {
+    group: 'capability' | 'boundarySafety' | 'efficiency' | 'taskUtility'
+    strategy: 'min' | 'max' | 'single'
+    sampleCount: number
+    sourceCaseIds: string[]
+  }>
   thresholdBreaches: Array<{
     metric: string
     threshold: number | string
@@ -1032,6 +1066,8 @@ interface BenchmarkReport {
 - boundary safety metrics
 - efficiency metrics
 - task utility metrics
+- metric aggregation provenance for duplicated metric names
+- profile caveat / representativeness note
 - scale results
 - regression comparison
 - per-case evidence

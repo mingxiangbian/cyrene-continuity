@@ -26,6 +26,8 @@ export function renderBenchmarkReportMarkdown(report: BenchmarkReport): string {
     : report.thresholdBreaches
       .map((item) => `- ${item.severity.toUpperCase()} ${item.caseId} ${item.metric}: ${item.actual} (${item.threshold})`)
       .join('\n')
+  const profileCaveat = renderProfileCaveat(report)
+  const metricAggregation = renderMetricAggregation(report)
   const skippedCases = report.caseResults.filter((item) => item.status === 'skipped_with_reason')
   const unsupportedCases = report.caseResults.filter((item) => item.status === 'not_supported_without_provider')
   const caseMetricDetails = report.caseResults
@@ -64,6 +66,10 @@ Completed: ${report.completedAt}
 - Skipped with reason: ${report.summary.skippedWithReason}
 - Not supported without provider: ${report.summary.notSupportedWithoutProvider}
 
+## Profile Caveat
+
+${profileCaveat}
+
 ## Failed Cases
 
 ${failedCases}
@@ -91,6 +97,10 @@ ${renderMetricGroup(report.metrics.efficiency)}
 ## Task Utility Metrics
 
 ${renderMetricGroup(report.metrics.taskUtility)}
+
+## Metric Aggregation
+
+${metricAggregation}
 
 ## Case Metric Details
 
@@ -160,6 +170,37 @@ function renderMetricGroup(metrics: Record<string, number>): string {
     return '- None'
   }
   return entries.map(([name, value]) => `- ${name}: ${value}`).join('\n')
+}
+
+function renderMetricAggregation(report: BenchmarkReport): string {
+  const entries = Object.entries(report.metricAggregation ?? {})
+    .filter(([, aggregation]) => aggregation.sampleCount > 1)
+    .sort(([left], [right]) => left.localeCompare(right))
+  if (entries.length === 0) {
+    return '- None'
+  }
+  return entries
+    .map(([name, aggregation]) => {
+      const sources = aggregation.sourceCaseIds.map((caseId) => inlineMarkdownText(caseId)).join(', ')
+      return `- ${name}: group=${aggregation.group}, strategy=${aggregation.strategy}, samples=${aggregation.sampleCount}, sources=${sources}`
+    })
+    .join('\n')
+}
+
+function renderProfileCaveat(report: BenchmarkReport): string {
+  const caveats: string[] = []
+  if (report.profile === 'llm') {
+    caveats.push('`llm` profile reports configured adapter coverage only; unsupported provider cases are not completed live LLM comparisons.')
+  } else if (report.profile === 'external') {
+    caveats.push('`external` profile requires configured external adapters; unsupported cases are adapter availability gaps, not competitive results.')
+  }
+  if (report.profile === 'scale' || report.profile === 'full') {
+    caveats.push('Scale L/XL results may combine target-scale synthetic runtime with capped materialized fixture storage; use case evidence before treating storage values as full target materialization.')
+  }
+  if (caveats.length === 0) {
+    caveats.push('This profile is bounded by deterministic fixtures unless a provider-backed adapter is explicitly configured.')
+  }
+  return caveats.map((item) => `- ${item}`).join('\n')
 }
 
 function renderObjectSection(value: unknown): string {

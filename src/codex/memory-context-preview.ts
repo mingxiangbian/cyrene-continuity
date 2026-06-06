@@ -20,6 +20,7 @@ export interface CodexMemoryContextPreview {
     includePendingNotice?: boolean
     includeDiagnostics?: boolean
     recordRetrievedEvents?: boolean
+    allowJsonlFallback?: boolean
     maxTokens?: number
   }
   project: {
