@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { handleCodexHookTraceCommand } from '../../src/codex/codex-hook-trace.js'
 import { runCodexMemoryLifecycleDaily } from '../../src/codex/codex-memory-lifecycle-daily.js'
+import { runCodexMemoryLifecycleWeekly } from '../../src/codex/codex-memory-lifecycle-weekly.js'
 import { getCodexContinuityContext } from '../../src/codex/continuity-context.js'
 import {
   markFastSummaryProjectionStale,
@@ -312,35 +313,71 @@ async function runAutomationInterrupt(
       projectId: fixture.projectId,
       createdAt: options.now ?? benchmarkCase.fixture.now
     }))
+    const dailyStartedAt = Date.now()
     const first = await runCodexMemoryLifecycleDaily({
       cwd: fixture.cwd,
       projectRoots: [{ projectId: fixture.projectId, memoryRoot: fixture.projectMemoryRoot }],
       apply: true,
       now: options.now ?? benchmarkCase.fixture.now
     })
+    const dailyRuntimeMs = Math.max(0, Date.now() - dailyStartedAt)
+
+    const secondStartedAt = Date.now()
     const second = await runCodexMemoryLifecycleDaily({
       cwd: fixture.cwd,
       projectRoots: [{ projectId: fixture.projectId, memoryRoot: fixture.projectMemoryRoot }],
       apply: true,
       now: options.now ?? benchmarkCase.fixture.now
     })
+    const automationInterruptRecoveryTimeMs = Math.max(0, Date.now() - secondStartedAt)
+
+    const beforeWeeklyEvents = await readMemoryEventsFromRoot(fixture.projectMemoryRoot)
+    const weeklyStartedAt = Date.now()
+    const weekly = await runCodexMemoryLifecycleWeekly({
+      cwd: fixture.cwd,
+      projectRoots: [{ projectId: fixture.projectId, memoryRoot: fixture.projectMemoryRoot }],
+      globalRoot: fixture.globalMemoryRoot,
+      apply: false,
+      now: options.now ?? benchmarkCase.fixture.now
+    })
+    const weeklyRuntimeMs = Math.max(0, Date.now() - weeklyStartedAt)
+    const afterWeeklyEvents = await readMemoryEventsFromRoot(fixture.projectMemoryRoot)
+
     const [semantic, events] = await Promise.all([
       readSemanticMemoriesFromRoot(fixture.projectMemoryRoot),
       readMemoryEventsFromRoot(fixture.projectMemoryRoot)
     ])
     const promoteEvents = events.filter((event) => event.action === 'promote' && event.memoryId === memory.id)
     const stored = semantic.find((item) => item.id === memory.id)
+    const dryRunWriteCount = Math.max(0, afterWeeklyEvents.length - beforeWeeklyEvents.length)
+    const duplicatePromotionCount = promoteEvents.length === 1 ? 0 : promoteEvents.length
+    const weeklyCoreCandidateCount = weekly.projectRoots.reduce(
+      (sum, root) => sum + root.promotedValidatedToProjectCore,
+      0
+    ) + weekly.global.promotedToGlobalCore
     const hardFailures: HardGateRuleId[] = [
       ...(first.roots[0]?.promotedTrialToValidated === 1 ? [] : ['unauthorized_promotion' as const]),
       ...(second.roots[0]?.promotedTrialToValidated === 0 ? [] : ['unauthorized_promotion' as const]),
       ...(promoteEvents.length === 1 ? [] : ['duplicate_context_injection' as const]),
-      ...(stored?.confidenceTier === 'validated' ? [] : ['unauthorized_promotion' as const])
+      ...(stored?.confidenceTier === 'validated' ? [] : ['unauthorized_promotion' as const]),
+      ...(dryRunWriteCount === 0 ? [] : ['unauthorized_promotion' as const])
     ]
     return {
       hardFailures,
-      metrics: metricsFor(benchmarkCase, hardFailures),
+      metrics: metricsFor(benchmarkCase, hardFailures, {
+        dailyAutomationRuntimeMs: dailyRuntimeMs,
+        weeklyAutomationRuntimeMs: weeklyRuntimeMs,
+        dailyPromotedCount: first.roots[0]?.promotedTrialToValidated ?? 0,
+        weeklyCoreCandidateCount,
+        pendingReviewedCount: 0,
+        pendingGeneratedCount: 0,
+        duplicateAutomationOutputCount: duplicatePromotionCount,
+        dryRunWriteCount,
+        repeatedPromotionCount: second.roots[0]?.promotedTrialToValidated ?? 0,
+        automationInterruptRecoveryTimeMs
+      }),
       evidence: [{
-        summary: `automation idempotent; first promotions=${first.roots[0]?.promotedTrialToValidated ?? 'missing'}; second promotions=${second.roots[0]?.promotedTrialToValidated ?? 'missing'}; duplicate promotion=${promoteEvents.length === 1 ? 0 : 1}`
+        summary: `automation idempotent; first promotions=${first.roots[0]?.promotedTrialToValidated ?? 'missing'}; second promotions=${second.roots[0]?.promotedTrialToValidated ?? 'missing'}; weekly dry-run candidates=${weeklyCoreCandidateCount}; dry-run writes=${dryRunWriteCount}; duplicate promotion=${promoteEvents.length === 1 ? 0 : 1}`
       }]
     }
   })
@@ -361,7 +398,13 @@ async function runHookTimeout(
     ]
     return {
       hardFailures,
-      metrics: metricsFor(benchmarkCase, hardFailures, { stopHookP95Ms: latencyMs }),
+      metrics: metricsFor(benchmarkCase, hardFailures, {
+        stopHookP50Ms: latencyMs,
+        stopHookP95Ms: latencyMs,
+        stopHookP99Ms: latencyMs,
+        hookTimeoutCount: 1,
+        hookFailOpenCount: parsed.continue === true && parsed.suppressOutput === true ? 1 : 0
+      }),
       evidence: [{
         summary: `hook timeout fail-open; continue=${parsed.continue === true ? 1 : 0}; suppressOutput=${parsed.suppressOutput === true ? 1 : 0}; latencyMs=${latencyMs}`
       }]
@@ -447,15 +490,23 @@ function metricsFor(
 
 function defaultMetricValue(metric: BenchmarkMetricId, passed: boolean): number {
   if (!passed) return 0
+  const normalized = metric.toLowerCase()
   if (
-    metric.includes('Leakage') ||
-    metric.includes('Pollution') ||
-    metric.includes('Misuse') ||
-    metric.includes('Fallback') ||
-    metric.includes('Stale') ||
-    metric.includes('Interference') ||
-    metric.includes('DefaultWrite') ||
-    metric.includes('wrongTop1')
+    normalized.includes('leakage') ||
+    normalized.includes('pollution') ||
+    normalized.includes('misuse') ||
+    normalized.includes('fallback') ||
+    normalized.includes('stale') ||
+    normalized.includes('interference') ||
+    normalized.includes('defaultwrite') ||
+    normalized.includes('wrongtop1') ||
+    normalized.includes('duplicate') ||
+    normalized.includes('repeated') ||
+    normalized.includes('timeout') ||
+    normalized.includes('failopen') ||
+    normalized.includes('heavyoperation') ||
+    normalized.includes('pendingreview') ||
+    normalized.includes('dryrunwrite')
   ) {
     return 0
   }

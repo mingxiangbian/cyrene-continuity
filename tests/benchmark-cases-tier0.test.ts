@@ -22,6 +22,10 @@ function evidenceText(result: { evidence: ReadonlyArray<{ summary: string }> } |
   return result?.evidence.map((item) => item.summary).join('\n') ?? ''
 }
 
+function metricMap(result: { metrics: ReadonlyArray<{ name: string; value: number }> } | undefined): Map<string, number> {
+  return new Map(result?.metrics.map((item) => [item.name, item.value]) ?? [])
+}
+
 describe('benchmark Tier 0 cases', () => {
   it('runs smoke cases with real assertions instead of catalog-only evidence', async () => {
     const report = await runCyreneBenchmark({
@@ -68,6 +72,7 @@ describe('benchmark Tier 0 cases', () => {
       ['T4-HOOK-LIGHTWEIGHT', 'hook metric=post_tool_use'],
       ['T4-HOOK-LIGHTWEIGHT', 'continuity metrics=0'],
       ['T0-SIMILAR-BOUNDARY', 'hintVisible=1'],
+      ['T0-CROSS-PROJECT-ADVERSARIAL', 'adversarial cross-project boundary ok'],
       ['T0-SESSION-HINTS', 'pending migration=0'],
       ['T16-ROUTING-NAMESPACE', 'namespace routing ok']
     ] as const) {
@@ -77,6 +82,23 @@ describe('benchmark Tier 0 cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
+
+    const proposeImportant = metricMap(report.caseResults.find((item) => item.caseId === 'T16-PROPOSE-IMPORTANT'))
+    expect(proposeImportant.get('importantMemoryMissedRate')).toBe(0)
+    expect(proposeImportant.get('proposalPrecision')).toBe(1)
+    expect(proposeImportant.get('proposalRecall')).toBe(1)
+    const proposeNoise = metricMap(report.caseResults.find((item) => item.caseId === 'T16-PROPOSE-NOISE'))
+    expect(proposeNoise.get('noiseProposalRate')).toBe(0)
+    expect(proposeNoise.get('proposalPrecision')).toBe(1)
+    const proposeSensitive = metricMap(report.caseResults.find((item) => item.caseId === 'T16-PROPOSE-SENSITIVE'))
+    expect(proposeSensitive.get('sensitiveProposalRate')).toBe(0)
+    expect(proposeSensitive.get('proposalPrecision')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-PROPOSE-ASSISTANT-INFERENCE')).get('assistantInferenceAutoActiveRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REVIEW-REJECT-DEFER')).get('rejectCount')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REVIEW-REJECT-DEFER')).get('deferCount')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REVIEW-EDIT-HASH')).get('editCount')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T0-CROSS-PROJECT-ADVERSARIAL')).get('crossProjectPollutionRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T0-CROSS-PROJECT-ADVERSARIAL')).get('similarHintMigrationRate')).toBe(0)
   })
 
   it('checks surface consistency across policy, context-preview, MCP, and skill contracts', async () => {

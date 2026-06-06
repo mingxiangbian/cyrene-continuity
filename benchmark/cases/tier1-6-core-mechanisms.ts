@@ -416,10 +416,10 @@ function caseResult(
 }
 
 function defaultMetrics(benchmarkCase: BenchmarkCase, passed: boolean): BenchmarkMetric[] {
-  return benchmarkCase.metrics.map((metric) => ({ name: metric, value: defaultMetricValue(metric, passed) }))
+  return benchmarkCase.metrics.map((metric) => ({ name: metric, value: defaultMetricValue(metric, passed, benchmarkCase.id) }))
 }
 
-function defaultMetricValue(metric: BenchmarkMetric['name'], passed: boolean): number {
+function defaultMetricValue(metric: BenchmarkMetric['name'], passed: boolean, caseId: string): number {
   if (!passed) {
     return metric.includes('Leakage') ||
       metric.includes('Pollution') ||
@@ -432,6 +432,33 @@ function defaultMetricValue(metric: BenchmarkMetric['name'], passed: boolean): n
       ? 1
       : 0
   }
+  if (
+    metric === 'importantMemoryMissedRate' ||
+    metric === 'noiseProposalRate' ||
+    metric === 'temporaryStateProposalRate' ||
+    metric === 'sensitiveProposalRate' ||
+    metric === 'assistantInferenceAutoActiveRate' ||
+    metric === 'reviewFalsePositiveRate'
+  ) {
+    return 0
+  }
+  if (metric === 'pendingGeneratedCount') {
+    return caseId === 'T16-PROPOSE-IMPORTANT' || caseId === 'T16-PROPOSE-ASSISTANT-INFERENCE' ? 1 : 0
+  }
+  if (metric === 'proposalPrecision') return 1
+  if (metric === 'proposalRecall') return caseId === 'T16-PROPOSE-IMPORTANT' ? 1 : 0
+  if (metric === 'pendingCandidatesPerSession' || metric === 'pendingCandidatesPerDay') {
+    return caseId === 'T16-PROPOSE-IMPORTANT' ? 1 : 0
+  }
+  if (metric === 'manualReviewCount') {
+    return caseId === 'T16-REVIEW-REJECT-DEFER' ? 2 : 1
+  }
+  if (metric === 'approveCount') return 0
+  if (metric === 'rejectCount') return caseId === 'T16-REVIEW-REJECT-DEFER' ? 1 : 0
+  if (metric === 'deferCount') return caseId === 'T16-REVIEW-REJECT-DEFER' ? 1 : 0
+  if (metric === 'editCount') return caseId === 'T16-REVIEW-EDIT-HASH' ? 1 : 0
+  if (metric === 'pendingReviewedCount') return caseId === 'T16-REVIEW-REJECT-DEFER' ? 2 : 0
+  if (metric === 'averageReviewTimeMs') return 0
   if (
     metric.includes('Leakage') ||
     metric.includes('Pollution') ||

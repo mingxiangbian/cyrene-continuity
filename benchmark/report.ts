@@ -28,6 +28,13 @@ export function renderBenchmarkReportMarkdown(report: BenchmarkReport): string {
       .join('\n')
   const skippedCases = report.caseResults.filter((item) => item.status === 'skipped_with_reason')
   const unsupportedCases = report.caseResults.filter((item) => item.status === 'not_supported_without_provider')
+  const caseMetricDetails = report.caseResults
+    .filter((item) => item.metrics.length > 0)
+    .map((item) => {
+      const metrics = item.metrics.map((metric) => `${metric.name}: ${metric.value}${metric.unit ?? ''}`).join(', ')
+      return `- ${item.caseId}: ${metrics}`
+    })
+    .join('\n')
   const fixtureRuns = report.fixtureRuns === undefined || report.fixtureRuns.length === 0
     ? '- None'
     : report.fixtureRuns.map((fixture) => {
@@ -84,6 +91,10 @@ ${renderMetricGroup(report.metrics.efficiency)}
 ## Task Utility Metrics
 
 ${renderMetricGroup(report.metrics.taskUtility)}
+
+## Case Metric Details
+
+${caseMetricDetails === '' ? '- None' : caseMetricDetails}
 
 ## Scale Results
 

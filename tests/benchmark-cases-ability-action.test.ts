@@ -22,6 +22,10 @@ function evidenceText(result: { evidence: ReadonlyArray<{ summary: string }> } |
   return result?.evidence.map((item) => item.summary).join('\n') ?? ''
 }
 
+function metricMap(result: { metrics: ReadonlyArray<{ name: string; value: number }> } | undefined): Map<string, number> {
+  return new Map(result?.metrics.map((item) => [item.name, item.value]) ?? [])
+}
+
 describe('benchmark Tier 1 and Tier 2 replay cases', () => {
   it('runs deterministic memory ability and memory-to-action cases in full profile', async () => {
     const report = await runCyreneBenchmark({
@@ -39,6 +43,7 @@ describe('benchmark Tier 1 and Tier 2 replay cases', () => {
       ['T1-TEMPORAL-ORDER', 'newest rule wins'],
       ['T1-KNOWLEDGE-UPDATE', 'superseded rule excluded'],
       ['T1-CONFLICT-HANDLING', 'single selected rule'],
+      ['T1-ADVERSARIAL-RETRIEVAL', 'adversarial retrieval ok'],
       ['T1-ABSTAIN-NO-EVIDENCE', 'abstain=1'],
       ['T1-EVENT-SUMMARY', 'summary includes decision/failure/fix/verification'],
       ['T2-REMEMBER-TEST-COMMAND', 'with-memory command reused'],
@@ -54,5 +59,10 @@ describe('benchmark Tier 1 and Tier 2 replay cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
+
+    const adversarialRetrieval = metricMap(report.caseResults.find((item) => item.caseId === 'T1-ADVERSARIAL-RETRIEVAL'))
+    expect(adversarialRetrieval.get('retrievalAccuracy')).toBe(1)
+    expect(adversarialRetrieval.get('answerAccuracy')).toBe(1)
+    expect(adversarialRetrieval.get('similarMemoryInterferenceRate')).toBe(0)
   }, 20_000)
 })

@@ -22,6 +22,10 @@ function evidenceText(result: { evidence: ReadonlyArray<{ summary: string }> } |
   return result?.evidence.map((item) => item.summary).join('\n') ?? ''
 }
 
+function metricMap(result: { metrics: ReadonlyArray<{ name: string; value: number }> } | undefined): Map<string, number> {
+  return new Map(result?.metrics.map((item) => [item.name, item.value]) ?? [])
+}
+
 describe('benchmark Tier 1.5 lifecycle cases', () => {
   it('runs lifecycle cases through real memory review and maintenance paths', async () => {
     const report = await runCyreneBenchmark({
@@ -39,7 +43,8 @@ describe('benchmark Tier 1.5 lifecycle cases', () => {
       ['T15-MERGE', 'deduped=1'],
       ['T15-EXPIRE', 'expired=1'],
       ['T15-SUPERSEDE-HASH', 'stale supersede hash rejected'],
-      ['T15-CONFLICT-SINGLE-INJECTION', 'single injection=1']
+      ['T15-CONFLICT-SINGLE-INJECTION', 'single injection=1'],
+      ['T15-ADVERSARIAL-CONFLICT', 'adversarial conflict lifecycle ok']
     ] as const) {
       const result = report.caseResults.find((item) => item.caseId === caseId)
       expect(result?.status).toBe('passed')
@@ -47,5 +52,14 @@ describe('benchmark Tier 1.5 lifecycle cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
+
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-UPGRADE')).get('promotionAccuracy')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-REPLACE')).get('replacementAccuracy')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-REPLACE')).get('staleMemoryLeakageRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-MERGE')).get('mergeAccuracy')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-MERGE')).get('duplicateActiveMemoryRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-CONFLICT-SINGLE-INJECTION')).get('summaryStalePropagationAccuracy')).toBe(1)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-ADVERSARIAL-CONFLICT')).get('staleMemoryLeakageRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T15-ADVERSARIAL-CONFLICT')).get('conflictResolutionAccuracy')).toBe(1)
   }, 20_000)
 })

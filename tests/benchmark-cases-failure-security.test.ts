@@ -20,6 +20,10 @@ function evidenceText(result: { evidence: ReadonlyArray<{ summary: string }> } |
   return result?.evidence.map((item) => item.summary).join('\n') ?? ''
 }
 
+function metricMap(result: { metrics: ReadonlyArray<{ name: string; value: number }> } | undefined): Map<string, number> {
+  return new Map(result?.metrics.map((item) => [item.name, item.value]) ?? [])
+}
+
 describe('benchmark Tier 4 failure, security, and adapter cases', () => {
   it('runs full-profile failure and recovery cases with real assertions', async () => {
     const report = await runCyreneBenchmark({
@@ -47,6 +51,27 @@ describe('benchmark Tier 4 failure, security, and adapter cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
+
+    const automation = metricMap(report.caseResults.find((item) => item.caseId === 'T4-AUTOMATION-INTERRUPT'))
+    for (const metric of [
+      'dailyAutomationRuntimeMs',
+      'weeklyAutomationRuntimeMs',
+      'dailyPromotedCount',
+      'weeklyCoreCandidateCount',
+      'pendingReviewedCount',
+      'pendingGeneratedCount',
+      'duplicateAutomationOutputCount',
+      'dryRunWriteCount',
+      'repeatedPromotionCount',
+      'automationInterruptRecoveryTimeMs'
+    ]) {
+      expect(automation.has(metric)).toBe(true)
+    }
+
+    const hook = metricMap(report.caseResults.find((item) => item.caseId === 'T4-HOOK-TIMEOUT'))
+    expect(hook.get('hookTimeoutCount')).toBe(1)
+    expect(hook.get('hookFailOpenCount')).toBe(1)
+    expect(hook.has('stopHookP95Ms')).toBe(true)
   }, 20_000)
 
   it('marks llm and external adapter cases unsupported when provider env is missing', async () => {

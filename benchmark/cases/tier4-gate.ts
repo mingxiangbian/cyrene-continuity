@@ -65,12 +65,31 @@ async function runHookLightweight(benchmarkCase: BenchmarkCase, options: Benchma
     ]
     return {
       hardFailures,
-      metrics: [{ name: 'postToolUseHookP95Ms', value: hookMetric?.latencyMs ?? Number.POSITIVE_INFINITY }],
+      metrics: [
+        { name: 'sessionStartHookP50Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'session_start').map((item) => item.latencyMs), 0.5) },
+        { name: 'sessionStartHookP95Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'session_start').map((item) => item.latencyMs), 0.95) },
+        { name: 'sessionStartHookP99Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'session_start').map((item) => item.latencyMs), 0.99) },
+        { name: 'userPromptSubmitHookP50Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'user_prompt_submit').map((item) => item.latencyMs), 0.5) },
+        { name: 'userPromptSubmitHookP95Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'user_prompt_submit').map((item) => item.latencyMs), 0.95) },
+        { name: 'userPromptSubmitHookP99Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'user_prompt_submit').map((item) => item.latencyMs), 0.99) },
+        { name: 'postToolUseHookP50Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'post_tool_use').map((item) => item.latencyMs), 0.5) },
+        { name: 'postToolUseHookP95Ms', value: hookMetric?.latencyMs ?? Number.POSITIVE_INFINITY },
+        { name: 'postToolUseHookP99Ms', value: percentile(hookMetrics.filter((item) => item.hookEvent === 'post_tool_use').map((item) => item.latencyMs), 0.99) },
+        { name: 'postToolUseHeavyOperationCount', value: continuityMetricCount },
+        { name: 'ordinaryHookPendingReviewCount', value: pending.length }
+      ],
       evidence: [{
         summary: `non-Stop hook lightweight; hook events=${hookMetrics.length}; hook metric=${hookMetric?.hookEvent ?? 'missing'}; continuity metrics=${continuityMetricCount}; ordinary pending review=${pending.length}`
       }]
     }
   })
+}
+
+function percentile(values: readonly number[], p: number): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * p) - 1))
+  return Math.max(0, Math.round(sorted[index] ?? 0))
 }
 
 async function runSecuritySecrets(benchmarkCase: BenchmarkCase, options: BenchmarkRunOptions): Promise<BenchmarkCaseResult> {

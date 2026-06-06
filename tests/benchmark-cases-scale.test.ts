@@ -22,6 +22,10 @@ function evidenceText(result: { evidence: ReadonlyArray<{ summary: string }> } |
   return result?.evidence.map((item) => item.summary).join('\n') ?? ''
 }
 
+function metricMap(result: { metrics: ReadonlyArray<{ name: string; value: number }> } | undefined): Map<string, number> {
+  return new Map(result?.metrics.map((item) => [item.name, item.value]) ?? [])
+}
+
 describe('benchmark Tier 3 scale and efficiency cases', () => {
   it('runs scale profile and records ranking, overhead, latency, and index metrics', async () => {
     const report = await runCyreneBenchmark({
@@ -52,6 +56,67 @@ describe('benchmark Tier 3 scale and efficiency cases', () => {
 
     const ranking = report.caseResults.find((item) => item.caseId === 'T3-RANKING')
     expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt3')
+    expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt1')
+    expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt5')
+    expect(ranking?.metrics.map((item) => item.name)).toContain('top1Accuracy')
     expect(ranking?.metrics.find((item) => item.name === 'mrr')?.value).toBe(1)
+
+    const token = metricMap(report.caseResults.find((item) => item.caseId === 'T3-TOKEN-OVERHEAD'))
+    for (const metric of [
+      'projectMemoryTokens',
+      'globalProfileTokens',
+      'fastSummaryTokens',
+      'fullProfileTokens',
+      'sessionHintsTokens',
+      'similarHintsTokens',
+      'pendingTokens',
+      'diagnosticsTokens',
+      'contextItemCount',
+      'memoryItemCount',
+      'profileSectionCount',
+      'sessionHintsCount',
+      'diagnosticsItemCount'
+    ]) {
+      expect(token.has(metric)).toBe(true)
+    }
+
+    const latency = metricMap(report.caseResults.find((item) => item.caseId === 'T3-LATENCY'))
+    for (const metric of [
+      'continuityGetP50FastMs',
+      'continuityGetP95FastMs',
+      'continuityGetP99FastMs',
+      'continuityGetP50BalancedMs',
+      'continuityGetP95BalancedMs',
+      'continuityGetP99BalancedMs',
+      'continuityGetP50ReviewMs',
+      'continuityGetP95ReviewMs',
+      'continuityGetP99ReviewMs',
+      'sessionStartHookP50Ms',
+      'userPromptSubmitHookP95Ms',
+      'postToolUseHookP99Ms',
+      'stopHookP50Ms',
+      'hookTimeoutCount',
+      'hookFailOpenCount',
+      'postToolUseHeavyOperationCount',
+      'ordinaryHookPendingReviewCount'
+    ]) {
+      expect(latency.has(metric)).toBe(true)
+    }
+
+    const index = metricMap(report.caseResults.find((item) => item.caseId === 'T3-INDEX-HEALTH'))
+    for (const metric of [
+      'sqliteHitRate',
+      'jsonlFallbackRateHotPath',
+      'indexStaleRate',
+      'indexRebuildTimeMs',
+      'dbRebuildTimeMs',
+      'memoryDbSizeBytes',
+      'jsonlSizeBytes',
+      'indexSourceMismatchCount',
+      'hotPathRebuildCount',
+      'undetectedStaleIndexCount'
+    ]) {
+      expect(index.has(metric)).toBe(true)
+    }
   })
 })

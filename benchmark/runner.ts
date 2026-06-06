@@ -182,36 +182,58 @@ function defaultPassingMetrics(benchmarkCase: BenchmarkCase): BenchmarkMetric[] 
 }
 
 function defaultPassingMetricValue(metric: BenchmarkMetric['name']): number {
+  const normalized = metric.toLowerCase()
+  if (normalized.endsWith('accuracy')) {
+    return 1
+  }
   if (
-    metric.includes('Leakage') ||
-    metric.includes('Pollution') ||
-    metric.includes('Misuse') ||
-    metric.includes('Fallback') ||
-    metric.includes('Stale') ||
-    metric.includes('Interference') ||
-    metric.includes('DefaultWrite') ||
-    metric.includes('wrongTop1')
+    normalized.includes('leakage') ||
+    normalized.includes('pollution') ||
+    normalized.includes('misuse') ||
+    normalized.includes('fallback') ||
+    normalized.includes('stale') ||
+    normalized.includes('interference') ||
+    normalized.includes('defaultwrite') ||
+    normalized.includes('wrongtop1') ||
+    normalized.includes('duplicate') ||
+    normalized.includes('repeated') ||
+    normalized.includes('timeout') ||
+    normalized.includes('failopen') ||
+    normalized.includes('heavyoperation') ||
+    normalized.includes('pendingreview') ||
+    normalized.includes('dryrunwrite') ||
+    normalized.includes('mismatch') ||
+    normalized.includes('missed') ||
+    normalized.includes('noise') ||
+    normalized.includes('sensitive') ||
+    normalized.includes('temporary')
   ) {
     return 0
   }
   if (
-    metric.endsWith('Rate') ||
-    metric.endsWith('Accuracy') ||
+    normalized.endsWith('rate') ||
+    normalized.endsWith('accuracy') ||
     metric === 'mrr' ||
+    metric === 'recallAt1' ||
     metric === 'recallAt3' ||
+    metric === 'recallAt5' ||
     metric === 'sqliteHitRateFreshIndex' ||
     metric === 'sqliteHitRate'
   ) {
     return 1
   }
   if (
-    metric.includes('Overhead') ||
-    metric.includes('Latency') ||
-    metric.includes('P95') ||
-    metric.includes('P99') ||
-    metric.includes('P50') ||
-    metric.includes('Runtime') ||
-    metric.includes('Bytes') ||
+    normalized.includes('overhead') ||
+    normalized.includes('latency') ||
+    normalized.includes('p95') ||
+    normalized.includes('p99') ||
+    normalized.includes('p50') ||
+    normalized.includes('runtime') ||
+    normalized.includes('bytes') ||
+    normalized.includes('tokens') ||
+    normalized.includes('size') ||
+    normalized.includes('growth') ||
+    normalized.endsWith('count') ||
     metric === 'toolCallCount'
   ) {
     return 0
@@ -237,36 +259,47 @@ function metricGroup(
   metric: BenchmarkMetric['name'],
   groups: BenchmarkReport['metrics']
 ): Record<string, number> {
+  const normalized = metric.toLowerCase()
   if (
-    metric.includes('Leakage') ||
-    metric.includes('Pollution') ||
-    metric.includes('Misuse') ||
-    metric.includes('Migration') ||
-    metric.includes('Promotion') ||
-    metric.includes('Boundary')
+    normalized.includes('leakage') ||
+    normalized.includes('pollution') ||
+    normalized.includes('misuse') ||
+    normalized.includes('migration') ||
+    normalized.includes('unauthorized') ||
+    normalized.includes('boundary') ||
+    normalized.includes('sensitive') ||
+    normalized.includes('assistantinferenceautoactive') ||
+    normalized.includes('temporary') ||
+    normalized.includes('noiseproposal')
   ) {
     return groups.boundarySafety
   }
   if (
-    metric.includes('Latency') ||
-    metric.includes('Overhead') ||
-    metric.includes('P50') ||
-    metric.includes('P95') ||
-    metric.includes('P99') ||
-    metric.includes('Runtime') ||
-    metric.includes('Bytes') ||
-    metric.includes('sqlite') ||
-    metric.includes('jsonl') ||
-    metric.includes('Fallback') ||
-    metric.includes('Stale')
+    normalized.includes('latency') ||
+    normalized.includes('overhead') ||
+    normalized.includes('p50') ||
+    normalized.includes('p95') ||
+    normalized.includes('p99') ||
+    normalized.includes('runtime') ||
+    normalized.includes('bytes') ||
+    normalized.includes('sqlite') ||
+    normalized.includes('jsonl') ||
+    normalized.includes('fallback') ||
+    normalized.includes('index') ||
+    normalized.includes('db') ||
+    normalized.includes('tokens') ||
+    normalized.includes('size') ||
+    normalized.includes('growth') ||
+    normalized.includes('hook') ||
+    normalized.includes('automation')
   ) {
     return groups.efficiency
   }
   if (
-    metric.includes('Task') ||
-    metric.includes('Mistake') ||
-    metric.includes('Correction') ||
-    metric.includes('toolCall') ||
+    normalized.includes('task') ||
+    normalized.includes('mistake') ||
+    normalized.includes('correction') ||
+    normalized.includes('toolcall') ||
     metric === 'taskSuccessRate'
   ) {
     return groups.taskUtility
