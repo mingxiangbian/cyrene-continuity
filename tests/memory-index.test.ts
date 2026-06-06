@@ -9,8 +9,8 @@ import {
   type MemoryIndexRoot
 } from '../src/memory/memory-index.js'
 import { assertEmbeddingSafeText } from '../src/memory/embedding-provider.js'
-import { writeActiveMemoriesFromRoot, writePendingMemoriesFromRoot } from '../src/memory/memory-store.js'
-import type { CyreneMemory, PendingMemory } from '../src/memory/types.js'
+import { upsertMemoryEdgeFromRoot, writeActiveMemoriesFromRoot, writePendingMemoriesFromRoot } from '../src/memory/memory-store.js'
+import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, PendingMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
 
@@ -74,6 +74,28 @@ function pendingMemory(overrides: Partial<PendingMemory> = {}): PendingMemory {
     lastSeenAt: '2026-05-25T00:00:00.000Z',
     expiresAt: '2026-06-24T00:00:00.000Z',
     tags: ['router'],
+    ...overrides
+  }
+}
+
+function memoryRelationEdge(overrides: Partial<DurableMemoryEdge> = {}): DurableMemoryEdge {
+  return {
+    id: 'edge-relation-1',
+    fromMemoryId: 'from-memory',
+    toMemoryId: 'to-memory',
+    fromScope: 'project',
+    toScope: 'project',
+    fromProjectId: 'project-a',
+    toProjectId: 'project-a',
+    relationType: 'supports',
+    status: 'validated',
+    confidence: 0.9,
+    origin: 'operation',
+    reason: 'review approved relation',
+    evidenceId: 'evidence-1',
+    evidenceKind: 'review_hash',
+    createdAt: '2026-05-26T00:00:00.000Z',
+    updatedAt: '2026-05-26T00:00:00.000Z',
     ...overrides
   }
 }
@@ -780,6 +802,50 @@ describe('memory SQLite index', () => {
       fromId: JSON.stringify(['project', 'project-a', 'public-memory-id']),
       toId: 'src/public.ts',
       status: 'approved'
+    })])
+  })
+
+  it('projects durable memory relation edges during index rebuild', async () => {
+    const root = await createTempDir('cyrene-memory-index-relation-edge-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeActiveMemoriesFromRoot(projectRoot, [
+      activeMemory({
+        id: 'new-rule',
+        content: 'Use the new relation workflow.',
+        normalizedKey: 'new-relation-workflow'
+      }),
+      activeMemory({
+        id: 'old-rule',
+        content: 'Use the old relation workflow.',
+        normalizedKey: 'old-relation-workflow'
+      })
+    ])
+    await upsertMemoryEdgeFromRoot(projectRoot, memoryRelationEdge({
+      id: 'edge-new-supersedes-old',
+      fromMemoryId: 'new-rule',
+      toMemoryId: 'old-rule',
+      relationType: 'supersedes'
+    }))
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const edges = await adapter.queryMemoryEdges({ fromId: 'new-rule', status: 'approved' })
+
+    expect(edges).toEqual([expect.objectContaining({
+      id: 'edge-new-supersedes-old',
+      fromId: JSON.stringify(['project', 'project-a', 'new-rule']),
+      toId: JSON.stringify(['project', 'project-a', 'old-rule']),
+      fromKind: 'memory',
+      toKind: 'memory',
+      edgeType: 'relation:supersedes',
+      source: 'deterministic',
+      status: 'approved',
+      evidenceId: 'evidence-1',
+      approvedAt: '2026-05-26T00:00:00.000Z'
     })])
   })
 

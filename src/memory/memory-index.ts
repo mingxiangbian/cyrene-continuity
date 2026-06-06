@@ -16,10 +16,11 @@ import { isMemoryEligibleForRetrieval } from './memory-retriever.js'
 import type { RetrieveMemoriesInput } from './memory-retriever.js'
 import {
   readActiveMemoriesFromRoot,
+  readMemoryEdgesFromRoot,
   readPendingMemoriesFromRoot
 } from './memory-store.js'
 import { tokenizeMemoryText } from './tokenizer.js'
-import type { CyreneMemory, MemoryPortability, PendingMemory } from './types.js'
+import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, MemoryPortability, PendingMemory } from './types.js'
 
 export interface MemoryIndexRoot {
   memoryRoot: string
@@ -451,22 +452,29 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       `).run(root.projectId, root.projectId, root.projectId, now, now)
     }
 
-    const [active, pending] = await Promise.all([
+    const [active, pending, durableEdges] = await Promise.all([
       readActiveMemoriesFromRoot(root.memoryRoot),
-      readPendingMemoriesFromRoot(root.memoryRoot)
+      readPendingMemoriesFromRoot(root.memoryRoot),
+      readMemoryEdgesFromRoot(root.memoryRoot)
     ])
     const indexedAt = new Date().toISOString()
+    const indexedMemoryIds = new Set<string>()
     for (const memory of active) {
       const indexId = this.insertMemory(root, memory)
+      indexedMemoryIds.add(indexId)
       for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory, indexedAt)) {
         this.upsertMemoryEdgeRecord(edge)
       }
     }
     for (const memory of pending) {
       const indexId = this.insertMemory(root, memory)
+      indexedMemoryIds.add(indexId)
       for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory, indexedAt)) {
         this.upsertMemoryEdgeRecord(edge)
       }
+    }
+    for (const edge of deriveIndexedDurableMemoryEdges(root, durableEdges, indexedMemoryIds)) {
+      this.upsertMemoryEdgeRecord(edge)
     }
     return diagnostics
   }
@@ -1085,6 +1093,60 @@ function deriveIndexedDeterministicMemoryEdges(
     fromId: indexId,
     status: memory.status === 'active' ? 'approved' : 'pending'
   }))
+}
+
+function deriveIndexedDurableMemoryEdges(
+  root: MemoryIndexRoot,
+  edges: DurableMemoryEdge[],
+  indexedMemoryIds: Set<string>
+): MemoryEdge[] {
+  return edges.flatMap((edge) => {
+    if (!durableEdgeBelongsToRoot(root, edge)) {
+      return []
+    }
+    const fromId = memoryIndexId(root, edge.fromMemoryId)
+    const toId = memoryIndexId(root, edge.toMemoryId)
+    if (!indexedMemoryIds.has(fromId) || !indexedMemoryIds.has(toId)) {
+      return []
+    }
+    return [{
+      id: edge.id,
+      fromId,
+      fromKind: 'memory',
+      toId,
+      toKind: 'memory',
+      edgeType: `relation:${edge.relationType}`,
+      weight: edge.confidence,
+      source: edge.origin === 'model' ? 'model' : 'deterministic',
+      status: indexedDurableEdgeStatus(edge.status),
+      ...(edge.evidenceId !== undefined ? { evidenceId: edge.evidenceId } : {}),
+      createdAt: edge.createdAt,
+      ...(edge.status === 'validated' ? { approvedAt: edge.updatedAt } : {})
+    }]
+  })
+}
+
+function durableEdgeBelongsToRoot(root: MemoryIndexRoot, edge: DurableMemoryEdge): boolean {
+  if (edge.fromScope !== root.scope || edge.toScope !== root.scope) {
+    return false
+  }
+  if (root.scope === 'project') {
+    return edge.fromProjectId === root.projectId && edge.toProjectId === root.projectId
+  }
+  return edge.fromProjectId === undefined && edge.toProjectId === undefined
+}
+
+function indexedDurableEdgeStatus(status: DurableMemoryEdge['status']): MemoryEdge['status'] {
+  switch (status) {
+    case 'validated':
+      return 'approved'
+    case 'trial':
+      return 'pending'
+    case 'expired':
+    case 'rejected':
+    case 'superseded':
+      return 'rejected'
+  }
 }
 
 function indexedMemoryIdPayload(fromId: string): string | undefined {
