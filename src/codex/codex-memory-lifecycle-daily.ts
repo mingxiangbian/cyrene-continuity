@@ -11,12 +11,15 @@ import {
   appendMemoryEventFromRoot,
   assertSafeMemoryDataFileTarget,
   readActivationEventsFromRoot,
+  readMemoryEdgesFromRoot,
   readMemoryEventsFromRoot,
+  transitionMemoryEdgeStatusFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
 import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
 import type {
   ActivationEvent,
+  MemoryEdge,
   MemoryEvent,
   MemorySource,
   SemanticMemory,
@@ -64,6 +67,9 @@ export interface DailyLifecycleRootResult {
   promotedExplicitGlobalToCore: number
   recommendations: number
   staleTrials: number
+  relationEdgesExpired: number
+  relationEdgesValidated: number
+  relationEdgesRejected: number
   invalidMemories: number
   needsMigration: number
   malformedJsonLines?: number
@@ -175,10 +181,11 @@ async function runDailyForReadableRoot(
   if (!semanticRead.ok) {
     return malformedRootResult(root, semanticRead)
   }
-  const [memories, activationEvents, memoryEvents] = await Promise.all([
+  const [memories, activationEvents, memoryEvents, relationEdges] = await Promise.all([
     Promise.resolve(semanticRead.records),
     readActivationEventsFromRoot(root.memoryRoot),
-    readMemoryEventsFromRoot(root.memoryRoot)
+    readMemoryEventsFromRoot(root.memoryRoot),
+    readMemoryEdgesFromRoot(root.memoryRoot)
   ])
   const state: RootRunState = {
     root,
@@ -209,6 +216,11 @@ async function runDailyForReadableRoot(
     }
   }
 
+  const relationTransitions = relationEdgeMaintenanceTransitions(next, relationEdges)
+  for (const transition of relationTransitions) {
+    countRelationTransition(state.result, transition.status)
+  }
+
   const changed = memories.some((memory, index) => memory !== next[index])
   if (!input.dryRun) {
     for (const event of state.events) {
@@ -224,6 +236,14 @@ async function runDailyForReadableRoot(
         generatedAt: input.now
       })
       state.result.fastSummaryUpdated = true
+    }
+    for (const transition of relationTransitions) {
+      await transitionMemoryEdgeStatusFromRoot(root.memoryRoot, {
+        id: transition.edge.id,
+        status: transition.status,
+        now: input.now,
+        reason: transition.reason
+      })
     }
   }
 
@@ -399,6 +419,9 @@ function baseRootResult(root: LifecycleRootSpec): DailyLifecycleRootResult {
     promotedExplicitGlobalToCore: 0,
     recommendations: 0,
     staleTrials: 0,
+    relationEdgesExpired: 0,
+    relationEdgesValidated: 0,
+    relationEdgesRejected: 0,
     invalidMemories: 0,
     needsMigration: 0,
     evalFailures: 0,
@@ -421,6 +444,38 @@ function malformedRootResult(
     skipped: true,
     reason: readResult.reason
   }
+}
+
+interface RelationEdgeTransition {
+  edge: MemoryEdge
+  status: 'expired' | 'validated' | 'rejected'
+  reason: string
+}
+
+function relationEdgeMaintenanceTransitions(memories: SemanticMemory[], edges: MemoryEdge[]): RelationEdgeTransition[] {
+  const memoryIds = new Set(memories.map((memory) => memory.id))
+  return edges.flatMap((edge): RelationEdgeTransition[] => {
+    if ((edge.status !== 'validated' && edge.status !== 'trial') || (memoryIds.has(edge.fromMemoryId) && memoryIds.has(edge.toMemoryId))) {
+      return []
+    }
+    return [{
+      edge,
+      status: 'expired',
+      reason: 'v1.6 daily lifecycle expired orphan relation edge'
+    }]
+  })
+}
+
+function countRelationTransition(result: DailyLifecycleRootResult, status: RelationEdgeTransition['status']): void {
+  if (status === 'expired') {
+    result.relationEdgesExpired += 1
+    return
+  }
+  if (status === 'validated') {
+    result.relationEdgesValidated += 1
+    return
+  }
+  result.relationEdgesRejected += 1
 }
 
 function activationStats(memoryId: string, events: ActivationEvent[]): PromotionStats {

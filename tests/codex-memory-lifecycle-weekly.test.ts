@@ -15,8 +15,10 @@ import {
   appendActivationEventFromRoot,
   readMemoryEventsFromRoot,
   readSemanticMemoriesFromRoot,
+  upsertMemoryEdgeFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../src/memory/memory-store.js'
+import { createOperationBackedEdge } from '../src/memory/memory-relations.js'
 import type { MemoryDomain, MemoryModule, SemanticMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -305,6 +307,42 @@ describe('weekly core and global consolidation job', () => {
     expect(profile).not.toContain('Validated memory must stay out of profile.')
     expect(profile).not.toContain('Personal memory must stay out of profile.')
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.toBe(profile)
+  })
+
+  it('filters project core profile lines superseded by validated relation edges', async () => {
+    const root = await createTempDir('cyrene-weekly-profile-relation-filter-')
+    const oldCore = semanticMemory({
+      id: 'old-project-core',
+      confidenceTier: 'project_core',
+      content: 'Use the old project profile workflow.',
+      updatedAt: '2026-06-01T00:00:00.000Z'
+    })
+    const newCore = semanticMemory({
+      id: 'new-project-core',
+      confidenceTier: 'project_core',
+      content: 'Use the replacement project profile workflow.',
+      updatedAt: '2026-06-07T00:00:00.000Z'
+    })
+    await upsertMemoryEdgeFromRoot(root, createOperationBackedEdge({
+      fromMemoryId: 'new-project-core',
+      toMemoryId: 'old-project-core',
+      fromProjectId: 'project-1',
+      toProjectId: 'project-1',
+      relationType: 'supersedes',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'review approved profile replacement',
+      evidenceId: 'profile-edge-1',
+      evidenceKind: 'review_hash'
+    }))
+
+    const profile = await writeLifecycleProfileFromCoreMemory({
+      memoryRoot: root,
+      scope: 'project',
+      memories: [oldCore, newCore]
+    })
+
+    expect(profile).toContain('Use the replacement project profile workflow.')
+    expect(profile).not.toContain('Use the old project profile workflow.')
   })
 
   it('refreshes project fast summary after weekly project core profile regeneration', async () => {

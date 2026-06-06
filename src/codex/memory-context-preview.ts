@@ -1,5 +1,6 @@
-import { readPendingMemoriesFromRoot, readSemanticMemoriesFromRoot, readTombstonesFromRoot } from '../memory/memory-store.js'
-import type { MemoryTombstone, PendingMemory, SemanticMemory } from '../memory/types.js'
+import { readMemoryEdgesFromRoot, readPendingMemoriesFromRoot, readSemanticMemoriesFromRoot, readTombstonesFromRoot } from '../memory/memory-store.js'
+import { resolveRelationExpansion } from '../memory/memory-relations.js'
+import type { MemoryEdge, MemoryTombstone, PendingMemory, SemanticMemory } from '../memory/types.js'
 import type { RetrieveMemoriesInput } from '../memory/memory-retriever.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from './codex-memory-root.js'
 import { buildRetrievalPolicy, type ContextMode } from './context-policy.js'
@@ -47,6 +48,10 @@ export interface CodexMemoryContextPreview {
       hasItems: boolean
       count: number
     }
+    relations?: {
+      included: PreviewRelationDiagnostic[]
+      filtered: PreviewRelationFilteredDiagnostic[]
+    }
   }
 }
 
@@ -64,6 +69,21 @@ export interface PreviewExclusion {
   id: string
   scope: string
   root: 'project' | 'global'
+  reason: string
+}
+
+export interface PreviewRelationDiagnostic {
+  edgeId: string
+  relationType: string
+  fromMemoryId: string
+  toMemoryId: string
+  reason: string
+}
+
+export interface PreviewRelationFilteredDiagnostic {
+  edgeId: string
+  relationType: string
+  status: string
   reason: string
 }
 
@@ -95,11 +115,22 @@ export async function runCodexMemoryContextPreview(input: {
   })
   const mode = policy.mode
   const includeExclusionDetails = mode === 'review' || input.includePendingDetails === true || input.includeDiagnostics === true
+  const includeRelationDiagnostics = mode === 'review' || input.includeDiagnostics === true
   const project = await identifyCodexProject(input.cwd)
   const globalRoot = codexGlobalMemoryRoot()
   const projectRoot = codexProjectMemoryRoot(project.projectId)
 
-  const [context, globalPending, projectPending, globalTombstones, projectTombstones, globalSemantic, projectSemantic] =
+  const [
+    context,
+    globalPending,
+    projectPending,
+    globalTombstones,
+    projectTombstones,
+    globalSemantic,
+    projectSemantic,
+    globalRelationEdges,
+    projectRelationEdges
+  ] =
     await Promise.all([
       getCodexContinuityContext({
         cwd: input.cwd,
@@ -120,13 +151,18 @@ export async function runCodexMemoryContextPreview(input: {
       includeExclusionDetails ? readTombstonesFromRoot(globalRoot) : Promise.resolve([]),
       includeExclusionDetails ? readTombstonesFromRoot(projectRoot) : Promise.resolve([]),
       includeExclusionDetails ? readSemanticMemoriesFromRoot(globalRoot) : Promise.resolve([]),
-      includeExclusionDetails ? readSemanticMemoriesFromRoot(projectRoot) : Promise.resolve([])
+      includeExclusionDetails ? readSemanticMemoriesFromRoot(projectRoot) : Promise.resolve([]),
+      includeRelationDiagnostics ? readMemoryEdgesFromRoot(globalRoot) : Promise.resolve([]),
+      includeRelationDiagnostics ? readMemoryEdgesFromRoot(projectRoot) : Promise.resolve([])
     ])
 
   const pendingReviewItems = [
     ...globalPending.map((memory) => pendingExclusion(memory, 'global')),
     ...projectPending.map((memory) => pendingExclusion(memory, 'project'))
   ]
+  const relationDiagnostics = includeRelationDiagnostics
+    ? previewRelationDiagnostics([...globalRelationEdges, ...projectRelationEdges])
+    : undefined
 
   return {
     version: 1,
@@ -174,9 +210,52 @@ export async function runCodexMemoryContextPreview(input: {
               count: pendingReviewItems.length
             }
           }
-        : {})
+        : {}),
+      ...(relationDiagnostics === undefined ? {} : { relations: relationDiagnostics })
     }
   }
+}
+
+function previewRelationDiagnostics(edges: MemoryEdge[]): CodexMemoryContextPreview['diagnostics']['relations'] | undefined {
+  if (edges.length === 0) {
+    return undefined
+  }
+  const included: PreviewRelationDiagnostic[] = []
+  const filtered: PreviewRelationFilteredDiagnostic[] = []
+  for (const edge of edges) {
+    const reason = previewRelationReason(edge)
+    if (edge.status === 'validated' && reason !== 'edge_not_validated' && reason !== 'diagnostics_only' && reason !== 'wrong_direction') {
+      included.push({
+        edgeId: edge.id,
+        relationType: edge.relationType,
+        fromMemoryId: edge.fromMemoryId,
+        toMemoryId: edge.toMemoryId,
+        reason
+      })
+    } else {
+      filtered.push({
+        edgeId: edge.id,
+        relationType: edge.relationType,
+        status: edge.status,
+        reason
+      })
+    }
+  }
+  return {
+    included: included.slice(0, 50),
+    filtered: filtered.slice(0, 50)
+  }
+}
+
+function previewRelationReason(edge: MemoryEdge): string {
+  if (edge.status !== 'validated') {
+    return 'edge_not_validated'
+  }
+  const reasons = [
+    resolveRelationExpansion({ seedMemoryId: edge.fromMemoryId, edge }).reason,
+    resolveRelationExpansion({ seedMemoryId: edge.toMemoryId, edge }).reason
+  ]
+  return reasons.find((reason) => reason !== 'diagnostics_only' && reason !== 'wrong_direction') ?? 'diagnostics_only'
 }
 
 function previewMemory(

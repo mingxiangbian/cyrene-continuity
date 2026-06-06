@@ -13,10 +13,13 @@ import { semanticMemoryToActiveMemory } from '../src/memory/semantic-memory-adap
 import {
   appendActivationEventFromRoot,
   appendMemoryEventFromRoot,
+  readMemoryEdgesFromRoot,
   readMemoryEventsFromRoot,
   readSemanticMemoriesFromRoot,
+  upsertMemoryEdgeFromRoot,
   writeSemanticMemoriesFromRoot
 } from '../src/memory/memory-store.js'
+import { createOperationBackedEdge } from '../src/memory/memory-relations.js'
 import type { ActivationEvent, MemoryEvent, SemanticMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -374,6 +377,40 @@ describe('daily memory lifecycle automation', () => {
         lifecyclePolicyId: 'daily_trial_validation_v1',
         expiresAt: '2026-06-03T00:00:00.000Z'
       }
+    })
+  })
+
+  it('expires relation edges whose endpoint memory is missing', async () => {
+    const root = await createTempDir('cyrene-daily-relation-orphan-root-')
+    await writeSemanticMemoriesFromRoot(root, [trialMemory({ id: 'existing-memory' })])
+    await upsertMemoryEdgeFromRoot(root, createOperationBackedEdge({
+      fromMemoryId: 'existing-memory',
+      toMemoryId: 'missing-memory',
+      fromProjectId: 'project-1',
+      toProjectId: 'project-1',
+      relationType: 'supports',
+      now: '2026-06-06T00:00:00.000Z',
+      reason: 'review approved relation',
+      evidenceId: 'relation-edge-1',
+      evidenceKind: 'review_hash'
+    }))
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      apply: true,
+      now: '2026-06-07T00:00:00.000Z'
+    })
+
+    expect(result.roots[0]).toMatchObject({ relationEdgesExpired: 1 })
+    expect((await readMemoryEdgesFromRoot(root))[0]).toMatchObject({
+      fromMemoryId: 'existing-memory',
+      toMemoryId: 'missing-memory',
+      status: 'expired',
+      updatedAt: '2026-06-07T00:00:00.000Z'
+    })
+    expect((await readMemoryEventsFromRoot(root)).find((event) => event.action === 'audit')).toMatchObject({
+      memoryId: expect.stringMatching(/^edge-/),
+      reason: 'v1.6 daily lifecycle expired orphan relation edge'
     })
   })
 

@@ -8,6 +8,7 @@ import { rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { writeFastSummaryProjection } from '../src/codex/fast-summary-store.js'
+import { runCodexMemoryContextPreview } from '../src/codex/memory-context-preview.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { readRuntimeMetrics } from '../src/codex/runtime-metrics.js'
 import { readCodexSessionHints, replaceCodexSessionHints } from '../src/codex/session-hints.js'
@@ -19,7 +20,7 @@ import {
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../src/memory/memory-store.js'
-import { createOperationBackedEdge } from '../src/memory/memory-relations.js'
+import { createModelHintEdge, createOperationBackedEdge } from '../src/memory/memory-relations.js'
 import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -938,6 +939,59 @@ describe('Codex continuity context', () => {
 
     expect(context.projectMemory.map((item) => item.id)).toContain('primary-relation-rule')
     expect(context.projectMemory.find((item) => item.id === 'primary-relation-rule')?.explain).not.toContain('edge:relation:similar_to')
+  })
+
+  it('shows trial relation hints only in review preview diagnostics', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-preview-relation-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-preview-relation-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'preview-seed-relation',
+        content: 'Preview relation seed memory.',
+        normalizedKey: 'preview-relation-seed'
+      }),
+      createMemory({
+        id: 'preview-hint-relation',
+        content: 'Preview relation model hint memory.',
+        normalizedKey: 'preview-relation-hint'
+      })
+    ].map((memory) => JSON.stringify(memory)).join('\n') + '\n')
+    await upsertMemoryEdgeFromRoot(projectMemoryRoot, createModelHintEdge({
+      fromMemoryId: 'preview-seed-relation',
+      toMemoryId: 'preview-hint-relation',
+      fromProjectId: identity.projectId,
+      toProjectId: identity.projectId,
+      relationType: 'refines',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'preview model relation hint'
+    }))
+
+    const fast = await runCodexMemoryContextPreview({
+      cwd: repo,
+      userMessage: 'preview relation',
+      mode: 'fast'
+    })
+    const review = await runCodexMemoryContextPreview({
+      cwd: repo,
+      userMessage: 'preview relation',
+      mode: 'review',
+      includeDiagnostics: true
+    })
+
+    expect(JSON.stringify(fast)).not.toContain('preview-seed-relation')
+    expect(JSON.stringify(fast)).not.toContain('edge-')
+    expect(review.diagnostics.relations?.filtered).toEqual([
+      expect.objectContaining({
+        relationType: 'refines',
+        status: 'trial',
+        reason: 'edge_not_validated'
+      })
+    ])
+    expect(JSON.stringify(review.activeContext)).not.toContain('preview-hint-relation')
   })
 
   it('explains review queue memory as excluded from confirmed retrieval context', async () => {
