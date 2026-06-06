@@ -138,6 +138,10 @@ interface MemoryEdge {
   id: string
   fromMemoryId: string
   toMemoryId: string
+  fromScope: MemoryScope
+  toScope: MemoryScope
+  fromProjectId?: string
+  toProjectId?: string
   relationType: MemoryRelationType
   status: MemoryEdgeStatus
   confidence: number
@@ -155,10 +159,11 @@ interface MemoryEdge {
 
 - `fromMemoryId` 是主动关系源。例如 replacement `supersedes` old memory 时，replacement 是 `fromMemoryId`。
 - `toMemoryId` 是关系目标。
+- `fromScope` / `toScope` / `fromProjectId` / `toProjectId` 是 safety denormalization。它们可以从 memory node join 出来，但 durable edge store 必须冗余保存 scope；project id 仅在对应端是 `global` scope 时可省略。JSONL fallback、SQLite rebuild 和 cross-project leakage guard 都必须校验这些字段。
 - `status` 决定 edge 是否能影响 runtime/profile。
 - `origin` 区分 deterministic rule、LLM hint 和 operation-backed receipt。
 - `evidenceId` 指向 operation receipt、activation event、distillation input、project similarity receipt 或 model hint receipt。
-- `lastUsedAt` 仅在 edge 被 relation-aware retrieval 或 profile projection 实际使用时更新。
+- `lastUsedAt` 记录 edge 被 relation-aware retrieval 或 profile projection 实际使用后的聚合时间。Retrieval hot path 不直接写 durable edge store；它只能写 activation/usage event 或 SQLite transient usage，由 daily automation 聚合后更新 durable `lastUsedAt` 和 confidence。
 
 ## Relation Detection
 
@@ -234,6 +239,7 @@ trial -> rejected
 trial -> expired
 validated -> superseded
 validated -> expired
+validated -> rejected
 ```
 
 Rules：
@@ -243,13 +249,14 @@ Rules：
 - model-only edge 保持 trial 或 diagnostics-only，不能自动影响 runtime/profile。
 - missing related memory 时 edge 不扩展，daily 可 mark `expired`。
 - 被新 edge 替代时旧 edge mark `superseded`。
+- 后续确认 validated edge 是错误关系时，可 mark `rejected`，并用 `relation_edge_invalidated` receipt 记录 invalidation；不新增独立 `invalidated` 状态。
 - `contradicts`、`supersedes`、`transfers_to`、`derived_from` 属于高影响 relation；validated 前必须有 operation-backed evidence 或低风险 deterministic rule。
 
 Edge status transition 必须写 `MemoryEvent`：
 
 ```text
 action = audit
-reason = relation_edge_validated | relation_edge_rejected | relation_edge_expired | relation_edge_superseded
+reason = relation_edge_validated | relation_edge_rejected | relation_edge_invalidated | relation_edge_expired | relation_edge_superseded
 details = {
   edgeId,
   relationType,
@@ -262,6 +269,30 @@ details = {
   projectionImpact
 }
 ```
+
+## Relation Runtime Semantics
+
+Expansion direction is relation-specific. Implementations must not treat every edge as a symmetric graph neighbor.
+
+| Relation | Stored direction | Runtime traversal |
+| --- | --- | --- |
+| `supports` | supporting memory -> supported memory | May traverse either direction when both memories are eligible and the edge is validated low-risk. |
+| `supersedes` | new memory -> old memory | If seed is old, replace or include the new memory and do not inject old as active truth. If seed is new, old may appear only as diagnostics/evidence. |
+| `refines` | specific memory -> general memory | If seed is general, include the specific refinement when eligible. If seed is specific, general may appear only when it improves explanation under token budget. |
+| `derived_from` | derived memory -> source memory | Validated derived insight may be included only after normal memory validation. Source evidence is diagnostics by default. |
+| `warns_against` | warning memory -> risky or failed approach | If the risky/rejected approach is relevant to the current task, include the warning. |
+| `transfers_to` | source memory -> transferable target/context | Produce similar-project guidance only. Never write or inject current-project facts through this edge. |
+| `contradicts` | relation-specific or bidirectional | Diagnostics-only unless converted by operation-backed evidence into validated `warns_against` or `supersedes`. |
+| `similar_to` | either direction | Dedupe, merge, and diagnostics only. It is not used for ordinary runtime expansion. |
+
+Runtime rules:
+
+- `similar_to` never participates in ordinary 1-hop runtime expansion.
+- `contradicts` remains diagnostics-only unless a separate validated runtime relation is created.
+- `supersedes` must suppress stale old memory injection when the replacement is eligible.
+- `derived_from` does not validate the derived memory; the derived memory must pass normal memory lifecycle gates.
+- `transfers_to` never creates current-project memory, profile lines, or normal session hints.
+- `warns_against` may be injected only when the risky/rejected approach is relevant to the current task.
 
 ## Retrieval Integration
 
@@ -304,6 +335,7 @@ Filtered：
 - unsafe high-impact edge without operation-backed evidence
 - related memory that fails `isMemoryEligibleForRetrieval`
 - relation crossing project boundary without `transfers_to` and transferable portability
+- `similar_to` during ordinary runtime expansion
 
 Ranking signals：
 
@@ -316,7 +348,7 @@ Ranking signals：
 - last successful use
 - token cost
 
-`contradicts` is not used for ordinary expansion by default. It appears in diagnostics/context-preview unless an operation-backed warning or correction has converted it into a validated `warns_against` relation.
+`contradicts` is not used for ordinary expansion by default. It appears in diagnostics/context-preview unless an operation-backed warning or correction has converted it into a validated `warns_against` or `supersedes` relation.
 
 ## Context Preview
 
@@ -360,7 +392,7 @@ Projection rules：
 
 - core memories can enter `profile.static`。
 - validated recent memories can enter `profile.dynamic`。
-- trial memories and trial edges can only appear as `session_hints` or diagnostics。
+- trial memories and trial edges may appear only in review/diagnostic session hints or diagnostics. They must not appear in normal fast/balanced runtime `session_hints`。
 - episodes stay as evidence unless explicitly distilled。
 - derived memories cannot enter profile without normal memory validation。
 - `contradicts` / `supersedes` / `transfers_to` cannot affect profile unless validated by operation-backed evidence。
@@ -389,7 +421,7 @@ Daily actions：
 - reject unsafe edges。
 - expire stale edges。
 - mark ambiguous conflict/supersede as diagnostics or trial。
-- update confidence and `lastUsedAt`。
+- aggregate relation usage events and update durable confidence / `lastUsedAt` outside retrieval hot paths。
 - record feedback-derived evidence。
 - report `needs_model_config` when LLM hint pass is skipped。
 
@@ -421,6 +453,7 @@ Weekly actions：
 - missing related memory：skip expansion; daily may expire or supersede the edge。
 - ambiguous contradiction/supersede：trial or diagnostics only unless operation-backed。
 - cross-project transfer：`transfers_to` only becomes similar-project guidance; it does not write current-project memory/profile/session。
+- edge scope/project denormalization：relation expansion must verify both edge metadata and joined memory node metadata before crossing project boundaries。
 - profile pollution guard：exclude trial/model-only/derived-unvalidated edges。
 - auditability：every edge validation/rejection/expiration writes a receipt event。
 - hot path latency：candidate admission must not wait on model calls or broad graph scans。
@@ -432,13 +465,17 @@ Weekly actions：
 Add focused tests for：
 
 - edge store read/write/upsert/status transition。
+- validated edge invalidation through `validated -> rejected` plus `relation_edge_invalidated` receipt。
 - deterministic relation detection。
 - operation-backed validation from active supersede, maintenance dedupe, activation feedback。
 - SQLite projection rebuild from durable edge store。
-- 1-hop retrieval expansion limit and relation filters。
+- 1-hop retrieval expansion limit, relation filters, and relation-specific traversal direction。
+- `similar_to` excluded from ordinary runtime expansion。
 - stale/superseded related memory suppression。
+- hot-path retrieval does not rewrite durable edge `lastUsedAt`。
 - relation-aware context-preview explanations。
-- profile projection excluding trial/model-only/derived-unvalidated edges。
+- profile projection excluding trial/model-only/derived-unvalidated edges and normal fast/balanced session hints excluding trial edge metadata。
+- edge scope/project metadata preventing cross-project leakage in SQLite and JSONL fallback。
 - JSONL malformed fail-closed behavior。
 - LLM unavailable deterministic fallback with `needs_model_config` reporting。
 
