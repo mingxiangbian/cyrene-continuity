@@ -15,9 +15,11 @@ import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycl
 import {
   readActivationEventsFromRoot,
   readReflectionCandidatesFromRoot,
+  upsertMemoryEdgeFromRoot,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../src/memory/memory-store.js'
+import { createOperationBackedEdge } from '../src/memory/memory-relations.js'
 import type { CyreneMemory, PendingMemory, SemanticMemory } from '../src/memory/types.js'
 
 const execFileAsync = promisify(execFile)
@@ -846,6 +848,96 @@ describe('Codex continuity context', () => {
         ])
       })
     ])
+  })
+
+  it('expands validated supersedes relations from SQLite context and suppresses the old seed', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-relation-sqlite-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-relation-sqlite-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'old-relation-rule',
+        content: 'Obsoletealpha relation rule should be replaced.',
+        normalizedKey: 'obsoletealpha-relation-rule'
+      }),
+      createMemory({
+        id: 'replacement-relation-rule',
+        content: 'Approved replacement rule uses validated relation edges.',
+        normalizedKey: 'approved-replacement-relation-rule'
+      })
+    ].map((memory) => JSON.stringify(memory)).join('\n') + '\n')
+    await upsertMemoryEdgeFromRoot(projectMemoryRoot, createOperationBackedEdge({
+      fromMemoryId: 'replacement-relation-rule',
+      toMemoryId: 'old-relation-rule',
+      fromProjectId: identity.projectId,
+      toProjectId: identity.projectId,
+      relationType: 'supersedes',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'review approved replacement',
+      evidenceId: 'review-edge-1',
+      evidenceKind: 'review_hash'
+    }))
+    await rebuildCodexMemoryIndex({ cwd: repo })
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'obsoletealpha',
+      task: 'memory',
+      mode: 'review'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).toContain('replacement-relation-rule')
+    expect(context.projectMemory.map((item) => item.id)).not.toContain('old-relation-rule')
+    expect(context.projectMemory.find((item) => item.id === 'replacement-relation-rule')?.explain).toEqual(
+      expect.arrayContaining(['edge:relation:supersedes'])
+    )
+    expect(context.memory.items.map((item) => item.id)).not.toContain('old-relation-rule')
+  })
+
+  it('keeps diagnostics-only similar_to relations out of SQLite runtime expansion', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-relation-similar-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-relation-similar-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'primary-relation-rule',
+        content: 'Primaryalpha relation rule stays as the only runtime result.',
+        normalizedKey: 'primaryalpha-relation-rule'
+      }),
+      createMemory({
+        id: 'duplicate-relation-rule',
+        content: 'Duplicate relation rule is only useful for diagnostics.',
+        normalizedKey: 'duplicate-relation-rule'
+      })
+    ].map((memory) => JSON.stringify(memory)).join('\n') + '\n')
+    await upsertMemoryEdgeFromRoot(projectMemoryRoot, createOperationBackedEdge({
+      fromMemoryId: 'primary-relation-rule',
+      toMemoryId: 'duplicate-relation-rule',
+      fromProjectId: identity.projectId,
+      toProjectId: identity.projectId,
+      relationType: 'similar_to',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'review approved duplicate marker',
+      evidenceId: 'review-edge-2',
+      evidenceKind: 'review_hash'
+    }))
+    await rebuildCodexMemoryIndex({ cwd: repo })
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'primaryalpha',
+      task: 'memory',
+      mode: 'review'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).toContain('primary-relation-rule')
+    expect(context.projectMemory.find((item) => item.id === 'primary-relation-rule')?.explain).not.toContain('edge:relation:similar_to')
   })
 
   it('explains review queue memory as excluded from confirmed retrieval context', async () => {

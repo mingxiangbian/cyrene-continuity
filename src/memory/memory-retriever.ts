@@ -6,9 +6,10 @@ import {
   retrievalPlanMemoryKindBoost,
   type RetrievalPlan
 } from '../codex/retrieval-planner.js'
-import { readActiveMemories, readActiveMemoriesFromRoot } from './memory-store.js'
+import { resolveRelationExpansion } from './memory-relations.js'
+import { readActiveMemories, readActiveMemoriesFromRoot, readMemoryEdgesFromRoot } from './memory-store.js'
 import { tokenizeMemoryText } from './tokenizer.js'
-import type { CyreneMemory, MemoryDomain, MemoryScope, MemoryStrength, MemoryType } from './types.js'
+import type { CyreneMemory, MemoryDomain, MemoryEdge, MemoryScope, MemoryStrength, MemoryType } from './types.js'
 
 export interface RetrieveMemoriesInput {
   cwd: string
@@ -71,23 +72,8 @@ export async function retrieveMemories(input: RetrieveMemoriesInput): Promise<Re
     .filter((item) => input.query.trim() === '' || item.score > 0)
     .sort(compareRetrievedMemories)
 
-  const selected: RetrievedMemory[] = []
-  let tokenCount = 0
-  for (const item of scored) {
-    if (selected.length >= input.maxItems) {
-      break
-    }
-    const itemTokens = estimateTokens(item.memory.content)
-    if (itemTokens > input.maxTokens) {
-      continue
-    }
-    if (tokenCount + itemTokens > input.maxTokens) {
-      break
-    }
-    selected.push(item)
-    tokenCount += itemTokens
-  }
-  return selected
+  const selected = selectRetrievedWithinBudget(scored, input.maxItems, input.maxTokens)
+  return expandJsonlRelationMemories(input, selected, filtered)
 }
 
 async function readInputMemories(input: RetrieveMemoriesInput): Promise<CyreneMemory[]> {
@@ -104,6 +90,109 @@ function dedupeMemories(memories: CyreneMemory[]): CyreneMemory[] {
     byKey.set(memory.normalizedKey || memory.id, memory)
   }
   return [...byKey.values()]
+}
+
+async function expandJsonlRelationMemories(
+  input: RetrieveMemoriesInput,
+  selected: RetrievedMemory[],
+  eligibleMemories: CyreneMemory[]
+): Promise<RetrievedMemory[]> {
+  const roots = input.memoryRoots ?? (input.memoryRoot === undefined ? undefined : [input.memoryRoot])
+  if (roots === undefined || selected.length === 0) {
+    return selected
+  }
+
+  let expanded = [...selected]
+  const eligibleKeys = new Set(eligibleMemories.map(memoryIdentityKey))
+  for (const root of roots) {
+    let rootMemories: CyreneMemory[]
+    let edges: MemoryEdge[]
+    try {
+      [rootMemories, edges] = await Promise.all([
+        readActiveMemoriesFromRoot(root),
+        readMemoryEdgesFromRoot(root)
+      ])
+    } catch {
+      continue
+    }
+    if (edges.length === 0) {
+      continue
+    }
+    const rootEligibleById = new Map(
+      rootMemories
+        .filter((memory) => eligibleKeys.has(memoryIdentityKey(memory)))
+        .map((memory) => [memory.id, memory])
+    )
+    expanded = expandRelationMemoriesForRoot(expanded, rootEligibleById, edges)
+  }
+  return selectRetrievedWithinBudget(expanded, input.maxItems, input.maxTokens)
+}
+
+function expandRelationMemoriesForRoot(
+  selected: RetrievedMemory[],
+  memoryById: Map<string, CyreneMemory>,
+  edges: MemoryEdge[]
+): RetrievedMemory[] {
+  const byId = new Map(selected.map((item) => [item.memory.id, item]))
+  const suppressed = new Set<string>()
+  for (const seed of selected) {
+    if (!memoryById.has(seed.memory.id)) {
+      continue
+    }
+    for (const edge of relationEdgesForSeed(edges, seed.memory.id)) {
+      const resolution = resolveRelationExpansion({ seedMemoryId: seed.memory.id, edge })
+      for (const memoryId of resolution.suppressMemoryIds) {
+        suppressed.add(memoryId)
+      }
+      if (resolution.includeMemoryId === undefined) {
+        continue
+      }
+      const related = memoryById.get(resolution.includeMemoryId)
+      if (related === undefined) {
+        continue
+      }
+      const edgeType = `edge:relation:${edge.relationType}`
+      const existing = byId.get(related.id)
+      byId.set(related.id, {
+        memory: related,
+        score: existing?.score ?? Math.min(seed.score, edge.confidence),
+        explain: mergeExplain(existing?.explain ?? seed.explain, [edgeType])
+      })
+    }
+  }
+  return [...byId.values()].filter((item) => !suppressed.has(item.memory.id))
+}
+
+function relationEdgesForSeed(edges: MemoryEdge[], seedMemoryId: string): MemoryEdge[] {
+  return edges.filter((edge) => edge.fromMemoryId === seedMemoryId || edge.toMemoryId === seedMemoryId)
+}
+
+function mergeExplain(current: string[] | undefined, additions: string[]): string[] {
+  return Array.from(new Set([...(current ?? []), ...additions]))
+}
+
+function memoryIdentityKey(memory: CyreneMemory): string {
+  return JSON.stringify([memory.id, memory.normalizedKey, memory.content, memory.scope, memory.updatedAt])
+}
+
+function selectRetrievedWithinBudget(items: RetrievedMemory[], maxItems: number, maxTokens: number): RetrievedMemory[] {
+  const selected: RetrievedMemory[] = []
+  let tokenCount = 0
+  for (const item of items) {
+    if (selected.length >= maxItems) {
+      break
+    }
+    const itemTokens = estimateTokens(item.memory.content)
+    if (itemTokens > maxTokens) {
+      continue
+    }
+    if (tokenCount + itemTokens > maxTokens) {
+      break
+    }
+    selected.push(item)
+    tokenCount += itemTokens
+  }
+  return selected
 }
 
 export function isMemoryEligibleForRetrieval(

@@ -14,8 +14,9 @@ import type {
   MemoryRoutingSimilarHintItem
 } from '../eval/eval-runner.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
-import type { IndexedActiveMemory, IndexedPendingMemory, IndexedSimilarMemory, MemoryIndexDiagnostics } from '../memory/memory-index.js'
+import type { IndexedActiveMemory, IndexedPendingMemory, IndexedSimilarMemory, MemoryEdge as IndexedMemoryEdge, MemoryIndexDiagnostics } from '../memory/memory-index.js'
 import { deriveMemoryPortability, openMemoryIndexAdapter } from '../memory/memory-index.js'
+import { relationExpansionPolicy, resolveRelationExpansion } from '../memory/memory-relations.js'
 import { selectSimilarProjects } from '../memory/project-similarity.js'
 import {
   isMemoryEligibleForRetrieval,
@@ -24,7 +25,8 @@ import {
 } from '../memory/memory-retriever.js'
 import type { RetrievedMemory, RetrieveMemoriesInput } from '../memory/memory-retriever.js'
 import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot, readSemanticMemoriesFromRoot } from '../memory/memory-store.js'
-import type { CyreneMemory, PendingMemory, SemanticMemory } from '../memory/types.js'
+import { MEMORY_RELATION_TYPES } from '../memory/types.js'
+import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, MemoryRelationType, PendingMemory, SemanticMemory } from '../memory/types.js'
 import { estimateTokens } from '../token-counter.js'
 import { codexMemoryDbPath, codexMemoryIndexRoots } from './codex-memory-index.js'
 import {
@@ -626,16 +628,28 @@ async function retrieveRoutedMemory(input: {
       isMemoryEligibleForRetrieval(memory, input.fallback, input.task) &&
       !input.retrievalPlan.excludeDomains.includes(memory.domain)
     ))
-    const graphEdgeTypesByMemoryKey = input.retrievalPlan.includeGraphNeighbors
-      ? await queryGraphEdgeTypes(adapter, [
-        ...eligibleGlobalMemory,
-        ...eligibleProjectMemory,
-        ...safeSimilarProjectHints
-      ], input.projectId)
-      : new Map<string, string[]>()
-    return {
+    const relationExpandedMemory = await expandSqliteRelationMemory({
+      adapter,
+      currentProjectId: input.projectId,
+      task: input.task,
+      retrievalPlan: input.retrievalPlan,
+      fallback: input.fallback,
       globalMemory: eligibleGlobalMemory,
-      projectMemory: eligibleProjectMemory,
+      projectMemory: eligibleProjectMemory
+    })
+    const graphEdgeTypesByMemoryKey = mergeGraphEdgeTypeMaps(
+      input.retrievalPlan.includeGraphNeighbors
+        ? await queryGraphEdgeTypes(adapter, [
+          ...relationExpandedMemory.globalMemory,
+          ...relationExpandedMemory.projectMemory,
+          ...safeSimilarProjectHints
+        ], input.projectId)
+        : new Map<string, string[]>(),
+      relationExpandedMemory.relationEdgeTypesByMemoryKey
+    )
+    return {
+      globalMemory: relationExpandedMemory.globalMemory,
+      projectMemory: relationExpandedMemory.projectMemory,
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
       graphEdgeTypesByMemoryKey,
@@ -767,6 +781,114 @@ async function fallbackRoutedMemory(
       pendingLatencyMs,
       similarLatencyMs: 0
     }
+  }
+}
+
+interface SqliteRelationExpansionResult {
+  globalMemory: IndexedActiveMemory[]
+  projectMemory: IndexedActiveMemory[]
+  relationEdgeTypesByMemoryKey: Map<string, string[]>
+}
+
+async function expandSqliteRelationMemory(input: {
+  adapter: Pick<MemoryIndexAdapter, 'queryActive' | 'queryMemoryEdges'>
+  currentProjectId: string
+  task: CodexContinuityTask
+  retrievalPlan: RetrievalPlan
+  fallback: RetrieveMemoriesInput
+  globalMemory: IndexedActiveMemory[]
+  projectMemory: IndexedActiveMemory[]
+}): Promise<SqliteRelationExpansionResult> {
+  const [global, project] = await Promise.all([
+    expandSqliteRelationRoute({
+      ...input,
+      route: 'global',
+      memory: input.globalMemory
+    }),
+    expandSqliteRelationRoute({
+      ...input,
+      route: 'project',
+      memory: input.projectMemory
+    })
+  ])
+  return {
+    globalMemory: global.memory,
+    projectMemory: project.memory,
+    relationEdgeTypesByMemoryKey: mergeGraphEdgeTypeMaps(global.relationEdgeTypesByMemoryKey, project.relationEdgeTypesByMemoryKey)
+  }
+}
+
+async function expandSqliteRelationRoute(input: {
+  adapter: Pick<MemoryIndexAdapter, 'queryActive' | 'queryMemoryEdges'>
+  currentProjectId: string
+  task: CodexContinuityTask
+  retrievalPlan: RetrievalPlan
+  fallback: RetrieveMemoriesInput
+  route: 'global' | 'project'
+  memory: IndexedActiveMemory[]
+}): Promise<{ memory: IndexedActiveMemory[]; relationEdgeTypesByMemoryKey: Map<string, string[]> }> {
+  const byId = new Map(input.memory.map((item) => [item.memory.id, item]))
+  const suppressed = new Set<string>()
+  const relationEdgeTypesByMemoryKey = new Map<string, string[]>()
+  let routeCandidates: Map<string, IndexedActiveMemory> | undefined
+
+  const candidates = async (): Promise<Map<string, IndexedActiveMemory>> => {
+    if (routeCandidates !== undefined) {
+      return routeCandidates
+    }
+    const queried = await input.adapter.queryActive({
+      currentProjectId: input.currentProjectId,
+      query: '',
+      route: input.route,
+      task: input.task,
+      maxItems: 100,
+      maxTokens: 4_000
+    })
+    routeCandidates = new Map(
+      queried
+        .filter(({ memory }) => (
+          isMemoryEligibleForRetrieval(memory, input.fallback, input.task) &&
+          !input.retrievalPlan.excludeDomains.includes(memory.domain)
+        ))
+        .map((item) => [item.memory.id, item])
+    )
+    return routeCandidates
+  }
+
+  for (const seed of input.memory) {
+    const seedKey = memoryGraphKeyForRoutedItem(seed, input.currentProjectId)
+    const [outgoing, incoming] = await Promise.all([
+      input.adapter.queryMemoryEdges({ fromId: seedKey, status: 'approved' }),
+      input.adapter.queryMemoryEdges({ toId: seedKey, status: 'approved' })
+    ])
+    for (const edge of uniqueIndexedMemoryEdges([...outgoing, ...incoming])) {
+      const durableEdge = durableRelationEdgeFromIndexedEdge(edge)
+      if (durableEdge === undefined || !durableEdgeMatchesRoute(durableEdge, input.route, input.currentProjectId)) {
+        continue
+      }
+      const resolution = resolveRelationExpansion({ seedMemoryId: seed.memory.id, edge: durableEdge })
+      for (const memoryId of resolution.suppressMemoryIds) {
+        suppressed.add(memoryId)
+      }
+      if (resolution.includeMemoryId === undefined) {
+        continue
+      }
+      const related = byId.get(resolution.includeMemoryId) ?? (await candidates()).get(resolution.includeMemoryId)
+      if (related === undefined) {
+        continue
+      }
+      byId.set(related.memory.id, related)
+      addGraphEdgeType(
+        relationEdgeTypesByMemoryKey,
+        memoryGraphKeyForRoutedItem(related, input.currentProjectId),
+        `relation:${durableEdge.relationType}`
+      )
+    }
+  }
+
+  return {
+    memory: [...byId.values()].filter((item) => !suppressed.has(item.memory.id)),
+    relationEdgeTypesByMemoryKey
   }
 }
 
@@ -1190,6 +1312,14 @@ function toRoutedMemoryDigestItem(item: IndexedActiveMemory | RetrievedMemory, i
   retrievalPlan: RetrievalPlan
   edgeTypes: string[]
 }): RoutedMemoryDigestItem {
+  const explain = explainRetrievalReasons({
+    exactProject: input.exactProject,
+    globalPolicy: item.memory.scope === 'global',
+    memoryKind: memoryKindForRetrieval(item.memory),
+    taskIntent: input.retrievalPlan.taskIntent,
+    edgeTypes: input.edgeTypes,
+    score: item.score
+  })
   return {
     id: item.memory.id,
     domain: item.memory.domain,
@@ -1200,15 +1330,13 @@ function toRoutedMemoryDigestItem(item: IndexedActiveMemory | RetrievedMemory, i
     status: item.memory.status,
     content: item.memory.content,
     score: item.score,
-    explain: explainRetrievalReasons({
-      exactProject: input.exactProject,
-      globalPolicy: item.memory.scope === 'global',
-      memoryKind: memoryKindForRetrieval(item.memory),
-      taskIntent: input.retrievalPlan.taskIntent,
-      edgeTypes: input.edgeTypes,
-      score: item.score
-    })
+    explain: mergeRuntimeExplain(explain, 'explain' in item ? item.explain : undefined)
   }
+}
+
+function mergeRuntimeExplain(base: string[], inherited: string[] | undefined): string[] {
+  const relationReasons = (inherited ?? []).filter((reason) => reason.startsWith('edge:relation:'))
+  return Array.from(new Set([...base, ...relationReasons]))
 }
 
 function toPendingHypothesisDigestItem(item: IndexedPendingMemory): PendingHypothesisDigestItem {
@@ -1285,9 +1413,119 @@ async function queryGraphEdgeTypes(
   const entries = await Promise.all(items.map(async (item) => {
     const key = memoryGraphKeyForRoutedItem(item, currentProjectId)
     const edges = await adapter.queryMemoryEdges({ fromId: key, status: 'approved' })
-    return [key, Array.from(new Set(edges.map((edge) => edge.edgeType)))] as const
+    return [key, Array.from(new Set(edges.map((edge) => edge.edgeType).filter(isRuntimeGraphEdgeType)))] as const
   }))
   return new Map(entries.filter(([, edgeTypes]) => edgeTypes.length > 0))
+}
+
+function isRuntimeGraphEdgeType(edgeType: string): boolean {
+  const relationType = relationTypeFromEdgeType(edgeType)
+  return relationType === undefined || relationExpansionPolicy(relationType).runtime
+}
+
+function uniqueIndexedMemoryEdges(edges: IndexedMemoryEdge[]): IndexedMemoryEdge[] {
+  const seen = new Set<string>()
+  const output: IndexedMemoryEdge[] = []
+  for (const edge of edges) {
+    if (seen.has(edge.id)) {
+      continue
+    }
+    seen.add(edge.id)
+    output.push(edge)
+  }
+  return output
+}
+
+function durableRelationEdgeFromIndexedEdge(edge: IndexedMemoryEdge): DurableMemoryEdge | undefined {
+  const relationType = relationTypeFromEdgeType(edge.edgeType)
+  if (relationType === undefined) {
+    return undefined
+  }
+  const from = parseIndexedMemoryGraphKey(edge.fromId)
+  const to = parseIndexedMemoryGraphKey(edge.toId)
+  if (from === undefined || to === undefined) {
+    return undefined
+  }
+  return {
+    id: edge.id,
+    fromMemoryId: from.memoryId,
+    toMemoryId: to.memoryId,
+    fromScope: from.scope,
+    toScope: to.scope,
+    ...(from.projectId === null ? {} : { fromProjectId: from.projectId }),
+    ...(to.projectId === null ? {} : { toProjectId: to.projectId }),
+    relationType,
+    status: 'validated',
+    confidence: edge.weight,
+    origin: edge.source === 'model' ? 'model' : 'deterministic',
+    reason: 'approved indexed relation edge',
+    ...(edge.evidenceId === undefined ? {} : { evidenceId: edge.evidenceId }),
+    createdAt: edge.createdAt,
+    updatedAt: edge.approvedAt ?? edge.createdAt
+  }
+}
+
+function relationTypeFromEdgeType(edgeType: string): MemoryRelationType | undefined {
+  if (!edgeType.startsWith('relation:')) {
+    return undefined
+  }
+  const relationType = edgeType.slice('relation:'.length)
+  return isMemoryRelationType(relationType) ? relationType : undefined
+}
+
+function isMemoryRelationType(value: string): value is MemoryRelationType {
+  return (MEMORY_RELATION_TYPES as readonly string[]).includes(value)
+}
+
+function durableEdgeMatchesRoute(edge: DurableMemoryEdge, route: 'global' | 'project', currentProjectId: string): boolean {
+  if (edge.fromScope !== route || edge.toScope !== route) {
+    return false
+  }
+  if (route === 'global') {
+    return edge.fromProjectId === undefined && edge.toProjectId === undefined
+  }
+  return edge.fromProjectId === currentProjectId && edge.toProjectId === currentProjectId
+}
+
+interface ParsedMemoryGraphKey {
+  scope: 'global' | 'project'
+  projectId: string | null
+  memoryId: string
+}
+
+function parseIndexedMemoryGraphKey(value: string): ParsedMemoryGraphKey | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed) || parsed.length !== 3) {
+      return undefined
+    }
+    const [scope, projectId, memoryId] = parsed
+    if ((scope !== 'global' && scope !== 'project') || typeof memoryId !== 'string') {
+      return undefined
+    }
+    if (projectId !== null && typeof projectId !== 'string') {
+      return undefined
+    }
+    return { scope, projectId, memoryId }
+  } catch {
+    return undefined
+  }
+}
+
+function addGraphEdgeType(map: Map<string, string[]>, key: string, edgeType: string): void {
+  map.set(key, Array.from(new Set([...(map.get(key) ?? []), edgeType])))
+}
+
+function mergeGraphEdgeTypeMaps(...maps: Array<Map<string, string[]>>): Map<string, string[]> {
+  const merged = new Map<string, string[]>()
+  for (const map of maps) {
+    for (const [key, edgeTypes] of map) {
+      for (const edgeType of edgeTypes) {
+        addGraphEdgeType(merged, key, edgeType)
+      }
+    }
+  }
+  return merged
 }
 
 function memoryGraphKeyForRoutedItem(item: IndexedActiveMemory | IndexedSimilarMemory | RetrievedMemory, currentProjectId: string): string {

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { retrieveMemories } from '../src/memory/memory-retriever.js'
-import { writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
+import { upsertMemoryEdgeFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
+import { createModelHintEdge, createOperationBackedEdge } from '../src/memory/memory-relations.js'
 import type { CyreneMemory } from '../src/memory/types.js'
 
 const tempDirs: string[] = []
@@ -182,6 +183,89 @@ describe('memory retriever', () => {
 
     expect(result[0]?.memory.id).toBe('long-full-match')
     expect(result[0]?.score).toBeCloseTo(0.6, 5)
+  })
+
+  it('expands validated supersedes relations in JSONL fallback retrieval', async () => {
+    const memoryRoot = await createTempDir('cyrene-memory-retriever-relation-root-')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'old-jsonl-rule',
+        content: 'Obsoletejsonlalpha relation rule should be replaced.',
+        normalizedKey: 'obsoletejsonlalpha-relation-rule'
+      }),
+      createMemory({
+        id: 'replacement-jsonl-rule',
+        content: 'Replacement JSONL rule uses validated relation edges.',
+        normalizedKey: 'replacement-jsonl-relation-rule'
+      })
+    ])
+    await upsertMemoryEdgeFromRoot(memoryRoot, createOperationBackedEdge({
+      fromMemoryId: 'replacement-jsonl-rule',
+      toMemoryId: 'old-jsonl-rule',
+      fromProjectId: 'project-a',
+      toProjectId: 'project-a',
+      relationType: 'supersedes',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'review approved JSONL replacement',
+      evidenceId: 'review-jsonl-edge-1',
+      evidenceKind: 'review_hash'
+    }))
+
+    const result = await retrieveMemories({
+      cwd: memoryRoot,
+      userCyreneDir: memoryRoot,
+      memoryRoot,
+      query: 'obsoletejsonlalpha',
+      task: 'memory',
+      maxItems: 10,
+      maxTokens: 100
+    })
+
+    expect(result.map((item) => item.memory.id)).toContain('replacement-jsonl-rule')
+    expect(result.map((item) => item.memory.id)).not.toContain('old-jsonl-rule')
+    expect(result.find((item) => item.memory.id === 'replacement-jsonl-rule')?.explain).toEqual(
+      expect.arrayContaining(['edge:relation:supersedes'])
+    )
+  })
+
+  it('does not expand trial model relation hints in JSONL fallback retrieval', async () => {
+    const memoryRoot = await createTempDir('cyrene-memory-retriever-trial-relation-root-')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'seed-jsonl-rule',
+        content: 'Seedjsonlalpha relation rule stays visible.',
+        normalizedKey: 'seedjsonlalpha-relation-rule'
+      }),
+      createMemory({
+        id: 'hint-jsonl-rule',
+        content: 'Trial model hint relation rule must not enter runtime retrieval.',
+        normalizedKey: 'hint-jsonl-relation-rule'
+      })
+    ])
+    await upsertMemoryEdgeFromRoot(memoryRoot, createModelHintEdge({
+      fromMemoryId: 'seed-jsonl-rule',
+      toMemoryId: 'hint-jsonl-rule',
+      fromProjectId: 'project-a',
+      toProjectId: 'project-a',
+      relationType: 'refines',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'model hint only'
+    }))
+
+    const result = await retrieveMemories({
+      cwd: memoryRoot,
+      userCyreneDir: memoryRoot,
+      memoryRoot,
+      query: 'seedjsonlalpha',
+      task: 'memory',
+      maxItems: 1,
+      maxTokens: 100
+    })
+
+    expect(result.map((item) => item.memory.id)).toEqual(['seed-jsonl-rule'])
+    expect(JSON.stringify(result)).not.toContain('edge:relation:refines')
   })
 })
 
