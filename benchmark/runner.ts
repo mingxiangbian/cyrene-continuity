@@ -9,6 +9,7 @@ import { BENCHMARK_CASES } from './catalog.js'
 import { writeBenchmarkReports } from './report.js'
 import { scoreCaseResult, summarizeBenchmarkResults } from './scorer.js'
 import { BENCHMARK_VERSION, THRESHOLD_VERSION } from './thresholds.js'
+import { buildVersionFeatureDelta } from './version-feature-delta.js'
 import { runTier0Case } from './cases/tier0-release-gate.js'
 import { runTier1Case } from './cases/tier1-memory-ability.js'
 import { runTier15Case } from './cases/tier1-5-lifecycle.js'
@@ -23,6 +24,8 @@ import type {
   BenchmarkFixtureRunMetadata,
   BenchmarkMetric,
   BenchmarkReport,
+  BenchmarkScaleResult,
+  BenchmarkScaleResults,
   BenchmarkRunOptions
 } from './types.js'
 
@@ -95,9 +98,11 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
     caseResults,
     metrics: aggregatedMetrics.metrics,
     metricAggregation: aggregatedMetrics.metricAggregation,
+    versionFeatureDelta: buildVersionFeatureDelta(caseResults),
     hardFailures,
     thresholdBreaches,
     fixtureRuns,
+    ...optionalScaleResults(caseResults),
     ...(options.baselineReportPath === undefined
       ? {}
       : { regressionComparison: { baselineReportPath: options.baselineReportPath, regressions: [] } })
@@ -370,6 +375,84 @@ function metricGroupName(metric: BenchmarkMetric['name']): MetricGroupName {
     return 'taskUtility'
   }
   return 'capability'
+}
+
+const SCALE_RESULT_CASES = {
+  'T3-S-SCALE': { label: 'S', runtimeMetric: 'scaleSRuntimeMs' },
+  'T3-M-SCALE': { label: 'M', runtimeMetric: 'scaleMRuntimeMs' },
+  'T3-L-SCALE': { label: 'L', runtimeMetric: 'scaleLRuntimeMs' },
+  'T3-XL-SCALE': { label: 'XL', runtimeMetric: 'scaleXLRuntimeMs' }
+} as const
+
+function optionalScaleResults(
+  caseResults: readonly BenchmarkCaseResult[]
+): { scaleResults?: BenchmarkScaleResults } {
+  const scaleResults = buildScaleResults(caseResults)
+  return Object.keys(scaleResults).length === 0 ? {} : { scaleResults }
+}
+
+function buildScaleResults(caseResults: readonly BenchmarkCaseResult[]): BenchmarkScaleResults {
+  const scaleResults: BenchmarkScaleResults = {}
+  for (const result of caseResults) {
+    const definition = SCALE_RESULT_CASES[result.caseId as keyof typeof SCALE_RESULT_CASES]
+    if (definition === undefined || (result.status !== 'passed' && result.status !== 'failed')) {
+      continue
+    }
+    const metrics = metricMap(result.metrics)
+    const entry: BenchmarkScaleResult = {
+      caseId: result.caseId,
+      status: result.status,
+      passed: result.passed,
+      runtimeSource: metricValue(metrics, 'runtimeSourceIsMaterialized') === 1 ? 'materialized' : 'synthetic',
+      storageSource: scaleStorageSource(metrics),
+      runtimeMs: metricValue(metrics, definition.runtimeMetric),
+      targetProjectCount: metricValue(metrics, 'targetProjectCount'),
+      targetActiveMemoryCount: metricValue(metrics, 'targetActiveMemoryCount'),
+      targetPendingMemoryCount: metricValue(metrics, 'targetPendingMemoryCount'),
+      materializedProjectCount: metricValue(metrics, 'materializedProjectCount'),
+      materializedActiveMemoryCount: metricValue(metrics, 'materializedActiveMemoryCount'),
+      materializedPendingMemoryCount: metricValue(metrics, 'materializedPendingMemoryCount'),
+      sqliteIndexedActiveCount: metricValue(metrics, 'sqliteIndexedActiveCount'),
+      sqliteIndexedPendingCount: metricValue(metrics, 'sqliteIndexedPendingCount'),
+      jsonlRecordCount: metricValue(metrics, 'jsonlRecordCount'),
+      jsonlSizeBytes: metricValue(metrics, 'jsonlSizeBytes'),
+      memoryDbBytesPerMemory: metricValue(metrics, 'memoryDbBytesPerMemory'),
+      ...optionalMetric(metrics, 'memoryDbSizeBytes'),
+      ...optionalMetric(metrics, 'continuityGetP50Ms'),
+      ...optionalMetric(metrics, 'continuityGetP95Ms'),
+      ...optionalMetric(metrics, 'continuityGetP99Ms'),
+      ...optionalMetric(metrics, 'indexStaleRate'),
+      hardFailures: result.hardFailures
+    }
+    scaleResults[definition.label] = entry
+  }
+  return scaleResults
+}
+
+function metricMap(metrics: readonly BenchmarkMetric[]): Map<BenchmarkMetric['name'], number> {
+  return new Map(metrics.map((metric) => [metric.name, metric.value]))
+}
+
+function metricValue(metrics: ReadonlyMap<BenchmarkMetric['name'], number>, name: BenchmarkMetric['name']): number {
+  return metrics.get(name) ?? 0
+}
+
+function optionalMetric(
+  metrics: ReadonlyMap<BenchmarkMetric['name'], number>,
+  name: 'memoryDbSizeBytes' | 'continuityGetP50Ms' | 'continuityGetP95Ms' | 'continuityGetP99Ms' | 'indexStaleRate'
+): Partial<Pick<BenchmarkScaleResult, typeof name>> {
+  const value = metrics.get(name)
+  return value === undefined ? {} : { [name]: value }
+}
+
+function scaleStorageSource(
+  metrics: ReadonlyMap<BenchmarkMetric['name'], number>
+): BenchmarkScaleResult['storageSource'] {
+  const fullTarget =
+    metricValue(metrics, 'targetProjectCount') === metricValue(metrics, 'materializedProjectCount') &&
+    metricValue(metrics, 'targetActiveMemoryCount') === metricValue(metrics, 'materializedActiveMemoryCount') &&
+    metricValue(metrics, 'targetPendingMemoryCount') === metricValue(metrics, 'materializedPendingMemoryCount')
+  return fullTarget ? 'full-target-materialized-fixture' : 'capped-materialized-fixture'
 }
 
 async function firstFileHash(paths: readonly string[]): Promise<string> {

@@ -116,6 +116,7 @@ describe('benchmark Tier 0 cases', () => {
     expect(relationSupersedes.get('replacementAccuracy')).toBe(1)
     expect(relationSupersedes.get('staleMemoryLeakageRate')).toBe(0)
     expect(relationSupersedes.get('duplicateActiveMemoryRate')).toBe(0)
+    expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-SIMILAR-NO-EXPANSION')).get('irrelevantRetrievalRate')).toBe(0)
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-TRANSFER-HINT-ONLY')).get('similarHintMigrationRate')).toBe(0)
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-FALLBACK-SCOPE-GUARD')).get('crossProjectPollutionRate')).toBe(0)
     expect(metricMap(report.caseResults.find((item) => item.caseId === 'T16-REL-LASTUSED-HOTPATH')).get('retrievedDefaultWriteRate')).toBe(0)

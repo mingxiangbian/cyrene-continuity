@@ -806,6 +806,7 @@ function defaultMetricValue(metric: BenchmarkMetric['name'], passed: boolean, ca
       normalizedMetric.includes('interference') ||
       normalizedMetric.includes('defaultwrite') ||
       normalizedMetric.includes('duplicate') ||
+      normalizedMetric.includes('irrelevant') ||
       normalizedMetric.includes('migration') ||
       normalizedMetric.includes('mismatch') ||
       normalizedMetric.includes('wrongtop1')
@@ -849,6 +850,7 @@ function defaultMetricValue(metric: BenchmarkMetric['name'], passed: boolean, ca
     normalizedMetric.includes('interference') ||
     normalizedMetric.includes('defaultwrite') ||
     normalizedMetric.includes('duplicate') ||
+    normalizedMetric.includes('irrelevant') ||
     normalizedMetric.includes('migration') ||
     normalizedMetric.includes('mismatch') ||
     normalizedMetric.includes('wrongtop1')

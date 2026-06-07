@@ -37,6 +37,46 @@ describe('benchmark Tier 3 scale and efficiency cases', () => {
     })
 
     expect(report.passed).toBe(true)
+    const scaleResults = report.scaleResults as Record<string, {
+      caseId: string
+      passed: boolean
+      runtimeSource: string
+      targetActiveMemoryCount: number
+      materializedActiveMemoryCount: number
+      materializedPendingMemoryCount: number
+      sqliteIndexedActiveCount: number
+      jsonlRecordCount: number
+    }>
+    expect(scaleResults.S).toEqual(expect.objectContaining({
+      caseId: 'T3-S-SCALE',
+      passed: true,
+      runtimeSource: 'materialized',
+      targetActiveMemoryCount: 50
+    }))
+    expect(scaleResults.S.materializedActiveMemoryCount).toBeGreaterThan(0)
+    expect(scaleResults.S.materializedActiveMemoryCount).toBeLessThanOrEqual(scaleResults.S.targetActiveMemoryCount)
+    expect(scaleResults.S.sqliteIndexedActiveCount).toBe(scaleResults.S.materializedActiveMemoryCount)
+    expect(scaleResults.S.jsonlRecordCount).toBe(
+      scaleResults.S.materializedActiveMemoryCount + scaleResults.S.materializedPendingMemoryCount
+    )
+    expect(scaleResults.M).toEqual(expect.objectContaining({
+      caseId: 'T3-M-SCALE',
+      passed: true,
+      runtimeSource: 'materialized',
+      targetActiveMemoryCount: 500
+    }))
+    expect(scaleResults.L).toEqual(expect.objectContaining({
+      caseId: 'T3-L-SCALE',
+      passed: true,
+      runtimeSource: 'synthetic',
+      targetActiveMemoryCount: 5000
+    }))
+    expect(scaleResults.XL).toEqual(expect.objectContaining({
+      caseId: 'T3-XL-SCALE',
+      passed: true,
+      runtimeSource: 'synthetic',
+      targetActiveMemoryCount: 50000
+    }))
     for (const [caseId, expectedEvidence] of [
       ['T3-S-SCALE', 'target active=50'],
       ['T3-M-SCALE', 'target active=500'],

@@ -322,6 +322,63 @@ export interface BenchmarkThresholdBreach {
   severity: 'warning' | 'error'
 }
 
+export interface BenchmarkVersionFeatureDelta {
+  note: string
+  generatedFromTiers: readonly ['tier1_5', 'tier1_6']
+  versions: readonly BenchmarkVersionFeatureSummary[]
+  functionalDifferences: readonly BenchmarkFunctionalDifference[]
+}
+
+export interface BenchmarkVersionFeatureSummary {
+  version: 'v1.5' | 'v1.6'
+  tier: Extract<BenchmarkTier, 'tier1_5' | 'tier1_6'>
+  functionalFocus: string
+  capabilityAreas: readonly string[]
+  caseCount: number
+  executedCaseCount: number
+  passed: number
+  failed: number
+  skippedWithReason: number
+  notSupportedWithoutProvider: number
+  passRate: number | null
+  representativeCases: readonly string[]
+  keyMetrics: Record<string, number>
+}
+
+export interface BenchmarkFunctionalDifference {
+  area: string
+  v1_5: string
+  v1_6: string
+}
+
+export interface BenchmarkScaleResult {
+  caseId: string
+  status: BenchmarkCaseStatus
+  passed: boolean
+  runtimeSource: 'materialized' | 'synthetic'
+  storageSource: 'full-target-materialized-fixture' | 'capped-materialized-fixture'
+  runtimeMs: number
+  targetProjectCount: number
+  targetActiveMemoryCount: number
+  targetPendingMemoryCount: number
+  materializedProjectCount: number
+  materializedActiveMemoryCount: number
+  materializedPendingMemoryCount: number
+  sqliteIndexedActiveCount: number
+  sqliteIndexedPendingCount: number
+  jsonlRecordCount: number
+  jsonlSizeBytes: number
+  memoryDbSizeBytes?: number
+  memoryDbBytesPerMemory: number
+  continuityGetP50Ms?: number
+  continuityGetP95Ms?: number
+  continuityGetP99Ms?: number
+  indexStaleRate?: number
+  hardFailures: readonly HardGateRuleId[]
+}
+
+export type BenchmarkScaleResults = Partial<Record<'S' | 'M' | 'L' | 'XL', BenchmarkScaleResult>>
+
 export interface BenchmarkReport {
   runId: string
   startedAt: string
@@ -376,10 +433,11 @@ export interface BenchmarkReport {
     sampleCount: number
     sourceCaseIds: readonly string[]
   }>
+  versionFeatureDelta?: BenchmarkVersionFeatureDelta
   hardFailures: readonly HardGateRuleId[]
   thresholdBreaches: readonly BenchmarkThresholdBreach[]
   fixtureRuns?: readonly BenchmarkFixtureRunMetadata[]
-  scaleResults?: Record<string, unknown>
+  scaleResults?: BenchmarkScaleResults
   regressionComparison?: {
     baselineReportPath?: string
     regressions: ReadonlyArray<{ metric: string; baseline: number; current: number; delta: number }>

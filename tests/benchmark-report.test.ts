@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { archiveBenchmarkReports } from '../benchmark/artifacts.js'
-import { writeBenchmarkReports } from '../benchmark/report.js'
+import { renderBenchmarkReportMarkdown, writeBenchmarkReports } from '../benchmark/report.js'
 import { scoreCaseResult, summarizeBenchmarkResults } from '../benchmark/scorer.js'
 import type { BenchmarkCaseResult, BenchmarkReport } from '../benchmark/types.js'
 
@@ -212,6 +212,44 @@ describe('benchmark scorer and report', () => {
         efficiency: { fastTokenOverhead: 700 },
         taskUtility: {}
       },
+      versionFeatureDelta: {
+        note: 'Functional comparison derived from benchmark tier coverage, not a commit-to-commit A/B run.',
+        generatedFromTiers: ['tier1_5', 'tier1_6'],
+        versions: [{
+          version: 'v1.5',
+          tier: 'tier1_5',
+          functionalFocus: 'Memory lifecycle and review safety',
+          capabilityAreas: ['replace / merge / expire lifecycle transitions'],
+          caseCount: 1,
+          executedCaseCount: 1,
+          passed: 1,
+          failed: 0,
+          skippedWithReason: 0,
+          notSupportedWithoutProvider: 0,
+          passRate: 1,
+          representativeCases: ['T15-REPLACE'],
+          keyMetrics: { replacementAccuracy: 1 }
+        }, {
+          version: 'v1.6',
+          tier: 'tier1_6',
+          functionalFocus: 'Memory proposal, routing, review, and relation-model safety',
+          capabilityAreas: ['important / noise / sensitive proposal filtering'],
+          caseCount: 1,
+          executedCaseCount: 1,
+          passed: 1,
+          failed: 0,
+          skippedWithReason: 0,
+          notSupportedWithoutProvider: 0,
+          passRate: 1,
+          representativeCases: ['T16-PROPOSE-IMPORTANT'],
+          keyMetrics: { proposalPrecision: 1 }
+        }],
+        functionalDifferences: [{
+          area: 'Memory admission',
+          v1_5: 'Validates controlled promotion from pending/trial memory into active memory.',
+          v1_6: 'Adds proposal filtering so important evidence is proposed while noise, sensitive content, and assistant-only inference are blocked.'
+        }]
+      },
       hardFailures: ['pending_leakage'],
       thresholdBreaches: [{
         caseId: 'T0-MODE-FAST',
@@ -231,7 +269,29 @@ describe('benchmark scorer and report', () => {
         preserveFixture: true,
         preserveReason: 'debug failing fixture'
       }],
-      scaleResults: { S: { passed: true } },
+      scaleResults: {
+        S: {
+          caseId: 'T3-S-SCALE',
+          status: 'passed',
+          passed: true,
+          runtimeSource: 'materialized',
+          storageSource: 'full-target-materialized-fixture',
+          runtimeMs: 100,
+          targetProjectCount: 1,
+          targetActiveMemoryCount: 50,
+          targetPendingMemoryCount: 10,
+          materializedProjectCount: 1,
+          materializedActiveMemoryCount: 50,
+          materializedPendingMemoryCount: 10,
+          sqliteIndexedActiveCount: 50,
+          sqliteIndexedPendingCount: 10,
+          jsonlRecordCount: 60,
+          jsonlSizeBytes: 1000,
+          memoryDbSizeBytes: 2000,
+          memoryDbBytesPerMemory: 34,
+          hardFailures: []
+        }
+      },
       regressionComparison: { regressions: [] }
     }
 
@@ -303,7 +363,13 @@ describe('benchmark scorer and report', () => {
       efficiency: { fastTokenOverhead: 700 },
       taskUtility: {}
     })
-    expect(payload.scaleResults).toEqual({ S: { passed: true } })
+    expect(payload.versionFeatureDelta?.versions.map((item) => item.version)).toEqual(['v1.5', 'v1.6'])
+    expect(payload.scaleResults?.S).toEqual(expect.objectContaining({
+      caseId: 'T3-S-SCALE',
+      passed: true,
+      runtimeSource: 'materialized',
+      targetActiveMemoryCount: 50
+    }))
     expect(payload.regressionComparison).toEqual({ regressions: [] })
     expect(payload.hardFailures).toEqual(['pending_leakage'])
     expect(payload.thresholdBreaches).toEqual([{
@@ -334,6 +400,7 @@ describe('benchmark scorer and report', () => {
     expect(markdown).toContain('## Boundary Safety Metrics')
     expect(markdown).toContain('## Efficiency Metrics')
     expect(markdown).toContain('## Task Utility Metrics')
+    expect(markdown).toContain('## V1.5 vs V1.6 Functional Delta')
     expect(markdown).toContain('## Case Metric Details')
     expect(markdown).toContain('## Scale Results')
     expect(markdown).toContain('## Regression Comparison')
@@ -351,6 +418,8 @@ describe('benchmark scorer and report', () => {
     expect(markdown).toContain('WARNING T0-MODE-FAST fastTokenOverhead: 900 (<= 800)')
     expect(markdown).toContain('- T0-MODE-FAST')
     expect(markdown).toContain('fastTokenOverhead: 700')
+    expect(markdown).toContain('v1.5 (tier1_5): focus=Memory lifecycle and review safety')
+    expect(markdown).toContain('| Memory admission | Validates controlled promotion from pending/trial memory into active memory.')
     expect(markdown).toContain('fast mode stayed isolated')
     expect(markdown).toContain('pending leaked with newline')
     expect(markdown).toContain('/tmp/fixture-a')
@@ -361,6 +430,99 @@ describe('benchmark scorer and report', () => {
     expect(markdown).toContain('spec-hash')
     expect(markdown).toContain('2026-06-05')
     expect(markdown).toContain('10.0.0')
+  })
+
+  it('marks the version feature delta as not evaluated when the profile skipped both version tiers', () => {
+    const report: BenchmarkReport = {
+      runId: 'run-real-replay',
+      startedAt: '2026-06-05T00:00:00.000Z',
+      completedAt: '2026-06-05T00:00:01.000Z',
+      profile: 'real-replay',
+      spec: {
+        path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md',
+        title: 'Cyrene Benchmark Eval System Design',
+        date: '2026-06-05',
+        contentHash: 'spec-hash'
+      },
+      benchmark: {
+        version: '1.0.0',
+        thresholdVersion: '2026-06-05',
+        caseCatalogHash: 'catalog-hash'
+      },
+      package: {
+        name: 'cyrene-continuity',
+        version: '0.1.0'
+      },
+      git: {
+        branch: 'main',
+        commit: 'abc123',
+        dirty: false,
+        trackedChanges: []
+      },
+      runtime: {
+        nodeVersion: process.version,
+        npmVersion: '10.0.0',
+        platform: process.platform,
+        arch: process.arch
+      },
+      passed: true,
+      summary: { totalCases: 2, passed: 0, failed: 0, skippedWithReason: 2, notSupportedWithoutProvider: 0 },
+      failedCases: [],
+      caseResults: [],
+      metrics: {
+        capability: {},
+        boundarySafety: {},
+        efficiency: {},
+        taskUtility: {}
+      },
+      versionFeatureDelta: {
+        note: 'Functional comparison derived from benchmark tier coverage, not a commit-to-commit A/B run.',
+        generatedFromTiers: ['tier1_5', 'tier1_6'],
+        versions: [{
+          version: 'v1.5',
+          tier: 'tier1_5',
+          functionalFocus: 'Memory lifecycle and review safety',
+          capabilityAreas: [],
+          caseCount: 8,
+          executedCaseCount: 0,
+          passed: 0,
+          failed: 0,
+          skippedWithReason: 8,
+          notSupportedWithoutProvider: 0,
+          passRate: null,
+          representativeCases: [],
+          keyMetrics: {}
+        }, {
+          version: 'v1.6',
+          tier: 'tier1_6',
+          functionalFocus: 'Memory proposal, routing, review, and relation-model safety',
+          capabilityAreas: [],
+          caseCount: 17,
+          executedCaseCount: 0,
+          passed: 0,
+          failed: 0,
+          skippedWithReason: 17,
+          notSupportedWithoutProvider: 0,
+          passRate: null,
+          representativeCases: [],
+          keyMetrics: {}
+        }],
+        functionalDifferences: [{
+          area: 'Memory admission',
+          v1_5: 'v1.5 text',
+          v1_6: 'v1.6 text'
+        }]
+      },
+      hardFailures: [],
+      thresholdBreaches: []
+    }
+
+    const markdown = renderBenchmarkReportMarkdown(report)
+
+    expect(markdown).toContain('v1.5/v1.6 functional delta was not evaluated by profile real-replay')
+    expect(markdown).toContain('v1.5 (tier1_5): executed=0/8')
+    expect(markdown).toContain('v1.6 (tier1_6): executed=0/17')
+    expect(markdown).not.toContain('| Area | v1.5 | v1.6 |')
   })
 
   it('archives only sanitized report artifacts under the profile directory', async () => {

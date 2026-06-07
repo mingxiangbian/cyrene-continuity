@@ -28,6 +28,7 @@ export function renderBenchmarkReportMarkdown(report: BenchmarkReport): string {
       .join('\n')
   const profileCaveat = renderProfileCaveat(report)
   const metricAggregation = renderMetricAggregation(report)
+  const versionFeatureDelta = renderVersionFeatureDelta(report)
   const skippedCases = report.caseResults.filter((item) => item.status === 'skipped_with_reason')
   const unsupportedCases = report.caseResults.filter((item) => item.status === 'not_supported_without_provider')
   const caseMetricDetails = report.caseResults
@@ -97,6 +98,10 @@ ${renderMetricGroup(report.metrics.efficiency)}
 ## Task Utility Metrics
 
 ${renderMetricGroup(report.metrics.taskUtility)}
+
+## V1.5 vs V1.6 Functional Delta
+
+${versionFeatureDelta}
 
 ## Metric Aggregation
 
@@ -185,6 +190,42 @@ function renderMetricAggregation(report: BenchmarkReport): string {
       return `- ${name}: group=${aggregation.group}, strategy=${aggregation.strategy}, samples=${aggregation.sampleCount}, sources=${sources}`
     })
     .join('\n')
+}
+
+function renderVersionFeatureDelta(report: BenchmarkReport): string {
+  if (report.versionFeatureDelta === undefined) {
+    return '- None'
+  }
+  if (report.versionFeatureDelta.versions.some((version) => version.executedCaseCount === 0)) {
+    const versions = report.versionFeatureDelta.versions
+      .map((version) => {
+        return `- ${version.version} (${version.tier}): executed=${version.executedCaseCount}/${version.caseCount}, skipped=${version.skippedWithReason}, unsupported=${version.notSupportedWithoutProvider}`
+      })
+      .join('\n')
+    return `${inlineMarkdownText(report.versionFeatureDelta.note)}
+
+- v1.5/v1.6 functional delta was not evaluated by profile ${inlineMarkdownText(report.profile)}. Run the full profile for the direct functional comparison.
+${versions}`
+  }
+  const versions = report.versionFeatureDelta.versions
+    .map((version) => {
+      const passRate = version.passRate === null ? 'n/a' : version.passRate
+      const metrics = Object.entries(version.keyMetrics)
+        .map(([name, value]) => `${name}=${value}`)
+        .join(', ')
+      return `- ${version.version} (${version.tier}): focus=${inlineMarkdownText(version.functionalFocus)}, executed=${version.executedCaseCount}/${version.caseCount}, passed=${version.passed}, failed=${version.failed}, skipped=${version.skippedWithReason}, unsupported=${version.notSupportedWithoutProvider}, passRate=${passRate}, keyMetrics=${metrics === '' ? 'none' : inlineMarkdownText(metrics)}`
+    })
+    .join('\n')
+  const areas = report.versionFeatureDelta.functionalDifferences
+    .map((item) => `| ${inlineMarkdownText(item.area)} | ${inlineMarkdownText(item.v1_5)} | ${inlineMarkdownText(item.v1_6)} |`)
+    .join('\n')
+  return `${inlineMarkdownText(report.versionFeatureDelta.note)}
+
+${versions}
+
+| Area | v1.5 | v1.6 |
+| --- | --- | --- |
+${areas}`
 }
 
 function renderProfileCaveat(report: BenchmarkReport): string {
