@@ -68,7 +68,7 @@ async function runScaleCase(
   const materializedProjects = target.projects === 0 ? 0 : Math.min(target.projects, 1)
   return withTier3Fixture(benchmarkCase, options, {
     activeMemories: generateActiveMemories(benchmarkCase.id, materializedActive, options.now ?? benchmarkCase.fixture.now),
-    pendingMemories: generatePendingMemories(benchmarkCase.id, materializedPending, options.now ?? benchmarkCase.fixture.now)
+    pendingMemories: generatePendingMemories(benchmarkCase.id, materializedPending)
   }, async (fixture) => {
     const rebuild = await rebuildCodexMemoryIndex({ cwd: fixture.cwd })
     const dbSize = await fileSize(fixture.memoryDbPath)
@@ -412,7 +412,7 @@ function generateActiveMemories(caseId: string, count: number, now: string): Cyr
   ))
 }
 
-function generatePendingMemories(caseId: string, count: number, now: string): Array<Partial<PendingMemory> & { id: string; content: string }> {
+function generatePendingMemories(caseId: string, count: number): Array<Partial<PendingMemory> & { id: string; content: string }> {
   return Array.from({ length: count }, (_, index) => ({
     id: `${caseId.toLowerCase()}-pending-${index}`,
     content: `Scale ${caseId} pending memory ${index} for deterministic review queue benchmark.`,

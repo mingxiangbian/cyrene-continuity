@@ -5,7 +5,6 @@ import { benchmarkActiveMemory, recordFixtureRun } from './common.js'
 import type {
   BenchmarkCase,
   BenchmarkCaseResult,
-  BenchmarkEvidence,
   BenchmarkMetric,
   BenchmarkRunOptions,
   HardGateRuleId
