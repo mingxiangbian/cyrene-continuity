@@ -17,6 +17,7 @@ export interface RetrieveMemoriesInput {
   memoryRoot?: string
   memoryRoots?: string[]
   extraMemories?: CyreneMemory[]
+  currentProjectId?: string
   query: string
   task?: 'coding' | 'planning' | 'conversation' | 'memory' | 'debugging'
   domains?: MemoryDomain[]
@@ -123,7 +124,7 @@ async function expandJsonlRelationMemories(
         .filter((memory) => eligibleKeys.has(memoryIdentityKey(memory)))
         .map((memory) => [memory.id, memory])
     )
-    expanded = expandRelationMemoriesForRoot(expanded, rootEligibleById, edges)
+    expanded = expandRelationMemoriesForRoot(expanded, rootEligibleById, edges, input.currentProjectId)
   }
   return selectRetrievedWithinBudget(expanded, input.maxItems, input.maxTokens)
 }
@@ -131,7 +132,8 @@ async function expandJsonlRelationMemories(
 function expandRelationMemoriesForRoot(
   selected: RetrievedMemory[],
   memoryById: Map<string, CyreneMemory>,
-  edges: MemoryEdge[]
+  edges: MemoryEdge[],
+  currentProjectId: string | undefined
 ): RetrievedMemory[] {
   const byId = new Map(selected.map((item) => [item.memory.id, item]))
   const suppressed = new Set<string>()
@@ -140,6 +142,9 @@ function expandRelationMemoriesForRoot(
       continue
     }
     for (const edge of relationEdgesForSeed(edges, seed.memory.id)) {
+      if (!relationEdgeMatchesRetrievalScope(edge, memoryById, currentProjectId)) {
+        continue
+      }
       const resolution = resolveRelationExpansion({ seedMemoryId: seed.memory.id, edge })
       for (const memoryId of resolution.suppressMemoryIds) {
         suppressed.add(memoryId)
@@ -165,6 +170,31 @@ function expandRelationMemoriesForRoot(
 
 function relationEdgesForSeed(edges: MemoryEdge[], seedMemoryId: string): MemoryEdge[] {
   return edges.filter((edge) => edge.fromMemoryId === seedMemoryId || edge.toMemoryId === seedMemoryId)
+}
+
+function relationEdgeMatchesRetrievalScope(
+  edge: MemoryEdge,
+  memoryById: Map<string, CyreneMemory>,
+  currentProjectId: string | undefined
+): boolean {
+  const fromMemory = memoryById.get(edge.fromMemoryId)
+  const toMemory = memoryById.get(edge.toMemoryId)
+  if (fromMemory === undefined || toMemory === undefined) {
+    return false
+  }
+  if (fromMemory.scope !== edge.fromScope || toMemory.scope !== edge.toScope) {
+    return false
+  }
+  if (edge.fromScope !== edge.toScope) {
+    return false
+  }
+  if (edge.fromScope === 'global') {
+    return edge.fromProjectId === undefined && edge.toProjectId === undefined
+  }
+  if (currentProjectId !== undefined) {
+    return edge.fromProjectId === currentProjectId && edge.toProjectId === currentProjectId
+  }
+  return edge.fromProjectId === edge.toProjectId
 }
 
 function mergeExplain(current: string[] | undefined, additions: string[]): string[] {

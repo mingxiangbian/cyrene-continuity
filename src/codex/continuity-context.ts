@@ -296,6 +296,7 @@ export async function getCodexContinuityContext(input: {
       userCyreneDir: config.userCyreneDir,
       memoryRoots: [globalMemoryRoot, projectMemoryRoot],
       extraMemories: policy.mode === 'fast' || !policy.allowJsonlFallback ? [] : await readLegacyGlobalCodexMemories(project.projectId),
+      currentProjectId: project.projectId,
       query: input.userMessage,
       task,
       maxItems: budget.maxItems,

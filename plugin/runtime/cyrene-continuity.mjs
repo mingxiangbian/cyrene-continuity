@@ -11513,11 +11513,11 @@ async function expandJsonlRelationMemories(input, selected, eligibleMemories) {
     const rootEligibleById = new Map(
       rootMemories.filter((memory2) => eligibleKeys.has(memoryIdentityKey(memory2))).map((memory2) => [memory2.id, memory2])
     );
-    expanded = expandRelationMemoriesForRoot(expanded, rootEligibleById, edges);
+    expanded = expandRelationMemoriesForRoot(expanded, rootEligibleById, edges, input.currentProjectId);
   }
   return selectRetrievedWithinBudget(expanded, input.maxItems, input.maxTokens);
 }
-function expandRelationMemoriesForRoot(selected, memoryById, edges) {
+function expandRelationMemoriesForRoot(selected, memoryById, edges, currentProjectId) {
   const byId = new Map(selected.map((item) => [item.memory.id, item]));
   const suppressed = /* @__PURE__ */ new Set();
   for (const seed of selected) {
@@ -11525,6 +11525,9 @@ function expandRelationMemoriesForRoot(selected, memoryById, edges) {
       continue;
     }
     for (const edge of relationEdgesForSeed(edges, seed.memory.id)) {
+      if (!relationEdgeMatchesRetrievalScope(edge, memoryById, currentProjectId)) {
+        continue;
+      }
       const resolution = resolveRelationExpansion({ seedMemoryId: seed.memory.id, edge });
       for (const memoryId of resolution.suppressMemoryIds) {
         suppressed.add(memoryId);
@@ -11549,6 +11552,26 @@ function expandRelationMemoriesForRoot(selected, memoryById, edges) {
 }
 function relationEdgesForSeed(edges, seedMemoryId) {
   return edges.filter((edge) => edge.fromMemoryId === seedMemoryId || edge.toMemoryId === seedMemoryId);
+}
+function relationEdgeMatchesRetrievalScope(edge, memoryById, currentProjectId) {
+  const fromMemory = memoryById.get(edge.fromMemoryId);
+  const toMemory = memoryById.get(edge.toMemoryId);
+  if (fromMemory === void 0 || toMemory === void 0) {
+    return false;
+  }
+  if (fromMemory.scope !== edge.fromScope || toMemory.scope !== edge.toScope) {
+    return false;
+  }
+  if (edge.fromScope !== edge.toScope) {
+    return false;
+  }
+  if (edge.fromScope === "global") {
+    return edge.fromProjectId === void 0 && edge.toProjectId === void 0;
+  }
+  if (currentProjectId !== void 0) {
+    return edge.fromProjectId === currentProjectId && edge.toProjectId === currentProjectId;
+  }
+  return edge.fromProjectId === edge.toProjectId;
 }
 function mergeExplain(current, additions) {
   return Array.from(/* @__PURE__ */ new Set([...current ?? [], ...additions]));
@@ -18714,6 +18737,7 @@ async function getCodexContinuityContext(input) {
     userCyreneDir: config2.userCyreneDir,
     memoryRoots: [globalMemoryRoot, projectMemoryRoot],
     extraMemories: policy.mode === "fast" || !policy.allowJsonlFallback ? [] : await readLegacyGlobalCodexMemories(project.projectId),
+    currentProjectId: project.projectId,
     query: input.userMessage,
     task,
     maxItems: budget.maxItems,
@@ -20115,6 +20139,7 @@ function renderBenchmarkReportMarkdown(report) {
   const thresholdBreaches = report.thresholdBreaches.length === 0 ? "- None" : report.thresholdBreaches.map((item) => `- ${item.severity.toUpperCase()} ${item.caseId} ${item.metric}: ${item.actual} (${item.threshold})`).join("\n");
   const profileCaveat = renderProfileCaveat(report);
   const metricAggregation = renderMetricAggregation(report);
+  const versionFeatureDelta = renderVersionFeatureDelta(report);
   const skippedCases = report.caseResults.filter((item) => item.status === "skipped_with_reason");
   const unsupportedCases = report.caseResults.filter((item) => item.status === "not_supported_without_provider");
   const caseMetricDetails = report.caseResults.filter((item) => item.metrics.length > 0).map((item) => {
@@ -20176,6 +20201,10 @@ ${renderMetricGroup(report.metrics.efficiency)}
 ## Task Utility Metrics
 
 ${renderMetricGroup(report.metrics.taskUtility)}
+
+## V1.5 vs V1.6 Functional Delta
+
+${versionFeatureDelta}
 
 ## Metric Aggregation
 
@@ -20258,6 +20287,33 @@ function renderMetricAggregation(report) {
     const sources = aggregation.sourceCaseIds.map((caseId) => inlineMarkdownText(caseId)).join(", ");
     return `- ${name}: group=${aggregation.group}, strategy=${aggregation.strategy}, samples=${aggregation.sampleCount}, sources=${sources}`;
   }).join("\n");
+}
+function renderVersionFeatureDelta(report) {
+  if (report.versionFeatureDelta === void 0) {
+    return "- None";
+  }
+  if (report.versionFeatureDelta.versions.some((version2) => version2.executedCaseCount === 0)) {
+    const versions2 = report.versionFeatureDelta.versions.map((version2) => {
+      return `- ${version2.version} (${version2.tier}): executed=${version2.executedCaseCount}/${version2.caseCount}, skipped=${version2.skippedWithReason}, unsupported=${version2.notSupportedWithoutProvider}`;
+    }).join("\n");
+    return `${inlineMarkdownText(report.versionFeatureDelta.note)}
+
+- v1.5/v1.6 functional delta was not evaluated by profile ${inlineMarkdownText(report.profile)}. Run the full profile for the direct functional comparison.
+${versions2}`;
+  }
+  const versions = report.versionFeatureDelta.versions.map((version2) => {
+    const passRate = version2.passRate === null ? "n/a" : version2.passRate;
+    const metrics = Object.entries(version2.keyMetrics).map(([name, value]) => `${name}=${value}`).join(", ");
+    return `- ${version2.version} (${version2.tier}): focus=${inlineMarkdownText(version2.functionalFocus)}, executed=${version2.executedCaseCount}/${version2.caseCount}, passed=${version2.passed}, failed=${version2.failed}, skipped=${version2.skippedWithReason}, unsupported=${version2.notSupportedWithoutProvider}, passRate=${passRate}, keyMetrics=${metrics === "" ? "none" : inlineMarkdownText(metrics)}`;
+  }).join("\n");
+  const areas = report.versionFeatureDelta.functionalDifferences.map((item) => `| ${inlineMarkdownText(item.area)} | ${inlineMarkdownText(item.v1_5)} | ${inlineMarkdownText(item.v1_6)} |`).join("\n");
+  return `${inlineMarkdownText(report.versionFeatureDelta.note)}
+
+${versions}
+
+| Area | v1.5 | v1.6 |
+| --- | --- | --- |
+${areas}`;
 }
 function renderProfileCaveat(report) {
   const caveats = [];
@@ -20397,6 +20453,153 @@ function summarizeBenchmarkResults(results) {
     skippedWithReason: results.filter((item) => item.status === "skipped_with_reason").length,
     notSupportedWithoutProvider: results.filter((item) => item.status === "not_supported_without_provider").length
   };
+}
+
+// benchmark/version-feature-delta.ts
+var VERSION_DEFINITIONS = [
+  {
+    version: "v1.5",
+    tier: "tier1_5",
+    functionalFocus: "Memory lifecycle and review safety",
+    capabilityAreas: [
+      "low-risk upgrade policy",
+      "replace / merge / expire lifecycle transitions",
+      "review-hash protected supersede",
+      "conflict and stale-memory suppression",
+      "adversarial lifecycle conflict handling"
+    ],
+    representativeCases: [
+      "T15-UPGRADE",
+      "T15-REPLACE",
+      "T15-MERGE",
+      "T15-SUPERSEDE-HASH",
+      "T15-ADVERSARIAL-CONFLICT"
+    ],
+    keyMetrics: [
+      "promotionAccuracy",
+      "replacementAccuracy",
+      "mergeAccuracy",
+      "conflictResolutionAccuracy",
+      "staleMemoryLeakageRate",
+      "duplicateActiveMemoryRate",
+      "lifecyclePromotionAccuracy"
+    ]
+  },
+  {
+    version: "v1.6",
+    tier: "tier1_6",
+    functionalFocus: "Memory proposal, routing, review, and relation-model safety",
+    capabilityAreas: [
+      "important / noise / sensitive proposal filtering",
+      "project and global namespace routing",
+      "review hash, reject, defer, and edit contracts",
+      "relation expansion rules for supersedes / similar / derived / transfer",
+      "JSONL fallback scope guard and relation hot-path read-only behavior"
+    ],
+    representativeCases: [
+      "T16-PROPOSE-IMPORTANT",
+      "T16-PROPOSE-SENSITIVE",
+      "T16-ROUTING-NAMESPACE",
+      "T16-REVIEW-HASH-REQUIRED",
+      "T16-REL-SUPERSEDES-DIRECTION",
+      "T16-REL-FALLBACK-SCOPE-GUARD"
+    ],
+    keyMetrics: [
+      "proposalPrecision",
+      "proposalRecall",
+      "importantMemoryMissedRate",
+      "noiseProposalRate",
+      "sensitiveProposalRate",
+      "assistantInferenceAutoActiveRate",
+      "lifecyclePromotionAccuracy",
+      "replacementAccuracy",
+      "staleMemoryLeakageRate",
+      "crossProjectPollutionRate",
+      "similarHintMigrationRate",
+      "retrievedDefaultWriteRate",
+      "pendingLeakageRate"
+    ]
+  }
+];
+function buildVersionFeatureDelta(caseResults) {
+  return {
+    note: "Functional comparison derived from benchmark tier coverage, not a commit-to-commit A/B run.",
+    generatedFromTiers: ["tier1_5", "tier1_6"],
+    versions: VERSION_DEFINITIONS.map((definition) => summarizeVersion(definition, caseResults)),
+    functionalDifferences: [
+      {
+        area: "Memory admission",
+        v1_5: "Validates controlled promotion from pending/trial memory into active memory.",
+        v1_6: "Adds proposal filtering so important evidence is proposed while noise, sensitive content, and assistant-only inference are blocked."
+      },
+      {
+        area: "Review integrity",
+        v1_5: "Protects supersede and lifecycle changes with review-hash validation.",
+        v1_6: "Extends review contracts to missing/stale hashes plus reject, defer, and edited-candidate hash refresh behavior."
+      },
+      {
+        area: "Memory updates",
+        v1_5: "Checks replace, merge, expire, rollback, and stale active-memory suppression.",
+        v1_6: "Adds relation-driven replacement, relation edge invalidation, and relation expansion constraints."
+      },
+      {
+        area: "Boundary safety",
+        v1_5: "Ensures conflicting old/new lifecycle memories do not both enter context.",
+        v1_6: "Adds namespace routing, relation scope guards, transfer hint-only behavior, and trial/pending relation exclusion."
+      },
+      {
+        area: "Runtime side effects",
+        v1_5: "Tracks lifecycle receipts, audit growth, and activation-event growth for review actions.",
+        v1_6: "Checks relation expansion stays read-only on hot paths and does not write retrieved/lastUsed state by default."
+      }
+    ]
+  };
+}
+function summarizeVersion(definition, caseResults) {
+  const results = caseResults.filter((item) => item.tier === definition.tier);
+  const executed = results.filter((item) => item.status === "passed" || item.status === "failed");
+  const passed = results.filter((item) => item.status === "passed").length;
+  const failed = results.filter((item) => item.status === "failed").length;
+  const skippedWithReason = results.filter((item) => item.status === "skipped_with_reason").length;
+  const notSupportedWithoutProvider = results.filter((item) => item.status === "not_supported_without_provider").length;
+  return {
+    version: definition.version,
+    tier: definition.tier,
+    functionalFocus: definition.functionalFocus,
+    capabilityAreas: definition.capabilityAreas,
+    caseCount: results.length,
+    executedCaseCount: executed.length,
+    passed,
+    failed,
+    skippedWithReason,
+    notSupportedWithoutProvider,
+    passRate: executed.length === 0 ? null : roundMetric(passed / executed.length),
+    representativeCases: definition.representativeCases,
+    keyMetrics: keyMetricSummary(results, definition.keyMetrics)
+  };
+}
+function keyMetricSummary(results, metricNames) {
+  const summary = {};
+  for (const metricName of metricNames) {
+    const values = results.flatMap(
+      (result3) => result3.metrics.filter((metric) => metric.name === metricName).map((metric) => metric.value)
+    );
+    if (values.length > 0) {
+      summary[metricName] = roundMetric(aggregateMetric(metricName, values));
+    }
+  }
+  return summary;
+}
+function aggregateMetric(metricName, values) {
+  if (values.length === 0) return 0;
+  const normalized = metricName.toLowerCase();
+  if (normalized.includes("accuracy") || normalized.includes("precision") || normalized.includes("recall") || normalized.includes("success")) {
+    return Math.min(...values);
+  }
+  return Math.max(...values);
+}
+function roundMetric(value) {
+  return Number(value.toFixed(4));
 }
 
 // benchmark/cases/tier0-release-gate.ts
@@ -28674,7 +28877,7 @@ function defaultMetrics3(benchmarkCase, passed) {
 function defaultMetricValue2(metric, passed, caseId) {
   const normalizedMetric = metric.toLowerCase();
   if (!passed) {
-    return normalizedMetric.includes("leakage") || normalizedMetric.includes("pollution") || normalizedMetric.includes("misuse") || normalizedMetric.includes("fallback") || normalizedMetric.includes("stale") || normalizedMetric.includes("interference") || normalizedMetric.includes("defaultwrite") || normalizedMetric.includes("duplicate") || normalizedMetric.includes("migration") || normalizedMetric.includes("mismatch") || normalizedMetric.includes("wrongtop1") ? 1 : 0;
+    return normalizedMetric.includes("leakage") || normalizedMetric.includes("pollution") || normalizedMetric.includes("misuse") || normalizedMetric.includes("fallback") || normalizedMetric.includes("stale") || normalizedMetric.includes("interference") || normalizedMetric.includes("defaultwrite") || normalizedMetric.includes("duplicate") || normalizedMetric.includes("irrelevant") || normalizedMetric.includes("migration") || normalizedMetric.includes("mismatch") || normalizedMetric.includes("wrongtop1") ? 1 : 0;
   }
   if (metric === "importantMemoryMissedRate" || metric === "noiseProposalRate" || metric === "temporaryStateProposalRate" || metric === "sensitiveProposalRate" || metric === "assistantInferenceAutoActiveRate" || metric === "reviewFalsePositiveRate") {
     return 0;
@@ -28697,7 +28900,7 @@ function defaultMetricValue2(metric, passed, caseId) {
   if (metric === "pendingReviewedCount") return caseId === "T16-REVIEW-REJECT-DEFER" ? 2 : 0;
   if (metric === "auditLogGrowth") return caseId === "T16-REL-EDGE-INVALIDATION" ? 1 : 0;
   if (metric === "averageReviewTimeMs") return 0;
-  if (normalizedMetric.includes("leakage") || normalizedMetric.includes("pollution") || normalizedMetric.includes("misuse") || normalizedMetric.includes("fallback") || normalizedMetric.includes("stale") || normalizedMetric.includes("interference") || normalizedMetric.includes("defaultwrite") || normalizedMetric.includes("duplicate") || normalizedMetric.includes("migration") || normalizedMetric.includes("mismatch") || normalizedMetric.includes("wrongtop1")) {
+  if (normalizedMetric.includes("leakage") || normalizedMetric.includes("pollution") || normalizedMetric.includes("misuse") || normalizedMetric.includes("fallback") || normalizedMetric.includes("stale") || normalizedMetric.includes("interference") || normalizedMetric.includes("defaultwrite") || normalizedMetric.includes("duplicate") || normalizedMetric.includes("irrelevant") || normalizedMetric.includes("migration") || normalizedMetric.includes("mismatch") || normalizedMetric.includes("wrongtop1")) {
     return 0;
   }
   if (metric.endsWith("Rate") || metric.endsWith("Accuracy") || metric === "mrr" || metric === "recallAt3") {
@@ -31543,9 +31746,11 @@ async function runCyreneBenchmark(options) {
     caseResults,
     metrics: aggregatedMetrics.metrics,
     metricAggregation: aggregatedMetrics.metricAggregation,
+    versionFeatureDelta: buildVersionFeatureDelta(caseResults),
     hardFailures,
     thresholdBreaches,
     fixtureRuns,
+    ...optionalScaleResults(caseResults),
     ...options.baselineReportPath === void 0 ? {} : { regressionComparison: { baselineReportPath: options.baselineReportPath, regressions: [] } }
   };
   await writeBenchmarkReports(options.outputDir, report);
@@ -31699,6 +31904,67 @@ function metricGroupName(metric) {
     return "taskUtility";
   }
   return "capability";
+}
+var SCALE_RESULT_CASES = {
+  "T3-S-SCALE": { label: "S", runtimeMetric: "scaleSRuntimeMs" },
+  "T3-M-SCALE": { label: "M", runtimeMetric: "scaleMRuntimeMs" },
+  "T3-L-SCALE": { label: "L", runtimeMetric: "scaleLRuntimeMs" },
+  "T3-XL-SCALE": { label: "XL", runtimeMetric: "scaleXLRuntimeMs" }
+};
+function optionalScaleResults(caseResults) {
+  const scaleResults = buildScaleResults(caseResults);
+  return Object.keys(scaleResults).length === 0 ? {} : { scaleResults };
+}
+function buildScaleResults(caseResults) {
+  const scaleResults = {};
+  for (const result3 of caseResults) {
+    const definition = SCALE_RESULT_CASES[result3.caseId];
+    if (definition === void 0 || result3.status !== "passed" && result3.status !== "failed") {
+      continue;
+    }
+    const metrics = metricMap(result3.metrics);
+    const entry = {
+      caseId: result3.caseId,
+      status: result3.status,
+      passed: result3.passed,
+      runtimeSource: metricValue(metrics, "runtimeSourceIsMaterialized") === 1 ? "materialized" : "synthetic",
+      storageSource: scaleStorageSource(metrics),
+      runtimeMs: metricValue(metrics, definition.runtimeMetric),
+      targetProjectCount: metricValue(metrics, "targetProjectCount"),
+      targetActiveMemoryCount: metricValue(metrics, "targetActiveMemoryCount"),
+      targetPendingMemoryCount: metricValue(metrics, "targetPendingMemoryCount"),
+      materializedProjectCount: metricValue(metrics, "materializedProjectCount"),
+      materializedActiveMemoryCount: metricValue(metrics, "materializedActiveMemoryCount"),
+      materializedPendingMemoryCount: metricValue(metrics, "materializedPendingMemoryCount"),
+      sqliteIndexedActiveCount: metricValue(metrics, "sqliteIndexedActiveCount"),
+      sqliteIndexedPendingCount: metricValue(metrics, "sqliteIndexedPendingCount"),
+      jsonlRecordCount: metricValue(metrics, "jsonlRecordCount"),
+      jsonlSizeBytes: metricValue(metrics, "jsonlSizeBytes"),
+      memoryDbBytesPerMemory: metricValue(metrics, "memoryDbBytesPerMemory"),
+      ...optionalMetric(metrics, "memoryDbSizeBytes"),
+      ...optionalMetric(metrics, "continuityGetP50Ms"),
+      ...optionalMetric(metrics, "continuityGetP95Ms"),
+      ...optionalMetric(metrics, "continuityGetP99Ms"),
+      ...optionalMetric(metrics, "indexStaleRate"),
+      hardFailures: result3.hardFailures
+    };
+    scaleResults[definition.label] = entry;
+  }
+  return scaleResults;
+}
+function metricMap(metrics) {
+  return new Map(metrics.map((metric) => [metric.name, metric.value]));
+}
+function metricValue(metrics, name) {
+  return metrics.get(name) ?? 0;
+}
+function optionalMetric(metrics, name) {
+  const value = metrics.get(name);
+  return value === void 0 ? {} : { [name]: value };
+}
+function scaleStorageSource(metrics) {
+  const fullTarget = metricValue(metrics, "targetProjectCount") === metricValue(metrics, "materializedProjectCount") && metricValue(metrics, "targetActiveMemoryCount") === metricValue(metrics, "materializedActiveMemoryCount") && metricValue(metrics, "targetPendingMemoryCount") === metricValue(metrics, "materializedPendingMemoryCount");
+  return fullTarget ? "full-target-materialized-fixture" : "capped-materialized-fixture";
 }
 async function firstFileHash(paths) {
   return createHash16("sha256").update(await readFirstFileBuffer(paths)).digest("hex");

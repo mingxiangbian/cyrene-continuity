@@ -267,6 +267,50 @@ describe('memory retriever', () => {
     expect(result.map((item) => item.memory.id)).toEqual(['seed-jsonl-rule'])
     expect(JSON.stringify(result)).not.toContain('edge:relation:refines')
   })
+
+  it('does not expand cross-scope relation edges in JSONL fallback retrieval', async () => {
+    const memoryRoot = await createTempDir('cyrene-memory-retriever-cross-scope-relation-root-')
+    await mkdir(memoryRoot, { recursive: true })
+    await writeJsonLines(join(memoryRoot, 'index.jsonl'), [
+      createMemory({
+        id: 'project-jsonl-seed',
+        content: 'Projectjsonlalpha relation seed should retrieve normally.',
+        normalizedKey: 'projectjsonlalpha-relation-seed'
+      }),
+      createMemory({
+        id: 'global-jsonl-target',
+        content: 'Unrelated global relation target must not replace the local fallback seed.',
+        normalizedKey: 'global-jsonl-relation-target',
+        scope: 'global',
+        confidenceTier: 'global_core'
+      })
+    ])
+    await upsertMemoryEdgeFromRoot(memoryRoot, createOperationBackedEdge({
+      fromMemoryId: 'global-jsonl-target',
+      toMemoryId: 'project-jsonl-seed',
+      fromScope: 'global',
+      toScope: 'project',
+      toProjectId: 'project-a',
+      relationType: 'supersedes',
+      now: '2026-06-07T00:00:00.000Z',
+      reason: 'review approved cross-scope edge',
+      evidenceId: 'review-jsonl-cross-scope-edge-1',
+      evidenceKind: 'review_hash'
+    }))
+
+    const result = await retrieveMemories({
+      cwd: memoryRoot,
+      userCyreneDir: memoryRoot,
+      memoryRoot,
+      query: 'projectjsonlalpha',
+      task: 'memory',
+      maxItems: 1,
+      maxTokens: 100
+    })
+
+    expect(result.map((item) => item.memory.id)).toEqual(['project-jsonl-seed'])
+    expect(JSON.stringify(result)).not.toContain('edge:relation:supersedes')
+  })
 })
 
 function createMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
