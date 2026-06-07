@@ -10490,6 +10490,7 @@ var ROUTING_DECISIONS_FILE = "routing_decisions.jsonl";
 var REVIEW_DECISIONS_FILE = "review_decisions.jsonl";
 var ACTIVATION_EVENTS_FILE = "activation_events.jsonl";
 var SEMANTIC_REWRITE_RECEIPTS_FILE = "semantic_rewrite_receipts.jsonl";
+var MEMORY_EDGES_FILE = "memory_edges.jsonl";
 var EVENTS_FILE = "events.jsonl";
 var TOMBSTONES_FILE = "tombstones.jsonl";
 var MAX_PENDING_EVIDENCE = 10;
@@ -10682,6 +10683,48 @@ async function readSemanticRewriteReceiptsFromRoot(memoryRoot) {
   }
   return readJsonLines(join4(memoryRoot, SEMANTIC_REWRITE_RECEIPTS_FILE));
 }
+async function readMemoryEdgesFromRoot(memoryRoot) {
+  const readable = await isReadableMemoryRoot(memoryRoot);
+  if (!readable) {
+    return [];
+  }
+  return readJsonLines(join4(memoryRoot, MEMORY_EDGES_FILE));
+}
+async function writeMemoryEdgesFromRoot(memoryRoot, edges) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  await writeJsonLinesAtomic(join4(root, MEMORY_EDGES_FILE), edges);
+}
+async function upsertMemoryEdgeFromRoot(memoryRoot, edge) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  const current = await readMemoryEdgesFromRoot(root);
+  await writeMemoryEdgesFromRoot(root, upsertMemoryEdges(current, [edge]));
+}
+async function transitionMemoryEdgeStatusFromRoot(memoryRoot, input) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  const current = await readMemoryEdgesFromRoot(root);
+  const edge = current.find((item) => item.id === input.id);
+  if (edge === void 0) {
+    throw new Error(`Memory edge not found: ${input.id}`);
+  }
+  await writeMemoryEdgesFromRoot(root, current.map(
+    (item) => item.id === input.id ? { ...item, status: input.status, updatedAt: input.now } : item
+  ));
+  await appendMemoryEventFromRoot(root, {
+    id: randomUUID(),
+    action: "audit",
+    at: input.now,
+    reason: input.reason,
+    memoryId: input.id,
+    details: {
+      relationType: edge.relationType,
+      fromMemoryId: edge.fromMemoryId,
+      toMemoryId: edge.toMemoryId,
+      previousStatus: edge.status,
+      nextStatus: input.status,
+      ...input.details ?? {}
+    }
+  });
+}
 async function appendRoutingDecisionFromRoot(memoryRoot, decision2) {
   const root = await ensureWritableMemoryRoot(memoryRoot);
   await appendJsonLine(join4(root, ROUTING_DECISIONS_FILE), decision2);
@@ -10824,6 +10867,21 @@ function upsertSemanticMemories(current, replacements) {
     }
   }
   return next;
+}
+function upsertMemoryEdges(current, replacements) {
+  const next = [...current];
+  for (const replacement of replacements) {
+    const index = next.findIndex((edge) => edge.id === replacement.id);
+    if (index < 0) {
+      next.push(replacement);
+    } else {
+      next[index] = replacement;
+    }
+  }
+  return next.sort((left, right) => {
+    const createdAtDiff = left.createdAt.localeCompare(right.createdAt);
+    return createdAtDiff === 0 ? left.id.localeCompare(right.id) : createdAtDiff;
+  });
 }
 async function semanticMemoryStoreExists(memoryRoot) {
   const filePath = join4(memoryRoot, SEMANTIC_MEMORIES_FILE);
@@ -11093,7 +11151,7 @@ import { join as join8 } from "node:path";
 import { basename as basename2, dirname as dirname3, join as join7 } from "node:path";
 
 // src/memory/memory-index.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { mkdir as mkdir4 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname as dirname2 } from "node:path";
@@ -11156,8 +11214,110 @@ function tokenize(text) {
   return text.split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 
-// src/memory/tokenizer.ts
+// src/memory/memory-relations.ts
 import { createHash } from "node:crypto";
+var ORDINARY_RUNTIME_RELATIONS = /* @__PURE__ */ new Set([
+  "supports",
+  "supersedes",
+  "refines",
+  "derived_from",
+  "warns_against",
+  "transfers_to"
+]);
+var HIGH_IMPACT_RELATIONS = /* @__PURE__ */ new Set([
+  "contradicts",
+  "supersedes",
+  "transfers_to",
+  "derived_from"
+]);
+function relationExpansionPolicy(relationType) {
+  if (relationType === "similar_to" || relationType === "contradicts") {
+    return { runtime: false, diagnostics: true };
+  }
+  return { runtime: ORDINARY_RUNTIME_RELATIONS.has(relationType), diagnostics: true };
+}
+function resolveRelationExpansion(input) {
+  const { seedMemoryId, edge } = input;
+  if (edge.status !== "validated") {
+    return { suppressMemoryIds: [], reason: "edge_not_validated" };
+  }
+  if (!relationExpansionPolicy(edge.relationType).runtime) {
+    return { suppressMemoryIds: [], reason: "diagnostics_only" };
+  }
+  if (edge.relationType === "supersedes" && seedMemoryId === edge.toMemoryId) {
+    return {
+      includeMemoryId: edge.fromMemoryId,
+      suppressMemoryIds: [edge.toMemoryId],
+      reason: "supersedes_replacement"
+    };
+  }
+  if (edge.relationType === "supersedes" && seedMemoryId === edge.fromMemoryId) {
+    return {
+      suppressMemoryIds: [edge.toMemoryId],
+      reason: "supersedes_evidence_only"
+    };
+  }
+  if (seedMemoryId === edge.fromMemoryId) {
+    return { includeMemoryId: edge.toMemoryId, suppressMemoryIds: [], reason: edge.relationType };
+  }
+  if (seedMemoryId === edge.toMemoryId && (edge.relationType === "supports" || edge.relationType === "refines")) {
+    return { includeMemoryId: edge.fromMemoryId, suppressMemoryIds: [], reason: edge.relationType };
+  }
+  return { suppressMemoryIds: [], reason: "wrong_direction" };
+}
+function stableMemoryEdgeId(input) {
+  return `edge-${createHash("sha256").update(JSON.stringify({
+    fromMemoryId: input.fromMemoryId,
+    toMemoryId: input.toMemoryId,
+    relationType: input.relationType,
+    evidenceId: input.evidenceId ?? null
+  })).digest("hex").slice(0, 16)}`;
+}
+function createModelHintEdge(input) {
+  return {
+    id: stableMemoryEdgeId(input),
+    fromMemoryId: input.fromMemoryId,
+    toMemoryId: input.toMemoryId,
+    fromScope: input.fromScope ?? "project",
+    toScope: input.toScope ?? "project",
+    ...input.fromProjectId === void 0 ? {} : { fromProjectId: input.fromProjectId },
+    ...input.toProjectId === void 0 ? {} : { toProjectId: input.toProjectId },
+    relationType: input.relationType,
+    status: "trial",
+    confidence: input.confidence ?? 0.7,
+    origin: "model",
+    reason: input.reason,
+    evidenceKind: "model_hint",
+    createdAt: input.now,
+    updatedAt: input.now
+  };
+}
+function createOperationBackedEdge(input) {
+  if (input.evidenceId === void 0 || input.evidenceKind === void 0) {
+    throw new Error("Operation-backed relation edge requires evidenceId and evidenceKind");
+  }
+  return {
+    id: stableMemoryEdgeId(input),
+    fromMemoryId: input.fromMemoryId,
+    toMemoryId: input.toMemoryId,
+    fromScope: input.fromScope ?? "project",
+    toScope: input.toScope ?? "project",
+    ...input.fromProjectId === void 0 ? {} : { fromProjectId: input.fromProjectId },
+    ...input.toProjectId === void 0 ? {} : { toProjectId: input.toProjectId },
+    relationType: input.relationType,
+    status: "validated",
+    confidence: input.confidence ?? (HIGH_IMPACT_RELATIONS.has(input.relationType) ? 0.9 : 0.8),
+    origin: "operation",
+    reason: input.reason,
+    evidenceId: input.evidenceId,
+    evidenceKind: input.evidenceKind,
+    createdAt: input.now,
+    updatedAt: input.now
+  };
+}
+
+// src/memory/tokenizer.ts
+import { createHash as createHash2 } from "node:crypto";
 var MEMORY_TOKEN_ALIASES = {
   "\u591A\u667A\u80FD\u4F53": ["multi-agent", "multi_agent", "multiagent"],
   "\u4ED3\u5E93": ["repo", "repository"],
@@ -11251,7 +11411,7 @@ function tokenizeMemoryText(text) {
 function normalizeMemoryKey(text) {
   const tokens = tokenizeMemoryText(text).filter((token) => !isCjkToken(token) || token.length >= 2).sort(compareTokensForKey);
   const slug = tokens.join("-").replace(/[^a-z0-9\u4e00-\u9fff_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  return slug.length > 0 ? slug : createHash("sha256").update(text).digest("hex").slice(0, 16);
+  return slug.length > 0 ? slug : createHash2("sha256").update(text).digest("hex").slice(0, 16);
 }
 function addToken(tokens, token) {
   const trimmed = token.trim().toLowerCase();
@@ -11314,23 +11474,8 @@ async function retrieveMemories(input) {
       })
     };
   }).filter((item) => input.query.trim() === "" || item.score > 0).sort(compareRetrievedMemories);
-  const selected = [];
-  let tokenCount = 0;
-  for (const item of scored) {
-    if (selected.length >= input.maxItems) {
-      break;
-    }
-    const itemTokens = estimateTokens(item.memory.content);
-    if (itemTokens > input.maxTokens) {
-      continue;
-    }
-    if (tokenCount + itemTokens > input.maxTokens) {
-      break;
-    }
-    selected.push(item);
-    tokenCount += itemTokens;
-  }
-  return selected;
+  const selected = selectRetrievedWithinBudget(scored, input.maxItems, input.maxTokens);
+  return expandJsonlRelationMemories(input, selected, filtered);
 }
 async function readInputMemories(input) {
   const roots = input.memoryRoots ?? (input.memoryRoot === void 0 ? void 0 : [input.memoryRoot]);
@@ -11343,6 +11488,92 @@ function dedupeMemories(memories) {
     byKey.set(memory2.normalizedKey || memory2.id, memory2);
   }
   return [...byKey.values()];
+}
+async function expandJsonlRelationMemories(input, selected, eligibleMemories) {
+  const roots = input.memoryRoots ?? (input.memoryRoot === void 0 ? void 0 : [input.memoryRoot]);
+  if (roots === void 0 || selected.length === 0) {
+    return selected;
+  }
+  let expanded = [...selected];
+  const eligibleKeys = new Set(eligibleMemories.map(memoryIdentityKey));
+  for (const root of roots) {
+    let rootMemories;
+    let edges;
+    try {
+      [rootMemories, edges] = await Promise.all([
+        readActiveMemoriesFromRoot(root),
+        readMemoryEdgesFromRoot(root)
+      ]);
+    } catch {
+      continue;
+    }
+    if (edges.length === 0) {
+      continue;
+    }
+    const rootEligibleById = new Map(
+      rootMemories.filter((memory2) => eligibleKeys.has(memoryIdentityKey(memory2))).map((memory2) => [memory2.id, memory2])
+    );
+    expanded = expandRelationMemoriesForRoot(expanded, rootEligibleById, edges);
+  }
+  return selectRetrievedWithinBudget(expanded, input.maxItems, input.maxTokens);
+}
+function expandRelationMemoriesForRoot(selected, memoryById, edges) {
+  const byId = new Map(selected.map((item) => [item.memory.id, item]));
+  const suppressed = /* @__PURE__ */ new Set();
+  for (const seed of selected) {
+    if (!memoryById.has(seed.memory.id)) {
+      continue;
+    }
+    for (const edge of relationEdgesForSeed(edges, seed.memory.id)) {
+      const resolution = resolveRelationExpansion({ seedMemoryId: seed.memory.id, edge });
+      for (const memoryId of resolution.suppressMemoryIds) {
+        suppressed.add(memoryId);
+      }
+      if (resolution.includeMemoryId === void 0) {
+        continue;
+      }
+      const related = memoryById.get(resolution.includeMemoryId);
+      if (related === void 0) {
+        continue;
+      }
+      const edgeType = `edge:relation:${edge.relationType}`;
+      const existing = byId.get(related.id);
+      byId.set(related.id, {
+        memory: related,
+        score: existing?.score ?? Math.min(seed.score, edge.confidence),
+        explain: mergeExplain(existing?.explain ?? seed.explain, [edgeType])
+      });
+    }
+  }
+  return [...byId.values()].filter((item) => !suppressed.has(item.memory.id));
+}
+function relationEdgesForSeed(edges, seedMemoryId) {
+  return edges.filter((edge) => edge.fromMemoryId === seedMemoryId || edge.toMemoryId === seedMemoryId);
+}
+function mergeExplain(current, additions) {
+  return Array.from(/* @__PURE__ */ new Set([...current ?? [], ...additions]));
+}
+function memoryIdentityKey(memory2) {
+  return JSON.stringify([memory2.id, memory2.normalizedKey, memory2.content, memory2.scope, memory2.updatedAt]);
+}
+function selectRetrievedWithinBudget(items, maxItems, maxTokens) {
+  const selected = [];
+  let tokenCount = 0;
+  for (const item of items) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    const itemTokens = estimateTokens(item.memory.content);
+    if (itemTokens > maxTokens) {
+      continue;
+    }
+    if (tokenCount + itemTokens > maxTokens) {
+      break;
+    }
+    selected.push(item);
+    tokenCount += itemTokens;
+  }
+  return selected;
 }
 function isMemoryEligibleForRetrieval(memory2, input, task) {
   if (memory2.status !== "active") {
@@ -11668,22 +11899,29 @@ var SqliteMemoryIndexAdapter = class {
         on conflict(project_id) do update set updated_at = excluded.updated_at
       `).run(root.projectId, root.projectId, root.projectId, now, now);
     }
-    const [active, pending] = await Promise.all([
+    const [active, pending, durableEdges] = await Promise.all([
       readActiveMemoriesFromRoot(root.memoryRoot),
-      readPendingMemoriesFromRoot(root.memoryRoot)
+      readPendingMemoriesFromRoot(root.memoryRoot),
+      readMemoryEdgesFromRoot(root.memoryRoot)
     ]);
     const indexedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const indexedMemoryIds = /* @__PURE__ */ new Set();
     for (const memory2 of active) {
       const indexId = this.insertMemory(root, memory2);
+      indexedMemoryIds.add(indexId);
       for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory2, indexedAt)) {
         this.upsertMemoryEdgeRecord(edge);
       }
     }
     for (const memory2 of pending) {
       const indexId = this.insertMemory(root, memory2);
+      indexedMemoryIds.add(indexId);
       for (const edge of deriveIndexedDeterministicMemoryEdges(indexId, memory2, indexedAt)) {
         this.upsertMemoryEdgeRecord(edge);
       }
+    }
+    for (const edge of deriveIndexedDurableMemoryEdges(root, durableEdges, indexedMemoryIds)) {
+      this.upsertMemoryEdgeRecord(edge);
     }
     return diagnostics;
   }
@@ -12249,6 +12487,53 @@ function deriveIndexedDeterministicMemoryEdges(indexId, memory2, now) {
     status: memory2.status === "active" ? "approved" : "pending"
   }));
 }
+function deriveIndexedDurableMemoryEdges(root, edges, indexedMemoryIds) {
+  return edges.flatMap((edge) => {
+    if (!durableEdgeBelongsToRoot(root, edge)) {
+      return [];
+    }
+    const fromId = memoryIndexId(root, edge.fromMemoryId);
+    const toId = memoryIndexId(root, edge.toMemoryId);
+    if (!indexedMemoryIds.has(fromId) || !indexedMemoryIds.has(toId)) {
+      return [];
+    }
+    return [{
+      id: edge.id,
+      fromId,
+      fromKind: "memory",
+      toId,
+      toKind: "memory",
+      edgeType: `relation:${edge.relationType}`,
+      weight: edge.confidence,
+      source: edge.origin === "model" ? "model" : "deterministic",
+      status: indexedDurableEdgeStatus(edge.status),
+      ...edge.evidenceId !== void 0 ? { evidenceId: edge.evidenceId } : {},
+      createdAt: edge.createdAt,
+      ...edge.status === "validated" ? { approvedAt: edge.updatedAt } : {}
+    }];
+  });
+}
+function durableEdgeBelongsToRoot(root, edge) {
+  if (edge.fromScope !== root.scope || edge.toScope !== root.scope) {
+    return false;
+  }
+  if (root.scope === "project") {
+    return edge.fromProjectId === root.projectId && edge.toProjectId === root.projectId;
+  }
+  return edge.fromProjectId === void 0 && edge.toProjectId === void 0;
+}
+function indexedDurableEdgeStatus(status) {
+  switch (status) {
+    case "validated":
+      return "approved";
+    case "trial":
+      return "pending";
+    case "expired":
+    case "rejected":
+    case "superseded":
+      return "rejected";
+  }
+}
 function indexedMemoryIdPayload(fromId) {
   try {
     const value = JSON.parse(fromId);
@@ -12280,7 +12565,7 @@ function isSafeFileTraceRef(ref) {
   return /^[\w./-]+\.[\w]+$/.test(ref) && !ref.includes("..");
 }
 function hashText(value, length) {
-  return createHash2("sha256").update(value).digest("hex").slice(0, length);
+  return createHash3("sha256").update(value).digest("hex").slice(0, length);
 }
 function dependencyFingerprint(dependencyNames2) {
   return dependencyNames2.slice().sort().join("\n");
@@ -12394,7 +12679,7 @@ function basicFtsTokens(text) {
 }
 
 // src/codex/project-fingerprint.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { readdir as readdir2, readFile as readFile3, stat } from "node:fs/promises";
 import { join as join6 } from "node:path";
 var MAX_PROJECT_SCAN_FILES = 1e3;
@@ -12581,12 +12866,12 @@ async function exists(path) {
   }
 }
 function hashShort(value) {
-  return createHash3("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash4("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/project-id.ts
 import { execFile } from "node:child_process";
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { realpath as realpath4 } from "node:fs/promises";
 import { basename, resolve as resolve2 } from "node:path";
 import { promisify } from "node:util";
@@ -12624,7 +12909,7 @@ async function tryGit(args, cwd) {
   }
 }
 function sha256Short(value) {
-  return createHash4("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash5("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/codex-memory-index.ts
@@ -13774,7 +14059,7 @@ function isErrorCode3(error2, code) {
 }
 
 // src/codex/continuity-context.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 
 // src/affect/affect-runtime.ts
 async function buildContinuitySnapshot(input) {
@@ -14246,8 +14531,99 @@ function overlapScore(label, sourceValues, targetValues, weight, reason) {
   return matches2.length / denominator * weight;
 }
 
+// src/memory/types.ts
+var MEMORY_DOMAINS = ["project", "personal", "relationship", "affective", "procedural", "system"];
+var MEMORY_TYPES = [
+  "project_fact",
+  "user_preference",
+  "interaction_style",
+  "relationship_boundary",
+  "affective_pattern",
+  "procedural_rule",
+  "episode",
+  "system_policy",
+  "reference"
+];
+var MEMORY_STRENGTHS = ["hard", "soft", "session"];
+var MEMORY_SCOPES = ["global", "project", "session"];
+var PROJECT_CONFIDENCE_TIERS = ["trial", "validated", "project_core"];
+var GLOBAL_CONFIDENCE_TIERS = ["global_core"];
+var CONFIDENCE_TIERS = [...PROJECT_CONFIDENCE_TIERS, ...GLOBAL_CONFIDENCE_TIERS];
+var ACTIVATION_MODES = [
+  "workflow_hint",
+  "plan_constraint",
+  "checklist_item",
+  "workflow_selection"
+];
+var RUNTIME_ACTIVATION_STRENGTHS = ["hint", "constraint", "checklist", "profile"];
+var MEMORY_SOURCES2 = [
+  "user_explicit",
+  "user_implicit",
+  "assistant_observed",
+  "tool_trace",
+  "file",
+  "legacy_markdown",
+  "review_event"
+];
+var MEMORY_CANDIDATE_KINDS2 = [
+  "project_fact",
+  "project_decision",
+  "user_instruction",
+  "workflow_rule",
+  "known_pitfall",
+  "rejected_approach",
+  "open_question"
+];
+var MEMORY_MODULES = [
+  "project_semantic",
+  "procedural",
+  "system",
+  "preference",
+  "global_policy",
+  "relationship_affective",
+  "principle_candidate",
+  "task_state"
+];
+var SEMANTIC_MEMORY_STATUSES = [
+  "candidate",
+  "pending",
+  "active",
+  "archived",
+  "rejected",
+  "superseded"
+];
+var UPDATE_POLICIES = [
+  "strict_auto_promote",
+  "pending_review",
+  "manual_only",
+  "drop",
+  "defer"
+];
+var MEMORY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
+var MEMORY_RELATION_TYPES = [
+  "supports",
+  "contradicts",
+  "supersedes",
+  "refines",
+  "derived_from",
+  "similar_to",
+  "warns_against",
+  "transfers_to"
+];
+var ADMISSION_ACTIONS = [
+  "admit_to_pending",
+  "admit_to_distillation",
+  "episode_only",
+  "task_state",
+  "reference_only",
+  "auto_drop",
+  "auto_defer",
+  "merge_with_existing",
+  "reject_duplicate"
+];
+
 // src/codex/memory-review.ts
-import { createHash as createHash6, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID7 } from "node:crypto";
 
 // src/codex/active-memory-readiness.ts
 var VERSION_OR_SESSION_PATTERN = /(?:\bv\d+(?:\.\d+)*\b|本轮|这次|当前|目前|刚刚|today|this round|current)/i;
@@ -14327,7 +14703,7 @@ import { lstat as lstat8, open, readdir as readdir4, readFile as readFile8, real
 import { dirname as dirname8, isAbsolute as isAbsolute3, join as join13, relative as relative3 } from "node:path";
 
 // src/memory/memory-validator.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 function validateMemoryCandidate(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const candidate = normalizeCandidate(input.candidate);
@@ -14433,7 +14809,7 @@ function distinctEvidenceCount(candidate) {
       seenRunIds.add(runId);
     }
     const summaryQuote = `${entry.summary ?? ""}|${entry.quote ?? ""}`;
-    const hash = createHash5("sha256").update(summaryQuote).digest("hex");
+    const hash = createHash6("sha256").update(summaryQuote).digest("hex");
     keys.add(evidenceGroupId ?? sessionId ?? runId ?? hash);
   }
   return keys.size;
@@ -15905,87 +16281,6 @@ function isFileErrorCode9(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
-// src/memory/types.ts
-var MEMORY_DOMAINS = ["project", "personal", "relationship", "affective", "procedural", "system"];
-var MEMORY_TYPES = [
-  "project_fact",
-  "user_preference",
-  "interaction_style",
-  "relationship_boundary",
-  "affective_pattern",
-  "procedural_rule",
-  "episode",
-  "system_policy",
-  "reference"
-];
-var MEMORY_STRENGTHS = ["hard", "soft", "session"];
-var MEMORY_SCOPES = ["global", "project", "session"];
-var PROJECT_CONFIDENCE_TIERS = ["trial", "validated", "project_core"];
-var GLOBAL_CONFIDENCE_TIERS = ["global_core"];
-var CONFIDENCE_TIERS = [...PROJECT_CONFIDENCE_TIERS, ...GLOBAL_CONFIDENCE_TIERS];
-var ACTIVATION_MODES = [
-  "workflow_hint",
-  "plan_constraint",
-  "checklist_item",
-  "workflow_selection"
-];
-var RUNTIME_ACTIVATION_STRENGTHS = ["hint", "constraint", "checklist", "profile"];
-var MEMORY_SOURCES2 = [
-  "user_explicit",
-  "user_implicit",
-  "assistant_observed",
-  "tool_trace",
-  "file",
-  "legacy_markdown",
-  "review_event"
-];
-var MEMORY_CANDIDATE_KINDS2 = [
-  "project_fact",
-  "project_decision",
-  "user_instruction",
-  "workflow_rule",
-  "known_pitfall",
-  "rejected_approach",
-  "open_question"
-];
-var MEMORY_MODULES = [
-  "project_semantic",
-  "procedural",
-  "system",
-  "preference",
-  "global_policy",
-  "relationship_affective",
-  "principle_candidate",
-  "task_state"
-];
-var SEMANTIC_MEMORY_STATUSES = [
-  "candidate",
-  "pending",
-  "active",
-  "archived",
-  "rejected",
-  "superseded"
-];
-var UPDATE_POLICIES = [
-  "strict_auto_promote",
-  "pending_review",
-  "manual_only",
-  "drop",
-  "defer"
-];
-var MEMORY_CONFLICT_RESOLUTIONS = ["supersede", "keep_both", "reject_new"];
-var ADMISSION_ACTIONS = [
-  "admit_to_pending",
-  "admit_to_distillation",
-  "episode_only",
-  "task_state",
-  "reference_only",
-  "auto_drop",
-  "auto_defer",
-  "merge_with_existing",
-  "reject_duplicate"
-];
-
 // src/codex/memory-review.ts
 var READINESS_REASON_TEXT_LIMIT = 120;
 var NORMALIZED_KEY_CONFLICT_RESOLUTIONS = [...MEMORY_CONFLICT_RESOLUTIONS];
@@ -16014,7 +16309,7 @@ function reviewHashForSemanticMemory(memory2) {
     createdAt: memory2.createdAt,
     updatedAt: memory2.updatedAt
   };
-  return createHash6("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash7("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 function summarizePendingMemory(candidate, now = (/* @__PURE__ */ new Date()).toISOString(), semanticRewriteReceipts = []) {
   const semanticMemory = pendingReviewSemanticMemory(candidate);
@@ -17068,10 +17363,10 @@ function addDays2(iso, days) {
 }
 
 // src/codex/memory-feedback.ts
-import { createHash as createHash8, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID9 } from "node:crypto";
 
 // src/codex/active-memory-review.ts
-import { createHash as createHash7, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID8 } from "node:crypto";
 
 // src/codex/fast-summary-store.ts
 import { mkdir as mkdir10, readFile as readFile12, writeFile as writeFile8 } from "node:fs/promises";
@@ -17236,7 +17531,7 @@ function activationPolicyMatchesConfidenceTier(tier, policy) {
 
 // src/codex/active-memory-review.ts
 function contentHashForActiveMemory(memory2) {
-  return createHash7("sha256").update(JSON.stringify({
+  return createHash8("sha256").update(JSON.stringify({
     id: memory2.id,
     content: memory2.content,
     normalizedKey: memory2.normalizedKey,
@@ -17564,7 +17859,7 @@ function inheritedLifecycleFields(memory2) {
 }
 function tombstoneForActiveMemory(memory2, input) {
   return {
-    id: `tombstone-${memory2.id}-${createHash7("sha256").update(`${memory2.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
+    id: `tombstone-${memory2.id}-${createHash8("sha256").update(`${memory2.updatedAt}:${input.now}:${input.reason}`).digest("hex").slice(0, 8)}`,
     memoryId: memory2.id,
     normalizedKey: memory2.normalizedKey,
     domain: memory2.domain,
@@ -17738,7 +18033,7 @@ var PUBLIC_ACTIVATION_FEEDBACK_EVENTS = [
   "violated"
 ];
 function queryHashFor(query) {
-  return createHash8("sha256").update(query).digest("hex").slice(0, 16);
+  return createHash9("sha256").update(query).digest("hex").slice(0, 16);
 }
 async function recordCodexMemoryFeedback(input) {
   const projectIdentity = await identifyCodexProject(input.cwd);
@@ -17872,7 +18167,7 @@ function normalizedIdempotencyKey(input, queryHash) {
   if (explicit !== void 0 && explicit !== "") {
     return explicit;
   }
-  return createHash8("sha256").update(`${input.memoryId}:${input.event}:${feedbackContextKey({
+  return createHash9("sha256").update(`${input.memoryId}:${input.event}:${feedbackContextKey({
     activationId: input.activationId,
     evidenceRef: input.evidenceRef,
     queryHash
@@ -17941,7 +18236,7 @@ async function appendActivationEventsFailOpen(input) {
 }
 
 // src/codex/memory-activation.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 var DISTINCTIVE_TOKEN_LENGTH = 8;
 var DO_NOT_USE_BOUNDARY_TOKENS = /* @__PURE__ */ new Set([
   "avoid",
@@ -18077,7 +18372,7 @@ function riskForMemory(memory2) {
   return "low";
 }
 function stableActivationId(memoryId, mode, source) {
-  return createHash9("sha256").update(`${memoryId}:${mode}:${source}`).digest("hex").slice(0, 16);
+  return createHash10("sha256").update(`${memoryId}:${mode}:${source}`).digest("hex").slice(0, 16);
 }
 function normalizeMaxPerBucket(value) {
   if (value === void 0) return 6;
@@ -18700,14 +18995,26 @@ async function retrieveRoutedMemory(input) {
     const safeSimilarProjectHints = evalGate.passed ? similarRetrieval.similarProjectHints : [];
     const eligibleGlobalMemory = globalMemory.filter(({ memory: memory2 }) => isMemoryEligibleForRetrieval(memory2, input.fallback, input.task) && !input.retrievalPlan.excludeDomains.includes(memory2.domain));
     const eligibleProjectMemory = projectMemory.filter(({ memory: memory2 }) => isMemoryEligibleForRetrieval(memory2, input.fallback, input.task) && !input.retrievalPlan.excludeDomains.includes(memory2.domain));
-    const graphEdgeTypesByMemoryKey = input.retrievalPlan.includeGraphNeighbors ? await queryGraphEdgeTypes(adapter, [
-      ...eligibleGlobalMemory,
-      ...eligibleProjectMemory,
-      ...safeSimilarProjectHints
-    ], input.projectId) : /* @__PURE__ */ new Map();
-    return {
+    const relationExpandedMemory = await expandSqliteRelationMemory({
+      adapter,
+      currentProjectId: input.projectId,
+      task: input.task,
+      retrievalPlan: input.retrievalPlan,
+      fallback: input.fallback,
       globalMemory: eligibleGlobalMemory,
-      projectMemory: eligibleProjectMemory,
+      projectMemory: eligibleProjectMemory
+    });
+    const graphEdgeTypesByMemoryKey = mergeGraphEdgeTypeMaps(
+      input.retrievalPlan.includeGraphNeighbors ? await queryGraphEdgeTypes(adapter, [
+        ...relationExpandedMemory.globalMemory,
+        ...relationExpandedMemory.projectMemory,
+        ...safeSimilarProjectHints
+      ], input.projectId) : /* @__PURE__ */ new Map(),
+      relationExpandedMemory.relationEdgeTypesByMemoryKey
+    );
+    return {
+      globalMemory: relationExpandedMemory.globalMemory,
+      projectMemory: relationExpandedMemory.projectMemory,
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
       graphEdgeTypesByMemoryKey,
@@ -18818,6 +19125,82 @@ async function fallbackRoutedMemory(input, diagnostics, projectId, policy) {
       pendingLatencyMs,
       similarLatencyMs: 0
     }
+  };
+}
+async function expandSqliteRelationMemory(input) {
+  const [global, project] = await Promise.all([
+    expandSqliteRelationRoute({
+      ...input,
+      route: "global",
+      memory: input.globalMemory
+    }),
+    expandSqliteRelationRoute({
+      ...input,
+      route: "project",
+      memory: input.projectMemory
+    })
+  ]);
+  return {
+    globalMemory: global.memory,
+    projectMemory: project.memory,
+    relationEdgeTypesByMemoryKey: mergeGraphEdgeTypeMaps(global.relationEdgeTypesByMemoryKey, project.relationEdgeTypesByMemoryKey)
+  };
+}
+async function expandSqliteRelationRoute(input) {
+  const byId = new Map(input.memory.map((item) => [item.memory.id, item]));
+  const suppressed = /* @__PURE__ */ new Set();
+  const relationEdgeTypesByMemoryKey = /* @__PURE__ */ new Map();
+  let routeCandidates;
+  const candidates = async () => {
+    if (routeCandidates !== void 0) {
+      return routeCandidates;
+    }
+    const queried = await input.adapter.queryActive({
+      currentProjectId: input.currentProjectId,
+      query: "",
+      route: input.route,
+      task: input.task,
+      maxItems: 100,
+      maxTokens: 4e3
+    });
+    routeCandidates = new Map(
+      queried.filter(({ memory: memory2 }) => isMemoryEligibleForRetrieval(memory2, input.fallback, input.task) && !input.retrievalPlan.excludeDomains.includes(memory2.domain)).map((item) => [item.memory.id, item])
+    );
+    return routeCandidates;
+  };
+  for (const seed of input.memory) {
+    const seedKey = memoryGraphKeyForRoutedItem(seed, input.currentProjectId);
+    const [outgoing, incoming] = await Promise.all([
+      input.adapter.queryMemoryEdges({ fromId: seedKey, status: "approved" }),
+      input.adapter.queryMemoryEdges({ toId: seedKey, status: "approved" })
+    ]);
+    for (const edge of uniqueIndexedMemoryEdges([...outgoing, ...incoming])) {
+      const durableEdge = durableRelationEdgeFromIndexedEdge(edge);
+      if (durableEdge === void 0 || !durableEdgeMatchesRoute(durableEdge, input.route, input.currentProjectId)) {
+        continue;
+      }
+      const resolution = resolveRelationExpansion({ seedMemoryId: seed.memory.id, edge: durableEdge });
+      for (const memoryId of resolution.suppressMemoryIds) {
+        suppressed.add(memoryId);
+      }
+      if (resolution.includeMemoryId === void 0) {
+        continue;
+      }
+      const related = byId.get(resolution.includeMemoryId) ?? (await candidates()).get(resolution.includeMemoryId);
+      if (related === void 0) {
+        continue;
+      }
+      byId.set(related.memory.id, related);
+      addGraphEdgeType(
+        relationEdgeTypesByMemoryKey,
+        memoryGraphKeyForRoutedItem(related, input.currentProjectId),
+        `relation:${durableEdge.relationType}`
+      );
+    }
+  }
+  return {
+    memory: [...byId.values()].filter((item) => !suppressed.has(item.memory.id)),
+    relationEdgeTypesByMemoryKey
   };
 }
 function emptyRoutedMemory(diagnostics, reason) {
@@ -18969,7 +19352,7 @@ async function generateCodexSessionHintsFailOpen(input) {
   }
 }
 function stableSessionHintId(item) {
-  return `session-hint-${createHash10("sha256").update(JSON.stringify({
+  return `session-hint-${createHash11("sha256").update(JSON.stringify({
     sourceProjectId: item.homeProjectId,
     memoryId: item.memory.id,
     content: item.memory.content
@@ -19142,6 +19525,14 @@ function tokenize2(text) {
   return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 function toRoutedMemoryDigestItem(item, input) {
+  const explain = explainRetrievalReasons({
+    exactProject: input.exactProject,
+    globalPolicy: item.memory.scope === "global",
+    memoryKind: memoryKindForRetrieval(item.memory),
+    taskIntent: input.retrievalPlan.taskIntent,
+    edgeTypes: input.edgeTypes,
+    score: item.score
+  });
   return {
     id: item.memory.id,
     domain: item.memory.domain,
@@ -19152,15 +19543,12 @@ function toRoutedMemoryDigestItem(item, input) {
     status: item.memory.status,
     content: item.memory.content,
     score: item.score,
-    explain: explainRetrievalReasons({
-      exactProject: input.exactProject,
-      globalPolicy: item.memory.scope === "global",
-      memoryKind: memoryKindForRetrieval(item.memory),
-      taskIntent: input.retrievalPlan.taskIntent,
-      edgeTypes: input.edgeTypes,
-      score: item.score
-    })
+    explain: mergeRuntimeExplain(explain, "explain" in item ? item.explain : void 0)
   };
+}
+function mergeRuntimeExplain(base, inherited) {
+  const relationReasons = (inherited ?? []).filter((reason) => reason.startsWith("edge:relation:"));
+  return Array.from(/* @__PURE__ */ new Set([...base, ...relationReasons]));
 }
 function toPendingHypothesisDigestItem(item) {
   return {
@@ -19225,9 +19613,104 @@ async function queryGraphEdgeTypes(adapter, items, currentProjectId) {
   const entries = await Promise.all(items.map(async (item) => {
     const key = memoryGraphKeyForRoutedItem(item, currentProjectId);
     const edges = await adapter.queryMemoryEdges({ fromId: key, status: "approved" });
-    return [key, Array.from(new Set(edges.map((edge) => edge.edgeType)))];
+    return [key, Array.from(new Set(edges.map((edge) => edge.edgeType).filter(isRuntimeGraphEdgeType)))];
   }));
   return new Map(entries.filter(([, edgeTypes]) => edgeTypes.length > 0));
+}
+function isRuntimeGraphEdgeType(edgeType) {
+  const relationType = relationTypeFromEdgeType(edgeType);
+  return relationType === void 0 || relationExpansionPolicy(relationType).runtime;
+}
+function uniqueIndexedMemoryEdges(edges) {
+  const seen = /* @__PURE__ */ new Set();
+  const output = [];
+  for (const edge of edges) {
+    if (seen.has(edge.id)) {
+      continue;
+    }
+    seen.add(edge.id);
+    output.push(edge);
+  }
+  return output;
+}
+function durableRelationEdgeFromIndexedEdge(edge) {
+  const relationType = relationTypeFromEdgeType(edge.edgeType);
+  if (relationType === void 0) {
+    return void 0;
+  }
+  const from = parseIndexedMemoryGraphKey(edge.fromId);
+  const to = parseIndexedMemoryGraphKey(edge.toId);
+  if (from === void 0 || to === void 0) {
+    return void 0;
+  }
+  return {
+    id: edge.id,
+    fromMemoryId: from.memoryId,
+    toMemoryId: to.memoryId,
+    fromScope: from.scope,
+    toScope: to.scope,
+    ...from.projectId === null ? {} : { fromProjectId: from.projectId },
+    ...to.projectId === null ? {} : { toProjectId: to.projectId },
+    relationType,
+    status: "validated",
+    confidence: edge.weight,
+    origin: edge.source === "model" ? "model" : "deterministic",
+    reason: "approved indexed relation edge",
+    ...edge.evidenceId === void 0 ? {} : { evidenceId: edge.evidenceId },
+    createdAt: edge.createdAt,
+    updatedAt: edge.approvedAt ?? edge.createdAt
+  };
+}
+function relationTypeFromEdgeType(edgeType) {
+  if (!edgeType.startsWith("relation:")) {
+    return void 0;
+  }
+  const relationType = edgeType.slice("relation:".length);
+  return isMemoryRelationType(relationType) ? relationType : void 0;
+}
+function isMemoryRelationType(value) {
+  return MEMORY_RELATION_TYPES.includes(value);
+}
+function durableEdgeMatchesRoute(edge, route, currentProjectId) {
+  if (edge.fromScope !== route || edge.toScope !== route) {
+    return false;
+  }
+  if (route === "global") {
+    return edge.fromProjectId === void 0 && edge.toProjectId === void 0;
+  }
+  return edge.fromProjectId === currentProjectId && edge.toProjectId === currentProjectId;
+}
+function parseIndexedMemoryGraphKey(value) {
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length !== 3) {
+      return void 0;
+    }
+    const [scope, projectId, memoryId] = parsed;
+    if (scope !== "global" && scope !== "project" || typeof memoryId !== "string") {
+      return void 0;
+    }
+    if (projectId !== null && typeof projectId !== "string") {
+      return void 0;
+    }
+    return { scope, projectId, memoryId };
+  } catch {
+    return void 0;
+  }
+}
+function addGraphEdgeType(map, key, edgeType) {
+  map.set(key, Array.from(/* @__PURE__ */ new Set([...map.get(key) ?? [], edgeType])));
+}
+function mergeGraphEdgeTypeMaps(...maps) {
+  const merged = /* @__PURE__ */ new Map();
+  for (const map of maps) {
+    for (const [key, edgeTypes] of map) {
+      for (const edgeType of edgeTypes) {
+        addGraphEdgeType(merged, key, edgeType);
+      }
+    }
+  }
+  return merged;
 }
 function memoryGraphKeyForRoutedItem(item, currentProjectId) {
   if ("homeProjectId" in item && item.homeProjectId !== null) {
@@ -19424,7 +19907,7 @@ function uniqueChecks(checks) {
 import { join as join32 } from "node:path";
 
 // benchmark/runner.ts
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 import { execFile as execFile3 } from "node:child_process";
 import { readFile as readFile22 } from "node:fs/promises";
 import { dirname as dirname11, join as join31, resolve as resolve5 } from "node:path";
@@ -19573,6 +20056,14 @@ var BENCHMARK_CASES = [
   caseSpec({ id: "T16-REVIEW-STALE-HASH", tier: "tier1_6", title: "stale review hash cannot approve pending memory", profiles: ["gate", "full"], action: action("direct", "reviewPendingMemory", "stale hash rejection"), expected: ["stale hash rejection"], forbidden: ["stale hash accepted"], metrics: ["manualReviewCount", "stalePendingCount", "reviewFalsePositiveRate"], passFail: ["stale_approval_success"] }),
   caseSpec({ id: "T16-REVIEW-REJECT-DEFER", tier: "tier1_6", title: "reject and defer decisions do not activate memory", profiles: ["gate", "full"], action: action("direct", "reviewPendingMemory", "reject and defer lifecycle check"), expected: ["reject and defer stay inactive"], forbidden: ["rejected memory activated"], metrics: ["manualReviewCount", "rejectCount", "deferCount", "pendingReviewedCount", "stalePendingCount"], passFail: ["rejected_memory_activation"] }),
   caseSpec({ id: "T16-REVIEW-EDIT-HASH", tier: "tier1_6", title: "edited review content gets a fresh hash contract", profiles: ["gate", "full"], action: action("direct", "reviewPendingMemory", "edit hash lifecycle check"), expected: ["edited candidate receives new hash"], forbidden: ["edited content approved with stale hash"], metrics: ["manualReviewCount", "editCount", "averageReviewTimeMs"], passFail: ["hash_bypass"] }),
+  caseSpec({ id: "T16-REL-SUPERSEDES-DIRECTION", tier: "tier1_6", title: "validated supersedes relation expands replacement and suppresses stale seed", profiles: ["gate", "full"], action: action("direct", "getCodexContinuityContext", "relation supersedes direction check"), expected: ["replacement relation memory injected", "stale relation seed suppressed"], forbidden: ["superseded relation memory injected", "old and new relation rules both injected"], metrics: ["retrievalAccuracy", "replacementAccuracy", "staleMemoryLeakageRate", "duplicateActiveMemoryRate"], passFail: ["duplicate_context_injection", "conflicting_context_injection"] }),
+  caseSpec({ id: "T16-REL-SIMILAR-NO-EXPANSION", tier: "tier1_6", title: "similar_to relation stays diagnostics-only and does not expand runtime context", profiles: ["gate", "full"], action: action("direct", "getCodexContinuityContext", "relation similar_to diagnostics-only check"), expected: ["primary relation memory injected without similar expansion"], forbidden: ["similar relation edge used for runtime expansion"], metrics: ["retrievalAccuracy", "irrelevantRetrievalRate", "duplicateActiveMemoryRate"], passFail: ["duplicate_context_injection"] }),
+  caseSpec({ id: "T16-REL-DERIVED-TRIAL-BLOCK", tier: "tier1_6", title: "trial derived_from relation hints cannot enter active runtime context", profiles: ["gate", "full"], action: action("direct", "memoryContextPreview", "trial derived relation preview check"), expected: ["trial derived relation visible only in diagnostics"], forbidden: ["trial derived relation injected as active memory"], metrics: ["pendingLeakageRate", "pendingMisuseRate", "profilePollutionRate"], passFail: ["pending_active_bypass", "unauthorized_promotion"] }),
+  caseSpec({ id: "T16-REL-TRANSFER-HINT-ONLY", tier: "tier1_6", title: "transfers_to model relation remains hint-only and does not migrate memory", profiles: ["gate", "full"], action: action("direct", "memoryContextPreview", "transfer relation hint-only check"), expected: ["transfer relation remains diagnostic hint"], forbidden: ["transfer relation migrated active memory"], metrics: ["similarHintMigrationRate", "profilePollutionRate", "pendingGeneratedCount"], passFail: ["similar_hint_migration", "unauthorized_promotion"] }),
+  caseSpec({ id: "T16-REL-TRIAL-HINT-EXCLUSION", tier: "tier1_6", title: "trial model relation hints are excluded from ordinary runtime expansion", profiles: ["gate", "full"], action: action("direct", "getCodexContinuityContext", "trial relation runtime exclusion check"), expected: ["trial relation hint excluded from runtime"], forbidden: ["trial relation edge expanded into context"], metrics: ["pendingLeakageRate", "pendingMisuseRate", "sessionHintsCount"], passFail: ["pending_active_bypass"] }),
+  caseSpec({ id: "T16-REL-EDGE-INVALIDATION", tier: "tier1_6", title: "daily lifecycle expires relation edges whose memory endpoint is missing", profiles: ["gate", "full"], action: action("direct", "runCodexMemoryLifecycleDaily", "orphan relation edge invalidation"), expected: ["orphan relation edge expired"], forbidden: ["expired relation edge remains active"], metrics: ["staleMemoryLeakageRate", "auditLogGrowth"], passFail: ["expired_memory_injection"] }),
+  caseSpec({ id: "T16-REL-FALLBACK-SCOPE-GUARD", tier: "tier1_6", title: "JSONL fallback relation expansion stays scoped to the relation root", profiles: ["gate", "full"], action: action("direct", "getCodexContinuityContext", "JSONL relation fallback scope guard"), expected: ["current project memory survives JSONL fallback"], forbidden: ["cross-project relation target injected"], metrics: ["crossProjectPollutionRate", "jsonlFallbackRateHotPath", "indexSourceMismatchCount"], passFail: ["cross_project_pollution", "index_source_mismatch"] }),
+  caseSpec({ id: "T16-REL-LASTUSED-HOTPATH", tier: "tier1_6", title: "relation expansion hot path does not update edge lastUsed state", profiles: ["gate", "full"], action: action("direct", "getCodexContinuityContext", "relation hot-path read-only check"), expected: ["relation expansion is read-only on hot path"], forbidden: ["relation lastUsed write during retrieval"], metrics: ["retrievedDefaultWriteRate", "hotPathRebuildCount", "activationEventGrowth"], passFail: ["retrieved_default_write", "hot_path_rebuild"] }),
   caseSpec({ id: "T2-REMEMBER-TEST-COMMAND", tier: "tier2", title: "remember and reuse project test command", profiles: ["full", "llm"], action: action("replay", "memoryToActionReplay", "test command replay"), expected: ["remembered npm test command used"], forbidden: ["generic test command guessed"], adapter: { kind: "deterministic" } }),
   caseSpec({ id: "T2-AVOID-REJECTED-APPROACH", tier: "tier2", title: "avoid an approach rejected in an earlier session", profiles: ["full", "llm"], action: action("replay", "memoryToActionReplay", "rejected approach replay"), expected: ["alternate accepted approach used"], forbidden: ["rejected approach retried"], adapter: { kind: "deterministic" } }),
   caseSpec({ id: "T2-FOLLOW-WORKFLOW", tier: "tier2", title: "follow remembered project workflow", profiles: ["full", "llm"], action: action("replay", "memoryToActionReplay", "workflow replay"), expected: ["project workflow rule followed"], forbidden: ["workflow rule skipped"], adapter: { kind: "deterministic" } }),
@@ -19929,10 +20420,21 @@ async function runCodexMemoryContextPreview(input) {
   });
   const mode = policy.mode;
   const includeExclusionDetails = mode === "review" || input.includePendingDetails === true || input.includeDiagnostics === true;
+  const includeRelationDiagnostics = mode === "review" || input.includeDiagnostics === true;
   const project = await identifyCodexProject(input.cwd);
   const globalRoot = codexGlobalMemoryRoot();
   const projectRoot = codexProjectMemoryRoot(project.projectId);
-  const [context, globalPending, projectPending, globalTombstones, projectTombstones, globalSemantic, projectSemantic] = await Promise.all([
+  const [
+    context,
+    globalPending,
+    projectPending,
+    globalTombstones,
+    projectTombstones,
+    globalSemantic,
+    projectSemantic,
+    globalRelationEdges,
+    projectRelationEdges
+  ] = await Promise.all([
     getCodexContinuityContext({
       cwd: input.cwd,
       userMessage: input.userMessage,
@@ -19952,12 +20454,15 @@ async function runCodexMemoryContextPreview(input) {
     includeExclusionDetails ? readTombstonesFromRoot(globalRoot) : Promise.resolve([]),
     includeExclusionDetails ? readTombstonesFromRoot(projectRoot) : Promise.resolve([]),
     includeExclusionDetails ? readSemanticMemoriesFromRoot(globalRoot) : Promise.resolve([]),
-    includeExclusionDetails ? readSemanticMemoriesFromRoot(projectRoot) : Promise.resolve([])
+    includeExclusionDetails ? readSemanticMemoriesFromRoot(projectRoot) : Promise.resolve([]),
+    includeRelationDiagnostics ? readMemoryEdgesFromRoot(globalRoot) : Promise.resolve([]),
+    includeRelationDiagnostics ? readMemoryEdgesFromRoot(projectRoot) : Promise.resolve([])
   ]);
   const pendingReviewItems = [
     ...globalPending.map((memory2) => pendingExclusion(memory2, "global")),
     ...projectPending.map((memory2) => pendingExclusion(memory2, "project"))
   ];
+  const relationDiagnostics = includeRelationDiagnostics ? previewRelationDiagnostics([...globalRelationEdges, ...projectRelationEdges]) : void 0;
   return {
     version: 1,
     input: {
@@ -20000,9 +20505,50 @@ async function runCodexMemoryContextPreview(input) {
           hasItems: pendingReviewItems.length > 0,
           count: pendingReviewItems.length
         }
-      } : {}
+      } : {},
+      ...relationDiagnostics === void 0 ? {} : { relations: relationDiagnostics }
     }
   };
+}
+function previewRelationDiagnostics(edges) {
+  if (edges.length === 0) {
+    return void 0;
+  }
+  const included = [];
+  const filtered = [];
+  for (const edge of edges) {
+    const reason = previewRelationReason(edge);
+    if (edge.status === "validated" && reason !== "edge_not_validated" && reason !== "diagnostics_only" && reason !== "wrong_direction") {
+      included.push({
+        edgeId: edge.id,
+        relationType: edge.relationType,
+        fromMemoryId: edge.fromMemoryId,
+        toMemoryId: edge.toMemoryId,
+        reason
+      });
+    } else {
+      filtered.push({
+        edgeId: edge.id,
+        relationType: edge.relationType,
+        status: edge.status,
+        reason
+      });
+    }
+  }
+  return {
+    included: included.slice(0, 50),
+    filtered: filtered.slice(0, 50)
+  };
+}
+function previewRelationReason(edge) {
+  if (edge.status !== "validated") {
+    return "edge_not_validated";
+  }
+  const reasons = [
+    resolveRelationExpansion({ seedMemoryId: edge.fromMemoryId, edge }).reason,
+    resolveRelationExpansion({ seedMemoryId: edge.toMemoryId, edge }).reason
+  ];
+  return reasons.find((reason) => reason !== "diagnostics_only" && reason !== "wrong_direction") ?? "diagnostics_only";
 }
 function previewMemory(memory2) {
   return {
@@ -24129,14 +24675,14 @@ async function handleContinuityGet(input, fallbackCwd) {
 }
 
 // benchmark/fixtures.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { mkdir as mkdir15, mkdtemp, rm as rm6, writeFile as writeFile12 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as join22 } from "node:path";
 var defaultProcessCwd = process.cwd();
 var fixtureEnvironmentQueue = Promise.resolve();
 function seededId(seed, label) {
-  return createHash11("sha256").update(`${seed}:${label}`).digest("hex").slice(0, 16);
+  return createHash12("sha256").update(`${seed}:${label}`).digest("hex").slice(0, 16);
 }
 async function withFixtureEnvironment(fixture, fn) {
   const release = await acquireFixtureEnvironmentLock();
@@ -24383,7 +24929,7 @@ function restoreEnvValue(name, value) {
 }
 
 // benchmark/cases/common.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 async function timedCase(benchmarkCase, fn) {
   try {
     const result3 = await fn();
@@ -24444,7 +24990,7 @@ function approxTokens(value) {
   return Math.ceil(JSON.stringify(value).length / 4);
 }
 function stableId(value) {
-  return createHash12("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash13("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // benchmark/cases/tier0-release-gate.ts
@@ -25247,7 +25793,7 @@ function includesNone(text, forbidden) {
 }
 
 // src/codex/codex-memory-lifecycle-daily.ts
-import { createHash as createHash13, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID10 } from "node:crypto";
 import { readFile as readFile17 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 
@@ -25355,10 +25901,11 @@ async function runDailyForReadableRoot(root, input) {
   if (!semanticRead.ok) {
     return malformedRootResult(root, semanticRead);
   }
-  const [memories, activationEvents, memoryEvents] = await Promise.all([
+  const [memories, activationEvents, memoryEvents, relationEdges] = await Promise.all([
     Promise.resolve(semanticRead.records),
     readActivationEventsFromRoot(root.memoryRoot),
-    readMemoryEventsFromRoot(root.memoryRoot)
+    readMemoryEventsFromRoot(root.memoryRoot),
+    readMemoryEdgesFromRoot(root.memoryRoot)
   ]);
   const state = {
     root,
@@ -25386,6 +25933,10 @@ async function runDailyForReadableRoot(root, input) {
       next.push(processGlobalMemory(state, memory2));
     }
   }
+  const relationTransitions = relationEdgeMaintenanceTransitions(next, relationEdges);
+  for (const transition of relationTransitions) {
+    countRelationTransition(state.result, transition.status);
+  }
   const changed = memories.some((memory2, index) => memory2 !== next[index]);
   if (!input.dryRun) {
     for (const event of state.events) {
@@ -25401,6 +25952,14 @@ async function runDailyForReadableRoot(root, input) {
         generatedAt: input.now
       });
       state.result.fastSummaryUpdated = true;
+    }
+    for (const transition of relationTransitions) {
+      await transitionMemoryEdgeStatusFromRoot(root.memoryRoot, {
+        id: transition.edge.id,
+        status: transition.status,
+        now: input.now,
+        reason: transition.reason
+      });
     }
   }
   return state.result;
@@ -25553,6 +26112,9 @@ function baseRootResult(root) {
     promotedExplicitGlobalToCore: 0,
     recommendations: 0,
     staleTrials: 0,
+    relationEdgesExpired: 0,
+    relationEdgesValidated: 0,
+    relationEdgesRejected: 0,
     invalidMemories: 0,
     needsMigration: 0,
     evalFailures: 0,
@@ -25571,6 +26133,30 @@ function malformedRootResult(root, readResult) {
     skipped: true,
     reason: readResult.reason
   };
+}
+function relationEdgeMaintenanceTransitions(memories, edges) {
+  const memoryIds = new Set(memories.map((memory2) => memory2.id));
+  return edges.flatMap((edge) => {
+    if (edge.status !== "validated" && edge.status !== "trial" || memoryIds.has(edge.fromMemoryId) && memoryIds.has(edge.toMemoryId)) {
+      return [];
+    }
+    return [{
+      edge,
+      status: "expired",
+      reason: "v1.6 daily lifecycle expired orphan relation edge"
+    }];
+  });
+}
+function countRelationTransition(result3, status) {
+  if (status === "expired") {
+    result3.relationEdgesExpired += 1;
+    return;
+  }
+  if (status === "validated") {
+    result3.relationEdgesValidated += 1;
+    return;
+  }
+  result3.relationEdgesRejected += 1;
 }
 function activationStats(memoryId, events) {
   const applied = events.filter((event) => event.memoryId === memoryId && event.event === "applied");
@@ -25630,7 +26216,7 @@ function distinctStructuredEvidenceCount(evidence) {
   const keys = /* @__PURE__ */ new Set();
   for (const entry of evidence) {
     const explicitKey = firstPresent(entry.id, entry.sourceRef, entry.whatHappened);
-    const key = explicitKey ?? createHash13("sha256").update(`${entry.sourceKind ?? ""}|${entry.when ?? ""}|${entry.whatHappened}|${entry.whyImportant}`).digest("hex");
+    const key = explicitKey ?? createHash14("sha256").update(`${entry.sourceKind ?? ""}|${entry.when ?? ""}|${entry.whatHappened}|${entry.whyImportant}`).digest("hex");
     keys.add(key);
   }
   return keys.size;
@@ -27465,7 +28051,15 @@ var CASES2 = {
   "T16-REVIEW-HASH-REQUIRED": { hardFailure: "hash_bypass", run: runReviewHashRequired },
   "T16-REVIEW-STALE-HASH": { hardFailure: "stale_approval_success", run: runReviewStaleHash },
   "T16-REVIEW-REJECT-DEFER": { hardFailure: "rejected_memory_activation", run: runReviewRejectDefer },
-  "T16-REVIEW-EDIT-HASH": { hardFailure: "hash_bypass", run: runReviewEditHash }
+  "T16-REVIEW-EDIT-HASH": { hardFailure: "hash_bypass", run: runReviewEditHash },
+  "T16-REL-SUPERSEDES-DIRECTION": { hardFailure: "conflicting_context_injection", run: runRelationSupersedesDirection },
+  "T16-REL-SIMILAR-NO-EXPANSION": { hardFailure: "duplicate_context_injection", run: runRelationSimilarNoExpansion },
+  "T16-REL-DERIVED-TRIAL-BLOCK": { hardFailure: "pending_active_bypass", run: runRelationDerivedTrialBlock },
+  "T16-REL-TRANSFER-HINT-ONLY": { hardFailure: "similar_hint_migration", run: runRelationTransferHintOnly },
+  "T16-REL-TRIAL-HINT-EXCLUSION": { hardFailure: "pending_active_bypass", run: runRelationTrialHintExclusion },
+  "T16-REL-EDGE-INVALIDATION": { hardFailure: "expired_memory_injection", run: runRelationEdgeInvalidation },
+  "T16-REL-FALLBACK-SCOPE-GUARD": { hardFailure: "cross_project_pollution", run: runRelationFallbackScopeGuard },
+  "T16-REL-LASTUSED-HOTPATH": { hardFailure: "retrieved_default_write", run: runRelationLastUsedHotpath }
 };
 async function runTier16Case(benchmarkCase, options) {
   const handler = CASES2[benchmarkCase.id];
@@ -27711,18 +28305,265 @@ async function runReviewEditHash(input) {
     return [{ summary: "edited candidate receives new hash; stale edit hash rejected" }];
   });
 }
+async function runRelationSupersedesDirection(input) {
+  return withActiveFixture(input, [
+    activeRelationMemory("old-relation-rule", "Obsoletebenchalpha relation rule should be replaced.", "obsoletebenchalpha-relation-rule"),
+    activeRelationMemory("replacement-relation-rule", "Benchmark replacement relation rule should be used.", "replacement-relation-rule")
+  ], async (fixture) => {
+    await upsertOperationEdge(input, fixture, {
+      fromMemoryId: "replacement-relation-rule",
+      toMemoryId: "old-relation-rule",
+      relationType: "supersedes",
+      evidenceId: "review-supersedes-direction"
+    });
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd });
+    const context = await getCodexContinuityContext({
+      cwd: fixture.cwd,
+      userMessage: "obsoletebenchalpha",
+      task: "memory",
+      mode: "review",
+      includeDiagnostics: true,
+      recordRetrievedEvents: false
+    });
+    const projectMemoryIds = context.projectMemory.map((item) => item.id);
+    assert2(projectMemoryIds.includes("replacement-relation-rule"), "replacement relation memory was not injected");
+    assert2(!projectMemoryIds.includes("old-relation-rule"), "superseded relation seed was still injected");
+    assert2(!context.memory.items.map((item) => item.id).includes("old-relation-rule"), "superseded memory remained in canonical memory items");
+    assert2(
+      context.projectMemory.find((item) => item.id === "replacement-relation-rule")?.explain?.includes("edge:relation:supersedes"),
+      "replacement memory did not explain supersedes relation expansion"
+    );
+    return [{ summary: "supersedes direction ok; staleLeakage=0" }];
+  });
+}
+async function runRelationSimilarNoExpansion(input) {
+  return withActiveFixture(input, [
+    activeRelationMemory("primary-relation-rule", "Primarybenchalpha relation rule stays as the only runtime result.", "primarybenchalpha-relation-rule"),
+    activeRelationMemory("duplicate-relation-rule", "Duplicate relation rule is only useful for diagnostics.", "duplicate-relation-rule")
+  ], async (fixture) => {
+    await upsertOperationEdge(input, fixture, {
+      fromMemoryId: "primary-relation-rule",
+      toMemoryId: "duplicate-relation-rule",
+      relationType: "similar_to",
+      evidenceId: "review-similar-no-expansion"
+    });
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd });
+    const context = await getCodexContinuityContext({
+      cwd: fixture.cwd,
+      userMessage: "primarybenchalpha",
+      task: "memory",
+      mode: "review",
+      recordRetrievedEvents: false
+    });
+    const projectMemoryIds = context.projectMemory.map((item) => item.id);
+    assert2(projectMemoryIds.includes("primary-relation-rule"), "primary relation memory was not retrieved");
+    assert2(
+      !context.projectMemory.some((item) => item.explain?.includes("edge:relation:similar_to")),
+      "similar_to relation appeared in runtime expansion explain"
+    );
+    return [{ summary: "similar relation diagnostics-only; expansion=0" }];
+  });
+}
+async function runRelationDerivedTrialBlock(input) {
+  return withActiveFixture(input, [
+    activeRelationMemory("derived-seed-rule", "Derivedbenchalpha seed relation memory.", "derivedbenchalpha-seed"),
+    activeRelationMemory("derived-hint-rule", "Derived model hint target must stay out of active context.", "derived-model-hint-target")
+  ], async (fixture) => {
+    await upsertModelHintEdge(input, fixture, {
+      fromMemoryId: "derived-seed-rule",
+      toMemoryId: "derived-hint-rule",
+      relationType: "derived_from"
+    });
+    const preview = await runCodexMemoryContextPreview({
+      cwd: fixture.cwd,
+      userMessage: "derivedbenchalpha",
+      mode: "review",
+      includeDiagnostics: true
+    });
+    assert2(
+      preview.diagnostics.relations?.filtered.some(
+        (item) => item.relationType === "derived_from" && item.status === "trial" && item.reason === "edge_not_validated"
+      ),
+      "trial derived_from relation was not reported as filtered diagnostics"
+    );
+    assert2(!JSON.stringify(preview.activeContext).includes("derived-hint-rule"), "trial derived_from target entered active context");
+    assert2(!JSON.stringify(preview.activeContext).includes("edge:relation:derived_from"), "trial derived_from edge entered runtime explain");
+    return [{ summary: "derived trial relation blocked; activeHintLeakage=0" }];
+  });
+}
+async function runRelationTransferHintOnly(input) {
+  return withActiveFixture(input, [
+    activeRelationMemory("transfer-seed-rule", "Transferbenchalpha seed relation memory stays local.", "transferbenchalpha-seed")
+  ], async (fixture) => {
+    await upsertModelHintEdge(input, fixture, {
+      fromMemoryId: "transfer-seed-rule",
+      toMemoryId: "foreign-transfer-target",
+      relationType: "transfers_to",
+      toProjectId: "foreign-transfer-project"
+    });
+    const preview = await runCodexMemoryContextPreview({
+      cwd: fixture.cwd,
+      userMessage: "transferbenchalpha",
+      mode: "review",
+      includeDiagnostics: true
+    });
+    const active = await readActiveMemoriesFromRoot(fixture.projectMemoryRoot);
+    const pending = await readPendingMemoriesFromRoot(fixture.projectMemoryRoot);
+    assert2(
+      preview.diagnostics.relations?.filtered.some(
+        (item) => item.relationType === "transfers_to" && item.status === "trial" && item.reason === "edge_not_validated"
+      ),
+      "trial transfers_to relation was not kept as filtered diagnostics"
+    );
+    assert2(active.length === 1 && active[0]?.id === "transfer-seed-rule", "transfer relation migrated active memory");
+    assert2(pending.length === 0, "transfer relation generated a pending memory");
+    assert2(!JSON.stringify(preview.activeContext).includes("foreign-transfer-target"), "transfer relation target entered active context");
+    return [{ summary: "transfer relation hint-only; migration=0" }];
+  });
+}
+async function runRelationTrialHintExclusion(input) {
+  return withActiveFixture(input, [
+    activeRelationMemory("trial-hint-seed-rule", "Trialhintseedalpha seed relation memory should retrieve normally.", "trialhintseedalpha-seed"),
+    activeRelationMemory("trial-hint-target-rule", "Unrelated model relation target must not be expanded by a trial edge.", "trial-hint-target")
+  ], async (fixture) => {
+    await upsertModelHintEdge(input, fixture, {
+      fromMemoryId: "trial-hint-seed-rule",
+      toMemoryId: "trial-hint-target-rule",
+      relationType: "refines"
+    });
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd });
+    const context = await getCodexContinuityContext({
+      cwd: fixture.cwd,
+      userMessage: "trialhintseedalpha",
+      task: "memory",
+      mode: "review",
+      recordRetrievedEvents: false
+    });
+    const preview = await runCodexMemoryContextPreview({
+      cwd: fixture.cwd,
+      userMessage: "trialhintseedalpha",
+      mode: "review",
+      includeDiagnostics: true
+    });
+    const projectMemoryIds = context.projectMemory.map((item) => item.id);
+    assert2(projectMemoryIds.includes("trial-hint-seed-rule"), "trial hint seed memory was not retrieved");
+    assert2(
+      !context.projectMemory.some((item) => item.explain?.includes("edge:relation:refines")),
+      "trial model hint edge was expanded into runtime context"
+    );
+    assert2(
+      preview.diagnostics.relations?.filtered.some(
+        (item) => item.relationType === "refines" && item.status === "trial" && item.reason === "edge_not_validated"
+      ),
+      "trial model hint was not visible as diagnostics-only relation"
+    );
+    return [{ summary: "trial relation hint excluded from runtime; diagnosticsOnly=1" }];
+  });
+}
+async function runRelationEdgeInvalidation(input) {
+  return withEmptyFixture(input, async (fixture) => {
+    await upsertOperationEdge(input, fixture, {
+      fromMemoryId: "existing-relation-endpoint",
+      toMemoryId: "missing-relation-endpoint",
+      relationType: "supports",
+      evidenceId: "review-orphan-edge"
+    });
+    const result3 = await runCodexMemoryLifecycleDaily({
+      projectRoots: [{ projectId: fixture.projectId, memoryRoot: fixture.projectMemoryRoot }],
+      apply: true,
+      now: input.now
+    });
+    const edge = (await readMemoryEdgesFromRoot(fixture.projectMemoryRoot))[0];
+    const auditEvents = await readMemoryEventsFromRoot(fixture.projectMemoryRoot);
+    assert2(result3.roots[0]?.relationEdgesExpired === 1, "daily lifecycle did not expire orphan relation edge");
+    assert2(edge?.status === "expired", "orphan relation edge was not marked expired");
+    assert2(edge.updatedAt === input.now, "expired relation edge did not record deterministic updatedAt");
+    assert2(auditEvents.some((event) => event.memoryId === edge.id && event.action === "audit"), "edge expiration audit event was not recorded");
+    return [{ summary: "relation edge invalidation ok; expired=1" }];
+  });
+}
+async function runRelationFallbackScopeGuard(input) {
+  return withActiveFixture(input, [
+    activeRelationMemory("fallback-scope-seed-rule", "Fallbackscopealpha current project relation memory.", "fallbackscopealpha-current"),
+    activeRelationMemory("foreign-fallback-target-rule", "Foreign relation target must not cross into project fallback context.", "foreign-fallback-target", {
+      scope: "global",
+      confidenceTier: "global_core"
+    })
+  ], async (fixture) => {
+    await upsertOperationEdge(input, fixture, {
+      fromMemoryId: "fallback-scope-seed-rule",
+      toMemoryId: "foreign-fallback-target-rule",
+      relationType: "supports",
+      evidenceId: "review-fallback-scope",
+      toScope: "global",
+      toProjectId: "foreign-fallback-project"
+    });
+    const context = await getCodexContinuityContext({
+      cwd: fixture.cwd,
+      userMessage: "fallbackscopealpha",
+      task: "memory",
+      mode: "review",
+      includeDiagnostics: true,
+      allowJsonlFallback: true,
+      recordRetrievedEvents: false
+    });
+    const projectMemoryIds = context.projectMemory.map((item) => item.id);
+    assert2(context.diagnostics?.memoryIndex?.source === "jsonl", "scope guard case did not exercise JSONL fallback");
+    assert2(projectMemoryIds.includes("fallback-scope-seed-rule"), "current project fallback seed was not retrieved");
+    assert2(!projectMemoryIds.includes("foreign-fallback-target-rule"), "cross-project relation target was injected as project memory by JSONL fallback");
+    return [{ summary: "JSONL fallback scope guard ok; crossProjectPollution=0" }];
+  });
+}
+async function runRelationLastUsedHotpath(input) {
+  return withActiveFixture(input, [
+    activeRelationMemory("hotpath-seed-rule", "Hotpathalpha relation seed should retrieve from SQLite.", "hotpathalpha-seed"),
+    activeRelationMemory("hotpath-related-rule", "Validated hot path relation target is injected read-only.", "hotpath-related")
+  ], async (fixture) => {
+    await upsertOperationEdge(input, fixture, {
+      fromMemoryId: "hotpath-seed-rule",
+      toMemoryId: "hotpath-related-rule",
+      relationType: "supports",
+      evidenceId: "review-hotpath-readonly"
+    });
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd });
+    const before = await readMemoryEdgesFromRoot(fixture.projectMemoryRoot);
+    const context = await getCodexContinuityContext({
+      cwd: fixture.cwd,
+      userMessage: "hotpathalpha",
+      task: "memory",
+      mode: "review",
+      recordRetrievedEvents: false
+    });
+    const after = await readMemoryEdgesFromRoot(fixture.projectMemoryRoot);
+    const projectMemoryIds = context.projectMemory.map((item) => item.id);
+    assert2(projectMemoryIds.includes("hotpath-seed-rule"), "hot path seed memory was not retrieved");
+    assert2(projectMemoryIds.includes("hotpath-related-rule"), "validated relation target was not expanded");
+    assert2(
+      context.projectMemory.find((item) => item.id === "hotpath-related-rule")?.explain?.includes("edge:relation:supports"),
+      "hot path relation target did not explain relation expansion"
+    );
+    assert2(before.length === 1 && after.length === 1, "relation hot path changed edge count");
+    assert2(after[0]?.lastUsedAt === void 0, "relation hot path wrote lastUsedAt");
+    assert2(after[0]?.updatedAt === before[0]?.updatedAt, "relation hot path mutated updatedAt");
+    return [{ summary: "relation hot path read-only; lastUsedWrites=0" }];
+  });
+}
 async function withEmptyFixture(input, run) {
   return withFixture(input, [], run);
 }
 async function withReviewFixture(input, pendingMemories, run) {
   return withFixture(input, pendingMemories, run);
 }
-async function withFixture(input, pendingMemories, run) {
+async function withActiveFixture(input, activeMemories, run) {
+  return withFixture(input, [], run, activeMemories);
+}
+async function withFixture(input, pendingMemories, run, activeMemories = []) {
   const baseInput = {
     caseId: input.benchmarkCase.id,
     seed: input.seed,
     now: input.now,
-    pendingMemories
+    pendingMemories,
+    ...activeMemories.length === 0 ? {} : { activeMemories }
   };
   const fixture = await createBenchmarkFixture(
     input.options.preserveFixtures === true ? {
@@ -27740,6 +28581,48 @@ async function withFixture(input, pendingMemories, run) {
       recordFixtureRun(input.options, fixture.metadata);
     }
   }
+}
+function activeRelationMemory(id, content, normalizedKey, overrides = {}) {
+  return {
+    id,
+    domain: "procedural",
+    type: "procedural_rule",
+    strength: "hard",
+    scope: "project",
+    content,
+    normalizedKey,
+    source: "user_explicit",
+    scores: { evidenceStrength: 0.95, stability: 0.9, usefulness: 0.9, safety: 0.95, sensitivity: 0.05 },
+    tags: ["benchmark", "relation"],
+    candidateKind: "workflow_rule",
+    ...overrides
+  };
+}
+async function upsertOperationEdge(input, fixture, edge) {
+  await upsertMemoryEdgeFromRoot(fixture.projectMemoryRoot, createOperationBackedEdge({
+    fromMemoryId: edge.fromMemoryId,
+    toMemoryId: edge.toMemoryId,
+    fromScope: edge.fromScope ?? "project",
+    toScope: edge.toScope ?? "project",
+    fromProjectId: edge.fromProjectId ?? fixture.projectId,
+    toProjectId: edge.toProjectId ?? fixture.projectId,
+    relationType: edge.relationType,
+    now: input.now,
+    reason: `benchmark ${input.benchmarkCase.id} validated relation`,
+    evidenceId: edge.evidenceId,
+    evidenceKind: "review_hash"
+  }));
+}
+async function upsertModelHintEdge(input, fixture, edge) {
+  await upsertMemoryEdgeFromRoot(fixture.projectMemoryRoot, createModelHintEdge({
+    fromMemoryId: edge.fromMemoryId,
+    toMemoryId: edge.toMemoryId,
+    fromProjectId: edge.fromProjectId ?? fixture.projectId,
+    toProjectId: edge.toProjectId ?? fixture.projectId,
+    relationType: edge.relationType,
+    now: input.now,
+    reason: `benchmark ${input.benchmarkCase.id} model relation hint`
+  }));
 }
 function pendingReviewCandidate(id, overrides = {}) {
   return {
@@ -27789,8 +28672,9 @@ function defaultMetrics3(benchmarkCase, passed) {
   return benchmarkCase.metrics.map((metric) => ({ name: metric, value: defaultMetricValue2(metric, passed, benchmarkCase.id) }));
 }
 function defaultMetricValue2(metric, passed, caseId) {
+  const normalizedMetric = metric.toLowerCase();
   if (!passed) {
-    return metric.includes("Leakage") || metric.includes("Pollution") || metric.includes("Misuse") || metric.includes("Fallback") || metric.includes("Stale") || metric.includes("Interference") || metric.includes("DefaultWrite") || metric.includes("wrongTop1") ? 1 : 0;
+    return normalizedMetric.includes("leakage") || normalizedMetric.includes("pollution") || normalizedMetric.includes("misuse") || normalizedMetric.includes("fallback") || normalizedMetric.includes("stale") || normalizedMetric.includes("interference") || normalizedMetric.includes("defaultwrite") || normalizedMetric.includes("duplicate") || normalizedMetric.includes("migration") || normalizedMetric.includes("mismatch") || normalizedMetric.includes("wrongtop1") ? 1 : 0;
   }
   if (metric === "importantMemoryMissedRate" || metric === "noiseProposalRate" || metric === "temporaryStateProposalRate" || metric === "sensitiveProposalRate" || metric === "assistantInferenceAutoActiveRate" || metric === "reviewFalsePositiveRate") {
     return 0;
@@ -27811,8 +28695,9 @@ function defaultMetricValue2(metric, passed, caseId) {
   if (metric === "deferCount") return caseId === "T16-REVIEW-REJECT-DEFER" ? 1 : 0;
   if (metric === "editCount") return caseId === "T16-REVIEW-EDIT-HASH" ? 1 : 0;
   if (metric === "pendingReviewedCount") return caseId === "T16-REVIEW-REJECT-DEFER" ? 2 : 0;
+  if (metric === "auditLogGrowth") return caseId === "T16-REL-EDGE-INVALIDATION" ? 1 : 0;
   if (metric === "averageReviewTimeMs") return 0;
-  if (metric.includes("Leakage") || metric.includes("Pollution") || metric.includes("Misuse") || metric.includes("Fallback") || metric.includes("Stale") || metric.includes("Interference") || metric.includes("DefaultWrite") || metric.includes("wrongTop1")) {
+  if (normalizedMetric.includes("leakage") || normalizedMetric.includes("pollution") || normalizedMetric.includes("misuse") || normalizedMetric.includes("fallback") || normalizedMetric.includes("stale") || normalizedMetric.includes("interference") || normalizedMetric.includes("defaultwrite") || normalizedMetric.includes("duplicate") || normalizedMetric.includes("migration") || normalizedMetric.includes("mismatch") || normalizedMetric.includes("wrongtop1")) {
     return 0;
   }
   if (metric.endsWith("Rate") || metric.endsWith("Accuracy") || metric === "mrr" || metric === "recallAt3") {
@@ -29105,7 +29990,7 @@ import { readFile as readFile21, writeFile as writeFile15 } from "node:fs/promis
 import { join as join30 } from "node:path";
 
 // src/codex/codex-memory-lifecycle-weekly.ts
-import { createHash as createHash14, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID14 } from "node:crypto";
 import { readFile as readFile20 } from "node:fs/promises";
 import { join as join29 } from "node:path";
 
@@ -29120,8 +30005,9 @@ async function assertLifecycleProfileTargetSafe(memoryRoot) {
 }
 function formatLifecycleProfileFromCoreMemory(input) {
   const coreTier = input.scope === "global" ? "global_core" : "project_core";
+  const supersededMemoryIds = supersededProfileMemoryIds(input.memories, input.relations ?? []);
   const core = input.memories.filter(
-    (memory2) => memory2.status === "active" && memory2.confidenceTier === coreTier && isLowRiskLifecycleMemory(memory2) && validateSemanticMemoryLifecycle(memory2).length === 0
+    (memory2) => memory2.status === "active" && memory2.confidenceTier === coreTier && !supersededMemoryIds.has(memory2.id) && isLowRiskLifecycleMemory(memory2) && validateSemanticMemoryLifecycle(memory2).length === 0
   ).map((memory2) => sanitizeProfileContent2(memory2.content)).filter((content) => content !== null).sort((left, right) => left.localeCompare(right));
   const lines2 = [
     GENERATED_HEADER2,
@@ -29144,12 +30030,35 @@ function formatLifecycleProfileFromCoreMemory(input) {
 }
 async function writeLifecycleProfileFromCoreMemory(input) {
   const root = await assertLifecycleProfileTargetSafe(input.memoryRoot);
+  const relations = await readMemoryEdgesFromRoot(root);
   const content = formatLifecycleProfileFromCoreMemory({
     scope: input.scope,
-    memories: input.memories
+    memories: input.memories,
+    relations
   });
   await writeSafeGeneratedProfile(root, content);
   return content;
+}
+function supersededProfileMemoryIds(memories, relations) {
+  const activeById = new Map(
+    memories.filter((memory2) => memory2.status === "active").map((memory2) => [memory2.id, memory2])
+  );
+  const superseded = /* @__PURE__ */ new Set();
+  for (const relation of relations) {
+    if (relation.status !== "validated" || relation.relationType !== "supersedes" || relation.origin !== "operation") {
+      continue;
+    }
+    const replacement = activeById.get(relation.fromMemoryId);
+    const replaced = activeById.get(relation.toMemoryId);
+    if (replacement === void 0 || replaced === void 0) {
+      continue;
+    }
+    if (replacement.updatedAt <= replaced.updatedAt) {
+      continue;
+    }
+    superseded.add(replaced.id);
+  }
+  return superseded;
 }
 async function writeSafeGeneratedProfile(memoryRoot, content) {
   await assertLifecycleProfileTargetSafe(memoryRoot);
@@ -29696,7 +30605,7 @@ function globalCoreMemoryFromProjectCore(sources, now) {
   const normalized = normalizeContent2(base.content);
   return {
     ...base,
-    id: `global-${createHash14("sha256").update(normalized).digest("hex").slice(0, 16)}`,
+    id: `global-${createHash15("sha256").update(normalized).digest("hex").slice(0, 16)}`,
     module: base.domain === "system" ? "system" : "global_policy",
     scope: "global",
     confidenceTier: "global_core",
@@ -30605,7 +31514,7 @@ async function runCyreneBenchmark(options) {
   const thresholdBreaches = caseResults.flatMap((item) => item.thresholdBreaches);
   const aggregatedMetrics = aggregateMetricGroups(caseResults);
   const report = {
-    runId: createHash15("sha256").update(`${startedAt}:${options.profile}:${options.seed ?? ""}`).digest("hex").slice(0, 16),
+    runId: createHash16("sha256").update(`${startedAt}:${options.profile}:${options.seed ?? ""}`).digest("hex").slice(0, 16),
     startedAt,
     completedAt,
     profile: options.profile,
@@ -30618,7 +31527,7 @@ async function runCyreneBenchmark(options) {
     benchmark: {
       version: BENCHMARK_VERSION,
       thresholdVersion: THRESHOLD_VERSION,
-      caseCatalogHash: createHash15("sha256").update(JSON.stringify(BENCHMARK_CASES)).digest("hex")
+      caseCatalogHash: createHash16("sha256").update(JSON.stringify(BENCHMARK_CASES)).digest("hex")
     },
     package: await packageMetadata([join31(resolve5(options.cwd), "package.json"), join31(BENCHMARK_SOURCE_ROOT, "package.json")]),
     git: await gitMetadata(resolve5(options.cwd)),
@@ -30792,7 +31701,7 @@ function metricGroupName(metric) {
   return "capability";
 }
 async function firstFileHash(paths) {
-  return createHash15("sha256").update(await readFirstFileBuffer(paths)).digest("hex");
+  return createHash16("sha256").update(await readFirstFileBuffer(paths)).digest("hex");
 }
 async function packageMetadata(paths) {
   const parsed = JSON.parse(await readFirstFileText(paths));
@@ -31626,7 +32535,7 @@ function asString2(value) {
 }
 
 // src/codex/global-memory-capture.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|今后所有项目|所有项目|每个项目|all projects|every project|across projects|remember globally|(?:作为|写入|加入|保存到|记到).{0,8}全局记忆|全局(?:记住|保存|默认|规则|使用))/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
 var AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i;
@@ -31776,11 +32685,11 @@ function reviewActionForEvent(event) {
   return void 0;
 }
 function shortHash(value) {
-  return createHash16("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash17("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile4 } from "node:child_process";
@@ -32495,7 +33404,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash17("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash18("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -32535,7 +33444,7 @@ function isRecord4(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash18, randomUUID as randomUUID18 } from "node:crypto";
+import { createHash as createHash19, randomUUID as randomUUID18 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile4 } from "node:fs/promises";
@@ -32821,7 +33730,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash18("sha256").update(JSON.stringify({
+  return createHash19("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -34533,7 +35442,7 @@ async function readableMemoryRoot2(memoryRoot) {
 import { randomUUID as randomUUID21 } from "node:crypto";
 
 // src/codex/semantic-rewrite-validator.ts
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 function validateSemanticRewriteCandidate(input) {
   const beforeReadiness = activeReadinessForPending2(input.original);
   const afterReadiness = activeReadinessForPending2(input.next);
@@ -34574,7 +35483,7 @@ function validateSemanticRewriteCandidate(input) {
   };
 }
 function contentHashForSemanticRewrite(content) {
-  return createHash19("sha256").update(content).digest("hex");
+  return createHash20("sha256").update(content).digest("hex");
 }
 function activeReadinessForPending2(candidate) {
   return evaluateActiveMemoryReadiness({
@@ -39241,7 +40150,7 @@ async function runCodexMemoryAutomation(input) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash20, randomUUID as randomUUID24 } from "node:crypto";
+import { createHash as createHash21, randomUUID as randomUUID24 } from "node:crypto";
 import { lstat as lstat16, readFile as readFile28, rename as rename7, writeFile as writeFile18 } from "node:fs/promises";
 import { join as join40 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -39260,7 +40169,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash20("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash21("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -39768,7 +40677,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash21, randomUUID as randomUUID25 } from "node:crypto";
+import { createHash as createHash22, randomUUID as randomUUID25 } from "node:crypto";
 import { basename as basename6, dirname as dirname13 } from "node:path";
 function reviewHashForSimilarHintMemory(memory2) {
   const payload = {
@@ -39785,7 +40694,7 @@ function reviewHashForSimilarHintMemory(memory2) {
     updatedAt: memory2.updatedAt,
     tags: memory2.tags
   };
-  return createHash21("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash22("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
