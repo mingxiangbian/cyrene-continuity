@@ -30,7 +30,7 @@ function episode(overrides: Partial<EpisodeMemory> = {}): EpisodeMemory {
     decisions: ['采用分阶段主干串行加阶段内并行'],
     failures: [],
     openQuestions: [],
-    changedFiles: ['docs/superpowers/specs/example.md'],
+    changedFiles: ['benchmark/fixtures/example.md'],
     commandsRun: ['npm run typecheck'],
     toolNames: ['exec_command'],
     sourceTraceIds: ['session-1:turn-1'],

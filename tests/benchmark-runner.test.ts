@@ -35,6 +35,7 @@ describe('benchmark runner', () => {
     expect(report.fixtureRuns?.length).toBeGreaterThan(0)
     expect(report.fixtureRuns?.every((fixture) => fixture.timezone === 'UTC')).toBe(true)
     expect(report.fixtureRuns?.every((fixture) => fixture.cleanupStatus === 'cleaned')).toBe(true)
+    expect(report.spec.path).toBe('benchmark/fixtures/benchmark-eval-system-design.md')
     expect(report.spec.contentHash).toMatch(/^[a-f0-9]{64}$/)
     expect(report.benchmark.caseCatalogHash).toMatch(/^[a-f0-9]{64}$/)
 

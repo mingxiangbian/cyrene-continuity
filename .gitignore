@@ -7,3 +7,13 @@ dist/
 .env.*
 coverage/
 .worktrees/
+
+# Creator-only planning, agent, and review artifacts
+docs/superpowers/
+REVIEW_REPORT.md
+
+# Local benchmark output
+benchmark-results/
+
+# Local Cyrene runtime and memory data
+.cyrene/

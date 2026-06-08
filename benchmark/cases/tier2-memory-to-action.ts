@@ -264,7 +264,7 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
         'ask user for benchmark command'
       ]),
       withMemory: attempt(true, 7, 1, 1, [
-        'inspect docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md',
+        'inspect benchmark/fixtures/benchmark-expansion-plan.md',
         'inspect tests/benchmark-cases-real-replay.test.ts',
         'edit tests/benchmark-cases-real-replay.test.ts',
         'edit benchmark/catalog.ts',
@@ -273,7 +273,7 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
         'skip live LLM adapter'
       ]),
       requiredActions: [
-        'inspect docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md',
+        'inspect benchmark/fixtures/benchmark-expansion-plan.md',
         'inspect tests/benchmark-cases-real-replay.test.ts',
         'edit tests/benchmark-cases-real-replay.test.ts',
         'edit benchmark/catalog.ts',
@@ -288,7 +288,7 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
       ],
       fixtureFiles: [
         {
-          path: 'docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md',
+          path: 'benchmark/fixtures/benchmark-expansion-plan.md',
           content: [
             '# Cyrene Benchmark Expansion Implementation Plan',
             '',
@@ -328,13 +328,13 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
         }
       ],
       requiredFixtureContent: [
-        { path: 'docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md', content: 'Task 1 verification command' },
+        { path: 'benchmark/fixtures/benchmark-expansion-plan.md', content: 'Task 1 verification command' },
         { path: 'tests/benchmark-cases-real-replay.test.ts', content: 'repo-grounded replay fixtures' },
         { path: 'benchmark/catalog.ts', content: 'real-replay' },
         { path: 'benchmark/cases/tier2-memory-to-action.ts', content: 'memoryToActionReplay' }
       ],
       forbiddenFixtureContent: [
-        { path: 'docs/superpowers/plans/2026-06-06-cyrene-benchmark-expansion-plan.md', content: 'call live LLM adapter by default' }
+        { path: 'benchmark/fixtures/benchmark-expansion-plan.md', content: 'call live LLM adapter by default' }
       ],
       evidence: `real project replay ok; fixture files verified; updated workflow command applied; repeated mistake reduction=${formatRatio(0.75)}; corrections reduction=${formatRatio(0.75)}; tool call reduction=${formatRatio(5 / 12)}`
     }
@@ -401,7 +401,7 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
           ].join('\n')
         },
         {
-          path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+          path: 'benchmark/reports/2026-06-06/summary.md',
           content: [
             '# Cyrene Benchmark Results',
             '',
@@ -421,7 +421,7 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
         { path: 'benchmark/catalog.ts', content: 'T2-REAL-PROJECT-REPLAY' },
         { path: 'benchmark/cases/tier2-memory-to-action.ts', content: 'repo-grounded fixture files verified' },
         { path: 'tests/benchmark-cases-real-replay.test.ts', content: 'expectedRealReplayCases' },
-        { path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md', content: 'coding task utility' },
+        { path: 'benchmark/reports/2026-06-06/summary.md', content: 'coding task utility' },
         { path: 'plugin/runtime/cyrene-continuity.mjs', content: 'Generated runtime fixture' }
       ],
       forbiddenFixtureContent: [
@@ -437,18 +437,18 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
         'run npm run typecheck',
         'run npm test',
         'ask user whether docs need tests',
-        'edit docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md'
+        'edit benchmark/reports/2026-06-06/summary.md'
       ]),
       withMemory: attempt(true, 4, 0, 0, [
         'inspect AGENTS.md',
-        'inspect docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
-        'edit docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+        'inspect benchmark/reports/2026-06-06/summary.md',
+        'edit benchmark/reports/2026-06-06/summary.md',
         'run git diff --check'
       ]),
       requiredActions: [
         'inspect AGENTS.md',
-        'inspect docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
-        'edit docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+        'inspect benchmark/reports/2026-06-06/summary.md',
+        'edit benchmark/reports/2026-06-06/summary.md',
         'run git diff --check'
       ],
       forbiddenActions: [
@@ -468,7 +468,7 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
           ].join('\n')
         },
         {
-          path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md',
+          path: 'benchmark/reports/2026-06-06/summary.md',
           content: [
             '# Cyrene Benchmark Results',
             '',
@@ -479,10 +479,10 @@ function replayCaseFor(id: Tier2CaseId): ActionReplayCase | undefined {
       ],
       requiredFixtureContent: [
         { path: 'AGENTS.md', content: 'For documentation-only changes, run git diff --check' },
-        { path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md', content: 'deterministic repo-grounded cases' }
+        { path: 'benchmark/reports/2026-06-06/summary.md', content: 'deterministic repo-grounded cases' }
       ],
       forbiddenFixtureContent: [
-        { path: 'docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md', content: 'requires npm test' }
+        { path: 'benchmark/reports/2026-06-06/summary.md', content: 'requires npm test' }
       ],
       evidence: `real project replay ok; fixture files verified; docs-only verification applied; repeated mistake reduction=${formatRatio(1)}; corrections reduction=${formatRatio(1)}; tool call reduction=${formatRatio(5 / 9)}`
     }

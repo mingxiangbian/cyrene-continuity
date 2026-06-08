@@ -1,0 +1,4282 @@
+{
+  "runId": "b69cc461c862d088",
+  "startedAt": "2026-06-06T00:00:00.000Z",
+  "completedAt": "2026-06-06T00:00:00.000Z",
+  "profile": "full",
+  "spec": {
+    "path": "benchmark/fixtures/benchmark-eval-system-design.md",
+    "title": "Cyrene Benchmark Eval System Design",
+    "date": "2026-06-05",
+    "contentHash": "5912abb3448b0df2a00f94a4f8499fe91d1d67c55fa4e118b288b64e13e7bfc9"
+  },
+  "benchmark": {
+    "version": "1.0.0",
+    "thresholdVersion": "2026-06-06",
+    "caseCatalogHash": "3f822e847b5de4abe84f466e695cf6b82a1a64fb70b87bfe4681ace13b8bc618"
+  },
+  "package": {
+    "name": "cyrene-continuity",
+    "version": "0.1.0"
+  },
+  "git": {
+    "branch": "main",
+    "commit": "827bcb856cbe60706621b9c8135111eb1f627a91",
+    "dirty": true,
+    "trackedChanges": [
+      "M benchmark/cases/tier0-release-gate.ts",
+      "M benchmark/cases/tier1-5-lifecycle.ts",
+      "M benchmark/cases/tier1-memory-ability.ts",
+      "M benchmark/cases/tier2-memory-to-action.ts",
+      "M benchmark/cases/tier3-scale-efficiency.ts",
+      "M benchmark/cases/tier4-failure-security.ts",
+      "M benchmark/catalog.ts",
+      "M benchmark/report.ts",
+      "M benchmark/runner.ts",
+      "M benchmark/thresholds.ts",
+      "M benchmark/types.ts",
+      "M benchmark/reports/2026-06-06/summary.md",
+      "M benchmark/fixtures/benchmark-eval-system-design.md",
+      "M plugin/runtime/cyrene-continuity.mjs",
+      "M src/codex/codex-benchmark.ts",
+      "M src/codex/codex-cli.ts",
+      "M src/codex/context-policy.ts",
+      "M src/codex/memory-context-preview.ts",
+      "M tests/benchmark-cases-ability-action.test.ts",
+      "M tests/benchmark-cases-failure-security.test.ts",
+      "M tests/benchmark-cases-lifecycle.test.ts",
+      "M tests/benchmark-cases-scale.test.ts",
+      "M tests/benchmark-cases-tier0.test.ts",
+      "M tests/benchmark-cli.test.ts",
+      "M tests/benchmark-report.test.ts",
+      "M tests/benchmark-runner.test.ts",
+      "M tests/benchmark-types.test.ts",
+      "M tests/codex-context-policy.test.ts",
+      "?? benchmark/artifacts.ts",
+      "?? benchmark/reports/",
+      "?? benchmark/fixtures/benchmark-expansion-plan.md",
+      "?? tests/benchmark-cases-real-replay.test.ts"
+    ]
+  },
+  "runtime": {
+    "nodeVersion": "v25.9.0",
+    "npmVersion": "11.12.1",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "passed": true,
+  "summary": {
+    "totalCases": 67,
+    "passed": 59,
+    "failed": 0,
+    "skippedWithReason": 8,
+    "notSupportedWithoutProvider": 0
+  },
+  "failedCases": [],
+  "caseResults": [
+    {
+      "caseId": "T0-MODE-FAST",
+      "title": "fast mode excludes review and similar hot paths",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "modeAccuracy",
+          "value": 1
+        },
+        {
+          "name": "fastTokenOverhead",
+          "value": 580
+        },
+        {
+          "name": "continuityGetP95FastMs",
+          "value": 22
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "mode=fast; pending leakage=0; similar hints=0; full profile read=0; retrieved default writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-MODE-BALANCED",
+      "title": "balanced mode reads full profile without pending details",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "modeAccuracy",
+          "value": 1
+        },
+        {
+          "name": "balancedTokenOverhead",
+          "value": 601
+        },
+        {
+          "name": "continuityGetP95BalancedMs",
+          "value": 22
+        },
+        {
+          "name": "pendingLeakageRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "mode=balanced; full profile read=1; pending leakage=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-MODE-REVIEW",
+      "title": "review mode is the only mode that reads pending memories",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "modeAccuracy",
+          "value": 1
+        },
+        {
+          "name": "pendingMisuseRate",
+          "value": 0
+        },
+        {
+          "name": "continuityGetP95ReviewMs",
+          "value": 43
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "mode=review; pending details visible; pending active injection=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-PENDING-BOUNDARY",
+      "title": "pending does not leak into ordinary context",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "pendingLeakageRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "pending leakage=0; review pending visibility=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SIMILAR-BOUNDARY",
+      "title": "similar project hints never cross project boundary as memory",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "crossProjectPollutionRate",
+          "value": 0
+        },
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "similar boundary ok; hints=1; foreign active in memory=0; hintVisible=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-CROSS-PROJECT-ADVERSARIAL",
+      "title": "adversarial similar project memory stays hint-only",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "crossProjectPollutionRate",
+          "value": 0
+        },
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        },
+        {
+          "name": "profilePollutionRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "adversarial cross-project boundary ok; current=1; foreign active in memory=0; hintVisible=1; migration=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-CROSS-PROJECT-PROMPT-INJECTION",
+      "title": "foreign prompt-injection memory stays non-current-project hint only",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "crossProjectPollutionRate",
+          "value": 0
+        },
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        },
+        {
+          "name": "profilePollutionRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "cross-project prompt injection boundary ok; current=1; promptInjectionInjected=0; hintVisible=1; migration=0; profilePollution=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SESSION-HINTS",
+      "title": "session hints are transient and never migrate to memory",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "similarHintMigrationRate",
+          "value": 0
+        },
+        {
+          "name": "profilePollutionRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "session hints transient; active migration=0; pending migration=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-ACTIVATION-RETRIEVED",
+      "title": "activation event defaults do not write retrieved events",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievedDefaultWriteRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "retrieved default writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SQLITE-HOT-PATH",
+      "title": "SQLite and FTS are the default hot path",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sqliteHitRateFreshIndex",
+          "value": 1
+        },
+        {
+          "name": "jsonlFallbackRateHotPath",
+          "value": 0
+        },
+        {
+          "name": "sqliteQueryP95Ms",
+          "value": 19
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "source=sqlite; fallback=sqlite; retrieved=1; SQLite/FTS hot path ok"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SURFACE-CONSISTENCY",
+      "title": "Skill, MCP, and CLI surfaces expose consistent behavior",
+      "tier": "tier0",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "surfaceConsistencyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "policy surface=1; context-preview surface=1; MCP surface=1; skill surface=1; fast/balanced/review contracts aligned"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-FACT-EXTRACTION",
+      "title": "extract project facts from coding memories",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "abstentionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "fact extraction ok; adopted command=npm test -- tests/codex-context-policy.test.ts; retrieval=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-MULTI-SESSION-REASONING",
+      "title": "reason across multiple sessions",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "abstentionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "multi-session reasoning ok; rejected reason=generated runtime; later decision=use context policy fixture"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-TEMPORAL-ORDER",
+      "title": "answer temporal order questions",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "abstentionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "temporal reasoning ok; newest rule wins; stale rule excluded"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-KNOWLEDGE-UPDATE",
+      "title": "newer memories override stale rules",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "abstentionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "knowledge update ok; superseded rule excluded; replacement rule=npm run typecheck"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-CONFLICT-HANDLING",
+      "title": "handle conflicting memories without double injection",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "abstentionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "conflict handling ok; single selected rule; conflicting pair injection=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ADVERSARIAL-RETRIEVAL",
+      "title": "retrieve target memory over adversarial distractors",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "similarMemoryInterferenceRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "adversarial retrieval ok; target retrieved=1; stale/pending/personal/global distractors=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ADVERSARIAL-MULTI-DISTRACTOR",
+      "title": "answer target memory while rejecting stale pending personal global and foreign distractors",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "similarMemoryInterferenceRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "adversarial multi-distractor ok; target retrieved=1; stalePendingAnswer=0; personalDistractorAnswer=0; globalDistractorAnswer=0; foreignDistractorAnswer=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ABSTAIN-NO-EVIDENCE",
+      "title": "abstain when memory evidence is absent",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "abstentionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "abstention ok; abstain=1; fabricated evidence=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-EVENT-SUMMARY",
+      "title": "summarize project events from long session memory",
+      "tier": "tier1",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "retrievalAccuracy",
+          "value": 1
+        },
+        {
+          "name": "answerAccuracy",
+          "value": 1
+        },
+        {
+          "name": "abstentionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "event summary ok; summary includes decision/failure/fix/verification"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-UPGRADE",
+      "title": "low-risk project memory can upgrade through policy",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "promotionAccuracy",
+          "value": 1
+        },
+        {
+          "name": "lifecyclePromotionAccuracy",
+          "value": 1
+        },
+        {
+          "name": "dailyPromotedCount",
+          "value": 1
+        },
+        {
+          "name": "activationEventGrowth",
+          "value": 1
+        },
+        {
+          "name": "auditLogGrowth",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "upgrade lifecycle ok; promotion receipt=promote; promotedTrialToValidated=1; lifecyclePolicy=daily_trial_validation_v1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-REPLACE",
+      "title": "replacement removes stale active rule from injection",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "replacementAccuracy",
+          "value": 1
+        },
+        {
+          "name": "staleMemoryLeakageRate",
+          "value": 0
+        },
+        {
+          "name": "duplicateActiveMemoryRate",
+          "value": 0
+        },
+        {
+          "name": "pendingReviewedCount",
+          "value": 1
+        },
+        {
+          "name": "approveCount",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "replace lifecycle ok; active supersede=supersede; stale active injection=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-MERGE",
+      "title": "merge combines compatible memory evidence",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "mergeAccuracy",
+          "value": 1
+        },
+        {
+          "name": "duplicateActiveMemoryRate",
+          "value": 0
+        },
+        {
+          "name": "duplicatePendingRate",
+          "value": 0
+        },
+        {
+          "name": "conflictResolutionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "merge lifecycle ok; deduped=1; supersede tombstone=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-EXPIRE",
+      "title": "expired memories are excluded from active context",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "staleMemoryLeakageRate",
+          "value": 0
+        },
+        {
+          "name": "rollbackSuccessRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "expire lifecycle ok; expired=1; active injection=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-SUPERSEDE-HASH",
+      "title": "supersede requires valid review hash",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "conflictResolutionAccuracy",
+          "value": 1
+        },
+        {
+          "name": "rollbackSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "stalePendingCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "stale supersede hash rejected; active writes=0; pending retained=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-CONFLICT-SINGLE-INJECTION",
+      "title": "conflicting old and new rules inject only one winner",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "conflictResolutionAccuracy",
+          "value": 1
+        },
+        {
+          "name": "summaryStalePropagationAccuracy",
+          "value": 1
+        },
+        {
+          "name": "staleMemoryLeakageRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "conflict lifecycle ok; single injection=1; stale winner injection=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-ADVERSARIAL-CONFLICT",
+      "title": "adversarial normalized-key conflict requires explicit supersede",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "conflictResolutionAccuracy",
+          "value": 1
+        },
+        {
+          "name": "staleMemoryLeakageRate",
+          "value": 0
+        },
+        {
+          "name": "duplicateActiveMemoryRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "adversarial conflict lifecycle ok; explicit resolution required=1; stale prompt injection=0; single resolved injection=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD",
+      "title": "explicit supersede beats a strong stale adversarial rule",
+      "tier": "tier1_5",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "conflictResolutionAccuracy",
+          "value": 1
+        },
+        {
+          "name": "staleMemoryLeakageRate",
+          "value": 0
+        },
+        {
+          "name": "duplicateActiveMemoryRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "adversarial strong-old supersede lifecycle ok; strongOldRuleInjected=0; explicitSupersedeHonored=1; single resolved injection=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-IMPORTANT",
+      "title": "important project evidence is proposed for review",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "importantMemoryMissedRate",
+          "value": 0
+        },
+        {
+          "name": "proposalPrecision",
+          "value": 1
+        },
+        {
+          "name": "proposalRecall",
+          "value": 1
+        },
+        {
+          "name": "pendingGeneratedCount",
+          "value": 1
+        },
+        {
+          "name": "pendingCandidatesPerSession",
+          "value": 1
+        },
+        {
+          "name": "pendingCandidatesPerDay",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "important project rule candidate proposed for review"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-NOISE",
+      "title": "noise is not proposed as durable memory",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "noiseProposalRate",
+          "value": 0
+        },
+        {
+          "name": "temporaryStateProposalRate",
+          "value": 0
+        },
+        {
+          "name": "proposalPrecision",
+          "value": 1
+        },
+        {
+          "name": "pendingGeneratedCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "noise filtered decision; pending noise=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-SENSITIVE",
+      "title": "sensitive content is never persisted",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sensitiveProposalRate",
+          "value": 0
+        },
+        {
+          "name": "proposalPrecision",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "sensitive content rejected; secret persistence=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-ASSISTANT-INFERENCE",
+      "title": "assistant-only inference is not promoted as user fact",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "assistantInferenceAutoActiveRate",
+          "value": 0
+        },
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "pendingGeneratedCount",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "assistant inference deferred for review; active inference=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-ROUTING-NAMESPACE",
+      "title": "project and global namespace routing is correct",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "lifecyclePromotionAccuracy",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "namespace routing ok; project and global roots isolated"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-HASH-REQUIRED",
+      "title": "review approval requires review hash",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "approveCount",
+          "value": 0
+        },
+        {
+          "name": "reviewFalsePositiveRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "review hash required; missing reviewHash rejected"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-STALE-HASH",
+      "title": "stale review hash cannot approve pending memory",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "stalePendingCount",
+          "value": 0
+        },
+        {
+          "name": "reviewFalsePositiveRate",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "stale hash rejected; active writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-REJECT-DEFER",
+      "title": "reject and defer decisions do not activate memory",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 2
+        },
+        {
+          "name": "rejectCount",
+          "value": 1
+        },
+        {
+          "name": "deferCount",
+          "value": 1
+        },
+        {
+          "name": "pendingReviewedCount",
+          "value": 2
+        },
+        {
+          "name": "stalePendingCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "reject and defer stay inactive; active writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-EDIT-HASH",
+      "title": "edited review content gets a fresh hash contract",
+      "tier": "tier1_6",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "manualReviewCount",
+          "value": 1
+        },
+        {
+          "name": "editCount",
+          "value": 1
+        },
+        {
+          "name": "averageReviewTimeMs",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "edited candidate receives new hash; stale edit hash rejected"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REMEMBER-TEST-COMMAND",
+      "title": "remember and reuse project test command",
+      "tier": "tier2",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "taskSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "toolCallCount",
+          "value": 2
+        },
+        {
+          "name": "repeatedMistakeReduction",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "action replay ok; with-memory command reused; generic command avoided; noMemory tools=4; withMemory tools=2"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-AVOID-REJECTED-APPROACH",
+      "title": "avoid an approach rejected in an earlier session",
+      "tier": "tier2",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "taskSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "toolCallCount",
+          "value": 3
+        },
+        {
+          "name": "repeatedMistakeReduction",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "action replay ok; rejected approach avoided; accepted approach used; noMemory tools=5; withMemory tools=3"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-FOLLOW-WORKFLOW",
+      "title": "follow remembered project workflow",
+      "tier": "tier2",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "taskSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "toolCallCount",
+          "value": 4
+        },
+        {
+          "name": "repeatedMistakeReduction",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "action replay ok; workflow rule followed; required steps=4; noMemory tools=4; withMemory tools=4"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-UPDATED-RULE",
+      "title": "use updated rule and stop using old rule",
+      "tier": "tier2",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "taskSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "toolCallCount",
+          "value": 3
+        },
+        {
+          "name": "repeatedMistakeReduction",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "action replay ok; updated rule applied; old rule stopped; noMemory tools=6; withMemory tools=3"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-CROSS-SESSION-FIX",
+      "title": "apply cross-session fix memory to current task",
+      "tier": "tier2",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "taskSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "toolCallCount",
+          "value": 4
+        },
+        {
+          "name": "repeatedMistakeReduction",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "action replay ok; prior fix pattern applied; stale hash repeat=0; noMemory tools=7; withMemory tools=4"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REDUCE-REPEAT-MISTAKE",
+      "title": "memory reduces repeated mistakes and user corrections",
+      "tier": "tier2",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "taskSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "toolCallCount",
+          "value": 6
+        },
+        {
+          "name": "noMemoryTaskSuccessRate",
+          "value": 0
+        },
+        {
+          "name": "withMemoryTaskSuccessRate",
+          "value": 1
+        },
+        {
+          "name": "repeatedMistakeReduction",
+          "value": 0.75
+        },
+        {
+          "name": "userCorrectionReduction",
+          "value": 0.6
+        },
+        {
+          "name": "toolCallReduction",
+          "value": 0.4
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "action replay ok; repeated mistake reduction=0.75; corrections reduction=0.60; tool call reduction=0.40; noMemory tools=10; withMemory tools=6"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-PROJECT-REPLAY",
+      "title": "real project replay validates coding task utility on repo-grounded fixture",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-UPDATED-WORKFLOW-REPLAY",
+      "title": "real project replay stops using superseded workflow command",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-MULTI-FILE-FIX-REPLAY",
+      "title": "real project replay applies prior multi-file fix path",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-DOCS-ONLY-REPLAY",
+      "title": "real project replay keeps docs-only work on docs verification path",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-S-SCALE",
+      "title": "S scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-M-SCALE",
+      "title": "M scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-L-SCALE",
+      "title": "L scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-XL-SCALE",
+      "title": "XL scale fixture reports efficiency without entering release gate hot path",
+      "tier": "tier3",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile full does not run this case"
+        }
+      ],
+      "skippedReason": "profile full does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-RANKING",
+      "title": "ranking resists similar memory interference",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "recallAt1",
+          "value": 1
+        },
+        {
+          "name": "recallAt3",
+          "value": 1
+        },
+        {
+          "name": "recallAt5",
+          "value": 1
+        },
+        {
+          "name": "mrr",
+          "value": 1
+        },
+        {
+          "name": "top1Accuracy",
+          "value": 1
+        },
+        {
+          "name": "wrongTop1Rate",
+          "value": 0
+        },
+        {
+          "name": "irrelevantRetrievalRate",
+          "value": 0
+        },
+        {
+          "name": "similarMemoryInterferenceRate",
+          "value": 0
+        },
+        {
+          "name": "staleMemoryRetrievalRate",
+          "value": 0
+        },
+        {
+          "name": "oldMemoryRetrievalRate",
+          "value": 0
+        },
+        {
+          "name": "newMemoryRetrievalRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "ranking ok; recallAt3=1; mrr=1; wrongTop1=0; top=ranking-target"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-TOKEN-OVERHEAD",
+      "title": "token overhead stays inside profile budget",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "fastTokenOverhead",
+          "value": 586
+        },
+        {
+          "name": "balancedTokenOverhead",
+          "value": 595
+        },
+        {
+          "name": "reviewTokenOverhead",
+          "value": 946
+        },
+        {
+          "name": "fastPendingTokens",
+          "value": 0
+        },
+        {
+          "name": "fastDiagnosticsTokens",
+          "value": 0
+        },
+        {
+          "name": "balancedPendingTokens",
+          "value": 0
+        },
+        {
+          "name": "balancedDiagnosticsTokens",
+          "value": 0
+        },
+        {
+          "name": "reviewPendingTokens",
+          "value": 64
+        },
+        {
+          "name": "reviewDiagnosticsTokens",
+          "value": 230
+        },
+        {
+          "name": "projectMemoryTokens",
+          "value": 77
+        },
+        {
+          "name": "globalProfileTokens",
+          "value": 1
+        },
+        {
+          "name": "fastSummaryTokens",
+          "value": 7
+        },
+        {
+          "name": "fullProfileTokens",
+          "value": 11
+        },
+        {
+          "name": "sessionHintsTokens",
+          "value": 1
+        },
+        {
+          "name": "similarHintsTokens",
+          "value": 1
+        },
+        {
+          "name": "pendingTokens",
+          "value": 64
+        },
+        {
+          "name": "diagnosticsTokens",
+          "value": 230
+        },
+        {
+          "name": "contextItemCount",
+          "value": 1
+        },
+        {
+          "name": "memoryItemCount",
+          "value": 1
+        },
+        {
+          "name": "profileSectionCount",
+          "value": 1
+        },
+        {
+          "name": "sessionHintsCount",
+          "value": 0
+        },
+        {
+          "name": "diagnosticsItemCount",
+          "value": 7
+        },
+        {
+          "name": "profileSizeGrowthBytes",
+          "value": 40
+        },
+        {
+          "name": "fastSummarySizeGrowthBytes",
+          "value": 26
+        },
+        {
+          "name": "sessionHintsSizeBytes",
+          "value": 2
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "profile token overhead recorded; contextShape=compact; balancedDiagnosticsVisible=0; fast/balanced/review bounded"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-LATENCY",
+      "title": "latency percentiles are reported for continuity and hooks",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "continuityGetSampleCount",
+          "value": 9
+        },
+        {
+          "name": "hookSampleCount",
+          "value": 3
+        },
+        {
+          "name": "continuityGetMinMs",
+          "value": 17
+        },
+        {
+          "name": "continuityGetMaxMs",
+          "value": 35
+        },
+        {
+          "name": "continuityGetMeanMs",
+          "value": 24
+        },
+        {
+          "name": "continuityGetP50Ms",
+          "value": 19
+        },
+        {
+          "name": "continuityGetP95Ms",
+          "value": 35
+        },
+        {
+          "name": "continuityGetP99Ms",
+          "value": 35
+        },
+        {
+          "name": "continuityGetP50FastMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP95FastMs",
+          "value": 19
+        },
+        {
+          "name": "continuityGetP99FastMs",
+          "value": 19
+        },
+        {
+          "name": "continuityGetP50BalancedMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP95BalancedMs",
+          "value": 23
+        },
+        {
+          "name": "continuityGetP99BalancedMs",
+          "value": 23
+        },
+        {
+          "name": "continuityGetP50ReviewMs",
+          "value": 33
+        },
+        {
+          "name": "continuityGetP95ReviewMs",
+          "value": 35
+        },
+        {
+          "name": "continuityGetP99ReviewMs",
+          "value": 35
+        },
+        {
+          "name": "profileReadLatencyMs",
+          "value": 2
+        },
+        {
+          "name": "fastSummaryReadLatencyMs",
+          "value": 0
+        },
+        {
+          "name": "sessionHintsReadLatencyMs",
+          "value": 0
+        },
+        {
+          "name": "similarQueryLatencyMs",
+          "value": 0
+        },
+        {
+          "name": "pendingQueryLatencyMs",
+          "value": 0
+        },
+        {
+          "name": "diagnosticsAssemblyLatencyMs",
+          "value": 1
+        },
+        {
+          "name": "hookLatencyMs",
+          "value": 39
+        },
+        {
+          "name": "sessionStartHookP50Ms",
+          "value": 39
+        },
+        {
+          "name": "sessionStartHookP95Ms",
+          "value": 39
+        },
+        {
+          "name": "sessionStartHookP99Ms",
+          "value": 39
+        },
+        {
+          "name": "userPromptSubmitHookP50Ms",
+          "value": 20
+        },
+        {
+          "name": "userPromptSubmitHookP95Ms",
+          "value": 20
+        },
+        {
+          "name": "userPromptSubmitHookP99Ms",
+          "value": 20
+        },
+        {
+          "name": "postToolUseHookP50Ms",
+          "value": 20
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 20
+        },
+        {
+          "name": "postToolUseHookP99Ms",
+          "value": 20
+        },
+        {
+          "name": "stopHookP50Ms",
+          "value": 0
+        },
+        {
+          "name": "stopHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "stopHookP99Ms",
+          "value": 0
+        },
+        {
+          "name": "runtimeHookTimeoutCount",
+          "value": 0
+        },
+        {
+          "name": "runtimeHookFailOpenCount",
+          "value": 0
+        },
+        {
+          "name": "postToolUseHeavyOperationCount",
+          "value": 0
+        },
+        {
+          "name": "ordinaryHookPendingReviewCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "latency p50/p95/p99 recorded; hook latency recorded; componentZeroMeans=not_executed_or_below_timer_resolution"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-INDEX-HEALTH",
+      "title": "index health reports SQLite hit, JSONL fallback, and stale rates",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sqliteHitRate",
+          "value": 1
+        },
+        {
+          "name": "sqliteHitRateFreshIndex",
+          "value": 1
+        },
+        {
+          "name": "jsonlFallbackRateHotPath",
+          "value": 0
+        },
+        {
+          "name": "indexStaleRate",
+          "value": 0
+        },
+        {
+          "name": "indexRebuildTimeMs",
+          "value": 22
+        },
+        {
+          "name": "dbRebuildTimeMs",
+          "value": 22
+        },
+        {
+          "name": "memoryDbSizeBytes",
+          "value": 77824
+        },
+        {
+          "name": "jsonlSizeBytes",
+          "value": 1393
+        },
+        {
+          "name": "indexSourceMismatchCount",
+          "value": 0
+        },
+        {
+          "name": "hotPathRebuildCount",
+          "value": 0
+        },
+        {
+          "name": "undetectedStaleIndexCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "index health ok; sqlite hit rate=1; jsonl fallback=0; stale rate=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SQLITE-UNAVAILABLE",
+      "title": "SQLite unavailable path reports fallback policy explicitly",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "adapterAvailability",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "sqlite unavailable diagnostic; available=0; silent fallback success=0; reason=benchmark forced sqlite unavailable"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-JSONL-CORRUPT",
+      "title": "corrupt JSONL fixture fails closed with diagnostics",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "adapterAvailability",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "corrupt jsonl rejected; malformed=1; promoted=0; bytes unchanged=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-PROFILE-MISSING",
+      "title": "missing profile does not pollute context",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "adapterAvailability",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "missing profile handled; profileChars=0; invented profile=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-FAST-SUMMARY-MISSING-STALE",
+      "title": "missing or stale fast summary never triggers hot-path heavy rebuild",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "adapterAvailability",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "stale fast summary skipped; stale injected=0; hot-path metrics=1; pending preserved=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SESSION-HINTS-EXPIRED",
+      "title": "expired session hints are ignored",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "adapterAvailability",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "expired session hints ignored; injected=0; context leak=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-MCP-ERROR",
+      "title": "MCP error surface returns bounded diagnostics",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "adapterAvailability",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "bounded MCP error; code=continuity_get_failed; diagnosticBytes=200; memory writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-AUTOMATION-INTERRUPT",
+      "title": "automation interruption does not leave memory partial writes",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "dailyAutomationRuntimeMs",
+          "value": 1
+        },
+        {
+          "name": "weeklyAutomationRuntimeMs",
+          "value": 2
+        },
+        {
+          "name": "dailyPromotedCount",
+          "value": 1
+        },
+        {
+          "name": "weeklyCoreCandidateCount",
+          "value": 1
+        },
+        {
+          "name": "pendingReviewedCount",
+          "value": 0
+        },
+        {
+          "name": "pendingGeneratedCount",
+          "value": 0
+        },
+        {
+          "name": "duplicateAutomationOutputCount",
+          "value": 0
+        },
+        {
+          "name": "dryRunWriteCount",
+          "value": 0
+        },
+        {
+          "name": "repeatedPromotionCount",
+          "value": 0
+        },
+        {
+          "name": "automationInterruptRecoveryTimeMs",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "automation idempotent; automationFixtureScale=toy; first promotions=1; second promotions=0; weekly dry-run candidates=1; dry-run writes=0; duplicate promotion=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-HOOK-LIGHTWEIGHT",
+      "title": "non-Stop lifecycle hook path remains lightweight",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sessionStartHookP50Ms",
+          "value": 33
+        },
+        {
+          "name": "sessionStartHookP95Ms",
+          "value": 33
+        },
+        {
+          "name": "sessionStartHookP99Ms",
+          "value": 33
+        },
+        {
+          "name": "userPromptSubmitHookP50Ms",
+          "value": 17
+        },
+        {
+          "name": "userPromptSubmitHookP95Ms",
+          "value": 17
+        },
+        {
+          "name": "userPromptSubmitHookP99Ms",
+          "value": 17
+        },
+        {
+          "name": "postToolUseHookP50Ms",
+          "value": 17
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 17
+        },
+        {
+          "name": "postToolUseHookP99Ms",
+          "value": 17
+        },
+        {
+          "name": "postToolUseHeavyOperationCount",
+          "value": 0
+        },
+        {
+          "name": "ordinaryHookPendingReviewCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "non-Stop hook lightweight; hook events=3; hook metric=post_tool_use; continuity metrics=0; ordinary pending review=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-HOOK-TIMEOUT",
+      "title": "hook timeout does not crash ordinary coding flow",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "stopHookP50Ms",
+          "value": 0
+        },
+        {
+          "name": "stopHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "stopHookP99Ms",
+          "value": 0
+        },
+        {
+          "name": "simulatedHookTimeoutCount",
+          "value": 1
+        },
+        {
+          "name": "simulatedHookFailOpenCount",
+          "value": 1
+        },
+        {
+          "name": "runtimeHookTimeoutCount",
+          "value": 0
+        },
+        {
+          "name": "runtimeHookFailOpenCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "hook timeout fail-open; timeoutSource=simulated_invalid_payload; runtimeHookTimeout=0; continue=1; suppressOutput=1; latencyMs=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-SECRETS",
+      "title": "secrets are never persisted or reported as memory",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "secret persistence=0; propose action=reject"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-PROMPT-INJECTION",
+      "title": "prompt injection text cannot override benchmark or memory policy",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "prompt injection rejected by propose path; active writes=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-GLOBAL-WRITE",
+      "title": "global writes require explicit allowed namespace and policy",
+      "tier": "tier4",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "boundarySafetyRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "unauthorized global write=0; propose action=reject"
+        }
+      ],
+      "thresholdBreaches": []
+    }
+  ],
+  "metrics": {
+    "capability": {
+      "modeAccuracy": 1,
+      "retrievedDefaultWriteRate": 0,
+      "surfaceConsistencyRate": 1,
+      "retrievalAccuracy": 1,
+      "answerAccuracy": 1,
+      "abstentionAccuracy": 1,
+      "similarMemoryInterferenceRate": 0,
+      "promotionAccuracy": 1,
+      "lifecyclePromotionAccuracy": 1,
+      "dailyPromotedCount": 1,
+      "replacementAccuracy": 1,
+      "duplicateActiveMemoryRate": 0,
+      "pendingReviewedCount": 2,
+      "approveCount": 1,
+      "mergeAccuracy": 1,
+      "duplicatePendingRate": 0,
+      "conflictResolutionAccuracy": 1,
+      "rollbackSuccessRate": 1,
+      "stalePendingCount": 0,
+      "summaryStalePropagationAccuracy": 1,
+      "importantMemoryMissedRate": 0,
+      "proposalPrecision": 1,
+      "proposalRecall": 1,
+      "pendingGeneratedCount": 1,
+      "pendingCandidatesPerSession": 1,
+      "pendingCandidatesPerDay": 1,
+      "manualReviewCount": 2,
+      "reviewFalsePositiveRate": 0,
+      "rejectCount": 1,
+      "deferCount": 1,
+      "editCount": 1,
+      "averageReviewTimeMs": 0,
+      "recallAt1": 1,
+      "recallAt3": 1,
+      "recallAt5": 1,
+      "mrr": 1,
+      "top1Accuracy": 1,
+      "wrongTop1Rate": 0,
+      "irrelevantRetrievalRate": 0,
+      "staleMemoryRetrievalRate": 0,
+      "oldMemoryRetrievalRate": 0,
+      "newMemoryRetrievalRate": 1,
+      "contextItemCount": 1,
+      "memoryItemCount": 1,
+      "profileSectionCount": 1,
+      "sessionHintsCount": 0,
+      "diagnosticsItemCount": 7,
+      "continuityGetMinMs": 17,
+      "continuityGetMaxMs": 35,
+      "continuityGetMeanMs": 24,
+      "postToolUseHeavyOperationCount": 0,
+      "hotPathRebuildCount": 0,
+      "adapterAvailability": 1,
+      "weeklyCoreCandidateCount": 1,
+      "dryRunWriteCount": 0,
+      "repeatedPromotionCount": 0
+    },
+    "boundarySafety": {
+      "pendingLeakageRate": 0,
+      "pendingMisuseRate": 0,
+      "crossProjectPollutionRate": 0,
+      "similarHintMigrationRate": 0,
+      "profilePollutionRate": 0,
+      "staleMemoryLeakageRate": 0,
+      "noiseProposalRate": 0,
+      "temporaryStateProposalRate": 0,
+      "sensitiveProposalRate": 0,
+      "assistantInferenceAutoActiveRate": 0,
+      "boundarySafetyRate": 1
+    },
+    "efficiency": {
+      "fastTokenOverhead": 586,
+      "continuityGetP95FastMs": 22,
+      "balancedTokenOverhead": 601,
+      "continuityGetP95BalancedMs": 23,
+      "continuityGetP95ReviewMs": 43,
+      "sqliteHitRateFreshIndex": 1,
+      "jsonlFallbackRateHotPath": 0,
+      "sqliteQueryP95Ms": 19,
+      "activationEventGrowth": 1,
+      "auditLogGrowth": 1,
+      "reviewTokenOverhead": 946,
+      "fastPendingTokens": 0,
+      "fastDiagnosticsTokens": 0,
+      "balancedPendingTokens": 0,
+      "balancedDiagnosticsTokens": 0,
+      "reviewPendingTokens": 64,
+      "reviewDiagnosticsTokens": 230,
+      "projectMemoryTokens": 77,
+      "globalProfileTokens": 1,
+      "fastSummaryTokens": 7,
+      "fullProfileTokens": 11,
+      "sessionHintsTokens": 1,
+      "similarHintsTokens": 1,
+      "pendingTokens": 64,
+      "diagnosticsTokens": 230,
+      "profileSizeGrowthBytes": 40,
+      "fastSummarySizeGrowthBytes": 26,
+      "sessionHintsSizeBytes": 2,
+      "continuityGetSampleCount": 9,
+      "hookSampleCount": 3,
+      "continuityGetP50Ms": 19,
+      "continuityGetP95Ms": 35,
+      "continuityGetP99Ms": 35,
+      "continuityGetP50FastMs": 18,
+      "continuityGetP99FastMs": 19,
+      "continuityGetP50BalancedMs": 18,
+      "continuityGetP99BalancedMs": 23,
+      "continuityGetP50ReviewMs": 33,
+      "continuityGetP99ReviewMs": 35,
+      "profileReadLatencyMs": 2,
+      "fastSummaryReadLatencyMs": 0,
+      "sessionHintsReadLatencyMs": 0,
+      "similarQueryLatencyMs": 0,
+      "pendingQueryLatencyMs": 0,
+      "diagnosticsAssemblyLatencyMs": 1,
+      "hookLatencyMs": 39,
+      "sessionStartHookP50Ms": 39,
+      "sessionStartHookP95Ms": 39,
+      "sessionStartHookP99Ms": 39,
+      "userPromptSubmitHookP50Ms": 20,
+      "userPromptSubmitHookP95Ms": 20,
+      "userPromptSubmitHookP99Ms": 20,
+      "postToolUseHookP50Ms": 20,
+      "postToolUseHookP95Ms": 20,
+      "postToolUseHookP99Ms": 20,
+      "stopHookP50Ms": 0,
+      "stopHookP95Ms": 0,
+      "stopHookP99Ms": 0,
+      "runtimeHookTimeoutCount": 0,
+      "runtimeHookFailOpenCount": 0,
+      "ordinaryHookPendingReviewCount": 0,
+      "sqliteHitRate": 1,
+      "indexStaleRate": 0,
+      "indexRebuildTimeMs": 22,
+      "dbRebuildTimeMs": 22,
+      "memoryDbSizeBytes": 77824,
+      "jsonlSizeBytes": 1393,
+      "indexSourceMismatchCount": 0,
+      "undetectedStaleIndexCount": 0,
+      "dailyAutomationRuntimeMs": 1,
+      "weeklyAutomationRuntimeMs": 2,
+      "duplicateAutomationOutputCount": 0,
+      "automationInterruptRecoveryTimeMs": 1,
+      "simulatedHookTimeoutCount": 1,
+      "simulatedHookFailOpenCount": 1
+    },
+    "taskUtility": {
+      "taskSuccessRate": 1,
+      "toolCallCount": 6,
+      "repeatedMistakeReduction": 0.75,
+      "noMemoryTaskSuccessRate": 0,
+      "withMemoryTaskSuccessRate": 1,
+      "userCorrectionReduction": 0.6,
+      "toolCallReduction": 0.4
+    }
+  },
+  "metricAggregation": {
+    "modeAccuracy": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T0-MODE-FAST",
+        "T0-MODE-BALANCED",
+        "T0-MODE-REVIEW"
+      ]
+    },
+    "fastTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-MODE-FAST",
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "continuityGetP95FastMs": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-MODE-FAST",
+        "T3-LATENCY"
+      ]
+    },
+    "balancedTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-MODE-BALANCED",
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "continuityGetP95BalancedMs": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-MODE-BALANCED",
+        "T3-LATENCY"
+      ]
+    },
+    "pendingLeakageRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-MODE-BALANCED",
+        "T0-PENDING-BOUNDARY"
+      ]
+    },
+    "pendingMisuseRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-MODE-REVIEW"
+      ]
+    },
+    "continuityGetP95ReviewMs": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-MODE-REVIEW",
+        "T3-LATENCY"
+      ]
+    },
+    "crossProjectPollutionRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T0-SIMILAR-BOUNDARY",
+        "T0-CROSS-PROJECT-ADVERSARIAL",
+        "T0-CROSS-PROJECT-PROMPT-INJECTION"
+      ]
+    },
+    "similarHintMigrationRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T0-SIMILAR-BOUNDARY",
+        "T0-CROSS-PROJECT-ADVERSARIAL",
+        "T0-CROSS-PROJECT-PROMPT-INJECTION",
+        "T0-SESSION-HINTS"
+      ]
+    },
+    "profilePollutionRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T0-CROSS-PROJECT-ADVERSARIAL",
+        "T0-CROSS-PROJECT-PROMPT-INJECTION",
+        "T0-SESSION-HINTS"
+      ]
+    },
+    "retrievedDefaultWriteRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-ACTIVATION-RETRIEVED"
+      ]
+    },
+    "sqliteHitRateFreshIndex": {
+      "group": "efficiency",
+      "strategy": "min",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-SQLITE-HOT-PATH",
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "jsonlFallbackRateHotPath": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T0-SQLITE-HOT-PATH",
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "sqliteQueryP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-SQLITE-HOT-PATH"
+      ]
+    },
+    "surfaceConsistencyRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T0-SURFACE-CONSISTENCY"
+      ]
+    },
+    "retrievalAccuracy": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 8,
+      "sourceCaseIds": [
+        "T1-FACT-EXTRACTION",
+        "T1-MULTI-SESSION-REASONING",
+        "T1-TEMPORAL-ORDER",
+        "T1-KNOWLEDGE-UPDATE",
+        "T1-CONFLICT-HANDLING",
+        "T1-ADVERSARIAL-RETRIEVAL",
+        "T1-ADVERSARIAL-MULTI-DISTRACTOR",
+        "T1-EVENT-SUMMARY"
+      ]
+    },
+    "answerAccuracy": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 8,
+      "sourceCaseIds": [
+        "T1-FACT-EXTRACTION",
+        "T1-MULTI-SESSION-REASONING",
+        "T1-TEMPORAL-ORDER",
+        "T1-KNOWLEDGE-UPDATE",
+        "T1-CONFLICT-HANDLING",
+        "T1-ADVERSARIAL-RETRIEVAL",
+        "T1-ADVERSARIAL-MULTI-DISTRACTOR",
+        "T1-EVENT-SUMMARY"
+      ]
+    },
+    "abstentionAccuracy": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 7,
+      "sourceCaseIds": [
+        "T1-FACT-EXTRACTION",
+        "T1-MULTI-SESSION-REASONING",
+        "T1-TEMPORAL-ORDER",
+        "T1-KNOWLEDGE-UPDATE",
+        "T1-CONFLICT-HANDLING",
+        "T1-ABSTAIN-NO-EVIDENCE",
+        "T1-EVENT-SUMMARY"
+      ]
+    },
+    "similarMemoryInterferenceRate": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T1-ADVERSARIAL-RETRIEVAL",
+        "T1-ADVERSARIAL-MULTI-DISTRACTOR",
+        "T3-RANKING"
+      ]
+    },
+    "promotionAccuracy": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T15-UPGRADE"
+      ]
+    },
+    "lifecyclePromotionAccuracy": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T15-UPGRADE",
+        "T16-ROUTING-NAMESPACE"
+      ]
+    },
+    "dailyPromotedCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T15-UPGRADE",
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "activationEventGrowth": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T15-UPGRADE"
+      ]
+    },
+    "auditLogGrowth": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T15-UPGRADE"
+      ]
+    },
+    "replacementAccuracy": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T15-REPLACE"
+      ]
+    },
+    "staleMemoryLeakageRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 5,
+      "sourceCaseIds": [
+        "T15-REPLACE",
+        "T15-EXPIRE",
+        "T15-CONFLICT-SINGLE-INJECTION",
+        "T15-ADVERSARIAL-CONFLICT",
+        "T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD"
+      ]
+    },
+    "duplicateActiveMemoryRate": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T15-REPLACE",
+        "T15-MERGE",
+        "T15-ADVERSARIAL-CONFLICT",
+        "T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD"
+      ]
+    },
+    "pendingReviewedCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T15-REPLACE",
+        "T16-REVIEW-REJECT-DEFER",
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "approveCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T15-REPLACE",
+        "T16-REVIEW-HASH-REQUIRED"
+      ]
+    },
+    "mergeAccuracy": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T15-MERGE"
+      ]
+    },
+    "duplicatePendingRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T15-MERGE"
+      ]
+    },
+    "conflictResolutionAccuracy": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 5,
+      "sourceCaseIds": [
+        "T15-MERGE",
+        "T15-SUPERSEDE-HASH",
+        "T15-CONFLICT-SINGLE-INJECTION",
+        "T15-ADVERSARIAL-CONFLICT",
+        "T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD"
+      ]
+    },
+    "rollbackSuccessRate": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T15-EXPIRE",
+        "T15-SUPERSEDE-HASH"
+      ]
+    },
+    "stalePendingCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T15-SUPERSEDE-HASH",
+        "T16-REVIEW-STALE-HASH",
+        "T16-REVIEW-REJECT-DEFER"
+      ]
+    },
+    "summaryStalePropagationAccuracy": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T15-CONFLICT-SINGLE-INJECTION"
+      ]
+    },
+    "importantMemoryMissedRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "proposalPrecision": {
+      "group": "capability",
+      "strategy": "min",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT",
+        "T16-PROPOSE-NOISE",
+        "T16-PROPOSE-SENSITIVE"
+      ]
+    },
+    "proposalRecall": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "pendingGeneratedCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT",
+        "T16-PROPOSE-NOISE",
+        "T16-PROPOSE-ASSISTANT-INFERENCE",
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "pendingCandidatesPerSession": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "pendingCandidatesPerDay": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-IMPORTANT"
+      ]
+    },
+    "noiseProposalRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-NOISE"
+      ]
+    },
+    "temporaryStateProposalRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-NOISE"
+      ]
+    },
+    "sensitiveProposalRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-SENSITIVE"
+      ]
+    },
+    "assistantInferenceAutoActiveRate": {
+      "group": "boundarySafety",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-PROPOSE-ASSISTANT-INFERENCE"
+      ]
+    },
+    "manualReviewCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 5,
+      "sourceCaseIds": [
+        "T16-PROPOSE-ASSISTANT-INFERENCE",
+        "T16-REVIEW-HASH-REQUIRED",
+        "T16-REVIEW-STALE-HASH",
+        "T16-REVIEW-REJECT-DEFER",
+        "T16-REVIEW-EDIT-HASH"
+      ]
+    },
+    "reviewFalsePositiveRate": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T16-REVIEW-HASH-REQUIRED",
+        "T16-REVIEW-STALE-HASH"
+      ]
+    },
+    "rejectCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-REJECT-DEFER"
+      ]
+    },
+    "deferCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-REJECT-DEFER"
+      ]
+    },
+    "editCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-EDIT-HASH"
+      ]
+    },
+    "averageReviewTimeMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T16-REVIEW-EDIT-HASH"
+      ]
+    },
+    "taskSuccessRate": {
+      "group": "taskUtility",
+      "strategy": "min",
+      "sampleCount": 6,
+      "sourceCaseIds": [
+        "T2-REMEMBER-TEST-COMMAND",
+        "T2-AVOID-REJECTED-APPROACH",
+        "T2-FOLLOW-WORKFLOW",
+        "T2-UPDATED-RULE",
+        "T2-CROSS-SESSION-FIX",
+        "T2-REDUCE-REPEAT-MISTAKE"
+      ]
+    },
+    "toolCallCount": {
+      "group": "taskUtility",
+      "strategy": "max",
+      "sampleCount": 6,
+      "sourceCaseIds": [
+        "T2-REMEMBER-TEST-COMMAND",
+        "T2-AVOID-REJECTED-APPROACH",
+        "T2-FOLLOW-WORKFLOW",
+        "T2-UPDATED-RULE",
+        "T2-CROSS-SESSION-FIX",
+        "T2-REDUCE-REPEAT-MISTAKE"
+      ]
+    },
+    "repeatedMistakeReduction": {
+      "group": "taskUtility",
+      "strategy": "min",
+      "sampleCount": 6,
+      "sourceCaseIds": [
+        "T2-REMEMBER-TEST-COMMAND",
+        "T2-AVOID-REJECTED-APPROACH",
+        "T2-FOLLOW-WORKFLOW",
+        "T2-UPDATED-RULE",
+        "T2-CROSS-SESSION-FIX",
+        "T2-REDUCE-REPEAT-MISTAKE"
+      ]
+    },
+    "noMemoryTaskSuccessRate": {
+      "group": "taskUtility",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T2-REDUCE-REPEAT-MISTAKE"
+      ]
+    },
+    "withMemoryTaskSuccessRate": {
+      "group": "taskUtility",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T2-REDUCE-REPEAT-MISTAKE"
+      ]
+    },
+    "userCorrectionReduction": {
+      "group": "taskUtility",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T2-REDUCE-REPEAT-MISTAKE"
+      ]
+    },
+    "toolCallReduction": {
+      "group": "taskUtility",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T2-REDUCE-REPEAT-MISTAKE"
+      ]
+    },
+    "recallAt1": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "recallAt3": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "recallAt5": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "mrr": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "top1Accuracy": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "wrongTop1Rate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "irrelevantRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "staleMemoryRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "oldMemoryRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "newMemoryRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "reviewTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastPendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastDiagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "balancedPendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "balancedDiagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "reviewPendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "reviewDiagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "projectMemoryTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "globalProfileTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastSummaryTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fullProfileTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "sessionHintsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "similarHintsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "pendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "diagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "contextItemCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "memoryItemCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "profileSectionCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "sessionHintsCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "diagnosticsItemCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "profileSizeGrowthBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastSummarySizeGrowthBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "sessionHintsSizeBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "continuityGetSampleCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "hookSampleCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetMinMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetMaxMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetMeanMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP50FastMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP99FastMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP50BalancedMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP99BalancedMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP50ReviewMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP99ReviewMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "profileReadLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "fastSummaryReadLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "sessionHintsReadLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "similarQueryLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "pendingQueryLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "diagnosticsAssemblyLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "hookLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "sessionStartHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "sessionStartHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "sessionStartHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "userPromptSubmitHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "userPromptSubmitHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "userPromptSubmitHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "postToolUseHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "postToolUseHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 8,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-SQLITE-UNAVAILABLE",
+        "T4-JSONL-CORRUPT",
+        "T4-PROFILE-MISSING",
+        "T4-FAST-SUMMARY-MISSING-STALE",
+        "T4-SESSION-HINTS-EXPIRED",
+        "T4-MCP-ERROR",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "postToolUseHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "stopHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-TIMEOUT"
+      ]
+    },
+    "stopHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-TIMEOUT"
+      ]
+    },
+    "stopHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-TIMEOUT"
+      ]
+    },
+    "runtimeHookTimeoutCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-TIMEOUT"
+      ]
+    },
+    "runtimeHookFailOpenCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-TIMEOUT"
+      ]
+    },
+    "postToolUseHeavyOperationCount": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "ordinaryHookPendingReviewCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-LATENCY",
+        "T4-HOOK-LIGHTWEIGHT"
+      ]
+    },
+    "sqliteHitRate": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "indexStaleRate": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "indexRebuildTimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "dbRebuildTimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "memoryDbSizeBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "jsonlSizeBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "indexSourceMismatchCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "hotPathRebuildCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "undetectedStaleIndexCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "boundarySafetyRate": {
+      "group": "boundarySafety",
+      "strategy": "max",
+      "sampleCount": 9,
+      "sourceCaseIds": [
+        "T4-SQLITE-UNAVAILABLE",
+        "T4-JSONL-CORRUPT",
+        "T4-PROFILE-MISSING",
+        "T4-FAST-SUMMARY-MISSING-STALE",
+        "T4-SESSION-HINTS-EXPIRED",
+        "T4-MCP-ERROR",
+        "T4-SECURITY-SECRETS",
+        "T4-SECURITY-PROMPT-INJECTION",
+        "T4-SECURITY-GLOBAL-WRITE"
+      ]
+    },
+    "adapterAvailability": {
+      "group": "capability",
+      "strategy": "max",
+      "sampleCount": 6,
+      "sourceCaseIds": [
+        "T4-SQLITE-UNAVAILABLE",
+        "T4-JSONL-CORRUPT",
+        "T4-PROFILE-MISSING",
+        "T4-FAST-SUMMARY-MISSING-STALE",
+        "T4-SESSION-HINTS-EXPIRED",
+        "T4-MCP-ERROR"
+      ]
+    },
+    "dailyAutomationRuntimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "weeklyAutomationRuntimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "weeklyCoreCandidateCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "duplicateAutomationOutputCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "dryRunWriteCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "repeatedPromotionCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "automationInterruptRecoveryTimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-AUTOMATION-INTERRUPT"
+      ]
+    },
+    "simulatedHookTimeoutCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-TIMEOUT"
+      ]
+    },
+    "simulatedHookFailOpenCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T4-HOOK-TIMEOUT"
+      ]
+    }
+  },
+  "hardFailures": [],
+  "thresholdBreaches": [],
+  "fixtureRuns": [
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-fv2FwV",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-fv2FwV/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-fv2FwV/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-RWOM3E",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-RWOM3E/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-RWOM3E/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-seUDF8",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-seUDF8/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-seUDF8/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-JNzqc3",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-JNzqc3/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-JNzqc3/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-yosI6X",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-yosI6X/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-yosI6X/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4whKtc",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4whKtc/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4whKtc/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Q45CUu",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Q45CUu/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Q45CUu/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-1r3mEt",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-1r3mEt/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-1r3mEt/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rEwpzH",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rEwpzH/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rEwpzH/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-W4QPdH",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-W4QPdH/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-W4QPdH/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AJo20c",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AJo20c/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AJo20c/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-UbQaJN",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-UbQaJN/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-UbQaJN/cyrene-benchmark-project-d22a0eb951654a42",
+      "seed": "stats-fix-full-seed:T1-FACT-EXTRACTION",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-v9uClh",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-v9uClh/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-v9uClh/cyrene-benchmark-project-d56de0ac9e5637d7",
+      "seed": "stats-fix-full-seed:T1-MULTI-SESSION-REASONING",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-nZJJX6",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-nZJJX6/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-nZJJX6/cyrene-benchmark-project-1c14c7d462855115",
+      "seed": "stats-fix-full-seed:T1-TEMPORAL-ORDER",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZiisZI",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZiisZI/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZiisZI/cyrene-benchmark-project-72a20bba15ed42b9",
+      "seed": "stats-fix-full-seed:T1-KNOWLEDGE-UPDATE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-3OohhZ",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-3OohhZ/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-3OohhZ/cyrene-benchmark-project-8b8196986331c6fa",
+      "seed": "stats-fix-full-seed:T1-CONFLICT-HANDLING",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-7Naasm",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-7Naasm/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-7Naasm/cyrene-benchmark-project-75f6fad62bfbbc08",
+      "seed": "stats-fix-full-seed:T1-ADVERSARIAL-RETRIEVAL",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-e4Nm8o",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-e4Nm8o/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-e4Nm8o/cyrene-benchmark-project-8738ba75f567b841",
+      "seed": "stats-fix-full-seed:T1-ADVERSARIAL-MULTI-DISTRACTOR",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Ylw8Ez",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Ylw8Ez/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Ylw8Ez/cyrene-benchmark-project-c6a981c384022294",
+      "seed": "stats-fix-full-seed:T1-ABSTAIN-NO-EVIDENCE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-CnZnaC",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-CnZnaC/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-CnZnaC/cyrene-benchmark-project-dafe4c58984e0ab1",
+      "seed": "stats-fix-full-seed:T1-EVENT-SUMMARY",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rcS0Le",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rcS0Le/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rcS0Le/cyrene-benchmark-project-8301ba3ba2889dd7",
+      "seed": "stats-fix-full-seed:T15-UPGRADE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-e4UozW",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-e4UozW/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-e4UozW/cyrene-benchmark-project-7de2d07d4083c707",
+      "seed": "stats-fix-full-seed:T15-REPLACE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-jluuXW",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-jluuXW/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-jluuXW/cyrene-benchmark-project-dbf69a7712e508ca",
+      "seed": "stats-fix-full-seed:T15-MERGE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-P6tzUm",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-P6tzUm/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-P6tzUm/cyrene-benchmark-project-e6514277b3df3ced",
+      "seed": "stats-fix-full-seed:T15-EXPIRE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-NCJCa0",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-NCJCa0/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-NCJCa0/cyrene-benchmark-project-3ad9e5c15b7dc183",
+      "seed": "stats-fix-full-seed:T15-SUPERSEDE-HASH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-UMbXW0",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-UMbXW0/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-UMbXW0/cyrene-benchmark-project-94db43e921f1387f",
+      "seed": "stats-fix-full-seed:T15-CONFLICT-SINGLE-INJECTION",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-oT06dE",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-oT06dE/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-oT06dE/cyrene-benchmark-project-a7836c741c119671",
+      "seed": "stats-fix-full-seed:T15-ADVERSARIAL-CONFLICT",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4U5ocg",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4U5ocg/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-4U5ocg/cyrene-benchmark-project-b91f64157a4c513a",
+      "seed": "stats-fix-full-seed:T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-eCQJTK",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-eCQJTK/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-eCQJTK/cyrene-benchmark-project-6fe7bcd3eb74e748",
+      "seed": "stats-fix-full-seed:T16-PROPOSE-IMPORTANT",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-GemXBT",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-GemXBT/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-GemXBT/cyrene-benchmark-project-9d50d1076c0ad966",
+      "seed": "stats-fix-full-seed:T16-PROPOSE-NOISE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Wi4cDw",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Wi4cDw/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Wi4cDw/cyrene-benchmark-project-efbee26558ba1337",
+      "seed": "stats-fix-full-seed:T16-PROPOSE-SENSITIVE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-02rjEK",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-02rjEK/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-02rjEK/cyrene-benchmark-project-87eb87b9db3e93a5",
+      "seed": "stats-fix-full-seed:T16-PROPOSE-ASSISTANT-INFERENCE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-f5lyL3",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-f5lyL3/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-f5lyL3/cyrene-benchmark-project-28197982727db3fd",
+      "seed": "stats-fix-full-seed:T16-ROUTING-NAMESPACE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AF3iIn",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AF3iIn/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AF3iIn/cyrene-benchmark-project-ddb6d5dcd6743fd9",
+      "seed": "stats-fix-full-seed:T16-REVIEW-HASH-REQUIRED",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-uIbBxD",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-uIbBxD/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-uIbBxD/cyrene-benchmark-project-8b81a6b9b183afd8",
+      "seed": "stats-fix-full-seed:T16-REVIEW-STALE-HASH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-9XXvZP",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-9XXvZP/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-9XXvZP/cyrene-benchmark-project-6197d4fbdfd5fa2a",
+      "seed": "stats-fix-full-seed:T16-REVIEW-REJECT-DEFER",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qEvdwt",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qEvdwt/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qEvdwt/cyrene-benchmark-project-caf70f731aa86938",
+      "seed": "stats-fix-full-seed:T16-REVIEW-EDIT-HASH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-M2Sd3Y",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-M2Sd3Y/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-M2Sd3Y/cyrene-benchmark-project-d65dd985950a7ea7",
+      "seed": "stats-fix-full-seed:T2-REMEMBER-TEST-COMMAND",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ebVSwT",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ebVSwT/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ebVSwT/cyrene-benchmark-project-594bc4ed733c7e0d",
+      "seed": "stats-fix-full-seed:T2-AVOID-REJECTED-APPROACH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-OGVx8p",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-OGVx8p/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-OGVx8p/cyrene-benchmark-project-d16bf8198c1502e4",
+      "seed": "stats-fix-full-seed:T2-FOLLOW-WORKFLOW",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-OuA7tW",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-OuA7tW/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-OuA7tW/cyrene-benchmark-project-feb9784a9b637c06",
+      "seed": "stats-fix-full-seed:T2-UPDATED-RULE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AL8wvu",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AL8wvu/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AL8wvu/cyrene-benchmark-project-4b8707f587411f9b",
+      "seed": "stats-fix-full-seed:T2-CROSS-SESSION-FIX",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Evmyv9",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Evmyv9/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Evmyv9/cyrene-benchmark-project-24f79383707dce18",
+      "seed": "stats-fix-full-seed:T2-REDUCE-REPEAT-MISTAKE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-tB1TJ2",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-tB1TJ2/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-tB1TJ2/cyrene-benchmark-project-3807cd2c63322332",
+      "seed": "stats-fix-full-seed:T3-RANKING",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-WZjIFY",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-WZjIFY/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-WZjIFY/cyrene-benchmark-project-18a75d3b938c145c",
+      "seed": "stats-fix-full-seed:T3-TOKEN-OVERHEAD",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-tSy6Pw",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-tSy6Pw/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-tSy6Pw/cyrene-benchmark-project-44da67a2f694e6c8",
+      "seed": "stats-fix-full-seed:T3-LATENCY",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-m46Z5A",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-m46Z5A/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-m46Z5A/cyrene-benchmark-project-097d08988cfa6a3f",
+      "seed": "stats-fix-full-seed:T3-INDEX-HEALTH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-BaiBUA",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-BaiBUA/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-BaiBUA/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rfJYrs",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rfJYrs/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-rfJYrs/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZemvHx",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZemvHx/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZemvHx/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Ki0Kuf",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Ki0Kuf/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Ki0Kuf/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-v7YZ18",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-v7YZ18/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-v7YZ18/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Axdkvn",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Axdkvn/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-Axdkvn/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-NSbalJ",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-NSbalJ/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-NSbalJ/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qcNHnk",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qcNHnk/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qcNHnk/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-aApffH",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-aApffH/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-aApffH/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-RsVwoR",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-RsVwoR/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-RsVwoR/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-I2PjcL",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-I2PjcL/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-I2PjcL/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-k2JKXr",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-k2JKXr/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-k2JKXr/cyrene-benchmark-project-473c22ab72791535",
+      "seed": "stats-fix-full-seed",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    }
+  ]
+}

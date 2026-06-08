@@ -176,7 +176,7 @@ describe('benchmark scorer and report', () => {
       completedAt: '2026-06-05T00:00:01.000Z',
       profile: 'smoke',
       spec: {
-        path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md',
+        path: 'benchmark/fixtures/benchmark-eval-system-design.md',
         title: 'Cyrene Benchmark Eval System Design',
         date: '2026-06-05',
         contentHash: 'spec-hash'
@@ -300,7 +300,7 @@ describe('benchmark scorer and report', () => {
     const payload = JSON.parse(await readFile(paths.jsonPath, 'utf8')) as BenchmarkReport
     expect(payload.profile).toBe('smoke')
     expect(payload.spec).toEqual({
-      path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md',
+      path: 'benchmark/fixtures/benchmark-eval-system-design.md',
       title: 'Cyrene Benchmark Eval System Design',
       date: '2026-06-05',
       contentHash: 'spec-hash'
@@ -439,7 +439,7 @@ describe('benchmark scorer and report', () => {
       completedAt: '2026-06-05T00:00:01.000Z',
       profile: 'real-replay',
       spec: {
-        path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md',
+        path: 'benchmark/fixtures/benchmark-eval-system-design.md',
         title: 'Cyrene Benchmark Eval System Design',
         date: '2026-06-05',
         contentHash: 'spec-hash'
@@ -537,7 +537,7 @@ describe('benchmark scorer and report', () => {
       completedAt: '2026-06-05T00:00:01.000Z',
       profile: 'smoke',
       spec: {
-        path: 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md',
+        path: 'benchmark/fixtures/benchmark-eval-system-design.md',
         title: 'Cyrene Benchmark Eval System Design',
         date: '2026-06-05',
         contentHash: 'spec-hash'

@@ -1,367 +1,131 @@
 # cyrene-continuity
 
-Local-first continuity bridge for Codex. This repository packages Cyrene as an
-independent Codex plugin with a bundled MCP server, a Codex skill, and local
-memory maintenance commands.
+Local-first continuity and memory plugin for Codex.
 
-## Plugin Features
+[![CI](https://github.com/mingxiangbian/cyrene-continuity/actions/workflows/ci.yml/badge.svg)](https://github.com/mingxiangbian/cyrene-continuity/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node >=22.5.0](https://img.shields.io/badge/node-%3E%3D22.5.0-339933)
+![npm >=10](https://img.shields.io/badge/npm-%3E%3D10-CB3837)
+![local-first](https://img.shields.io/badge/local--first-memory-2f855a)
+![MCP plugin](https://img.shields.io/badge/MCP-plugin-4b5563)
 
-- Codex plugin manifest at `plugin/.codex-plugin/plugin.json`.
-- Plugin MCP server named `cyrene-continuity`, declared in `plugin/.mcp.json`.
-- Bundled runtime at `plugin/runtime/cyrene-continuity.mjs`, built from
-  `src/main.ts`.
-- Stable executable shim at `~/.cyrene/codex/bin/cyrene-continuity`, written by
-  `cyrene-continuity codex install --plugin`.
-- Codex skill at `plugin/skills/cyrene-continuity/SKILL.md`.
-- Bundled Codex lifecycle hooks at `plugin/hooks/hooks.json` for
-  `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`.
+![Cyrene Continuity local-first memory architecture hero](docs/assets/cyrene-readme-hero.png)
 
-The bundled lifecycle hooks capture project activity signals during a Codex
-session. The Stop hook writes review-safe session summaries and may propose
-pending candidates. It is fail-open for Codex sessions, records failed summary
-runs in `review-summaries.jsonl`, and never promotes, rejects, or updates active
-memory/profile files from hook execution.
+## What It Does
 
-The older `codex install-hook --stop` and `codex hook stop` commands remain
-available as compatibility entrypoints for manual hook installs and existing
-configurations. New plugin installs should rely on the bundled
-`plugin/hooks/hooks.json` lifecycle config.
+- Supplies continuity context to Codex from local project and global memory.
+- Keeps memory review-safe with pending candidates, explicit approval, and review-hash validation.
+- Exposes MCP tools for continuity reads, memory review, lifecycle feedback, project identity, and project harvesting.
+- Includes a CLI and local Web UI for install checks, memory review, maintenance, and diagnostics.
+- Ships deterministic benchmark and eval profiles for continuity, safety, retrieval, and release gates.
 
-## MCP Tools
+## Quickstart
 
-The plugin MCP server exposes:
-
-- `cyrene_project_identify`: identify the current Cyrene project namespace.
-- `cyrene_continuity_get`: read compact continuity context, response strategy,
-  and principled dissent hints. It infers `fast`, `balanced`, or `review` mode
-  from task/message context unless `mode` is explicit, and accepts
-  `mode`, `includeSimilarProjectHints`, `includePendingDetails`,
-  `includePendingNotice`, `includeDiagnostics`, `recordRetrievedEvents`, and
-  `maxTokens`.
-- `cyrene_memory_feedback`: record hash-checked active-memory usage feedback
-  (`applied`, `ignored`, `corrected`, or `violated`) as lifecycle evidence.
-  It stores query text only as `queryHash` and never promotes memory directly.
-- `cyrene_memory_propose`: write a pending-only memory candidate for review.
-- `cyrene_memory_pending_list`: list pending memory candidates.
-- `cyrene_memory_pending_get`: read one pending candidate.
-- `cyrene_memory_promote`: promote a pending candidate only after explicit user
-  approval and review-hash validation.
-- `cyrene_memory_reject`: reject a pending candidate only after explicit user
-  rejection and review-hash validation.
-- `cyrene_memory_edit`: edit a pending candidate after review-hash validation;
-  the edited candidate remains pending.
-- `cyrene_memory_defer`: defer a pending candidate after review-hash validation;
-  this never promotes active memory.
-- `cyrene_memory_active_archive`: archive a hash-checked active memory so it
-  leaves retrieval without creating a tombstone.
-- `cyrene_memory_active_tombstone`: tombstone a hash-checked active memory and
-  block matching future candidates; high-risk memory requires explicit
-  confirmation.
-- `cyrene_memory_active_propose_edit`: create a pending replacement candidate
-  for a hash-checked active memory.
-- `cyrene_memory_active_supersede`: supersede a hash-checked active memory with
-  a reviewed pending replacement candidate.
-- `cyrene_memory_automation_run`: run daily or weekly memory lifecycle
-  maintenance. Automation can promote strict low-risk lifecycle memory through
-  named v1.5 gates and leaves high-risk recommendations in manual review.
-- `cyrene_memory_profile_get`: read the effective global and project
-  `MODEL_PROFILE.md` context.
-- `cyrene_memory_harvest_project`: harvest current-project signals into
-  pending-only project memory candidates. Use `dryRun` to preview candidates
-  without writing pending review items. The tool uses the MCP server fallback
-  working directory and does not accept a `cwd` input.
-
-## Context Modes
-
-`cyrene_continuity_get` and `codex memory context-preview` use explicit or
-automatically inferred context modes:
-
-- `fast` is the default ordinary-read mode. It uses fast summary projections
-  plus active project/global memory, hides pending candidates/counts/notices,
-  skips similar-project hints, skips diagnostics, and does not write
-  `retrieved` events by default.
-- `balanced` uses richer active/session context without pending review
-  visibility. It reads full global/project profiles, keeps session hints on,
-  and still hides pending candidates/counts/notices by default.
-- `review` is required for pending review diagnostics, pending content/counts,
-  local UI review, daily/weekly automation review, and explicit user requests to
-  review memory. It does not return similar-project hints by default.
-
-Pending review no longer interrupts ordinary continuity reads. Use MCP
-`mode: "review"` or CLI `--mode review` when the task is actually review or
-diagnostics work. Explicit parameters override mode defaults; supported MCP
-parameters are `mode`, `includeSimilarProjectHints`, `includePendingDetails`,
-`includePendingNotice`, `includeDiagnostics`, `recordRetrievedEvents`,
-`allowJsonlFallback`, and `maxTokens`. The matching CLI flags use kebab-case:
-`--mode`, `--include-similar-project-hints`, `--include-pending-details`,
-`--include-pending-notice`, `--include-diagnostics`,
-`--record-retrieved-events`, `--allow-jsonl-fallback`, and `--max-tokens`.
-JSONL fallback is disabled by default and must be explicitly enabled with
-`allowJsonlFallback` or `--allow-jsonl-fallback`.
-
-Fast summaries are generated by daily/weekly automation from confirmed active
-memory and profile projections. Use
-`codex memory summary refresh [--scope project|global]` for explicit manual
-refresh. Similar-project hints require `includeSimilarProjectHints`; generated
-session-hints are local transferable guidance and are not current-project facts,
-memory migration, or promotion evidence.
-
-## Install
-
-Build the standalone plugin runtime before installing the plugin bridge:
+Requirements: Node.js `>=22.5.0` and npm `>=10`.
 
 ```bash
-npm install
+git clone <repo-url>
+cd cyrene-continuity
+npm ci
 npm run build:plugin
 npm run dev -- codex install --plugin
 ```
 
-`codex install --plugin` installs/refreshes the Codex plugin bridge under the
-user Codex plugin directory. Start a new Codex session after this step so plugin
-discovery reloads the bundled MCP server and skill from `plugin/`.
+Restart Codex so plugin discovery reloads the bundled MCP server, lifecycle
+hooks, and skill from `plugin/`.
 
-After validating the installed plugin MCP server in the new Codex session, disable
-or remove any manual Cyrene MCP config such as
-`[mcp_servers."cyrene-continuity"]` or legacy `[mcp_servers.cyrene]`. The plugin
-declares its own MCP server, so keeping a manual server enabled can create
-duplicate Cyrene tools.
+Then verify the installed stable shim:
 
-For source-checkout development, use:
+```bash
+~/.cyrene/codex/bin/cyrene-continuity codex doctor
+~/.cyrene/codex/bin/cyrene-continuity codex benchmark run --profile smoke
+```
+
+If you previously configured a manual MCP server such as
+`[mcp_servers."cyrene-continuity"]` or `[mcp_servers.cyrene]`, disable the
+manual entry after the plugin install. The Codex plugin declares its own MCP
+server.
+
+For source-checkout development, use the dev bridge and local UI:
 
 ```bash
 npm run dev -- codex install --dev
-```
-
-## Commands
-
-```bash
-npm run build:plugin
-npm run dev -- mcp-server --stdio
 npm run dev -- codex doctor
-npm run dev -- codex ui [--port <n>]
-npm run dev -- codex install --dev
-npm run dev -- codex install --plugin
-npm run dev -- codex install-hook --stop
-npm run dev -- codex hook stop
-npm run dev -- codex project status
-npm run dev -- codex project list
-npm run dev -- codex project alias <projectId> <alias>
-npm run dev -- codex project merge <fromProjectId> <toProjectId>
-npm run dev -- codex benchmark run --profile smoke
-npm run dev -- codex benchmark run --profile gate
-npm run dev -- codex benchmark run --profile full
-npm run dev -- codex benchmark run --profile scale
-npm run dev -- codex benchmark run --profile llm
-npm run dev -- codex benchmark run --profile external
-npm run dev -- codex eval run --check similar-hints
-npm run dev -- codex eval run --check release
-npm run dev -- codex memory status
-npm run dev -- codex memory dashboard
-npm run dev -- codex memory review
-npm run dev -- codex memory approve <candidateId> --review-hash <hash>
-npm run dev -- codex memory reject <candidateId> --review-hash <hash>
-npm run dev -- codex memory edit <candidateId> --review-hash <hash> --content <text>
-npm run dev -- codex memory defer <candidateId> --review-hash <hash> --days 7
-npm run dev -- codex memory db rebuild
-npm run dev -- codex memory summary refresh [--scope project|global]
-npm run dev -- codex memory distill --dry-run
-npm run dev -- codex memory harvest-project [--dry-run] [--changed-files] [--since last-summary]
-npm run dev -- codex memory automation --job daily --dry-run
-npm run dev -- codex memory automation --job weekly --dry-run
-npm run dev -- codex memory context-preview --message "..." [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--max-tokens <n>]
-npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event applied --query "..."
-npm run dev -- codex memory maintenance
-npm run dev -- codex memory profile
-npm run dev -- codex profile reflect --source daily-interview
-npm run dev -- codex profile apply --candidate <candidateId> --review-hash <hash>
-npm run dev -- codex similar-hints explain --source-project-id <projectId>
-npm run dev -- codex similar-hints mark-transferable --memory-id <memoryId> --review-hash <hash>
+npm run dev -- codex ui
 ```
 
-## Benchmark Eval
+## How It Works
 
-Run benchmark profiles with `cyrene-continuity codex benchmark run --profile
-<smoke|gate|full|scale|llm|external>` or the source checkout equivalent
-`npm run dev -- codex benchmark run --profile <profile>`.
+Cyrene runs as a Codex plugin with a bundled MCP server, lifecycle hooks, a
+skill, a CLI, and a local Web UI. All surfaces share source contracts and local
+memory roots. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the layer
+model, data flow, and runtime boundaries.
 
-Every run writes `benchmark_report.json` and `benchmark_report.md` to
-`benchmark-results/` unless `--output-dir <path>` is provided. Reports include
-the spec hash, benchmark version, threshold version, package version, git
-branch/commit/dirty status, runtime metadata, case results, hard rule failures,
-soft threshold breaches, skipped cases, and provider-unsupported adapter cases.
+## MCP Tool Registry
 
-Use `smoke` for a quick sanity check and `gate` for release gate validation.
-Benchmark fixtures must use isolated temp HOME/project/memory/index paths and
-must not read or write real user memory.
-The 2026-06-06 local suite run is recorded in
-`docs/superpowers/benchmark-results/2026-06-06-cyrene-benchmark-results.md`.
+- Project and continuity: `cyrene_project_identify`, `cyrene_continuity_get`
+- Memory proposal and feedback: `cyrene_memory_propose`, `cyrene_memory_harvest_project`, `cyrene_memory_feedback`
+- Pending review queue: `cyrene_memory_pending_list`, `cyrene_memory_pending_get`, `cyrene_memory_promote`, `cyrene_memory_reject`, `cyrene_memory_edit`, `cyrene_memory_defer`
+- Active memory lifecycle: `cyrene_memory_active_archive`, `cyrene_memory_active_tombstone`, `cyrene_memory_active_propose_edit`, `cyrene_memory_active_supersede`
+- Automation and profile: `cyrene_memory_automation_run`, `cyrene_memory_profile_get`
 
-`cyrene-continuity codex ui` starts a local-only Web UI on
-`http://127.0.0.1:47833` by default. If that port is busy, the server tries the
-following ports and prints the bound URL. Pass `--port <n>` to request a
-specific port, or `--port 0` to let the operating system choose an available
-local port.
+## Safety Model
 
-The local Web UI is a review console for Overview, Manual Review, Timeline,
-Lifecycle Memory, Automation, Tools, and Profile views. It shows pending review
-candidates, review summaries, active project/global memory, project harvester
-signals, automation state, and profile text from the local Cyrene data store. Use the
-Project/Global scope controls to inspect the selected project memory root or
-global memory.
-It supports hash-checked
-single-candidate pending review actions: approve, reject, defer, and edit. Every
-write action requires the current review hash and an in-session UI token.
-Reject/defer accept an optional review note; edit requires a change note. The UI does not
-batch approve, does not apply Memory Automation/Profile changes, and does not require model
-API configuration for reviewing existing pending candidates. The Harvester view
-only runs `harvest-project` dry-run preview from the UI; it does not write
-pending memory, active memory, or profiles.
+- Local-first: Cyrene reads and writes memory under `~/.cyrene/codex`; install does not migrate or copy user memory.
+- Review queue: ambiguous or high-risk memory remains pending until the user approves, rejects, edits, or defers it.
+- Review hash: write actions require the current review hash so stale candidates cannot be approved by accident.
+- Fail-open hooks: Codex lifecycle hooks capture local activity signals and review summaries, but failed hook work must not block Codex.
+- Active memory boundaries: fast and balanced continuity reads hide pending review content by default; review mode is explicit.
 
-`codex memory automation --job daily` updates project lifecycle memory from
-trial to validated for strict low-risk evidence and refreshes fast summary
-projections. `--job weekly` updates validated project memory to project core,
-refreshes longer-lived summary projections, and consolidates safe project-core
-signals into global core candidates. High-risk, ambiguous, personal,
-relationship, affective, similar-project, and assistant-observed-only memory
-remains in manual review unless explicitly approved with review-hash validation.
+## Benchmark
 
-`codex memory feedback` records explicit usage evidence for active memory only.
-Callers must pass the active memory `contentHash`; stale hashes are rejected.
-Raw query text is never persisted, `retrieved` events are not recorded by
-default, and feedback cannot promote memory by itself. Record feedback only
-after active memory is actually applied, ignored, corrected, or violated.
-Daily/weekly automation decides how repeated evidence affects
-trial/validated/core lifecycle movement.
+Local benchmark runs write reports to `benchmark-results/` unless
+`--output-dir <path>` is provided. The curated public report for the
+2026-06-06 suite lives at
+[benchmark/reports/2026-06-06/summary.md](benchmark/reports/2026-06-06/summary.md).
 
-`CYRENE_MEMORY_RECOMMEND_PROMOTION=0` disables automation promotion
-recommendations while preserving pending candidates. The older
-`CYRENE_MEMORY_AUTO_PROMOTE` variable is deprecated and read only as
-recommendation-generation compatibility; it no longer enables unapproved active
-promotion.
-
-`codex memory harvest-project` extracts durable project memory candidates from
-git changes, project files, lifecycle hook traces, and recent review summaries.
-It emits candidates such as project facts, decisions, workflow rules, known
-pitfalls, rejected approaches, and open questions. Normal runs write only
-pending review candidates. `--dry-run` previews the harvest without writing
-pending items, `--changed-files` limits signal collection to changed files, and
-`--since last-summary` is accepted as a compatibility selector.
-
-Project memory harvesting needs the existing Cyrene model configuration before
-it can run LLM extraction. Reviewing existing memory does not require a model or
-API key. Do not write API keys into this repository. Configure the model through
-process environment variables or a local `.env` file outside version control:
-
-```env
-CYRENE_BASE_URL=https://api.openai.com/v1
-CYRENE_MODEL=<model-name>
-CYRENE_API_KEY=<provider-api-key>
-```
-
-`CYRENE_API_KEY` is sent as a bearer token when present. If model configuration
-is missing, the command returns
-`needs_model_config` and does not write pending candidates; dry-run remains safe
-for diagnostics.
-
-### Memory distillation
-
-`codex memory distill --dry-run` previews evidence-backed distillation
-candidates. It does not mutate pending memory, active memory, tombstones, or
-events. Apply flows remain gated by v5 review policy and review-hash
-validation.
-
-Profile reflection writes reviewable candidates to `profile_candidates.jsonl`;
-applying a candidate requires the matching review hash and regenerates
-`MODEL_PROFILE.md` from structured memory. Similar-project memory must be
-explicitly marked transferable before it can appear in cross-project hints.
-Current always-on global/profile context still comes from approved active
-memory: profile reflection proposes profile candidates, and profile apply
-requires review-hash validation before rendering `MODEL_PROFILE.md`. The
-project harvester creates project-scope pending candidates by default; it does
-not create global active memory or mutate profiles directly.
-
-Embedding retrieval is disabled by default. Set `CYRENE_EMBEDDING_PROVIDER` only
-when a safe provider is configured; unsafe content or provider failures fall
-back to structured FTS retrieval with diagnostics.
-
-## Project Tools
-
-Use `cyrene-continuity codex project status` and
-`cyrene-continuity codex project list` to inspect projectId drift. Use
-`cyrene-continuity codex project alias <projectId> <alias>` to label a known
-project root, and `cyrene-continuity codex project merge <from> <to>` to
-explicitly merge split project memory. Alias and merge never run implicitly from
-retrieval. Project merges are blocked when the source active memory contains
-personal, relationship, or affective domains, because those memories must not be
-migrated across project IDs as generic project context.
-
-## Similar-Project Hints
-
-`cyrene_continuity_get` can return `similarProjectHints` only when the caller
-explicitly enables `includeSimilarProjectHints` and another indexed project has
-portable `similar_project` or `project_family` memory. Balanced planning can
-generate local `sessionHints` from similar projects without returning
-`similarProjectHints`. Both surfaces are transferable session guidance, not facts
-about the current project and not memory migration. `local_only`, personal,
-relationship, and affective memories are excluded by policy and by the
-deterministic eval gate.
-
-## Eval Gates
-
-Deterministic gates protect retrieval, review, apply, and release paths:
-
-- `memory_routing_eval`: active, pending, and similar-project memories must stay
-  in their explicit routes.
-- `pending_usage_eval`: automation apply cannot promote assistant-observed or
-  unauditable pending memory.
-- `profile_pollution_eval`: profile apply must trace to approved active memory
-  and profile previews cannot include pending-only content.
-- `affective_boundary_eval`: diagnostic affective claims are blocked from
-  profile and automation apply outputs.
-- `cross_project_leak_eval`: same-project, global, local-only, or missing-home
-  similar hints are rejected, and personal, relationship, or affective memory is
-  not migrated across project IDs.
-- `similar_hint_eval`: similar-project hints must be explicitly transferable and
-  scrubbed of absolute paths, raw remotes, and secret-like values.
-- `distillation_review_gate`: distillation MVP output must remain dry-run,
-  avoid memory-store mutation, and retain source IDs for every candidate.
-
-`codex eval run --check similar-hints` reports the live similar-project hint
-boundary result. `codex eval run --check release` reports the minimum gate
-checklist expected before plugin release; it does not replace the verification
-commands below.
-
-## Verify
+Use the smoke profile for a quick local sanity check:
 
 ```bash
+~/.cyrene/codex/bin/cyrene-continuity codex benchmark run --profile smoke
+```
+
+Use the gate profile before release-facing changes:
+
+```bash
+npm run dev -- codex benchmark run --profile gate
+```
+
+Archive benchmark artifacts for a curated public report:
+
+```bash
+npm run dev -- codex benchmark run --profile gate --artifact-archive-dir benchmark/reports/<date>
+```
+
+Benchmark fixtures must use isolated temp HOME, project, memory, and index
+paths. They must not read or write real user memory.
+
+## Development
+
+```bash
+npm ci
 npm test
 npm run typecheck
 npm run build:plugin
-python3 /Users/phoenix/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugin
+npm run dev -- codex install --dev
+npm run dev -- codex doctor
+npm run dev -- codex ui
 ```
 
-## Data
+For the full command reference, including memory review, lifecycle, benchmark,
+eval, project, profile, and similar-hint commands, see
+[docs/CLI.md](docs/CLI.md).
 
-This repo reads and writes existing local data under:
+## Contributing
 
-```txt
-~/.cyrene/codex/global/memory/
-~/.cyrene/codex/projects/<projectId>/memory/
-~/.cyrene/codex/memory.db
-```
-
-It does not migrate or copy user memory data during install. `memory.db` is the
-runtime SQLite/FTS retrieval index. JSONL files remain the audit/recovery source
-of truth, and generated Markdown profiles remain review/debug projections.
-
-## Review Policy
-
-Pending memory candidates are not active memory unless Cyrene v5 returns a
-strict, capped auto-promotion receipt for low-risk project or procedural/system
-global memory that passes named policy and eval gates. Personal, relationship,
-affective, ambiguous, similar-project, and assistant-observed-only candidates
-remain manual review items. Manual promotion requires explicit user approval
-and a matching review hash. `codex memory review` shows the candidate metadata
-needed for approval, rejection, edit, or deferral. Fast and balanced context
-reads hide pending content, counts, and notices; use `mode=review` for pending
-review visibility.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), review
+[SECURITY.md](SECURITY.md), and check [CHANGELOG.md](CHANGELOG.md). GitHub
+templates live under [.github/](.github/), including the
+[bug report](.github/ISSUE_TEMPLATE/bug_report.yml),
+[feature request](.github/ISSUE_TEMPLATE/feature_request.yml), and
+[pull request](.github/pull_request_template.md) templates.

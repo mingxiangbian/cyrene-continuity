@@ -30,7 +30,7 @@ import type {
 } from './types.js'
 
 const execFileAsync = promisify(execFile)
-const SPEC_PATH = 'docs/superpowers/specs/2026-06-05-cyrene-benchmark-eval-system-design.md'
+const SPEC_PATH = 'benchmark/fixtures/benchmark-eval-system-design.md'
 const BENCHMARK_SOURCE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<BenchmarkReport> {

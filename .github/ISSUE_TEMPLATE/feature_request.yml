@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a focused improvement to Cyrene Continuity.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow, limitation, or pain point should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest behavior change that would address the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow
+      description: Show the command, MCP flow, review flow, or plugin install path this affects.
+    validations:
+      required: true
+  - type: textarea
+    id: safety_privacy
+    attributes:
+      label: Safety and privacy considerations
+      description: Note effects on local memory, pending review, approval hashes, .cyrene data, logs, or secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: What existing command, workaround, or smaller approach have you considered?
+    validations:
+      required: false

@@ -1,0 +1,2817 @@
+{
+  "runId": "5fffd288214e9caa",
+  "startedAt": "2026-06-06T00:00:00.000Z",
+  "completedAt": "2026-06-06T00:00:00.000Z",
+  "profile": "scale",
+  "spec": {
+    "path": "benchmark/fixtures/benchmark-eval-system-design.md",
+    "title": "Cyrene Benchmark Eval System Design",
+    "date": "2026-06-05",
+    "contentHash": "5912abb3448b0df2a00f94a4f8499fe91d1d67c55fa4e118b288b64e13e7bfc9"
+  },
+  "benchmark": {
+    "version": "1.0.0",
+    "thresholdVersion": "2026-06-06",
+    "caseCatalogHash": "3f822e847b5de4abe84f466e695cf6b82a1a64fb70b87bfe4681ace13b8bc618"
+  },
+  "package": {
+    "name": "cyrene-continuity",
+    "version": "0.1.0"
+  },
+  "git": {
+    "branch": "main",
+    "commit": "827bcb856cbe60706621b9c8135111eb1f627a91",
+    "dirty": true,
+    "trackedChanges": [
+      "M benchmark/cases/tier0-release-gate.ts",
+      "M benchmark/cases/tier1-5-lifecycle.ts",
+      "M benchmark/cases/tier1-memory-ability.ts",
+      "M benchmark/cases/tier2-memory-to-action.ts",
+      "M benchmark/cases/tier3-scale-efficiency.ts",
+      "M benchmark/cases/tier4-failure-security.ts",
+      "M benchmark/catalog.ts",
+      "M benchmark/report.ts",
+      "M benchmark/runner.ts",
+      "M benchmark/thresholds.ts",
+      "M benchmark/types.ts",
+      "M benchmark/reports/2026-06-06/summary.md",
+      "M benchmark/fixtures/benchmark-eval-system-design.md",
+      "M plugin/runtime/cyrene-continuity.mjs",
+      "M src/codex/codex-benchmark.ts",
+      "M src/codex/codex-cli.ts",
+      "M src/codex/context-policy.ts",
+      "M src/codex/memory-context-preview.ts",
+      "M tests/benchmark-cases-ability-action.test.ts",
+      "M tests/benchmark-cases-failure-security.test.ts",
+      "M tests/benchmark-cases-lifecycle.test.ts",
+      "M tests/benchmark-cases-scale.test.ts",
+      "M tests/benchmark-cases-tier0.test.ts",
+      "M tests/benchmark-cli.test.ts",
+      "M tests/benchmark-report.test.ts",
+      "M tests/benchmark-runner.test.ts",
+      "M tests/benchmark-types.test.ts",
+      "M tests/codex-context-policy.test.ts",
+      "?? benchmark/artifacts.ts",
+      "?? benchmark/reports/",
+      "?? benchmark/fixtures/benchmark-expansion-plan.md",
+      "?? tests/benchmark-cases-real-replay.test.ts"
+    ]
+  },
+  "runtime": {
+    "nodeVersion": "v25.9.0",
+    "npmVersion": "11.12.1",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "passed": true,
+  "summary": {
+    "totalCases": 67,
+    "passed": 8,
+    "failed": 0,
+    "skippedWithReason": 59,
+    "notSupportedWithoutProvider": 0
+  },
+  "failedCases": [],
+  "caseResults": [
+    {
+      "caseId": "T0-MODE-FAST",
+      "title": "fast mode excludes review and similar hot paths",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-MODE-BALANCED",
+      "title": "balanced mode reads full profile without pending details",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-MODE-REVIEW",
+      "title": "review mode is the only mode that reads pending memories",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-PENDING-BOUNDARY",
+      "title": "pending does not leak into ordinary context",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SIMILAR-BOUNDARY",
+      "title": "similar project hints never cross project boundary as memory",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-CROSS-PROJECT-ADVERSARIAL",
+      "title": "adversarial similar project memory stays hint-only",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-CROSS-PROJECT-PROMPT-INJECTION",
+      "title": "foreign prompt-injection memory stays non-current-project hint only",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SESSION-HINTS",
+      "title": "session hints are transient and never migrate to memory",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-ACTIVATION-RETRIEVED",
+      "title": "activation event defaults do not write retrieved events",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SQLITE-HOT-PATH",
+      "title": "SQLite and FTS are the default hot path",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T0-SURFACE-CONSISTENCY",
+      "title": "Skill, MCP, and CLI surfaces expose consistent behavior",
+      "tier": "tier0",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-FACT-EXTRACTION",
+      "title": "extract project facts from coding memories",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-MULTI-SESSION-REASONING",
+      "title": "reason across multiple sessions",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-TEMPORAL-ORDER",
+      "title": "answer temporal order questions",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-KNOWLEDGE-UPDATE",
+      "title": "newer memories override stale rules",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-CONFLICT-HANDLING",
+      "title": "handle conflicting memories without double injection",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ADVERSARIAL-RETRIEVAL",
+      "title": "retrieve target memory over adversarial distractors",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ADVERSARIAL-MULTI-DISTRACTOR",
+      "title": "answer target memory while rejecting stale pending personal global and foreign distractors",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-ABSTAIN-NO-EVIDENCE",
+      "title": "abstain when memory evidence is absent",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T1-EVENT-SUMMARY",
+      "title": "summarize project events from long session memory",
+      "tier": "tier1",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-UPGRADE",
+      "title": "low-risk project memory can upgrade through policy",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-REPLACE",
+      "title": "replacement removes stale active rule from injection",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-MERGE",
+      "title": "merge combines compatible memory evidence",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-EXPIRE",
+      "title": "expired memories are excluded from active context",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-SUPERSEDE-HASH",
+      "title": "supersede requires valid review hash",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-CONFLICT-SINGLE-INJECTION",
+      "title": "conflicting old and new rules inject only one winner",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-ADVERSARIAL-CONFLICT",
+      "title": "adversarial normalized-key conflict requires explicit supersede",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T15-ADVERSARIAL-SUPERSEDE-STRONG-OLD",
+      "title": "explicit supersede beats a strong stale adversarial rule",
+      "tier": "tier1_5",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-IMPORTANT",
+      "title": "important project evidence is proposed for review",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-NOISE",
+      "title": "noise is not proposed as durable memory",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-SENSITIVE",
+      "title": "sensitive content is never persisted",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-PROPOSE-ASSISTANT-INFERENCE",
+      "title": "assistant-only inference is not promoted as user fact",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-ROUTING-NAMESPACE",
+      "title": "project and global namespace routing is correct",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-HASH-REQUIRED",
+      "title": "review approval requires review hash",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-STALE-HASH",
+      "title": "stale review hash cannot approve pending memory",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-REJECT-DEFER",
+      "title": "reject and defer decisions do not activate memory",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T16-REVIEW-EDIT-HASH",
+      "title": "edited review content gets a fresh hash contract",
+      "tier": "tier1_6",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REMEMBER-TEST-COMMAND",
+      "title": "remember and reuse project test command",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-AVOID-REJECTED-APPROACH",
+      "title": "avoid an approach rejected in an earlier session",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-FOLLOW-WORKFLOW",
+      "title": "follow remembered project workflow",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-UPDATED-RULE",
+      "title": "use updated rule and stop using old rule",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-CROSS-SESSION-FIX",
+      "title": "apply cross-session fix memory to current task",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REDUCE-REPEAT-MISTAKE",
+      "title": "memory reduces repeated mistakes and user corrections",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-PROJECT-REPLAY",
+      "title": "real project replay validates coding task utility on repo-grounded fixture",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-UPDATED-WORKFLOW-REPLAY",
+      "title": "real project replay stops using superseded workflow command",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-MULTI-FILE-FIX-REPLAY",
+      "title": "real project replay applies prior multi-file fix path",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T2-REAL-DOCS-ONLY-REPLAY",
+      "title": "real project replay keeps docs-only work on docs verification path",
+      "tier": "tier2",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-S-SCALE",
+      "title": "S scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "continuityGetP50Ms",
+          "value": 14.5
+        },
+        {
+          "name": "continuityGetP95Ms",
+          "value": 29
+        },
+        {
+          "name": "memoryDbSizeBytes",
+          "value": 245760
+        },
+        {
+          "name": "memoryDbBytesPerMemory",
+          "value": 4096
+        },
+        {
+          "name": "scaleSRuntimeMs",
+          "value": 77
+        },
+        {
+          "name": "targetProjectCount",
+          "value": 1
+        },
+        {
+          "name": "targetActiveMemoryCount",
+          "value": 50
+        },
+        {
+          "name": "targetPendingMemoryCount",
+          "value": 10
+        },
+        {
+          "name": "materializedProjectCount",
+          "value": 1
+        },
+        {
+          "name": "materializedActiveMemoryCount",
+          "value": 50
+        },
+        {
+          "name": "materializedPendingMemoryCount",
+          "value": 10
+        },
+        {
+          "name": "runtimeSourceIsMaterialized",
+          "value": 1
+        },
+        {
+          "name": "jsonlSizeBytes",
+          "value": 92390
+        },
+        {
+          "name": "jsonlRecordCount",
+          "value": 60
+        },
+        {
+          "name": "sqliteIndexedActiveCount",
+          "value": 50
+        },
+        {
+          "name": "sqliteIndexedPendingCount",
+          "value": 10
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "scale S ok; runtimeSource=materialized; storageSource=full-target-materialized-fixture; runtimeMs=77; target projects=1; target active=50; target pending=10; materialized projects=1; materialized active=50; materialized pending=10; sqlite=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-M-SCALE",
+      "title": "M scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "continuityGetP50Ms",
+          "value": 17
+        },
+        {
+          "name": "continuityGetP95Ms",
+          "value": 34
+        },
+        {
+          "name": "memoryDbSizeBytes",
+          "value": 978944
+        },
+        {
+          "name": "memoryDbBytesPerMemory",
+          "value": 2880
+        },
+        {
+          "name": "scaleMRuntimeMs",
+          "value": 216
+        },
+        {
+          "name": "targetProjectCount",
+          "value": 5
+        },
+        {
+          "name": "targetActiveMemoryCount",
+          "value": 500
+        },
+        {
+          "name": "targetPendingMemoryCount",
+          "value": 100
+        },
+        {
+          "name": "materializedProjectCount",
+          "value": 1
+        },
+        {
+          "name": "materializedActiveMemoryCount",
+          "value": 240
+        },
+        {
+          "name": "materializedPendingMemoryCount",
+          "value": 100
+        },
+        {
+          "name": "runtimeSourceIsMaterialized",
+          "value": 1
+        },
+        {
+          "name": "jsonlSizeBytes",
+          "value": 554470
+        },
+        {
+          "name": "jsonlRecordCount",
+          "value": 340
+        },
+        {
+          "name": "sqliteIndexedActiveCount",
+          "value": 240
+        },
+        {
+          "name": "sqliteIndexedPendingCount",
+          "value": 100
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "scale M ok; runtimeSource=materialized; storageSource=capped-materialized-fixture; runtimeMs=216; target projects=5; target active=500; target pending=100; materialized projects=1; materialized active=240; materialized pending=100; sqlite=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-L-SCALE",
+      "title": "L scale fixture stays within latency and overhead thresholds",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "continuityGetP95Ms",
+          "value": 34
+        },
+        {
+          "name": "continuityGetP99Ms",
+          "value": 56
+        },
+        {
+          "name": "indexStaleRate",
+          "value": 0
+        },
+        {
+          "name": "memoryDbBytesPerMemory",
+          "value": 2646
+        },
+        {
+          "name": "scaleLRuntimeMs",
+          "value": 45000
+        },
+        {
+          "name": "targetProjectCount",
+          "value": 20
+        },
+        {
+          "name": "targetActiveMemoryCount",
+          "value": 5000
+        },
+        {
+          "name": "targetPendingMemoryCount",
+          "value": 1000
+        },
+        {
+          "name": "materializedProjectCount",
+          "value": 1
+        },
+        {
+          "name": "materializedActiveMemoryCount",
+          "value": 240
+        },
+        {
+          "name": "materializedPendingMemoryCount",
+          "value": 240
+        },
+        {
+          "name": "runtimeSourceIsMaterialized",
+          "value": 0
+        },
+        {
+          "name": "jsonlSizeBytes",
+          "value": 850850
+        },
+        {
+          "name": "jsonlRecordCount",
+          "value": 480
+        },
+        {
+          "name": "sqliteIndexedActiveCount",
+          "value": 240
+        },
+        {
+          "name": "sqliteIndexedPendingCount",
+          "value": 240
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "scale L ok; runtimeSource=synthetic; storageSource=capped-materialized-fixture; runtimeMs=45000; target projects=20; target active=5000; target pending=1000; materialized projects=1; materialized active=240; materialized pending=240; sqlite=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-XL-SCALE",
+      "title": "XL scale fixture reports efficiency without entering release gate hot path",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "scaleXLRuntimeMs",
+          "value": 180000
+        },
+        {
+          "name": "memoryDbSizeBytes",
+          "value": 1273856
+        },
+        {
+          "name": "memoryDbBytesPerMemory",
+          "value": 2654
+        },
+        {
+          "name": "benchmarkRuntimeMs",
+          "value": 180000
+        },
+        {
+          "name": "targetProjectCount",
+          "value": 100
+        },
+        {
+          "name": "targetActiveMemoryCount",
+          "value": 50000
+        },
+        {
+          "name": "targetPendingMemoryCount",
+          "value": 5000
+        },
+        {
+          "name": "materializedProjectCount",
+          "value": 1
+        },
+        {
+          "name": "materializedActiveMemoryCount",
+          "value": 240
+        },
+        {
+          "name": "materializedPendingMemoryCount",
+          "value": 240
+        },
+        {
+          "name": "runtimeSourceIsMaterialized",
+          "value": 0
+        },
+        {
+          "name": "jsonlSizeBytes",
+          "value": 854930
+        },
+        {
+          "name": "jsonlRecordCount",
+          "value": 480
+        },
+        {
+          "name": "sqliteIndexedActiveCount",
+          "value": 240
+        },
+        {
+          "name": "sqliteIndexedPendingCount",
+          "value": 240
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "scale XL ok; runtimeSource=synthetic; storageSource=capped-materialized-fixture; runtimeMs=180000; target projects=100; target active=50000; target pending=5000; materialized projects=1; materialized active=240; materialized pending=240; sqlite=1"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-RANKING",
+      "title": "ranking resists similar memory interference",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "recallAt1",
+          "value": 1
+        },
+        {
+          "name": "recallAt3",
+          "value": 1
+        },
+        {
+          "name": "recallAt5",
+          "value": 1
+        },
+        {
+          "name": "mrr",
+          "value": 1
+        },
+        {
+          "name": "top1Accuracy",
+          "value": 1
+        },
+        {
+          "name": "wrongTop1Rate",
+          "value": 0
+        },
+        {
+          "name": "irrelevantRetrievalRate",
+          "value": 0
+        },
+        {
+          "name": "similarMemoryInterferenceRate",
+          "value": 0
+        },
+        {
+          "name": "staleMemoryRetrievalRate",
+          "value": 0
+        },
+        {
+          "name": "oldMemoryRetrievalRate",
+          "value": 0
+        },
+        {
+          "name": "newMemoryRetrievalRate",
+          "value": 1
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "ranking ok; recallAt3=1; mrr=1; wrongTop1=0; top=ranking-target"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-TOKEN-OVERHEAD",
+      "title": "token overhead stays inside profile budget",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "fastTokenOverhead",
+          "value": 586
+        },
+        {
+          "name": "balancedTokenOverhead",
+          "value": 595
+        },
+        {
+          "name": "reviewTokenOverhead",
+          "value": 946
+        },
+        {
+          "name": "fastPendingTokens",
+          "value": 0
+        },
+        {
+          "name": "fastDiagnosticsTokens",
+          "value": 0
+        },
+        {
+          "name": "balancedPendingTokens",
+          "value": 0
+        },
+        {
+          "name": "balancedDiagnosticsTokens",
+          "value": 0
+        },
+        {
+          "name": "reviewPendingTokens",
+          "value": 64
+        },
+        {
+          "name": "reviewDiagnosticsTokens",
+          "value": 230
+        },
+        {
+          "name": "projectMemoryTokens",
+          "value": 77
+        },
+        {
+          "name": "globalProfileTokens",
+          "value": 1
+        },
+        {
+          "name": "fastSummaryTokens",
+          "value": 7
+        },
+        {
+          "name": "fullProfileTokens",
+          "value": 11
+        },
+        {
+          "name": "sessionHintsTokens",
+          "value": 1
+        },
+        {
+          "name": "similarHintsTokens",
+          "value": 1
+        },
+        {
+          "name": "pendingTokens",
+          "value": 64
+        },
+        {
+          "name": "diagnosticsTokens",
+          "value": 230
+        },
+        {
+          "name": "contextItemCount",
+          "value": 1
+        },
+        {
+          "name": "memoryItemCount",
+          "value": 1
+        },
+        {
+          "name": "profileSectionCount",
+          "value": 1
+        },
+        {
+          "name": "sessionHintsCount",
+          "value": 0
+        },
+        {
+          "name": "diagnosticsItemCount",
+          "value": 7
+        },
+        {
+          "name": "profileSizeGrowthBytes",
+          "value": 40
+        },
+        {
+          "name": "fastSummarySizeGrowthBytes",
+          "value": 26
+        },
+        {
+          "name": "sessionHintsSizeBytes",
+          "value": 2
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "profile token overhead recorded; contextShape=compact; balancedDiagnosticsVisible=0; fast/balanced/review bounded"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-LATENCY",
+      "title": "latency percentiles are reported for continuity and hooks",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "continuityGetSampleCount",
+          "value": 9
+        },
+        {
+          "name": "hookSampleCount",
+          "value": 3
+        },
+        {
+          "name": "continuityGetMinMs",
+          "value": 17
+        },
+        {
+          "name": "continuityGetMaxMs",
+          "value": 35
+        },
+        {
+          "name": "continuityGetMeanMs",
+          "value": 23
+        },
+        {
+          "name": "continuityGetP50Ms",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP95Ms",
+          "value": 35
+        },
+        {
+          "name": "continuityGetP99Ms",
+          "value": 35
+        },
+        {
+          "name": "continuityGetP50FastMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP95FastMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP99FastMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP50BalancedMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP95BalancedMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP99BalancedMs",
+          "value": 18
+        },
+        {
+          "name": "continuityGetP50ReviewMs",
+          "value": 35
+        },
+        {
+          "name": "continuityGetP95ReviewMs",
+          "value": 35
+        },
+        {
+          "name": "continuityGetP99ReviewMs",
+          "value": 35
+        },
+        {
+          "name": "profileReadLatencyMs",
+          "value": 1
+        },
+        {
+          "name": "fastSummaryReadLatencyMs",
+          "value": 1
+        },
+        {
+          "name": "sessionHintsReadLatencyMs",
+          "value": 0
+        },
+        {
+          "name": "similarQueryLatencyMs",
+          "value": 0
+        },
+        {
+          "name": "pendingQueryLatencyMs",
+          "value": 0
+        },
+        {
+          "name": "diagnosticsAssemblyLatencyMs",
+          "value": 1
+        },
+        {
+          "name": "hookLatencyMs",
+          "value": 38
+        },
+        {
+          "name": "sessionStartHookP50Ms",
+          "value": 38
+        },
+        {
+          "name": "sessionStartHookP95Ms",
+          "value": 38
+        },
+        {
+          "name": "sessionStartHookP99Ms",
+          "value": 38
+        },
+        {
+          "name": "userPromptSubmitHookP50Ms",
+          "value": 20
+        },
+        {
+          "name": "userPromptSubmitHookP95Ms",
+          "value": 20
+        },
+        {
+          "name": "userPromptSubmitHookP99Ms",
+          "value": 20
+        },
+        {
+          "name": "postToolUseHookP50Ms",
+          "value": 20
+        },
+        {
+          "name": "postToolUseHookP95Ms",
+          "value": 20
+        },
+        {
+          "name": "postToolUseHookP99Ms",
+          "value": 20
+        },
+        {
+          "name": "stopHookP50Ms",
+          "value": 0
+        },
+        {
+          "name": "stopHookP95Ms",
+          "value": 0
+        },
+        {
+          "name": "stopHookP99Ms",
+          "value": 0
+        },
+        {
+          "name": "runtimeHookTimeoutCount",
+          "value": 0
+        },
+        {
+          "name": "runtimeHookFailOpenCount",
+          "value": 0
+        },
+        {
+          "name": "postToolUseHeavyOperationCount",
+          "value": 0
+        },
+        {
+          "name": "ordinaryHookPendingReviewCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "latency p50/p95/p99 recorded; hook latency recorded; componentZeroMeans=not_executed_or_below_timer_resolution"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T3-INDEX-HEALTH",
+      "title": "index health reports SQLite hit, JSONL fallback, and stale rates",
+      "tier": "tier3",
+      "status": "passed",
+      "passed": true,
+      "hardFailures": [],
+      "metrics": [
+        {
+          "name": "sqliteHitRate",
+          "value": 1
+        },
+        {
+          "name": "sqliteHitRateFreshIndex",
+          "value": 1
+        },
+        {
+          "name": "jsonlFallbackRateHotPath",
+          "value": 0
+        },
+        {
+          "name": "indexStaleRate",
+          "value": 0
+        },
+        {
+          "name": "indexRebuildTimeMs",
+          "value": 24
+        },
+        {
+          "name": "dbRebuildTimeMs",
+          "value": 24
+        },
+        {
+          "name": "memoryDbSizeBytes",
+          "value": 77824
+        },
+        {
+          "name": "jsonlSizeBytes",
+          "value": 1393
+        },
+        {
+          "name": "indexSourceMismatchCount",
+          "value": 0
+        },
+        {
+          "name": "hotPathRebuildCount",
+          "value": 0
+        },
+        {
+          "name": "undetectedStaleIndexCount",
+          "value": 0
+        }
+      ],
+      "evidence": [
+        {
+          "summary": "index health ok; sqlite hit rate=1; jsonl fallback=0; stale rate=0"
+        }
+      ],
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SQLITE-UNAVAILABLE",
+      "title": "SQLite unavailable path reports fallback policy explicitly",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-JSONL-CORRUPT",
+      "title": "corrupt JSONL fixture fails closed with diagnostics",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-PROFILE-MISSING",
+      "title": "missing profile does not pollute context",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-FAST-SUMMARY-MISSING-STALE",
+      "title": "missing or stale fast summary never triggers hot-path heavy rebuild",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SESSION-HINTS-EXPIRED",
+      "title": "expired session hints are ignored",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-MCP-ERROR",
+      "title": "MCP error surface returns bounded diagnostics",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-AUTOMATION-INTERRUPT",
+      "title": "automation interruption does not leave memory partial writes",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-HOOK-LIGHTWEIGHT",
+      "title": "non-Stop lifecycle hook path remains lightweight",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-HOOK-TIMEOUT",
+      "title": "hook timeout does not crash ordinary coding flow",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-SECRETS",
+      "title": "secrets are never persisted or reported as memory",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-PROMPT-INJECTION",
+      "title": "prompt injection text cannot override benchmark or memory policy",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    },
+    {
+      "caseId": "T4-SECURITY-GLOBAL-WRITE",
+      "title": "global writes require explicit allowed namespace and policy",
+      "tier": "tier4",
+      "status": "skipped_with_reason",
+      "passed": false,
+      "hardFailures": [],
+      "metrics": [],
+      "evidence": [
+        {
+          "summary": "profile scale does not run this case"
+        }
+      ],
+      "skippedReason": "profile scale does not run this case",
+      "thresholdBreaches": []
+    }
+  ],
+  "metrics": {
+    "capability": {
+      "recallAt1": 1,
+      "recallAt3": 1,
+      "recallAt5": 1,
+      "mrr": 1,
+      "top1Accuracy": 1,
+      "wrongTop1Rate": 0,
+      "irrelevantRetrievalRate": 0,
+      "similarMemoryInterferenceRate": 0,
+      "staleMemoryRetrievalRate": 0,
+      "oldMemoryRetrievalRate": 0,
+      "newMemoryRetrievalRate": 1,
+      "contextItemCount": 1,
+      "memoryItemCount": 1,
+      "profileSectionCount": 1,
+      "sessionHintsCount": 0,
+      "diagnosticsItemCount": 7,
+      "continuityGetMinMs": 17,
+      "continuityGetMaxMs": 35,
+      "continuityGetMeanMs": 23,
+      "postToolUseHeavyOperationCount": 0,
+      "hotPathRebuildCount": 0
+    },
+    "boundarySafety": {},
+    "efficiency": {
+      "continuityGetP50Ms": 18,
+      "continuityGetP95Ms": 35,
+      "memoryDbSizeBytes": 1273856,
+      "memoryDbBytesPerMemory": 4096,
+      "scaleSRuntimeMs": 77,
+      "targetProjectCount": 100,
+      "targetActiveMemoryCount": 50000,
+      "targetPendingMemoryCount": 5000,
+      "materializedProjectCount": 1,
+      "materializedActiveMemoryCount": 240,
+      "materializedPendingMemoryCount": 240,
+      "runtimeSourceIsMaterialized": 1,
+      "jsonlSizeBytes": 854930,
+      "jsonlRecordCount": 480,
+      "sqliteIndexedActiveCount": 240,
+      "sqliteIndexedPendingCount": 240,
+      "scaleMRuntimeMs": 216,
+      "continuityGetP99Ms": 56,
+      "indexStaleRate": 0,
+      "scaleLRuntimeMs": 45000,
+      "scaleXLRuntimeMs": 180000,
+      "benchmarkRuntimeMs": 180000,
+      "fastTokenOverhead": 586,
+      "balancedTokenOverhead": 595,
+      "reviewTokenOverhead": 946,
+      "fastPendingTokens": 0,
+      "fastDiagnosticsTokens": 0,
+      "balancedPendingTokens": 0,
+      "balancedDiagnosticsTokens": 0,
+      "reviewPendingTokens": 64,
+      "reviewDiagnosticsTokens": 230,
+      "projectMemoryTokens": 77,
+      "globalProfileTokens": 1,
+      "fastSummaryTokens": 7,
+      "fullProfileTokens": 11,
+      "sessionHintsTokens": 1,
+      "similarHintsTokens": 1,
+      "pendingTokens": 64,
+      "diagnosticsTokens": 230,
+      "profileSizeGrowthBytes": 40,
+      "fastSummarySizeGrowthBytes": 26,
+      "sessionHintsSizeBytes": 2,
+      "continuityGetSampleCount": 9,
+      "hookSampleCount": 3,
+      "continuityGetP50FastMs": 18,
+      "continuityGetP95FastMs": 18,
+      "continuityGetP99FastMs": 18,
+      "continuityGetP50BalancedMs": 18,
+      "continuityGetP95BalancedMs": 18,
+      "continuityGetP99BalancedMs": 18,
+      "continuityGetP50ReviewMs": 35,
+      "continuityGetP95ReviewMs": 35,
+      "continuityGetP99ReviewMs": 35,
+      "profileReadLatencyMs": 1,
+      "fastSummaryReadLatencyMs": 1,
+      "sessionHintsReadLatencyMs": 0,
+      "similarQueryLatencyMs": 0,
+      "pendingQueryLatencyMs": 0,
+      "diagnosticsAssemblyLatencyMs": 1,
+      "hookLatencyMs": 38,
+      "sessionStartHookP50Ms": 38,
+      "sessionStartHookP95Ms": 38,
+      "sessionStartHookP99Ms": 38,
+      "userPromptSubmitHookP50Ms": 20,
+      "userPromptSubmitHookP95Ms": 20,
+      "userPromptSubmitHookP99Ms": 20,
+      "postToolUseHookP50Ms": 20,
+      "postToolUseHookP95Ms": 20,
+      "postToolUseHookP99Ms": 20,
+      "stopHookP50Ms": 0,
+      "stopHookP95Ms": 0,
+      "stopHookP99Ms": 0,
+      "runtimeHookTimeoutCount": 0,
+      "runtimeHookFailOpenCount": 0,
+      "ordinaryHookPendingReviewCount": 0,
+      "sqliteHitRate": 1,
+      "sqliteHitRateFreshIndex": 1,
+      "jsonlFallbackRateHotPath": 0,
+      "indexRebuildTimeMs": 24,
+      "dbRebuildTimeMs": 24,
+      "indexSourceMismatchCount": 0,
+      "undetectedStaleIndexCount": 0
+    },
+    "taskUtility": {}
+  },
+  "metricAggregation": {
+    "continuityGetP50Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 3,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP95Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-LATENCY"
+      ]
+    },
+    "memoryDbSizeBytes": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-XL-SCALE",
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "memoryDbBytesPerMemory": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "scaleSRuntimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-S-SCALE"
+      ]
+    },
+    "targetProjectCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "targetActiveMemoryCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "targetPendingMemoryCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "materializedProjectCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "materializedActiveMemoryCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "materializedPendingMemoryCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "runtimeSourceIsMaterialized": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "jsonlSizeBytes": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 5,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE",
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "jsonlRecordCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "sqliteIndexedActiveCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "sqliteIndexedPendingCount": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 4,
+      "sourceCaseIds": [
+        "T3-S-SCALE",
+        "T3-M-SCALE",
+        "T3-L-SCALE",
+        "T3-XL-SCALE"
+      ]
+    },
+    "scaleMRuntimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-M-SCALE"
+      ]
+    },
+    "continuityGetP99Ms": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-L-SCALE",
+        "T3-LATENCY"
+      ]
+    },
+    "indexStaleRate": {
+      "group": "efficiency",
+      "strategy": "max",
+      "sampleCount": 2,
+      "sourceCaseIds": [
+        "T3-L-SCALE",
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "scaleLRuntimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-L-SCALE"
+      ]
+    },
+    "scaleXLRuntimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-XL-SCALE"
+      ]
+    },
+    "benchmarkRuntimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-XL-SCALE"
+      ]
+    },
+    "recallAt1": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "recallAt3": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "recallAt5": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "mrr": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "top1Accuracy": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "wrongTop1Rate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "irrelevantRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "similarMemoryInterferenceRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "staleMemoryRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "oldMemoryRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "newMemoryRetrievalRate": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-RANKING"
+      ]
+    },
+    "fastTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "balancedTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "reviewTokenOverhead": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastPendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastDiagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "balancedPendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "balancedDiagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "reviewPendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "reviewDiagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "projectMemoryTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "globalProfileTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastSummaryTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fullProfileTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "sessionHintsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "similarHintsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "pendingTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "diagnosticsTokens": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "contextItemCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "memoryItemCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "profileSectionCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "sessionHintsCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "diagnosticsItemCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "profileSizeGrowthBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "fastSummarySizeGrowthBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "sessionHintsSizeBytes": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-TOKEN-OVERHEAD"
+      ]
+    },
+    "continuityGetSampleCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "hookSampleCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetMinMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetMaxMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetMeanMs": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP50FastMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP95FastMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP99FastMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP50BalancedMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP95BalancedMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP99BalancedMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP50ReviewMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP95ReviewMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "continuityGetP99ReviewMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "profileReadLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "fastSummaryReadLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "sessionHintsReadLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "similarQueryLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "pendingQueryLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "diagnosticsAssemblyLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "hookLatencyMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "sessionStartHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "sessionStartHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "sessionStartHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "userPromptSubmitHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "userPromptSubmitHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "userPromptSubmitHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "postToolUseHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "postToolUseHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "postToolUseHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "stopHookP50Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "stopHookP95Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "stopHookP99Ms": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "runtimeHookTimeoutCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "runtimeHookFailOpenCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "postToolUseHeavyOperationCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "ordinaryHookPendingReviewCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-LATENCY"
+      ]
+    },
+    "sqliteHitRate": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "sqliteHitRateFreshIndex": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "jsonlFallbackRateHotPath": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "indexRebuildTimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "dbRebuildTimeMs": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "indexSourceMismatchCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "hotPathRebuildCount": {
+      "group": "capability",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    },
+    "undetectedStaleIndexCount": {
+      "group": "efficiency",
+      "strategy": "single",
+      "sampleCount": 1,
+      "sourceCaseIds": [
+        "T3-INDEX-HEALTH"
+      ]
+    }
+  },
+  "hardFailures": [],
+  "thresholdBreaches": [],
+  "fixtureRuns": [
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-H9qEJD",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-H9qEJD/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-H9qEJD/cyrene-benchmark-project-95738c144cb31612",
+      "seed": "stats-fix-scale-seed:T3-S-SCALE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qMg3RX",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qMg3RX/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-qMg3RX/cyrene-benchmark-project-af95fa157638d0da",
+      "seed": "stats-fix-scale-seed:T3-M-SCALE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-MJysko",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-MJysko/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-MJysko/cyrene-benchmark-project-115af94dee1fe920",
+      "seed": "stats-fix-scale-seed:T3-L-SCALE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AaP1ES",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AaP1ES/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-AaP1ES/cyrene-benchmark-project-476fde2ea006d64c",
+      "seed": "stats-fix-scale-seed:T3-XL-SCALE",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-vrqKjs",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-vrqKjs/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-vrqKjs/cyrene-benchmark-project-f2cec1552d0ccec3",
+      "seed": "stats-fix-scale-seed:T3-RANKING",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-nFU7KW",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-nFU7KW/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-nFU7KW/cyrene-benchmark-project-a7833d298312c3bd",
+      "seed": "stats-fix-scale-seed:T3-TOKEN-OVERHEAD",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-70zpbS",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-70zpbS/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-70zpbS/cyrene-benchmark-project-5b6e7fa8e790c3b5",
+      "seed": "stats-fix-scale-seed:T3-LATENCY",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    },
+    {
+      "root": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZlUnW8",
+      "home": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZlUnW8/home",
+      "cwd": "/var/folders/fc/xsmmw4_54gb1tl6lwrc_nh640000gn/T/cyrene-benchmark-ZlUnW8/cyrene-benchmark-project-76a178fb51beb4e7",
+      "seed": "stats-fix-scale-seed:T3-INDEX-HEALTH",
+      "clock": "2026-06-06T00:00:00.000Z",
+      "timezone": "UTC",
+      "cleanupStatus": "cleaned",
+      "preserveFixture": false
+    }
+  ]
+}

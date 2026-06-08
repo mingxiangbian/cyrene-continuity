@@ -45,6 +45,7 @@ describe('benchmark real project replay cases', () => {
 
     expect(report.passed).toBe(true)
     expect(report.profile).toBe('real-replay')
+    expect(report.spec.path).toBe('benchmark/fixtures/benchmark-eval-system-design.md')
     expect(report.summary).toEqual({
       totalCases: report.summary.totalCases,
       passed: expectedRealReplayCases.length,

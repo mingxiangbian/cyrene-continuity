@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Cyrene Continuity Architecture</title>
+  <desc id="desc">Architecture diagram showing Codex entrypoints, plugin packaging, shared TypeScript source, local memory storage, review safety gates, and benchmark artifacts.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#1f2937" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow-teal" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto">
+      <path d="M2,2 L11,7 L2,12 Z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrow-amber" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto">
+      <path d="M2,2 L11,7 L2,12 Z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-graphite" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto">
+      <path d="M2,2 L11,7 L2,12 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .bg { fill: #f8f6ef; }
+      .panel { fill: #ffffff; stroke: #d7d1c4; stroke-width: 2; filter: url(#shadow); }
+      .panel-soft { fill: #fbfaf6; stroke: #ded8ca; stroke-width: 2; }
+      .title { font: 700 44px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2937; }
+      .subtitle { font: 400 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #5b6472; }
+      .section { font: 700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2937; }
+      .label { font: 650 19px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2937; }
+      .small { font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #536170; }
+      .tiny { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #657282; }
+      .pill { fill: #ecfdf5; stroke: #99d9cf; stroke-width: 1.5; }
+      .pill-amber { fill: #fff7ed; stroke: #f1bd73; stroke-width: 1.5; }
+      .pill-gray { fill: #f6f7f9; stroke: #cbd5e1; stroke-width: 1.5; }
+      .line-teal { fill: none; stroke: #0f766e; stroke-width: 4; stroke-linecap: round; marker-end: url(#arrow-teal); }
+      .line-amber { fill: none; stroke: #d97706; stroke-width: 4; stroke-linecap: round; marker-end: url(#arrow-amber); }
+      .line-graphite { fill: none; stroke: #334155; stroke-width: 4; stroke-linecap: round; marker-end: url(#arrow-graphite); }
+      .dash { stroke-dasharray: 10 10; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="1000"/>
+  <circle cx="1280" cy="130" r="170" fill="#e8f7f3" opacity="0.55"/>
+  <circle cx="260" cy="820" r="190" fill="#fff3dc" opacity="0.5"/>
+
+  <text class="title" x="90" y="86">Cyrene Continuity Architecture</text>
+  <text class="subtitle" x="90" y="122">Local-first Codex plugin with shared handlers, review-safe memory, and deterministic benchmark gates.</text>
+
+  <rect class="panel" x="90" y="170" width="1420" height="150" rx="18"/>
+  <text class="section" x="125" y="215">Codex entrypoints</text>
+  <g>
+    <rect class="pill" x="125" y="240" width="170" height="48" rx="24"/>
+    <text class="label" x="171" y="270">Skill</text>
+    <rect class="pill" x="320" y="240" width="170" height="48" rx="24"/>
+    <text class="label" x="358" y="270">MCP tools</text>
+    <rect class="pill" x="515" y="240" width="170" height="48" rx="24"/>
+    <text class="label" x="565" y="270">CLI</text>
+    <rect class="pill" x="710" y="240" width="170" height="48" rx="24"/>
+    <text class="label" x="751" y="270">Web UI</text>
+    <rect class="pill" x="905" y="240" width="170" height="48" rx="24"/>
+    <text class="label" x="951" y="270">Hooks</text>
+    <rect class="pill-gray" x="1100" y="240" width="360" height="48" rx="24"/>
+    <text class="label" x="1150" y="270">Stable shim and plugin discovery</text>
+  </g>
+
+  <rect class="panel" x="90" y="390" width="660" height="230" rx="18"/>
+  <text class="section" x="125" y="436">Plugin package</text>
+  <rect class="panel-soft" x="125" y="465" width="275" height="110" rx="14"/>
+  <text class="label" x="150" y="500">plugin/</text>
+  <text class="small" x="150" y="528">manifest, MCP config,</text>
+  <text class="small" x="150" y="552">hooks, skill, runtime</text>
+  <rect class="panel-soft" x="435" y="465" width="275" height="110" rx="14"/>
+  <text class="label" x="460" y="500">Generated runtime</text>
+  <text class="small" x="460" y="528">plugin/runtime/</text>
+  <text class="small" x="460" y="552">built from TypeScript</text>
+
+  <rect class="panel" x="850" y="390" width="660" height="230" rx="18"/>
+  <text class="section" x="885" y="436">Shared TypeScript source</text>
+  <rect class="panel-soft" x="885" y="465" width="275" height="110" rx="14"/>
+  <text class="label" x="910" y="500">Handlers and policy</text>
+  <text class="small" x="910" y="528">continuity, review,</text>
+  <text class="small" x="910" y="552">lifecycle, routing</text>
+  <rect class="panel-soft" x="1195" y="465" width="275" height="110" rx="14"/>
+  <text class="label" x="1220" y="500">Surface contracts</text>
+  <text class="small" x="1220" y="528">MCP, CLI, UI, hooks</text>
+  <text class="small" x="1220" y="552">share behavior</text>
+
+  <rect class="panel" x="90" y="705" width="660" height="205" rx="18"/>
+  <text class="section" x="125" y="750">Local memory root</text>
+  <text class="small" x="125" y="781">~/.cyrene/codex stays on the user's machine.</text>
+  <g>
+    <rect class="pill-gray" x="125" y="815" width="150" height="44" rx="22"/>
+    <text class="tiny" x="162" y="842">Active</text>
+    <rect class="pill-amber" x="295" y="815" width="150" height="44" rx="22"/>
+    <text class="tiny" x="330" y="842">Pending</text>
+    <rect class="pill-gray" x="465" y="815" width="150" height="44" rx="22"/>
+    <text class="tiny" x="503" y="842">Profiles</text>
+    <rect class="pill" x="125" y="870" width="150" height="44" rx="22"/>
+    <text class="tiny" x="155" y="897">SQLite/FTS</text>
+    <rect class="pill-gray" x="295" y="870" width="150" height="44" rx="22"/>
+    <text class="tiny" x="336" y="897">JSONL</text>
+    <rect class="pill-gray" x="465" y="870" width="150" height="44" rx="22"/>
+    <text class="tiny" x="505" y="897">Receipts</text>
+  </g>
+
+  <rect class="panel" x="850" y="705" width="660" height="205" rx="18"/>
+  <text class="section" x="885" y="750">Benchmarks and public artifacts</text>
+  <text class="small" x="885" y="781">Deterministic fixtures verify continuity, safety, retrieval, and release gates.</text>
+  <g>
+    <rect class="pill" x="885" y="815" width="190" height="44" rx="22"/>
+    <text class="tiny" x="925" y="842">benchmark/fixtures</text>
+    <rect class="pill" x="1095" y="815" width="190" height="44" rx="22"/>
+    <text class="tiny" x="1132" y="842">benchmark/reports</text>
+    <rect class="pill-amber" x="1305" y="815" width="150" height="44" rx="22"/>
+    <text class="tiny" x="1334" y="842">Release eval</text>
+    <rect class="pill-gray" x="885" y="870" width="570" height="44" rx="22"/>
+    <text class="tiny" x="1008" y="897">local run output remains ignored under benchmark-results/</text>
+  </g>
+
+  <path class="line-teal" d="M800 320 C800 360 585 370 585 420"/>
+  <path class="line-teal" d="M800 320 C800 360 1015 370 1015 420"/>
+  <path class="line-graphite" d="M750 505 C790 505 810 505 850 505"/>
+  <path class="line-teal" d="M420 620 C420 650 420 670 420 705"/>
+  <path class="line-teal" d="M1180 620 C1180 650 1180 670 1180 705"/>
+  <path class="line-amber dash" d="M1180 620 C980 660 735 680 560 725"/>
+  <path class="line-amber dash" d="M720 810 C785 810 795 810 850 810"/>
+
+  <rect class="pill-amber" x="590" y="650" width="420" height="52" rx="26"/>
+  <text class="label" x="630" y="682">Review hashes guard write actions</text>
+
+  <text class="tiny" x="94" y="965">Generated source: docs/assets/cyrene-architecture.svg</text>
+</svg>
