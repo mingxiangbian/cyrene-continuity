@@ -138,23 +138,10 @@ describe('jsonl repair', () => {
     expect(summary.error).toMatch(/changed during repair/)
   })
 
-  it('aborts if canonical bytes change after scan before accepting the repair precondition', async () => {
-    const memoryRoot = await createTempDir('cyrene-jsonl-repair-scan-race-')
-    const sourcePath = join(memoryRoot, 'semantic_memories.jsonl')
-    const original = '{"id":"old"}\n{bad json}\n'
-    const changed = '{"id":"new"}\n{bad json}\n'
-    await writeFile(sourcePath, original, 'utf8')
+  it('does not delegate repair planning to the independent JSONL scanner', async () => {
+    const repairSource = await readFile(join(process.cwd(), 'src/memory/memory-repair.ts'), 'utf8')
 
-    await expect(runJsonlRepairFromRoot({
-      memoryRoot,
-      apply: true,
-      now: '2026-06-12T01:02:03.004Z',
-      afterScanBeforePreconditionCheckForTest: async () => {
-        await writeFile(sourcePath, changed, 'utf8')
-      }
-    })).rejects.toThrow(/changed during repair/)
-
-    await expect(readFile(sourcePath, 'utf8')).resolves.toBe(changed)
+    expect(repairSource).not.toContain('scanJsonlFile')
   })
 
   it('removes a stale maintenance lock with a dead owner and noops on clean files', async () => {

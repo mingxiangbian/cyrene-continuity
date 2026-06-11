@@ -3,10 +3,8 @@ import { lstat, mkdir, open, readFile, rm, rename } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import {
   CANONICAL_JSONL_FILES,
-  scanJsonlFile,
   sha256,
   type CanonicalJsonlFile,
-  type JsonlFileScan,
   type MalformedJsonlLine
 } from './jsonl-diagnostics.js'
 import { withMemoryMaintenanceLockFromRoot } from './memory-maintenance.js'
@@ -20,7 +18,6 @@ export interface JsonlRepairInput {
   apply: boolean
   now?: string
   beforeRewrite?: () => Promise<void>
-  afterScanBeforePreconditionCheckForTest?: () => Promise<void>
 }
 
 export interface JsonlRepairResult {
@@ -38,8 +35,13 @@ export interface JsonlRepairResult {
 interface RepairSource {
   relativePath: CanonicalJsonlFile
   filePath: string
-  scan: JsonlFileScan
+  scan: RepairFileScan
   snapshot: SourceSnapshot
+}
+
+interface RepairFileScan {
+  validRecords: unknown[]
+  malformed: MalformedJsonlLine[]
 }
 
 interface SourceSnapshot {
@@ -69,7 +71,7 @@ export async function runJsonlRepairFromRoot(input: JsonlRepairInput): Promise<J
     const memoryRoot = await ensureWritableMemoryRootPath(lockedRoot)
     const now = input.now ?? new Date().toISOString()
     const repairTransactionId = createRepairTransactionId(now)
-    const scannedFiles = await scanCanonicalJsonlFiles(memoryRoot, input.afterScanBeforePreconditionCheckForTest)
+    const scannedFiles = await scanCanonicalJsonlFiles(memoryRoot)
     const malformedLineCount = scannedFiles.reduce((count, file) => count + file.scan.malformed.length, 0)
 
     if (!input.apply) {
@@ -106,25 +108,58 @@ export async function runJsonlRepairFromRoot(input: JsonlRepairInput): Promise<J
   })
 }
 
-async function scanCanonicalJsonlFiles(
-  memoryRoot: string,
-  afterScanBeforePreconditionCheckForTest?: () => Promise<void>
-): Promise<RepairSource[]> {
+async function scanCanonicalJsonlFiles(memoryRoot: string): Promise<RepairSource[]> {
   const files: RepairSource[] = []
   for (const relativePath of CANONICAL_JSONL_FILES) {
     const filePath = join(memoryRoot, relativePath)
     if (!(await pathExists(filePath))) {
       continue
     }
-    const snapshot = await captureSourceSnapshot(filePath)
-    const scan = await scanJsonlFile(filePath, { includeRawLine: true }, relativePath)
-    if (afterScanBeforePreconditionCheckForTest !== undefined) {
-      await afterScanBeforePreconditionCheckForTest()
-    }
-    await assertSourceUnchanged(filePath, snapshot)
-    files.push({ relativePath, filePath, scan, snapshot })
+    files.push(await readRepairSource(filePath, relativePath))
   }
   return files
+}
+
+async function readRepairSource(filePath: string, relativePath: CanonicalJsonlFile): Promise<RepairSource> {
+  const stats = await lstat(filePath)
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to repair JSONL symlink: ${filePath}`)
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`)
+  }
+  const bytes = await readFile(filePath)
+  const content = bytes.toString('utf8')
+  return {
+    relativePath,
+    filePath,
+    scan: parseJsonlContentForRepair(content, relativePath),
+    snapshot: createSourceSnapshot(stats.mtimeMs, content, bytes)
+  }
+}
+
+function parseJsonlContentForRepair(content: string, relativePath: CanonicalJsonlFile): RepairFileScan {
+  const validRecords: unknown[] = []
+  const malformed: MalformedJsonlLine[] = []
+  for (const [index, rawLine] of content.split(/\r?\n/).entries()) {
+    const trimmedLine = rawLine.trim()
+    if (trimmedLine === '') {
+      continue
+    }
+
+    try {
+      validRecords.push(JSON.parse(trimmedLine) as unknown)
+    } catch (error) {
+      malformed.push({
+        lineNumber: index + 1,
+        relativePath,
+        rawLineSha256: sha256(trimmedLine),
+        parseError: errorMessage(error),
+        rawLine: trimmedLine
+      })
+    }
+  }
+  return { validRecords, malformed }
 }
 
 async function applyJsonlRepair(input: {
@@ -246,10 +281,15 @@ async function captureSourceSnapshot(filePath: string): Promise<SourceSnapshot> 
     throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`)
   }
   const bytes = await readFile(filePath)
+  const content = bytes.toString('utf8')
+  return createSourceSnapshot(stats.mtimeMs, content, bytes)
+}
+
+function createSourceSnapshot(mtimeMs: number, content: string, bytes: Buffer): SourceSnapshot {
   return {
-    size: stats.size,
-    mtimeMs: stats.mtimeMs,
-    sha256: sha256(bytes),
+    size: Buffer.byteLength(content, 'utf8'),
+    mtimeMs,
+    sha256: sha256(content),
     bytes
   }
 }
