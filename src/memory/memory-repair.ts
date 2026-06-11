@@ -20,6 +20,7 @@ export interface JsonlRepairInput {
   apply: boolean
   now?: string
   beforeRewrite?: () => Promise<void>
+  afterScanBeforePreconditionCheckForTest?: () => Promise<void>
 }
 
 export interface JsonlRepairResult {
@@ -68,15 +69,15 @@ export async function runJsonlRepairFromRoot(input: JsonlRepairInput): Promise<J
     const memoryRoot = await ensureWritableMemoryRootPath(lockedRoot)
     const now = input.now ?? new Date().toISOString()
     const repairTransactionId = createRepairTransactionId(now)
-    const scans = await scanCanonicalJsonlFiles(memoryRoot)
-    const malformedLineCount = scans.reduce((count, scan) => count + scan.malformed.length, 0)
+    const scannedFiles = await scanCanonicalJsonlFiles(memoryRoot, input.afterScanBeforePreconditionCheckForTest)
+    const malformedLineCount = scannedFiles.reduce((count, file) => count + file.scan.malformed.length, 0)
 
     if (!input.apply) {
       return {
         action: 'dry_run',
         repairTransactionId,
         memoryRoot,
-        filesScanned: scans.length,
+        filesScanned: scannedFiles.length,
         filesRepaired: 0,
         malformedLineCount,
         backupPaths: []
@@ -88,7 +89,7 @@ export async function runJsonlRepairFromRoot(input: JsonlRepairInput): Promise<J
         action: 'noop',
         repairTransactionId,
         memoryRoot,
-        filesScanned: scans.length,
+        filesScanned: scannedFiles.length,
         filesRepaired: 0,
         malformedLineCount: 0,
         backupPaths: []
@@ -98,29 +99,38 @@ export async function runJsonlRepairFromRoot(input: JsonlRepairInput): Promise<J
     return applyJsonlRepair({
       memoryRoot,
       repairTransactionId,
-      scans,
+      scannedFiles,
       now,
       beforeRewrite: input.beforeRewrite
     })
   })
 }
 
-async function scanCanonicalJsonlFiles(memoryRoot: string): Promise<JsonlFileScan[]> {
-  const scans: JsonlFileScan[] = []
+async function scanCanonicalJsonlFiles(
+  memoryRoot: string,
+  afterScanBeforePreconditionCheckForTest?: () => Promise<void>
+): Promise<RepairSource[]> {
+  const files: RepairSource[] = []
   for (const relativePath of CANONICAL_JSONL_FILES) {
     const filePath = join(memoryRoot, relativePath)
     if (!(await pathExists(filePath))) {
       continue
     }
-    scans.push(await scanJsonlFile(filePath, { includeRawLine: true }, relativePath))
+    const snapshot = await captureSourceSnapshot(filePath)
+    const scan = await scanJsonlFile(filePath, { includeRawLine: true }, relativePath)
+    if (afterScanBeforePreconditionCheckForTest !== undefined) {
+      await afterScanBeforePreconditionCheckForTest()
+    }
+    await assertSourceUnchanged(filePath, snapshot)
+    files.push({ relativePath, filePath, scan, snapshot })
   }
-  return scans
+  return files
 }
 
 async function applyJsonlRepair(input: {
   memoryRoot: string
   repairTransactionId: string
-  scans: JsonlFileScan[]
+  scannedFiles: RepairSource[]
   now: string
   beforeRewrite?: () => Promise<void>
 }): Promise<JsonlRepairResult> {
@@ -134,19 +144,7 @@ async function applyJsonlRepair(input: {
   await mkdir(transactionRoot)
   await ensureDirectory(backupRoot)
 
-  const sources = await Promise.all(
-    input.scans
-      .filter((scan) => scan.malformed.length > 0)
-      .map(async (scan) => {
-        const relativePath = scan.relativePath as CanonicalJsonlFile
-        return {
-          relativePath,
-          filePath: scan.filePath,
-          scan,
-          snapshot: await captureSourceSnapshot(scan.filePath)
-        }
-      })
-  )
+  const sources = input.scannedFiles.filter((source) => source.scan.malformed.length > 0)
   const backupPaths = sources.map((source) => join(backupRoot, source.relativePath))
   const malformedLineCount = sources.reduce((count, source) => count + source.scan.malformed.length, 0)
   const pendingSummary: RepairSummary = {
@@ -154,7 +152,7 @@ async function applyJsonlRepair(input: {
     repairTransactionId: input.repairTransactionId,
     memoryRoot: input.memoryRoot,
     startedAt: input.now,
-    filesScanned: input.scans.length,
+    filesScanned: input.scannedFiles.length,
     filesRepaired: sources.length,
     malformedLineCount,
     backupPaths,
@@ -208,7 +206,7 @@ async function applyJsonlRepair(input: {
     action: 'repaired',
     repairTransactionId: input.repairTransactionId,
     memoryRoot: input.memoryRoot,
-    filesScanned: input.scans.length,
+    filesScanned: input.scannedFiles.length,
     filesRepaired: sources.length,
     malformedLineCount,
     backupPaths,
