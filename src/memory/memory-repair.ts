@@ -12,6 +12,13 @@ import { assertSafeMemoryDataFileTarget, ensureWritableMemoryRootPath } from './
 
 const REPAIR_DIR = 'repair'
 const TOOL_VERSION = '0.1.0'
+const UNSUPPORTED_DIRECTORY_FSYNC_ERROR_CODES = new Set(['EINVAL', 'EISDIR', 'ENOTSUP', 'ENOSYS', 'EPERM'])
+
+interface JsonlRepairTestHooks {
+  fsyncDirectory?: (dirPath: string) => Promise<void>
+}
+
+let jsonlRepairTestHooks: JsonlRepairTestHooks = {}
 
 export interface JsonlRepairInput {
   memoryRoot: string
@@ -30,6 +37,14 @@ export interface JsonlRepairResult {
   backupPaths: string[]
   quarantinePath?: string
   summaryPath?: string
+}
+
+export function setJsonlRepairTestHooksForTest(hooks: JsonlRepairTestHooks): () => void {
+  const previousHooks = jsonlRepairTestHooks
+  jsonlRepairTestHooks = hooks
+  return () => {
+    jsonlRepairTestHooks = previousHooks
+  }
 }
 
 interface RepairSource {
@@ -233,6 +248,7 @@ async function applyJsonlRepair(input: {
         finishedAt: input.now,
         error: errorMessage(error)
       }).catch(() => undefined)
+      throw createRepairFailedError(input.repairTransactionId, summaryPath, error)
     }
     throw error
   }
@@ -357,9 +373,16 @@ async function fsyncDirectory(dirPath: string): Promise<void> {
   let directory
   try {
     directory = await open(dirPath, 'r')
-    await directory.sync()
-  } catch {
-    return
+    if (jsonlRepairTestHooks.fsyncDirectory !== undefined) {
+      await jsonlRepairTestHooks.fsyncDirectory(dirPath)
+    } else {
+      await directory.sync()
+    }
+  } catch (error) {
+    if (isUnsupportedDirectoryFsyncError(error)) {
+      return
+    }
+    throw error
   } finally {
     await directory?.close().catch(() => undefined)
   }
@@ -384,6 +407,23 @@ function createRepairTransactionId(now: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function createRepairFailedError(repairTransactionId: string, summaryPath: string, cause: unknown): Error {
+  const error = new Error(
+    `repair_failed repairTransactionId=${repairTransactionId} summaryPath=${summaryPath}: ${errorMessage(cause)}`
+  )
+  Object.assign(error, { cause })
+  return error
+}
+
+function isUnsupportedDirectoryFsyncError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    UNSUPPORTED_DIRECTORY_FSYNC_ERROR_CODES.has(error.code)
+  )
 }
 
 function isFileErrorCode(error: unknown, code: string): boolean {

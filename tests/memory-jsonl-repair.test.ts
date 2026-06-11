@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { runJsonlRepairFromRoot } from '../src/memory/memory-repair.js'
+import { runJsonlRepairFromRoot, setJsonlRepairTestHooksForTest } from '../src/memory/memory-repair.js'
 
 const tempDirs: string[] = []
 
@@ -121,27 +121,77 @@ describe('jsonl repair', () => {
     const changed = '{"id":"external"}\n{bad json}\n'
     await writeFile(sourcePath, original, 'utf8')
 
-    await expect(runJsonlRepairFromRoot({
-      memoryRoot,
-      apply: true,
-      now: '2026-06-12T01:02:03.004Z',
-      beforeRewrite: async () => {
-        await writeFile(sourcePath, changed, 'utf8')
-      }
-    })).rejects.toThrow(/changed during repair/)
+    let thrown: unknown
+    try {
+      await runJsonlRepairFromRoot({
+        memoryRoot,
+        apply: true,
+        now: '2026-06-12T01:02:03.004Z',
+        beforeRewrite: async () => {
+          await writeFile(sourcePath, changed, 'utf8')
+        }
+      })
+    } catch (error) {
+      thrown = error
+    }
 
+    expect(thrown).toBeInstanceOf(Error)
     await expect(readFile(sourcePath, 'utf8')).resolves.toBe(changed)
     const [repairTransaction] = await readdir(join(memoryRoot, 'repair'))
     const summaryPath = join(memoryRoot, 'repair', repairTransaction as string, 'summary.json')
     const summary = JSON.parse(await readFile(summaryPath, 'utf8')) as { status: string; error: string }
+    expect((thrown as Error).message).toContain('repair_failed')
+    expect((thrown as Error).message).toContain(repairTransaction)
+    expect((thrown as Error).message).toContain(summaryPath)
+    expect((thrown as Error).message).toMatch(/changed during repair/)
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error)
     expect(summary.status).toBe('failed')
     expect(summary.error).toMatch(/changed during repair/)
+
+    const backupPath = join(memoryRoot, 'repair', repairTransaction as string, 'backups', 'semantic_memories.jsonl')
+    await expect(readFile(backupPath, 'utf8')).resolves.toBe(original)
+    const quarantine = await readFile(join(memoryRoot, 'repair', repairTransaction as string, 'quarantine.jsonl'), 'utf8')
+    expect(quarantine).toContain('{bad json}')
+    expect(quarantine).not.toContain('external')
   })
 
-  it('does not delegate repair planning to the independent JSONL scanner', async () => {
-    const repairSource = await readFile(join(process.cwd(), 'src/memory/memory-repair.ts'), 'utf8')
+  it('fails repair when directory fsync reports a real durability error', async () => {
+    const memoryRoot = await createTempDir('cyrene-jsonl-repair-dir-fsync-')
+    const sourcePath = join(memoryRoot, 'semantic_memories.jsonl')
+    await writeFile(sourcePath, '{"id":"ok"}\n{bad json}\n', 'utf8')
+    const resolvedMemoryRoot = await realpath(memoryRoot)
+    const restoreHooks = setJsonlRepairTestHooksForTest({
+      fsyncDirectory: async (dirPath) => {
+        if (dirPath === resolvedMemoryRoot) {
+          throw Object.assign(new Error('directory fsync failed'), { code: 'EIO' })
+        }
+      }
+    })
 
-    expect(repairSource).not.toContain('scanJsonlFile')
+    let thrown: unknown
+    try {
+      await runJsonlRepairFromRoot({
+        memoryRoot,
+        apply: true,
+        now: '2026-06-12T01:02:03.004Z'
+      })
+    } catch (error) {
+      thrown = error
+    } finally {
+      restoreHooks()
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    const [repairTransaction] = await readdir(join(memoryRoot, 'repair'))
+    const summaryPath = join(memoryRoot, 'repair', repairTransaction as string, 'summary.json')
+    expect((thrown as Error).message).toContain('repair_failed')
+    expect((thrown as Error).message).toContain(repairTransaction)
+    expect((thrown as Error).message).toContain(summaryPath)
+    expect((thrown as Error).message).toContain('directory fsync failed')
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error)
+    const summary = JSON.parse(await readFile(summaryPath, 'utf8')) as { status: string; error: string }
+    expect(summary.status).toBe('failed')
+    expect(summary.error).toContain('directory fsync failed')
   })
 
   it('removes a stale maintenance lock with a dead owner and noops on clean files', async () => {
