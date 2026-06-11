@@ -46,8 +46,8 @@ export function activeMemoryToSemanticMemory(memory: CyreneMemory): SemanticMemo
     scope: memory.scope,
     domain: memory.domain,
     content: memory.content,
-    useWhen: useWhenForKind(kind),
-    doNotUseWhen: doNotUseWhenForKind(kind),
+    useWhen: memory.useWhen ?? useWhenForKind(kind),
+    doNotUseWhen: memory.doNotUseWhen ?? doNotUseWhenForKind(kind),
     sourceOfTruth: memory.sourceOfTruth ?? memory.normalizedKey,
     evidence: structuredEvidenceForMemory(memory.id, memory.evidence, memory.source, memory.createdAt, memory.content, kind),
     routing: routingForMemory(module, scores, 'active'),
@@ -152,6 +152,8 @@ export function semanticMemoryToActiveMemory(memory: SemanticMemory): CyreneMemo
     ...(reviewState.profileVisibility === undefined ? {} : { profileVisibility: reviewState.profileVisibility }),
     ...(memory.confidenceTier === undefined ? {} : { confidenceTier: memory.confidenceTier }),
     ...(memory.activationPolicy === undefined ? {} : { activationPolicy: memory.activationPolicy }),
+    ...(memory.useWhen.length === 0 ? {} : { useWhen: memory.useWhen }),
+    ...(memory.doNotUseWhen.length === 0 ? {} : { doNotUseWhen: memory.doNotUseWhen }),
     candidateKind: memory.kind,
     ...(reviewState.normalizedKeyConflictResolution === undefined
       ? {}

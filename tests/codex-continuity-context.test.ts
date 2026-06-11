@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
+import { codexMemoryDbPath, rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
 import { writeFastSummaryProjection } from '../src/codex/fast-summary-store.js'
@@ -551,6 +551,346 @@ describe('Codex continuity context', () => {
     expect(context.activation.planConstraints).toEqual([])
     expect(context.activation.checklistItems).toEqual([])
     await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([])
+  })
+
+  it('balanced mode exposes active project trial strong relevance only as candidate hint', async () => {
+    const { repo, identity, memoryRoot } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-balanced',
+      [createSemanticMemory({
+        id: 'candidate-trial-strong',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        content: 'Runtime activation validator changes should stay as workflow hints.',
+        useWhen: ['runtime activation validator changes'],
+        doNotUseWhen: []
+      })]
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime activation validator changes',
+      task: 'coding',
+      mode: 'balanced'
+    })
+
+    expect(context.candidateHints).toEqual([
+      expect.objectContaining({
+        memoryId: 'candidate-trial-strong',
+        confidenceTier: 'trial',
+        activationMode: 'workflow_hint',
+        candidate: true,
+        validated: false,
+        source: 'project',
+        projectId: identity.projectId,
+        text: 'Candidate project workflow hint, not validated:\n- Runtime activation validator changes should stay as workflow hints.'
+      })
+    ])
+    expect(context.memory.items.map((item) => item.id)).not.toContain('candidate-trial-strong')
+    expect(context.globalMemory.map((item) => item.id)).not.toContain('candidate-trial-strong')
+    expect(context.projectMemory.map((item) => item.id)).not.toContain('candidate-trial-strong')
+    expect(context.activation.workflowHints).toEqual([])
+    expect(context.activation.planConstraints).toEqual([])
+    expect(context.activation.checklistItems).toEqual([])
+    await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([])
+    const metrics = await readRuntimeMetrics(memoryRoot)
+    const continuityMetrics = metrics.filter((metric) => metric.event === 'continuity_get')
+    const latestMetric = continuityMetrics[continuityMetrics.length - 1]
+    expect(latestMetric).toMatchObject({
+      candidateHintEligibleCount: 1,
+      candidateHintRelevantCount: 1,
+      candidateHintSelectedCount: 1,
+      candidateHintTimeoutCount: 0,
+      candidateHintSuppressedByLatencyCount: 0
+    })
+    expect(latestMetric?.candidateHintLatencyMs).toEqual(expect.any(Number))
+  })
+
+  it('fast mode returns no candidate hints even when a relevant project trial exists', async () => {
+    const { repo } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-fast',
+      [createSemanticMemory({
+        id: 'candidate-fast-trial',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        content: 'Runtime activation validator changes should stay as workflow hints.',
+        useWhen: ['runtime activation validator changes'],
+        doNotUseWhen: []
+      })]
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime activation validator changes',
+      task: 'coding',
+      mode: 'fast'
+    })
+
+    expect(context.candidateHints).toEqual([])
+  })
+
+  it('review mode returns at most three strong-relevance candidate hints', async () => {
+    const { repo } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-review',
+      Array.from({ length: 4 }, (_, index) => createSemanticMemory({
+        id: `candidate-review-${index}`,
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        content: `Runtime validator workflow candidate ${index} should stay as a candidate hint.`,
+        useWhen: ['runtime validator workflow'],
+        doNotUseWhen: [],
+        updatedAt: `2026-06-0${index + 1}T00:00:00.000Z`
+      }))
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime validator workflow',
+      task: 'coding',
+      mode: 'review'
+    })
+
+    expect(context.candidateHints).toHaveLength(3)
+    expect(context.candidateHints.every((hint) => hint.validated === false)).toBe(true)
+  })
+
+  it('balanced mode does not backfill candidate hints with weak or unrelated project trials', async () => {
+    const { repo } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-weak',
+      [
+        createSemanticMemory({
+          id: 'candidate-weak-trial',
+          confidenceTier: 'trial',
+          activationPolicy: activationPolicyForConfidenceTier('trial'),
+          content: 'Runtime notes should stay concise.',
+          useWhen: ['runtime notes'],
+          doNotUseWhen: []
+        }),
+        createSemanticMemory({
+          id: 'candidate-unrelated-trial',
+          confidenceTier: 'trial',
+          activationPolicy: activationPolicyForConfidenceTier('trial'),
+          content: 'Release notes should stay concise.',
+          useWhen: ['release notes'],
+          doNotUseWhen: []
+        })
+      ]
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime validator workflow',
+      task: 'coding',
+      mode: 'balanced'
+    })
+
+    expect(context.candidateHints).toEqual([])
+  })
+
+  it('pending semantic memory never appears as a candidate hint', async () => {
+    const { repo } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-pending',
+      [createSemanticMemory({
+        id: 'pending-candidate-hint',
+        status: 'pending',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        content: 'Runtime validator workflow pending candidate should not appear.',
+        useWhen: ['runtime validator workflow'],
+        doNotUseWhen: []
+      })]
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime validator workflow',
+      task: 'coding',
+      mode: 'balanced'
+    })
+
+    expect(context.candidateHints).toEqual([])
+    expect(JSON.stringify(context)).not.toContain('Runtime validator workflow pending candidate should not appear.')
+  })
+
+  it('balanced mode suppresses hard-conflicted trial candidate hints', async () => {
+    const { repo } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-conflict',
+      [
+        createSemanticMemory({
+          id: 'candidate-conflict-trial',
+          confidenceTier: 'trial',
+          activationPolicy: activationPolicyForConfidenceTier('trial'),
+          content: 'Run npm test before final verification.',
+          useWhen: ['coding verification npm test'],
+          doNotUseWhen: [],
+          sourceOfTruth: 'AGENTS.md',
+          reviewState: {
+            ...createSemanticMemory().reviewState,
+            normalizedKey: 'project-test-command'
+          }
+        }),
+        createSemanticMemory({
+          id: 'validated-conflict-memory',
+          confidenceTier: 'validated',
+          activationPolicy: activationPolicyForConfidenceTier('validated'),
+          content: 'Run pnpm test before final verification.',
+          useWhen: ['coding verification pnpm test'],
+          doNotUseWhen: [],
+          sourceOfTruth: 'AGENTS.md',
+          reviewState: {
+            ...createSemanticMemory().reviewState,
+            normalizedKey: 'project-test-command'
+          }
+        })
+      ]
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'run npm test before final verification',
+      task: 'coding',
+      mode: 'balanced'
+    })
+
+    expect(context.candidateHints).toEqual([])
+    expect(context.projectMemory.map((item) => item.id)).toContain('validated-conflict-memory')
+    expect(context.memory.items.map((item) => item.id)).not.toContain('candidate-conflict-trial')
+  })
+
+  it('suppresses hard-conflicted trial candidate hints even when the validated memory is not visible', async () => {
+    const fillerMemories = Array.from({ length: 14 }, (_, index) => createSemanticMemory({
+      id: `visible-filler-${index}`,
+      confidenceTier: 'validated',
+      activationPolicy: activationPolicyForConfidenceTier('validated'),
+      content: `Run npm test before final verification with high-priority filler ${index}.`,
+      useWhen: ['run npm test before final verification'],
+      doNotUseWhen: [],
+      reviewState: {
+        ...createSemanticMemory().reviewState,
+        normalizedKey: `visible-filler-${index}`,
+        scores: {
+          evidenceStrength: 0.99,
+          stability: 0.99,
+          usefulness: 0.99,
+          safety: 0.99,
+          sensitivity: 0.01
+        }
+      },
+      updatedAt: `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
+    }))
+    const { repo } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-hidden-conflict',
+      [
+        ...fillerMemories,
+        createSemanticMemory({
+          id: 'candidate-hidden-conflict-trial',
+          confidenceTier: 'trial',
+          activationPolicy: activationPolicyForConfidenceTier('trial'),
+          content: 'Run npm test before final verification.',
+          useWhen: ['coding verification npm test'],
+          doNotUseWhen: [],
+          sourceOfTruth: 'AGENTS.md',
+          reviewState: {
+            ...createSemanticMemory().reviewState,
+            normalizedKey: 'project-test-command'
+          }
+        }),
+        createSemanticMemory({
+          id: 'validated-hidden-conflict-memory',
+          confidenceTier: 'validated',
+          activationPolicy: activationPolicyForConfidenceTier('validated'),
+          content: 'Run pnpm test.',
+          useWhen: ['coding verification pnpm test'],
+          doNotUseWhen: [],
+          sourceOfTruth: 'AGENTS.md',
+          reviewState: {
+            ...createSemanticMemory().reviewState,
+            normalizedKey: 'project-test-command',
+            scores: {
+              evidenceStrength: 0.5,
+              stability: 0.5,
+              usefulness: 0.5,
+              safety: 0.9,
+              sensitivity: 0.1
+            }
+          },
+          updatedAt: '2026-05-01T00:00:00.000Z'
+        })
+      ]
+    )
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'run npm test before final verification',
+      task: 'coding',
+      mode: 'balanced'
+    })
+
+    expect(context.projectMemory.map((item) => item.id)).not.toContain('validated-hidden-conflict-memory')
+    expect(context.candidateHints).toEqual([])
+  })
+
+  it('selects candidate hints from SQLite payload without reading semantic JSONL in the hot path', async () => {
+    const { repo, memoryRoot } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-sqlite-only',
+      [createSemanticMemory({
+        id: 'candidate-sqlite-only',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        content: 'Runtime activation validator SQLite-only guidance should stay as a candidate hint.',
+        useWhen: ['runtime activation validator sqlite-only guidance'],
+        doNotUseWhen: []
+      })]
+    )
+    const dbStats = await stat(codexMemoryDbPath())
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+    await fsWriteFile(semanticPath, '{not-json\n', 'utf8')
+    const oldEnough = new Date(dbStats.mtime.getTime() - 2_000)
+    await utimes(semanticPath, oldEnough, oldEnough)
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'runtime activation validator sqlite-only guidance',
+      task: 'coding',
+      mode: 'balanced'
+    })
+
+    expect(context.candidateHints).toEqual([
+      expect.objectContaining({
+        memoryId: 'candidate-sqlite-only',
+        text: 'Candidate project workflow hint, not validated:\n- Runtime activation validator SQLite-only guidance should stay as a candidate hint.'
+      })
+    ])
+  })
+
+  it('preview includes candidate hints while confirmed active context excludes trial memory', async () => {
+    const { repo } = await createCandidateHintFixture(
+      'cyrene-codex-candidate-preview',
+      [createSemanticMemory({
+        id: 'candidate-preview-trial',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        content: 'Runtime activation validator preview guidance should stay as a candidate hint.',
+        useWhen: ['runtime activation validator preview guidance'],
+        doNotUseWhen: []
+      })]
+    )
+
+    const preview = await runCodexMemoryContextPreview({
+      cwd: repo,
+      userMessage: 'runtime activation validator preview guidance',
+      task: 'coding',
+      mode: 'balanced'
+    })
+
+    expect(preview.activeContext.candidateHints).toEqual([
+      expect.objectContaining({
+        memoryId: 'candidate-preview-trial',
+        text: 'Candidate project workflow hint, not validated:\n- Runtime activation validator preview guidance should stay as a candidate hint.'
+      })
+    ])
+    expect(preview.activeContext.globalMemory).toEqual([])
+    expect(preview.activeContext.projectMemory).toEqual([])
+    expect(preview.activation.workflowHints).toEqual([])
   })
 
   it('returns constraint and checklist activation for matching active validated memory', async () => {
@@ -1634,6 +1974,21 @@ describe('Codex continuity context', () => {
     expect(JSON.stringify(context.memory.items)).not.toContain('Other project local memory must not leak.')
   })
 })
+
+async function createCandidateHintFixture(prefix: string, memories: SemanticMemory[]) {
+  const home = await createTempDir(`${prefix}-home-`)
+  process.env.HOME = home
+  const repo = await createTempDir(`${prefix}-repo-`)
+  const identity = await identifyCodexProject(repo)
+  const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+  await mkdir(memoryRoot, { recursive: true })
+  await writeFile(
+    join(memoryRoot, 'semantic_memories.jsonl'),
+    memories.map((memory) => JSON.stringify(memory)).join('\n') + '\n'
+  )
+  await rebuildCodexMemoryIndex({ cwd: repo })
+  return { repo, identity, memoryRoot }
+}
 
 function createMemory(overrides: Partial<CyreneMemory> = {}): CyreneMemory {
   return {

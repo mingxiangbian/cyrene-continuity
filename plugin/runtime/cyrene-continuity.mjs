@@ -10214,8 +10214,8 @@ function activeMemoryToSemanticMemory(memory2) {
     scope: memory2.scope,
     domain: memory2.domain,
     content: memory2.content,
-    useWhen: useWhenForKind(kind),
-    doNotUseWhen: doNotUseWhenForKind(kind),
+    useWhen: memory2.useWhen ?? useWhenForKind(kind),
+    doNotUseWhen: memory2.doNotUseWhen ?? doNotUseWhenForKind(kind),
     sourceOfTruth: memory2.sourceOfTruth ?? memory2.normalizedKey,
     evidence: structuredEvidenceForMemory(memory2.id, memory2.evidence, memory2.source, memory2.createdAt, memory2.content, kind),
     routing: routingForMemory(module, scores, "active"),
@@ -10316,6 +10316,8 @@ function semanticMemoryToActiveMemory(memory2) {
     ...reviewState.profileVisibility === void 0 ? {} : { profileVisibility: reviewState.profileVisibility },
     ...memory2.confidenceTier === void 0 ? {} : { confidenceTier: memory2.confidenceTier },
     ...memory2.activationPolicy === void 0 ? {} : { activationPolicy: memory2.activationPolicy },
+    ...memory2.useWhen.length === 0 ? {} : { useWhen: memory2.useWhen },
+    ...memory2.doNotUseWhen.length === 0 ? {} : { doNotUseWhen: memory2.doNotUseWhen },
     candidateKind: memory2.kind,
     ...reviewState.normalizedKeyConflictResolution === void 0 ? {} : { normalizedKeyConflictResolution: reviewState.normalizedKeyConflictResolution },
     tags: reviewState.tags ?? [memory2.kind],
@@ -11768,6 +11770,9 @@ var UnavailableMemoryIndexAdapter = class {
   async querySimilarActive(_input) {
     return [];
   }
+  async queryCandidateHints(_input) {
+    return { candidates: [], validatedMemories: [] };
+  }
   diagnostics() {
     return {
       available: false,
@@ -11880,6 +11885,12 @@ var SqliteMemoryIndexAdapter = class {
         created_at text not null,
         approved_at text
       );
+
+      create index if not exists idx_memories_candidate_hints
+      on memories(status, scope, home_project_id, portability, domain, updated_at);
+
+      create index if not exists idx_memories_normalized_key
+      on memories(status, normalized_key, scope, home_project_id);
     `);
     this.ensureProjectColumns(db);
     if (!this.initialized) {
@@ -12179,6 +12190,28 @@ var SqliteMemoryIndexAdapter = class {
       input.maxTokens
     );
   }
+  async queryCandidateHints(input) {
+    await this.initialize();
+    const maxItems = Math.max(0, Math.floor(input.maxItems));
+    if (maxItems === 0) {
+      return { candidates: [], validatedMemories: [] };
+    }
+    const ftsMatches = this.queryFtsIds(input.query, "active");
+    const candidateRows = this.queryCandidateHintRows(input, ftsMatches, maxItems);
+    const candidates = candidateRows.map((row) => indexedCandidateHintFromRow(row, input.query, ftsMatches));
+    const conflictKeys = new Set(
+      candidates.map((item) => item.memory.reviewState?.normalizedKey).filter((key) => typeof key === "string" && key.trim() !== "")
+    );
+    const validatedRows = this.queryCandidateHintConflictRows(
+      input.currentProjectId,
+      conflictKeys,
+      input.maxConflictItems ?? 200
+    );
+    return {
+      candidates,
+      validatedMemories: validatedRows.map((row) => indexedCandidateHintFromRow(row, input.query, ftsMatches))
+    };
+  }
   diagnostics() {
     return this.currentDiagnostics;
   }
@@ -12267,7 +12300,7 @@ var SqliteMemoryIndexAdapter = class {
     const indexId = memoryIndexId(root, memory2.id);
     const portability = deriveMemoryPortability(memory2);
     const homeProjectId = root.scope === "global" ? null : root.projectId;
-    const tags = memory2.tags.join(" ");
+    const tags = memoryIndexTagsText(memory2);
     const now = (/* @__PURE__ */ new Date()).toISOString();
     db.prepare(`
       insert into memories (
@@ -12478,6 +12511,96 @@ var SqliteMemoryIndexAdapter = class {
     `).all(input.currentProjectId, ...input.targetProjectIds);
     return rows.map(rowFromRecord);
   }
+  queryCandidateHintRows(input, ftsMatches, maxItems) {
+    const matchedIds = Array.from(ftsMatches).slice(0, maxItems * 4);
+    const ftsRows = matchedIds.length === 0 ? [] : this.queryCandidateHintRowsWithExtraConditions(
+      input.currentProjectId,
+      [`id in (${matchedIds.map(() => "?").join(", ")})`],
+      matchedIds,
+      maxItems
+    );
+    const remaining = maxItems - ftsRows.length;
+    if (remaining <= 0) {
+      return ftsRows;
+    }
+    const excludeIds = ftsRows.map((row) => row.id);
+    const recentRows = this.queryCandidateHintRowsWithExtraConditions(
+      input.currentProjectId,
+      excludeIds.length === 0 ? [] : [`id not in (${excludeIds.map(() => "?").join(", ")})`],
+      excludeIds,
+      remaining
+    );
+    return [...ftsRows, ...recentRows];
+  }
+  queryCandidateHintRowsWithExtraConditions(currentProjectId, extraConditions, extraValues, limit) {
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        payload_json
+      from memories
+      where status = 'active'
+        and scope = 'project'
+        and home_project_id = ?
+        and portability = 'local_only'
+        and domain in ('project', 'procedural', 'system')
+        and payload_json like '%"confidenceTier":"trial"%'
+        and payload_json like '%workflow_hint%'
+        ${extraConditions.length === 0 ? "" : `and ${extraConditions.join(" and ")}`}
+      order by updated_at desc, created_at desc, id asc
+      limit ?
+    `).all(currentProjectId, ...extraValues, limit);
+    return rows.map(rowFromRecord);
+  }
+  queryCandidateHintConflictRows(currentProjectId, normalizedKeys, maxItems) {
+    const keys = Array.from(normalizedKeys);
+    const limit = Math.max(0, Math.floor(maxItems));
+    if (keys.length === 0 || limit === 0) {
+      return [];
+    }
+    const placeholders = keys.map(() => "?").join(", ");
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        payload_json
+      from memories
+      where status = 'active'
+        and normalized_key in (${placeholders})
+        and (
+          (scope = 'project' and home_project_id = ? and portability = 'local_only') or
+          (scope = 'global' and portability = 'global')
+        )
+        and (
+          payload_json like '%"confidenceTier":"validated"%' or
+          payload_json like '%"confidenceTier":"project_core"%' or
+          payload_json like '%"confidenceTier":"global_core"%'
+        )
+      order by updated_at desc, created_at desc, id asc
+      limit ?
+    `).all(...keys, currentProjectId, limit);
+    return rows.map(rowFromRecord);
+  }
   queryFtsIds(query, status) {
     if (query.trim() === "") {
       return /* @__PURE__ */ new Set();
@@ -12639,6 +12762,20 @@ function rowFromRecord(row) {
     scores: JSON.parse(readString(row.scores_json, "scores_json")),
     payload
   };
+}
+function indexedCandidateHintFromRow(row, query, ftsMatches) {
+  return {
+    memory: activeMemoryToSemanticMemory(row.payload),
+    score: scoreRow(row, query, ftsMatches),
+    homeProjectId: row.homeProjectId
+  };
+}
+function memoryIndexTagsText(memory2) {
+  return [
+    ...memory2.tags,
+    ...memory2.useWhen ?? [],
+    ...memory2.doNotUseWhen ?? []
+  ].join(" ");
 }
 function readString(value, field) {
   if (typeof value !== "string") {
@@ -14082,7 +14219,7 @@ function isErrorCode3(error2, code) {
 }
 
 // src/codex/continuity-context.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 
 // src/affect/affect-runtime.ts
 async function buildContinuitySnapshot(input) {
@@ -18131,6 +18268,7 @@ async function recordCodexMemoryFeedback(input) {
       id: eventId,
       memoryId: memory2.id,
       projectId: project.projectId,
+      contentHash: input.contentHash,
       ...queryHash === void 0 ? {} : { queryHash },
       event: input.event,
       ...input.activationId === void 0 ? {} : { activationId: input.activationId },
@@ -18241,6 +18379,10 @@ async function appendActivationEventFailOpen(input) {
 }
 async function appendActivationEventsFailOpen(input) {
   try {
+    const event = input.event ?? "retrieved";
+    if (event !== "retrieved") {
+      return;
+    }
     const memoryIds = [...new Set(input.memoryIds)].sort();
     const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
     for (const memoryId of memoryIds) {
@@ -18249,7 +18391,7 @@ async function appendActivationEventsFailOpen(input) {
         memoryId,
         projectId: input.projectId,
         query: input.query,
-        event: input.event ?? "retrieved",
+        event,
         evidenceRef: input.evidenceRef,
         now: createdAt
       });
@@ -18417,6 +18559,7 @@ var MODE_DEFAULTS = {
     includeFastSummaries: true,
     recordRetrievedEvents: false,
     allowJsonlFallback: false,
+    candidateHintBudget: 0,
     allowHotPathIndexRebuild: false
   },
   balanced: {
@@ -18431,6 +18574,7 @@ var MODE_DEFAULTS = {
     includeFastSummaries: false,
     recordRetrievedEvents: false,
     allowJsonlFallback: false,
+    candidateHintBudget: 1,
     allowHotPathIndexRebuild: false
   },
   review: {
@@ -18445,6 +18589,7 @@ var MODE_DEFAULTS = {
     includeFastSummaries: false,
     recordRetrievedEvents: false,
     allowJsonlFallback: false,
+    candidateHintBudget: 3,
     allowHotPathIndexRebuild: false
   }
 };
@@ -18599,6 +18744,12 @@ function runtimeMetricRecord(metric) {
     ...metric.similarLatencyMs === void 0 ? {} : { similarLatencyMs: metric.similarLatencyMs },
     ...metric.pendingLatencyMs === void 0 ? {} : { pendingLatencyMs: metric.pendingLatencyMs },
     ...metric.profileReadLatencyMs === void 0 ? {} : { profileReadLatencyMs: metric.profileReadLatencyMs },
+    ...metric.candidateHintLatencyMs === void 0 ? {} : { candidateHintLatencyMs: metric.candidateHintLatencyMs },
+    ...metric.candidateHintEligibleCount === void 0 ? {} : { candidateHintEligibleCount: metric.candidateHintEligibleCount },
+    ...metric.candidateHintRelevantCount === void 0 ? {} : { candidateHintRelevantCount: metric.candidateHintRelevantCount },
+    ...metric.candidateHintSelectedCount === void 0 ? {} : { candidateHintSelectedCount: metric.candidateHintSelectedCount },
+    ...metric.candidateHintTimeoutCount === void 0 ? {} : { candidateHintTimeoutCount: metric.candidateHintTimeoutCount },
+    ...metric.candidateHintSuppressedByLatencyCount === void 0 ? {} : { candidateHintSuppressedByLatencyCount: metric.candidateHintSuppressedByLatencyCount },
     ...metric.tokenOverhead === void 0 ? {} : { tokenOverhead: metric.tokenOverhead },
     ...metric.jsonlFallback === void 0 ? {} : { jsonlFallback: metric.jsonlFallback },
     ...metric.indexStale === void 0 ? {} : { indexStale: metric.indexStale },
@@ -18610,7 +18761,7 @@ function isRuntimeMetricEvent(value) {
   if (!isPlainRecord2(value)) {
     return false;
   }
-  return typeof value.event === "string" && RUNTIME_METRIC_EVENTS.has(value.event) && isOptionalContextMode(value.mode) && typeof value.latencyMs === "number" && isOptionalNumber(value.sqliteLatencyMs) && isOptionalNumber(value.similarLatencyMs) && isOptionalNumber(value.pendingLatencyMs) && isOptionalNumber(value.profileReadLatencyMs) && isOptionalNumber(value.tokenOverhead) && isOptionalBoolean(value.jsonlFallback) && isOptionalBoolean(value.indexStale) && isOptionalHookEvent(value.hookEvent) && typeof value.createdAt === "string" && Number.isFinite(Date.parse(value.createdAt));
+  return typeof value.event === "string" && RUNTIME_METRIC_EVENTS.has(value.event) && isOptionalContextMode(value.mode) && typeof value.latencyMs === "number" && isOptionalNumber(value.sqliteLatencyMs) && isOptionalNumber(value.similarLatencyMs) && isOptionalNumber(value.pendingLatencyMs) && isOptionalNumber(value.profileReadLatencyMs) && isOptionalNumber(value.candidateHintLatencyMs) && isOptionalNumber(value.candidateHintEligibleCount) && isOptionalNumber(value.candidateHintRelevantCount) && isOptionalNumber(value.candidateHintSelectedCount) && isOptionalNumber(value.candidateHintTimeoutCount) && isOptionalNumber(value.candidateHintSuppressedByLatencyCount) && isOptionalNumber(value.tokenOverhead) && isOptionalBoolean(value.jsonlFallback) && isOptionalBoolean(value.indexStale) && isOptionalHookEvent(value.hookEvent) && typeof value.createdAt === "string" && Number.isFinite(Date.parse(value.createdAt));
 }
 function isPlainRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -18707,7 +18858,331 @@ function isFileErrorCode12(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
+// src/codex/candidate-hints.ts
+import { createHash as createHash11 } from "node:crypto";
+var DISTINCTIVE_TOKEN_LENGTH2 = 8;
+var STOP_WORDS2 = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "been",
+  "being",
+  "but",
+  "by",
+  "can",
+  "could",
+  "for",
+  "from",
+  "if",
+  "in",
+  "into",
+  "is",
+  "it",
+  "its",
+  "may",
+  "must",
+  "of",
+  "on",
+  "or",
+  "should",
+  "that",
+  "the",
+  "then",
+  "these",
+  "this",
+  "those",
+  "to",
+  "was",
+  "were",
+  "when",
+  "while",
+  "will",
+  "with",
+  "without",
+  "would"
+]);
+var COMMAND_PHRASE_PATTERNS = [
+  { pattern: /\bnpm\s+run\s+typecheck\b/g, token: "npm run typecheck" },
+  { pattern: /\bnpm\s+test\b/g, token: "npm test" },
+  { pattern: /\bpnpm\s+run\s+typecheck\b/g, token: "pnpm run typecheck" },
+  { pattern: /\bpnpm\s+typecheck\b/g, token: "pnpm typecheck" },
+  { pattern: /\bpnpm\s+test\b/g, token: "pnpm test" },
+  { pattern: /\bdry[-\s]+run\s+first\b/g, token: "dry-run first" },
+  { pattern: /\bapply\s+directly\b/g, token: "apply directly" }
+];
+var ALLOWED_DOMAINS = /* @__PURE__ */ new Set(["project", "procedural", "system"]);
+var APPLIED_COUNT_CAP = 2;
+function selectCandidateHints(input) {
+  const startedAt = Date.now();
+  const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const diagnostics = {
+    ineligible: [],
+    irrelevant: [],
+    relevant: []
+  };
+  const budget = selectionBudget(input.mode, input.maxItems);
+  const queryTokens = tokenizeCandidateHintText(input.query);
+  const ranked = [];
+  let eligibleCount = 0;
+  let relevantCount = 0;
+  for (const candidate of input.candidates) {
+    const memory2 = candidate.memory;
+    const ineligibleReasons = ineligibleReasonsForCandidate(candidate, {
+      now,
+      projectId: input.projectId,
+      validatedMemories: input.validatedMemories ?? []
+    });
+    if (ineligibleReasons.length > 0) {
+      diagnostics.ineligible.push({ memoryId: memory2.id, reasons: ineligibleReasons });
+      continue;
+    }
+    eligibleCount += 1;
+    const relevance = evaluateRelevance(memory2, queryTokens);
+    if (!isRelevanceQualified(relevance)) {
+      diagnostics.irrelevant.push({ memoryId: memory2.id, reason: relevance.reason });
+      continue;
+    }
+    relevantCount += 1;
+    diagnostics.relevant.push({ memoryId: memory2.id, matchedTokens: relevance.matchedTokens });
+    ranked.push({ candidate, relevance, rankKey: rankKeyForCandidate(candidate, relevance) });
+  }
+  ranked.sort(compareRankedCandidates);
+  const hints = ranked.slice(0, budget).map(({ candidate, relevance }) => candidateHintForMemory({
+    memory: candidate.memory,
+    projectId: input.projectId,
+    triggerReason: `matched candidate tokens: ${relevance.matchedTokens.join(", ")}`
+  }));
+  return {
+    hints,
+    metrics: {
+      candidateHintLatencyMs: Date.now() - startedAt,
+      candidateHintEligibleCount: eligibleCount,
+      candidateHintRelevantCount: relevantCount,
+      candidateHintSelectedCount: hints.length,
+      candidateHintTimeoutCount: 0,
+      candidateHintSuppressedByLatencyCount: 0
+    },
+    diagnostics
+  };
+}
+function ineligibleReasonsForCandidate(candidate, context) {
+  const memory2 = candidate.memory;
+  const reasons = [];
+  if (!isRuntimeActivatableSemanticMemory(memory2)) reasons.push("not_runtime_activatable");
+  if (memory2.scope !== "project") reasons.push("not_project_scope");
+  if (candidate.projectId !== void 0 && candidate.projectId !== context.projectId) reasons.push("project_mismatch");
+  if (memory2.confidenceTier !== "trial") reasons.push("not_trial");
+  if (memory2.activationPolicy?.allowedModes.length !== 1 || memory2.activationPolicy.allowedModes[0] !== "workflow_hint") {
+    reasons.push("not_workflow_hint_only");
+  }
+  if (!ALLOWED_DOMAINS.has(memory2.domain)) reasons.push("domain_not_allowed");
+  if (riskForMemory2(memory2) !== "low") reasons.push("not_low_risk");
+  if (isSecuritySensitiveMemory(memory2)) reasons.push("security_sensitive");
+  if (hasPromptInjectionMarker(memory2)) reasons.push("prompt_injection");
+  if (hasNegativeFeedbackMarker(memory2)) reasons.push("negative_feedback");
+  if (memory2.expiresAt !== void 0 && memory2.expiresAt <= context.now) reasons.push("expired");
+  if (hasHardConflict(candidate, context.validatedMemories, context.projectId)) reasons.push("hard_conflict");
+  return reasons;
+}
+function hasHardConflict(candidate, validatedMemories, projectId) {
+  const key = normalizedKeyForMemory(candidate.memory);
+  if (key === void 0) return false;
+  const boundary = sourceBoundaryForCandidate(candidate, projectId);
+  return validatedMemories.some((validatedMemory) => {
+    return normalizedKeyForMemory(validatedMemory.memory) === key && sourceBoundaryForCandidate(validatedMemory, projectId) === boundary && hasContradictoryDirective(candidate.memory, validatedMemory.memory);
+  });
+}
+function hasContradictoryDirective(left, right) {
+  const leftText = directiveText(left);
+  const rightText = directiveText(right);
+  const pairs = [
+    [["npm test"], ["pnpm test"]],
+    [["npm run typecheck"], ["pnpm typecheck", "pnpm run typecheck"]],
+    [["dry run first"], ["apply directly"]]
+  ];
+  return pairs.some(([leftDirectives, rightDirectives]) => {
+    return hasAnyDirective(leftText, leftDirectives) && hasAnyDirective(rightText, rightDirectives) || hasAnyDirective(leftText, rightDirectives) && hasAnyDirective(rightText, leftDirectives);
+  });
+}
+function hasAnyDirective(text, directives) {
+  return directives.some((directive) => text.includes(directive));
+}
+function directiveText(memory2) {
+  return [memory2.content, ...memory2.useWhen].join(" ").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function normalizedKeyForMemory(memory2) {
+  return nonEmptyString2(memory2.reviewState?.normalizedKey);
+}
+function sourceBoundaryForCandidate(candidate, projectId) {
+  const memory2 = candidate.memory;
+  return [
+    candidate.projectId ?? projectId,
+    nonEmptyString2(memory2.reviewState?.sourceOfTruth) ?? nonEmptyString2(memory2.sourceOfTruth) ?? nonEmptyString2(memory2.evidence[0]?.sourceRef) ?? nonEmptyString2(memory2.evidence[0]?.sourceKind) ?? "source:unknown"
+  ].join(":");
+}
+function nonEmptyString2(value) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : void 0;
+}
+function evaluateRelevance(memory2, queryTokens) {
+  if (memory2.doNotUseWhen.some((boundary) => isStrongMatch2(matchingTokens2(queryTokens, tokenizeCandidateHintText(boundary))))) {
+    return {
+      matchedTokens: [],
+      useWhenMatchClass: 0,
+      contentMatchClass: 0,
+      reason: "do_not_use_when"
+    };
+  }
+  const useWhenMatchedTokens = matchingTokens2(queryTokens, tokenizeCandidateHintText(memory2.useWhen.join(" ")));
+  const contentMatchedTokens = matchingTokens2(queryTokens, tokenizeCandidateHintText(memory2.content));
+  const matchedTokens = mergeMatchedTokens(queryTokens, [...useWhenMatchedTokens, ...contentMatchedTokens]);
+  return {
+    matchedTokens,
+    useWhenMatchClass: matchClass(useWhenMatchedTokens),
+    contentMatchClass: matchClass(contentMatchedTokens),
+    reason: matchedTokens.length === 0 ? "no_relevance" : "weak_relevance"
+  };
+}
+function candidateHintForMemory(input) {
+  return {
+    id: stableCandidateHintId(input.memory.id, input.projectId),
+    memoryId: input.memory.id,
+    contentHash: contentHashForActiveMemory(semanticMemoryToActiveMemory(input.memory)),
+    confidenceTier: "trial",
+    activationMode: "workflow_hint",
+    text: input.memory.content,
+    candidate: true,
+    validated: false,
+    source: "project",
+    projectId: input.projectId,
+    risk: "low",
+    triggerReason: input.triggerReason
+  };
+}
+function tokenizeCandidateHintText(text) {
+  const tokens = /* @__PURE__ */ new Set();
+  const normalized = text.toLowerCase();
+  for (const { pattern, token } of COMMAND_PHRASE_PATTERNS) {
+    if (pattern.test(normalized)) addToken2(tokens, token);
+    pattern.lastIndex = 0;
+  }
+  for (const token of normalized.match(/[a-z0-9]+(?:[._:/-][a-z0-9]+)*|[\u4e00-\u9fff]+/g) ?? []) {
+    addToken2(tokens, token);
+    if (/[._:/-]/.test(token)) {
+      for (const part of token.split(/[._:/-]+/)) addToken2(tokens, part);
+    }
+  }
+  return Array.from(tokens);
+}
+function addToken2(tokens, token) {
+  const trimmed = token.trim();
+  if (trimmed === "" || STOP_WORDS2.has(trimmed)) return;
+  tokens.add(trimmed);
+}
+function matchingTokens2(queryTokens, candidateTokens) {
+  const candidateTokenSet = new Set(candidateTokens);
+  return queryTokens.filter((token) => candidateTokenSet.has(token));
+}
+function mergeMatchedTokens(queryTokens, matchedTokens) {
+  const matchedTokenSet = new Set(matchedTokens);
+  return queryTokens.filter((token) => matchedTokenSet.has(token));
+}
+function isStrongMatch2(tokens) {
+  return tokens.length >= 2 || tokens.some((token) => token.length >= DISTINCTIVE_TOKEN_LENGTH2);
+}
+function matchClass(tokens) {
+  if (isStrongMatch2(tokens)) return 2;
+  return tokens.length > 0 ? 1 : 0;
+}
+function isRelevanceQualified(relevance) {
+  return relevance.useWhenMatchClass === 2 || relevance.contentMatchClass === 2;
+}
+function rankKeyForCandidate(candidate, relevance) {
+  return {
+    useWhenMatchClass: relevance.useWhenMatchClass,
+    contentMatchClass: relevance.contentMatchClass,
+    sqliteRelevanceScore: finiteNumber(candidate.sqliteRelevanceScore),
+    appliedCountCapped: Math.min(APPLIED_COUNT_CAP, Math.max(0, Math.floor(finiteNumber(candidate.appliedCount)))),
+    updatedAt: timestampForSort(candidate.memory.updatedAt),
+    createdAt: timestampForSort(candidate.memory.createdAt),
+    id: candidate.memory.id
+  };
+}
+function compareRankedCandidates(left, right) {
+  return compareDescending(left.rankKey.useWhenMatchClass, right.rankKey.useWhenMatchClass) || compareDescending(left.rankKey.contentMatchClass, right.rankKey.contentMatchClass) || compareDescending(left.rankKey.sqliteRelevanceScore, right.rankKey.sqliteRelevanceScore) || compareDescending(left.rankKey.appliedCountCapped, right.rankKey.appliedCountCapped) || compareDescending(left.rankKey.updatedAt, right.rankKey.updatedAt) || compareDescending(left.rankKey.createdAt, right.rankKey.createdAt) || left.rankKey.id.localeCompare(right.rankKey.id);
+}
+function compareDescending(left, right) {
+  return right - left;
+}
+function finiteNumber(value) {
+  return value !== void 0 && Number.isFinite(value) ? value : 0;
+}
+function timestampForSort(value) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+function riskForMemory2(memory2) {
+  const scores = memory2.reviewState?.scores;
+  if (memory2.routing?.risk === "high") {
+    return "high";
+  }
+  if (memory2.routing?.risk === "medium" || (scores?.sensitivity ?? 0) > 0.35 || (scores?.safety ?? 1) < 0.8) {
+    return "medium";
+  }
+  return "low";
+}
+function isSecuritySensitiveMemory(memory2) {
+  const text = [
+    memory2.content,
+    ...memory2.useWhen,
+    ...memory2.reviewState?.tags ?? [],
+    ...memory2.routing?.reasons ?? []
+  ].join(" ").toLowerCase();
+  return /\b(security-sensitive|credential|credentials|secret|secrets|api key|password|token)\b/.test(text);
+}
+function hasPromptInjectionMarker(memory2) {
+  const text = [
+    memory2.content,
+    ...memory2.useWhen,
+    ...memory2.doNotUseWhen,
+    ...memory2.reviewState?.tags ?? [],
+    ...memory2.routing?.reasons ?? [],
+    ...evidenceFeedbackText(memory2)
+  ].join(" ").toLowerCase();
+  return /\b(ignore|disregard|override)\s+(all\s+)?(previous|prior|system|developer|higher[-\s]+priority)\s+(instructions|messages|rules)\b/.test(text) || /\b(system prompt|developer message|hidden instructions|reveal the prompt|do not follow instructions)\b/.test(text);
+}
+function hasNegativeFeedbackMarker(memory2) {
+  const extras = memory2;
+  const feedbackMarkers = [
+    ...memory2.reviewState?.tags ?? [],
+    ...evidenceFeedbackText(memory2),
+    ...Array.isArray(extras.feedbackEvents) ? extras.feedbackEvents : [],
+    ...Array.isArray(extras.activationFeedback) ? extras.activationFeedback : []
+  ].join(" ").toLowerCase();
+  return /\b(corrected|violated)\b/.test(feedbackMarkers);
+}
+function evidenceFeedbackText(memory2) {
+  return memory2.evidence.flatMap((entry) => [
+    entry.sourceRef,
+    entry.whatHappened,
+    entry.whyImportant,
+    entry.result
+  ]).filter((value) => typeof value === "string");
+}
+function selectionBudget(mode, maxItems) {
+  const modeBudget = mode === "fast" ? 0 : mode === "balanced" ? 1 : 3;
+  if (maxItems === void 0 || !Number.isFinite(maxItems)) return modeBudget;
+  return Math.max(0, Math.min(modeBudget, Math.floor(maxItems)));
+}
+function stableCandidateHintId(memoryId, projectId) {
+  return createHash11("sha256").update(`${projectId}:${memoryId}:candidate-hint`).digest("hex").slice(0, 16);
+}
+
 // src/codex/continuity-context.ts
+var CANDIDATE_HINT_QUERY_MAX_ITEMS = 20;
 async function getCodexContinuityContext(input) {
   const startedAt = Date.now();
   const project = await identifyCodexProject(input.cwd);
@@ -18856,6 +19331,7 @@ async function getCodexContinuityContext(input) {
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
+    candidateHints: routedMemory.candidateHints,
     sessionHints: sessionHints.map(toSessionHintDigestItem),
     activation,
     responseStrategy: {
@@ -18900,8 +19376,8 @@ async function getCodexContinuityContext(input) {
       ...retrievalExcluded.length === 0 ? {} : { retrievalExcluded }
     } : void 0,
     profile: {
-      global: globalProfile ?? nonEmptyString2(visibleGlobalFastSummary.globalFastSummary) ?? nonEmptyString2(visibleGlobalFastSummary.profileFastSummary),
-      project: projectProfile ?? nonEmptyString2(visibleProjectFastSummary.profileFastSummary) ?? nonEmptyString2(visibleGlobalFastSummary.profileFastSummary),
+      global: globalProfile ?? nonEmptyString3(visibleGlobalFastSummary.globalFastSummary) ?? nonEmptyString3(visibleGlobalFastSummary.profileFastSummary),
+      project: projectProfile ?? nonEmptyString3(visibleProjectFastSummary.profileFastSummary) ?? nonEmptyString3(visibleGlobalFastSummary.profileFastSummary),
       content: profileContent
     },
     pendingReview,
@@ -18929,6 +19405,7 @@ async function getCodexContinuityContext(input) {
     similarLatencyMs: routedMemory.runtimeMetrics.similarLatencyMs,
     pendingLatencyMs: routedMemory.runtimeMetrics.pendingLatencyMs,
     profileReadLatencyMs,
+    ...routedMemory.runtimeMetrics.candidateHintMetrics,
     tokenOverhead: estimateContinuityContextTokens(context),
     jsonlFallback: routedMemory.diagnostics.source === "jsonl",
     indexStale: routedMemory.diagnostics.freshness === "stale",
@@ -18989,7 +19466,14 @@ async function retrieveRoutedMemory(input) {
     }), (latencyMs) => {
       pendingLatencyMs = latencyMs;
     }) : Promise.resolve([]);
-    const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
+    const candidateHintQuery = shouldQueryCandidateHints(input.policy, indexStatus, diagnostics) ? selectSqliteCandidateHints({
+      adapter,
+      projectId: input.projectId,
+      query: input.query,
+      task: input.task,
+      policy: input.policy
+    }) : Promise.resolve(emptyCandidateHintSelection());
+    const [globalMemory, projectMemory, pendingHypotheses, candidateHintSelection] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
         query: input.query,
@@ -19006,7 +19490,8 @@ async function retrieveRoutedMemory(input) {
         maxItems: 12,
         maxTokens: 900
       }),
-      pendingQuery
+      pendingQuery,
+      candidateHintQuery
     ]);
     const memoryRoutingGate = runMemoryRoutingEvalGate({
       currentProjectId: input.projectId,
@@ -19041,6 +19526,7 @@ async function retrieveRoutedMemory(input) {
       projectMemory: relationExpandedMemory.projectMemory,
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
+      candidateHints: candidateHintSelection.hints,
       graphEdgeTypesByMemoryKey,
       diagnostics: sqliteRetrievalDiagnostics(indexStatus, diagnostics, input.policy),
       projectSimilarityDiagnostics: similarRetrieval.projectSimilarityDiagnostics,
@@ -19050,7 +19536,8 @@ async function retrieveRoutedMemory(input) {
       },
       runtimeMetrics: {
         pendingLatencyMs,
-        similarLatencyMs
+        similarLatencyMs,
+        candidateHintMetrics: candidateHintSelection.metrics
       }
     };
   } catch (error2) {
@@ -19073,6 +19560,95 @@ async function retrieveRoutedMemory(input) {
 function isQueryableIndexStatus(status) {
   return status.available && (status.freshness === "fresh" || status.freshness === "empty" && status.lastSyncAt !== void 0);
 }
+function shouldQueryCandidateHints(policy, status, diagnostics) {
+  return policy.candidateHintBudget > 0 && status.available && status.freshness === "fresh" && diagnostics.available;
+}
+async function selectSqliteCandidateHints(input) {
+  const startedAt = Date.now();
+  if (input.policy.candidateHintBudget <= 0) {
+    return emptyCandidateHintSelection();
+  }
+  try {
+    const pool = await input.adapter.queryCandidateHints({
+      currentProjectId: input.projectId,
+      query: input.query,
+      maxItems: CANDIDATE_HINT_QUERY_MAX_ITEMS
+    });
+    const candidates = candidateHintMemoryCandidates(pool, input.projectId);
+    if (candidates.length === 0) {
+      return {
+        hints: [],
+        metrics: {
+          ...emptyCandidateHintMetrics(),
+          candidateHintLatencyMs: elapsedSince(startedAt)
+        }
+      };
+    }
+    const result3 = selectCandidateHints({
+      mode: input.policy.mode,
+      query: input.query,
+      projectId: input.projectId,
+      task: input.task,
+      candidates,
+      validatedMemories: candidateHintValidatedMemoryCandidates(pool),
+      maxItems: input.policy.candidateHintBudget
+    });
+    return {
+      hints: result3.hints.map(labelModelVisibleCandidateHint),
+      metrics: {
+        ...result3.metrics,
+        candidateHintLatencyMs: elapsedSince(startedAt)
+      }
+    };
+  } catch {
+    return {
+      hints: [],
+      metrics: {
+        ...emptyCandidateHintMetrics(),
+        candidateHintLatencyMs: elapsedSince(startedAt)
+      }
+    };
+  }
+}
+function candidateHintMemoryCandidates(pool, projectId) {
+  return pool.candidates.map((item) => ({
+    memory: item.memory,
+    projectId: item.homeProjectId ?? projectId,
+    sqliteRelevanceScore: item.score
+  }));
+}
+function candidateHintValidatedMemoryCandidates(pool) {
+  return pool.validatedMemories.filter((item) => isValidatedConflictMemory(item.memory)).map((item) => ({
+    memory: item.memory,
+    ...item.homeProjectId === null ? {} : { projectId: item.homeProjectId }
+  }));
+}
+function emptyCandidateHintSelection() {
+  return {
+    hints: [],
+    metrics: emptyCandidateHintMetrics()
+  };
+}
+function emptyCandidateHintMetrics() {
+  return {
+    candidateHintLatencyMs: 0,
+    candidateHintEligibleCount: 0,
+    candidateHintRelevantCount: 0,
+    candidateHintSelectedCount: 0,
+    candidateHintTimeoutCount: 0,
+    candidateHintSuppressedByLatencyCount: 0
+  };
+}
+function isValidatedConflictMemory(memory2) {
+  return memory2.status === "active" && (memory2.confidenceTier === "validated" || memory2.confidenceTier === "project_core" || memory2.confidenceTier === "global_core");
+}
+function labelModelVisibleCandidateHint(hint) {
+  return {
+    ...hint,
+    text: `Candidate project workflow hint, not validated:
+- ${hint.text.trim()}`
+  };
+}
 function isModelVisibleRoutedMemory(item) {
   return item.memory.confidenceTier !== "trial";
 }
@@ -19086,7 +19662,7 @@ function emptyFastSummaryProjection() {
 function skipStaleFastSummary(projection) {
   return projection.stale === true ? emptyFastSummaryProjection() : projection;
 }
-function nonEmptyString2(value) {
+function nonEmptyString3(value) {
   return value.trim() === "" ? void 0 : value;
 }
 async function measureAsync(operation, recordLatency) {
@@ -19112,6 +19688,7 @@ function estimateContinuityContextTokens(context) {
     projectMemory: context.projectMemory,
     pendingHypotheses: context.pendingHypotheses,
     similarProjectHints: context.similarProjectHints,
+    candidateHints: context.candidateHints,
     sessionHints: context.sessionHints,
     activation: context.activation,
     profile: context.profile,
@@ -19133,6 +19710,7 @@ async function fallbackRoutedMemory(input, diagnostics, projectId, policy) {
     projectMemory: memories.filter(({ memory: memory2 }) => memory2.scope !== "global"),
     pendingHypotheses,
     similarProjectHints: [],
+    candidateHints: [],
     graphEdgeTypesByMemoryKey: /* @__PURE__ */ new Map(),
     diagnostics,
     projectSimilarityDiagnostics: {
@@ -19147,7 +19725,8 @@ async function fallbackRoutedMemory(input, diagnostics, projectId, policy) {
     },
     runtimeMetrics: {
       pendingLatencyMs,
-      similarLatencyMs: 0
+      similarLatencyMs: 0,
+      candidateHintMetrics: emptyCandidateHintMetrics()
     }
   };
 }
@@ -19233,6 +19812,7 @@ function emptyRoutedMemory(diagnostics, reason) {
     projectMemory: [],
     pendingHypotheses: [],
     similarProjectHints: [],
+    candidateHints: [],
     graphEdgeTypesByMemoryKey: /* @__PURE__ */ new Map(),
     diagnostics,
     projectSimilarityDiagnostics: {
@@ -19247,7 +19827,8 @@ function emptyRoutedMemory(diagnostics, reason) {
     },
     runtimeMetrics: {
       pendingLatencyMs: 0,
-      similarLatencyMs: 0
+      similarLatencyMs: 0,
+      candidateHintMetrics: emptyCandidateHintMetrics()
     }
   };
 }
@@ -19376,7 +19957,7 @@ async function generateCodexSessionHintsFailOpen(input) {
   }
 }
 function stableSessionHintId(item) {
-  return `session-hint-${createHash11("sha256").update(JSON.stringify({
+  return `session-hint-${createHash12("sha256").update(JSON.stringify({
     sourceProjectId: item.homeProjectId,
     memoryId: item.memory.id,
     content: item.memory.content
@@ -19931,7 +20512,7 @@ function uniqueChecks(checks) {
 import { join as join32 } from "node:path";
 
 // benchmark/runner.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { execFile as execFile3 } from "node:child_process";
 import { readFile as readFile22 } from "node:fs/promises";
 import { dirname as dirname11, join as join31, resolve as resolve5 } from "node:path";
@@ -20105,6 +20686,7 @@ var BENCHMARK_CASES = [
   caseSpec({ id: "T3-RANKING", tier: "tier3", title: "ranking resists similar memory interference", profiles: ["full", "scale"], action: action("direct", "queryCodexMemoryIndex", "ranking interference check"), expected: ["target project memory ranks above distractors"], forbidden: ["similar distractor top result"], metrics: ["recallAt1", "recallAt3", "recallAt5", "mrr", "top1Accuracy", "wrongTop1Rate", "irrelevantRetrievalRate", "similarMemoryInterferenceRate", "staleMemoryRetrievalRate", "oldMemoryRetrievalRate", "newMemoryRetrievalRate"] }),
   caseSpec({ id: "T3-TOKEN-OVERHEAD", tier: "tier3", title: "token overhead stays inside profile budget", profiles: ["full", "scale"], action: action("direct", "getCodexContinuityContext", "token overhead measurement"), expected: ["profile-specific token overhead recorded"], forbidden: ["unbounded context growth"], metrics: ["fastTokenOverhead", "balancedTokenOverhead", "reviewTokenOverhead", "projectMemoryTokens", "globalProfileTokens", "fastSummaryTokens", "fullProfileTokens", "sessionHintsTokens", "similarHintsTokens", "pendingTokens", "diagnosticsTokens", "fastPendingTokens", "fastDiagnosticsTokens", "balancedPendingTokens", "balancedDiagnosticsTokens", "reviewPendingTokens", "reviewDiagnosticsTokens", "contextItemCount", "memoryItemCount", "profileSectionCount", "sessionHintsCount", "diagnosticsItemCount", "profileSizeGrowthBytes", "fastSummarySizeGrowthBytes", "sessionHintsSizeBytes"] }),
   caseSpec({ id: "T3-LATENCY", tier: "tier3", title: "latency percentiles are reported for continuity and hooks", profiles: ["full", "scale"], action: action("direct", "runLatencyProbe", "latency percentile measurement"), expected: ["p50 p95 p99 latency metrics"], forbidden: ["missing percentile metrics"], metrics: ["continuityGetP50Ms", "continuityGetP95Ms", "continuityGetP99Ms", "continuityGetP50FastMs", "continuityGetP95FastMs", "continuityGetP99FastMs", "continuityGetP50BalancedMs", "continuityGetP95BalancedMs", "continuityGetP99BalancedMs", "continuityGetP50ReviewMs", "continuityGetP95ReviewMs", "continuityGetP99ReviewMs", "continuityGetSampleCount", "continuityGetMinMs", "continuityGetMeanMs", "continuityGetMaxMs", "profileReadLatencyMs", "fastSummaryReadLatencyMs", "sessionHintsReadLatencyMs", "similarQueryLatencyMs", "pendingQueryLatencyMs", "diagnosticsAssemblyLatencyMs", "hookLatencyMs", "hookSampleCount", "sessionStartHookP50Ms", "sessionStartHookP95Ms", "sessionStartHookP99Ms", "userPromptSubmitHookP50Ms", "userPromptSubmitHookP95Ms", "userPromptSubmitHookP99Ms", "postToolUseHookP50Ms", "postToolUseHookP95Ms", "postToolUseHookP99Ms", "stopHookP50Ms", "stopHookP95Ms", "stopHookP99Ms", "runtimeHookTimeoutCount", "runtimeHookFailOpenCount", "postToolUseHeavyOperationCount", "ordinaryHookPendingReviewCount"] }),
+  caseSpec({ id: "T3-CANDIDATE-HINTS", tier: "tier3", title: "candidate hint selector reports quality and latency deltas", profiles: ["scale"], action: action("direct", "selectCandidateHints", "candidate hint aggregate quality and latency probe"), expected: ["candidate hint aggregate counts", "disabled enabled context latency delta"], forbidden: ["raw prompt text", "raw memory text", "candidate content"], metrics: ["candidateHintLatencyMs", "candidateHintLatencyP50BalancedMs", "candidateHintLatencyP95BalancedMs", "candidateHintLatencyMaxBalancedMs", "candidateHintLatencyP50ReviewMs", "candidateHintLatencyP95ReviewMs", "candidateHintLatencyMaxReviewMs", "candidateHintDisabledContextLatencyMs", "candidateHintEnabledContextLatencyMs", "candidateHintContextLatencyDeltaMs", "candidateHintEligibleCount", "candidateHintRelevantCount", "candidateHintSelectedCount", "candidateHintTimeoutCount", "candidateHintSuppressedByLatencyCount"], passFail: ["candidate_hint_quality_gate", "latency_threshold_breach"] }),
   caseSpec({ id: "T3-INDEX-HEALTH", tier: "tier3", title: "index health reports SQLite hit, JSONL fallback, and stale rates", profiles: ["full", "scale"], action: action("direct", "inspectIndexHealth", "index health measurement"), expected: ["SQLite hit rate and stale rate recorded"], forbidden: ["silent JSONL fallback"], metrics: ["sqliteHitRate", "sqliteHitRateFreshIndex", "jsonlFallbackRateHotPath", "indexStaleRate", "indexRebuildTimeMs", "dbRebuildTimeMs", "memoryDbSizeBytes", "jsonlSizeBytes", "indexSourceMismatchCount", "hotPathRebuildCount", "undetectedStaleIndexCount"] }),
   caseSpec({ id: "T4-SQLITE-UNAVAILABLE", tier: "tier4", title: "SQLite unavailable path reports fallback policy explicitly", profiles: ["full", "external"], action: action("direct", "inspectIndexHealth", "SQLite unavailable check"), expected: ["explicit SQLite unavailable diagnostic"], forbidden: ["silent fallback success"], adapter: { kind: "external", provider: "mem0", requiredEnv: ["CYRENE_BENCHMARK_MEM0_PROVIDER"], supportsDeterministicReplay: false } }),
   caseSpec({ id: "T4-JSONL-CORRUPT", tier: "tier4", title: "corrupt JSONL fixture fails closed with diagnostics", profiles: ["full"], action: action("direct", "readMemoryStore", "corrupt JSONL check"), expected: ["bounded corrupt JSONL diagnostic"], forbidden: ["corrupt memory accepted"] }),
@@ -20684,7 +21266,8 @@ async function runCodexMemoryContextPreview(input) {
     activeContext: {
       globalMemory: context.globalMemory.map(previewMemory),
       projectMemory: context.projectMemory.map(previewMemory),
-      similarProjectHints: context.similarProjectHints.map(previewMemory)
+      similarProjectHints: context.similarProjectHints.map(previewMemory),
+      candidateHints: context.candidateHints
     },
     activation: context.activation,
     exclusions: {
@@ -24878,14 +25461,14 @@ async function handleContinuityGet(input, fallbackCwd) {
 }
 
 // benchmark/fixtures.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 import { mkdir as mkdir15, mkdtemp, rm as rm6, writeFile as writeFile12 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as join22 } from "node:path";
 var defaultProcessCwd = process.cwd();
 var fixtureEnvironmentQueue = Promise.resolve();
 function seededId(seed, label) {
-  return createHash12("sha256").update(`${seed}:${label}`).digest("hex").slice(0, 16);
+  return createHash13("sha256").update(`${seed}:${label}`).digest("hex").slice(0, 16);
 }
 async function withFixtureEnvironment(fixture, fn) {
   const release = await acquireFixtureEnvironmentLock();
@@ -25047,6 +25630,8 @@ function activeMemory(input, memory2, index) {
     confidenceTier,
     activationPolicy: memory2.activationPolicy ?? activationPolicyForConfidenceTier(confidenceTier),
     portability: memory2.portability ?? portabilityForScope(scope),
+    ...memory2.useWhen === void 0 ? {} : { useWhen: memory2.useWhen },
+    ...memory2.doNotUseWhen === void 0 ? {} : { doNotUseWhen: memory2.doNotUseWhen },
     ...memory2.sourceOfTruth === void 0 ? {} : { sourceOfTruth: memory2.sourceOfTruth },
     ...memory2.expiresAt === void 0 ? {} : { expiresAt: memory2.expiresAt },
     ...memory2.profileVisibility === void 0 ? {} : { profileVisibility: memory2.profileVisibility },
@@ -25132,7 +25717,7 @@ function restoreEnvValue(name, value) {
 }
 
 // benchmark/cases/common.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 async function timedCase(benchmarkCase, fn) {
   try {
     const result3 = await fn();
@@ -25193,7 +25778,7 @@ function approxTokens(value) {
   return Math.ceil(JSON.stringify(value).length / 4);
 }
 function stableId(value) {
-  return createHash13("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash14("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // benchmark/cases/tier0-release-gate.ts
@@ -25996,7 +26581,7 @@ function includesNone(text, forbidden) {
 }
 
 // src/codex/codex-memory-lifecycle-daily.ts
-import { createHash as createHash14, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID10 } from "node:crypto";
 import { readFile as readFile17 } from "node:fs/promises";
 import { join as join24 } from "node:path";
 
@@ -26419,7 +27004,7 @@ function distinctStructuredEvidenceCount(evidence) {
   const keys = /* @__PURE__ */ new Set();
   for (const entry of evidence) {
     const explicitKey = firstPresent(entry.id, entry.sourceRef, entry.whatHappened);
-    const key = explicitKey ?? createHash14("sha256").update(`${entry.sourceKind ?? ""}|${entry.when ?? ""}|${entry.whatHappened}|${entry.whyImportant}`).digest("hex");
+    const key = explicitKey ?? createHash15("sha256").update(`${entry.sourceKind ?? ""}|${entry.when ?? ""}|${entry.whatHappened}|${entry.whyImportant}`).digest("hex");
     keys.add(key);
   }
   return keys.size;
@@ -27579,19 +28164,19 @@ function isProjectSpecificGlobalCandidate(candidate) {
   return candidate.scope === "project" || candidate.domain === "project" || candidate.source === "file" || candidate.source === "tool_trace" || /\b(package\.json|readme|agents\.md|src\/|tests\/|docs\/|\.\/|\.\.)\b/.test(boundaryText);
 }
 function hasSourceBoundary(candidate) {
-  if (nonEmptyString3(candidate.sourceOfTruth) !== void 0) return true;
+  if (nonEmptyString4(candidate.sourceOfTruth) !== void 0) return true;
   return candidate.evidence.some(hasEvidenceTrace);
 }
 function hasEvidenceTrace(entry) {
-  return nonEmptyString3(entry.runId) !== void 0 || nonEmptyString3(entry.sessionId) !== void 0 || nonEmptyString3(entry.taskHash) !== void 0 || nonEmptyString3(entry.quoteHash) !== void 0 || nonEmptyString3(entry.evidenceGroupId) !== void 0 || (entry.traceRefs ?? []).some((value) => nonEmptyString3(value) !== void 0) || (entry.messageIds ?? []).some((value) => nonEmptyString3(value) !== void 0);
+  return nonEmptyString4(entry.runId) !== void 0 || nonEmptyString4(entry.sessionId) !== void 0 || nonEmptyString4(entry.taskHash) !== void 0 || nonEmptyString4(entry.quoteHash) !== void 0 || nonEmptyString4(entry.evidenceGroupId) !== void 0 || (entry.traceRefs ?? []).some((value) => nonEmptyString4(value) !== void 0) || (entry.messageIds ?? []).some((value) => nonEmptyString4(value) !== void 0);
 }
 function hasMixedDuplicateMetadata(candidates) {
-  return distinctValues(candidates.map((candidate) => deriveMemoryCandidateKind(candidate))).length > 1 || distinctValues(candidates.map((candidate) => candidate.scope)).length > 1 || distinctValues(candidates.map((candidate) => candidate.domain)).length > 1 || distinctValues(candidates.map((candidate) => candidate.type)).length > 1 || distinctValues(candidates.map((candidate) => candidate.source)).length > 1 || distinctValues(candidates.map((candidate) => nonEmptyString3(candidate.sourceOfTruth) ?? "")).length > 1;
+  return distinctValues(candidates.map((candidate) => deriveMemoryCandidateKind(candidate))).length > 1 || distinctValues(candidates.map((candidate) => candidate.scope)).length > 1 || distinctValues(candidates.map((candidate) => candidate.domain)).length > 1 || distinctValues(candidates.map((candidate) => candidate.type)).length > 1 || distinctValues(candidates.map((candidate) => candidate.source)).length > 1 || distinctValues(candidates.map((candidate) => nonEmptyString4(candidate.sourceOfTruth) ?? "")).length > 1;
 }
 function distinctValues(values) {
   return Array.from(new Set(values));
 }
-function nonEmptyString3(value) {
+function nonEmptyString4(value) {
   if (value === void 0) return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
@@ -28089,9 +28674,9 @@ function evaluateProjectTrialEligibility(input) {
   return { allowed: otherwiseEligible && hasSourceBoundary2, otherwiseEligible, hasSourceBoundary: hasSourceBoundary2 };
 }
 function hasTrialSourceBoundary(candidate) {
-  if (nonEmptyString4(candidate.sourceOfTruth) !== void 0) return true;
+  if (nonEmptyString5(candidate.sourceOfTruth) !== void 0) return true;
   return candidate.evidence.some(
-    (entry) => nonEmptyString4(entry.runId) !== void 0 || nonEmptyString4(entry.sessionId) !== void 0 || nonEmptyString4(entry.taskHash) !== void 0 || nonEmptyString4(entry.quoteHash) !== void 0 || nonEmptyString4(entry.evidenceGroupId) !== void 0 || (entry.traceRefs ?? []).some((value) => nonEmptyString4(value) !== void 0) || (entry.messageIds ?? []).some((value) => nonEmptyString4(value) !== void 0)
+    (entry) => nonEmptyString5(entry.runId) !== void 0 || nonEmptyString5(entry.sessionId) !== void 0 || nonEmptyString5(entry.taskHash) !== void 0 || nonEmptyString5(entry.quoteHash) !== void 0 || nonEmptyString5(entry.evidenceGroupId) !== void 0 || (entry.traceRefs ?? []).some((value) => nonEmptyString5(value) !== void 0) || (entry.messageIds ?? []).some((value) => nonEmptyString5(value) !== void 0)
   );
 }
 function trialSemanticMemoryFromCandidate(candidate, now) {
@@ -28150,7 +28735,7 @@ function autoPromotionThresholds(scope) {
   };
 }
 function withMergedSourceBoundary(mergedCandidate, incomingCandidate) {
-  const sourceOfTruth = nonEmptyString4(mergedCandidate.sourceOfTruth) ?? nonEmptyString4(incomingCandidate.sourceOfTruth);
+  const sourceOfTruth = nonEmptyString5(mergedCandidate.sourceOfTruth) ?? nonEmptyString5(incomingCandidate.sourceOfTruth);
   return sourceOfTruth === void 0 ? mergedCandidate : { ...mergedCandidate, sourceOfTruth };
 }
 function sourceIdsForAutoPromotion(candidate) {
@@ -28162,7 +28747,7 @@ function sourceIdsForAutoPromotion(candidate) {
 function uniqueInOrder4(values) {
   return Array.from(new Set(values));
 }
-function nonEmptyString4(value) {
+function nonEmptyString5(value) {
   if (value === void 0) return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
@@ -29792,12 +30377,17 @@ var SCALE_TARGETS = {
   "T3-L-SCALE": { label: "L", projects: 20, active: 5e3, pending: 1e3, runtimeMetric: "scaleLRuntimeMs", runtimeMs: 45e3 },
   "T3-XL-SCALE": { label: "XL", projects: 100, active: 5e4, pending: 5e3, runtimeMetric: "scaleXLRuntimeMs", runtimeMs: 18e4 }
 };
+var CANDIDATE_HINT_LATENCY_TARGETS = {
+  balanced: { p50Ms: 3, p95Ms: 10, hardCapMs: 20 },
+  review: { p50Ms: 8, p95Ms: 25, hardCapMs: 50 }
+};
 async function runTier3Case(benchmarkCase, options) {
   const id = benchmarkCase.id;
   if (id in SCALE_TARGETS) return runScaleCase(benchmarkCase, options, SCALE_TARGETS[id]);
   if (id === "T3-RANKING") return runRankingCase(benchmarkCase, options);
   if (id === "T3-TOKEN-OVERHEAD") return runTokenOverheadCase(benchmarkCase, options);
   if (id === "T3-LATENCY") return runLatencyCase(benchmarkCase, options);
+  if (id === "T3-CANDIDATE-HINTS") return runCandidateHintCase(benchmarkCase, options);
   if (id === "T3-INDEX-HEALTH") return runIndexHealthCase(benchmarkCase, options);
   return void 0;
 }
@@ -29997,6 +30587,113 @@ async function runLatencyCase(benchmarkCase, options) {
     ], [{ summary: "latency p50/p95/p99 recorded; hook latency recorded; componentZeroMeans=not_executed_or_below_timer_resolution" }]);
   });
 }
+async function runCandidateHintCase(benchmarkCase, options) {
+  const now = options.now ?? benchmarkCase.fixture.now;
+  return withTier3Fixture(benchmarkCase, options, {
+    activeMemories: candidateHintBenchmarkActiveMemories(now)
+  }, async (fixture) => {
+    const candidates = candidateHintBenchmarkCandidates(now);
+    const query = "candidate hint benchmark npm test typecheck runtime metrics";
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd });
+    const selectorBalancedRuns = runCandidateHintSamples({
+      mode: "balanced",
+      query,
+      projectId: fixture.projectId,
+      now,
+      candidates
+    });
+    const selectorReviewRuns = runCandidateHintSamples({
+      mode: "review",
+      query,
+      projectId: fixture.projectId,
+      now,
+      candidates
+    });
+    const disabledContextRuns = await runCandidateHintContextSamples({
+      cwd: fixture.cwd,
+      projectMemoryRoot: fixture.projectMemoryRoot,
+      mode: "fast",
+      query
+    });
+    const balancedContextRuns = await runCandidateHintContextSamples({
+      cwd: fixture.cwd,
+      projectMemoryRoot: fixture.projectMemoryRoot,
+      mode: "balanced",
+      query
+    });
+    const reviewContextRuns = await runCandidateHintContextSamples({
+      cwd: fixture.cwd,
+      projectMemoryRoot: fixture.projectMemoryRoot,
+      mode: "review",
+      query
+    });
+    const balancedMetrics = candidateHintMetricsForMode("balanced", balancedContextRuns.metrics);
+    const reviewMetrics = candidateHintMetricsForMode("review", reviewContextRuns.metrics);
+    const balancedCandidateLatencies = candidateHintMetricLatencies(balancedContextRuns.metrics);
+    const reviewCandidateLatencies = candidateHintMetricLatencies(reviewContextRuns.metrics);
+    const enabledContextLatencyMs = percentile([...balancedContextRuns.latencies, ...reviewContextRuns.latencies], 0.95);
+    const disabledContextLatencyMs = percentile(disabledContextRuns.latencies, 0.95);
+    const contextLatencyDeltaMs = Math.max(0, enabledContextLatencyMs - disabledContextLatencyMs);
+    const candidateHintReport = {
+      latencyTargets: [
+        { mode: "balanced", ...CANDIDATE_HINT_LATENCY_TARGETS.balanced },
+        { mode: "review", ...CANDIDATE_HINT_LATENCY_TARGETS.review }
+      ],
+      disabledContextLatencyMs,
+      enabledContextLatencyMs,
+      contextLatencyDeltaMs,
+      quality: [
+        {
+          mode: "balanced",
+          eligibleCount: balancedMetrics.candidateHintEligibleCount,
+          relevantCount: balancedMetrics.candidateHintRelevantCount,
+          selectedCount: balancedMetrics.candidateHintSelectedCount,
+          timeoutCount: balancedMetrics.candidateHintTimeoutCount,
+          suppressedByLatencyCount: balancedMetrics.candidateHintSuppressedByLatencyCount
+        },
+        {
+          mode: "review",
+          eligibleCount: reviewMetrics.candidateHintEligibleCount,
+          relevantCount: reviewMetrics.candidateHintRelevantCount,
+          selectedCount: reviewMetrics.candidateHintSelectedCount,
+          timeoutCount: reviewMetrics.candidateHintTimeoutCount,
+          suppressedByLatencyCount: reviewMetrics.candidateHintSuppressedByLatencyCount
+        }
+      ]
+    };
+    const hardFailures = [];
+    if (!candidateHintQualityGatePassed(balancedMetrics, reviewMetrics)) hardFailures.push("candidate_hint_quality_gate");
+    if (!candidateHintLatencyGatePassed(balancedCandidateLatencies, reviewCandidateLatencies)) hardFailures.push("latency_threshold_breach");
+    const caseResult3 = result2(benchmarkCase, hardFailures, [
+      { name: "candidateHintLatencyMs", value: enabledContextLatencyMs },
+      { name: "candidateHintLatencyP50BalancedMs", value: percentile(balancedCandidateLatencies, 0.5) },
+      { name: "candidateHintLatencyP95BalancedMs", value: percentile(balancedCandidateLatencies, 0.95) },
+      { name: "candidateHintLatencyMaxBalancedMs", value: maximum(balancedCandidateLatencies) },
+      { name: "candidateHintLatencyP50ReviewMs", value: percentile(reviewCandidateLatencies, 0.5) },
+      { name: "candidateHintLatencyP95ReviewMs", value: percentile(reviewCandidateLatencies, 0.95) },
+      { name: "candidateHintLatencyMaxReviewMs", value: maximum(reviewCandidateLatencies) },
+      { name: "candidateHintDisabledContextLatencyMs", value: disabledContextLatencyMs },
+      { name: "candidateHintEnabledContextLatencyMs", value: enabledContextLatencyMs },
+      { name: "candidateHintContextLatencyDeltaMs", value: contextLatencyDeltaMs },
+      { name: "candidateHintEligibleCount", value: reviewMetrics.candidateHintEligibleCount },
+      { name: "candidateHintRelevantCount", value: reviewMetrics.candidateHintRelevantCount },
+      { name: "candidateHintSelectedCount", value: reviewMetrics.candidateHintSelectedCount },
+      { name: "candidateHintTimeoutCount", value: reviewMetrics.candidateHintTimeoutCount },
+      { name: "candidateHintSuppressedByLatencyCount", value: reviewMetrics.candidateHintSuppressedByLatencyCount }
+    ], [{
+      summary: [
+        "candidate hints aggregate gate passed",
+        `balanced selected=${balancedMetrics.candidateHintSelectedCount}`,
+        `review selected=${reviewMetrics.candidateHintSelectedCount}`,
+        `relevant=${reviewMetrics.candidateHintRelevantCount}`,
+        `latencyDeltaMs=${contextLatencyDeltaMs}`,
+        `selectorBalancedP95Ms=${percentile(selectorBalancedRuns.latencies, 0.95)}`,
+        `selectorReviewP95Ms=${percentile(selectorReviewRuns.latencies, 0.95)}`
+      ].join("; ")
+    }]);
+    return { ...caseResult3, candidateHintReport };
+  });
+}
 async function runIndexHealthCase(benchmarkCase, options) {
   const now = options.now ?? benchmarkCase.fixture.now;
   return withTier3Fixture(benchmarkCase, options, {
@@ -30035,6 +30732,31 @@ async function runIndexHealthCase(benchmarkCase, options) {
     }
   });
 }
+function runCandidateHintSamples(input) {
+  const results = Array.from({ length: 5 }, () => selectCandidateHints({
+    mode: input.mode,
+    query: input.query,
+    projectId: input.projectId,
+    task: "coding",
+    candidates: input.candidates.map((memory2, index) => ({
+      memory: memory2,
+      projectId: input.projectId,
+      sqliteRelevanceScore: 1 - index / 10,
+      appliedCount: index === 0 ? 2 : 0
+    })),
+    now: input.now
+  }));
+  return {
+    results,
+    latencies: results.map((item) => item.metrics.candidateHintLatencyMs)
+  };
+}
+function candidateHintQualityGatePassed(balanced, review) {
+  return balanced.candidateHintEligibleCount >= 3 && balanced.candidateHintRelevantCount >= 2 && balanced.candidateHintSelectedCount >= 1 && review.candidateHintEligibleCount >= 3 && review.candidateHintRelevantCount >= 2 && review.candidateHintSelectedCount >= 2 && review.candidateHintTimeoutCount === 0 && review.candidateHintSuppressedByLatencyCount === 0;
+}
+function candidateHintLatencyGatePassed(balancedLatencies, reviewLatencies) {
+  return percentile(balancedLatencies, 0.5) <= CANDIDATE_HINT_LATENCY_TARGETS.balanced.p50Ms && percentile(balancedLatencies, 0.95) <= CANDIDATE_HINT_LATENCY_TARGETS.balanced.p95Ms && maximum(balancedLatencies) <= CANDIDATE_HINT_LATENCY_TARGETS.balanced.hardCapMs && percentile(reviewLatencies, 0.5) <= CANDIDATE_HINT_LATENCY_TARGETS.review.p50Ms && percentile(reviewLatencies, 0.95) <= CANDIDATE_HINT_LATENCY_TARGETS.review.p95Ms && maximum(reviewLatencies) <= CANDIDATE_HINT_LATENCY_TARGETS.review.hardCapMs;
+}
 async function withTier3Fixture(benchmarkCase, options, fixtureInput, run) {
   const baseInput = {
     caseId: benchmarkCase.id,
@@ -30058,6 +30780,42 @@ async function withTier3Fixture(benchmarkCase, options, fixtureInput, run) {
       recordFixtureRun(options, fixture.metadata);
     }
   }
+}
+async function runCandidateHintContextSamples(input) {
+  const sampleCount = 5;
+  const latencies = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    const startedAt = Date.now();
+    await getCodexContinuityContext({
+      cwd: input.cwd,
+      userMessage: `${input.query} sample ${index}`,
+      task: "coding",
+      mode: input.mode
+    });
+    latencies.push(Math.max(0, Date.now() - startedAt));
+  }
+  const metrics = await readRuntimeMetrics(input.projectMemoryRoot);
+  return {
+    latencies,
+    metrics: metrics.filter((metric) => metric.event === "continuity_get" && metric.mode === input.mode).slice(-sampleCount)
+  };
+}
+function candidateHintMetricsForMode(_mode, metrics) {
+  const metric = metrics[metrics.length - 1];
+  return {
+    candidateHintLatencyMs: numberOrZero(metric?.candidateHintLatencyMs),
+    candidateHintEligibleCount: numberOrZero(metric?.candidateHintEligibleCount),
+    candidateHintRelevantCount: numberOrZero(metric?.candidateHintRelevantCount),
+    candidateHintSelectedCount: numberOrZero(metric?.candidateHintSelectedCount),
+    candidateHintTimeoutCount: numberOrZero(metric?.candidateHintTimeoutCount),
+    candidateHintSuppressedByLatencyCount: numberOrZero(metric?.candidateHintSuppressedByLatencyCount)
+  };
+}
+function candidateHintMetricLatencies(metrics) {
+  return metrics.map((metric) => numberOrZero(metric.candidateHintLatencyMs));
+}
+function numberOrZero(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 function scaleMetrics(benchmarkCase, target, measured) {
   const runtimeMs = runtimeMsForTarget(target, measured.materializedRuntimeMs);
@@ -30121,6 +30879,112 @@ function generatePendingMemories(caseId, count) {
     scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.85, safety: 0.95, sensitivity: 0.05 },
     evidence: [{ runId: `${caseId}-pending-${index}`, summary: "Scale pending benchmark evidence.", traceRefs: [`benchmark:${caseId}:pending:${index}`] }]
   }));
+}
+function candidateHintBenchmarkActiveMemories(now) {
+  return [
+    ...candidateHintBenchmarkCandidates(now).map((memory2) => ({
+      id: memory2.id,
+      domain: memory2.domain,
+      type: "procedural_rule",
+      strength: "hard",
+      scope: "project",
+      content: memory2.content,
+      normalizedKey: memory2.id,
+      source: "user_explicit",
+      scores: {
+        evidenceStrength: 0.95,
+        stability: 0.9,
+        usefulness: 0.9,
+        safety: 0.95,
+        sensitivity: 0.05
+      },
+      tags: ["benchmark", "candidate-hint"],
+      confidenceTier: "trial",
+      activationPolicy: memory2.activationPolicy,
+      useWhen: memory2.useWhen,
+      doNotUseWhen: memory2.doNotUseWhen,
+      candidateKind: memory2.kind,
+      createdAt: now,
+      updatedAt: now
+    })),
+    ...Array.from({ length: 20 }, (_, index) => ({
+      id: `candidate-hint-distractor-${index}`,
+      domain: "procedural",
+      type: "procedural_rule",
+      strength: "hard",
+      scope: "project",
+      content: `Archival cleanup candidate hint distractor ${index}.`,
+      normalizedKey: `candidate-hint-distractor-${index}`,
+      source: "user_explicit",
+      tags: ["benchmark", "candidate-hint", "distractor"],
+      confidenceTier: "trial",
+      activationPolicy: {
+        allowedModes: ["workflow_hint"],
+        maxRuntimeStrength: "hint"
+      },
+      useWhen: [`archival cleanup distractor ${index}`],
+      doNotUseWhen: [],
+      candidateKind: "workflow_rule",
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.85,
+        usefulness: 0.7,
+        safety: 0.95,
+        sensitivity: 0.05
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    }))
+  ];
+}
+function candidateHintBenchmarkCandidates(now) {
+  return [
+    semanticCandidateHintMemory("candidate-hint-test-command", {
+      content: "Run npm test and npm run typecheck before final verification.",
+      useWhen: ["candidate hint benchmark npm test typecheck verification"]
+    }, now),
+    semanticCandidateHintMemory("candidate-hint-runtime-metrics", {
+      content: "Runtime metrics changes should record aggregate candidate hint counts.",
+      useWhen: ["candidate hint benchmark runtime metrics aggregate counts"]
+    }, now),
+    semanticCandidateHintMemory("candidate-hint-scale-review", {
+      content: "Scale benchmark changes should report quality gates and latency deltas.",
+      useWhen: ["candidate hint benchmark scale quality latency"]
+    }, now),
+    semanticCandidateHintMemory("candidate-hint-unrelated", {
+      content: "Unrelated fixture cleanup reminder for archival benchmark notes.",
+      useWhen: ["archival fixture cleanup reminder"]
+    }, now)
+  ];
+}
+function semanticCandidateHintMemory(id, input, now) {
+  return {
+    id,
+    status: "active",
+    module: "procedural",
+    kind: "workflow_rule",
+    scope: "project",
+    domain: "procedural",
+    content: input.content,
+    useWhen: input.useWhen,
+    doNotUseWhen: [],
+    evidence: [{
+      id: `${id}-evidence`,
+      sourceKind: "user_explicit",
+      sourceRef: `benchmark:${id}`,
+      whatHappened: "Benchmark candidate hint fixture was prepared.",
+      whyImportant: "Measures candidate hint aggregate quality and latency."
+    }],
+    reviewPolicy: "pending_review",
+    confidenceTier: "trial",
+    activationPolicy: {
+      allowedModes: ["workflow_hint"],
+      maxRuntimeStrength: "hint"
+    },
+    supersedes: [],
+    createdAt: now,
+    updatedAt: now
+  };
 }
 function activeMemory2(id, content, now, overrides = {}) {
   return {
@@ -30193,7 +31057,7 @@ import { readFile as readFile21, writeFile as writeFile15 } from "node:fs/promis
 import { join as join30 } from "node:path";
 
 // src/codex/codex-memory-lifecycle-weekly.ts
-import { createHash as createHash15, randomUUID as randomUUID14 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID14 } from "node:crypto";
 import { readFile as readFile20 } from "node:fs/promises";
 import { join as join29 } from "node:path";
 
@@ -30808,7 +31672,7 @@ function globalCoreMemoryFromProjectCore(sources, now) {
   const normalized = normalizeContent2(base.content);
   return {
     ...base,
-    id: `global-${createHash15("sha256").update(normalized).digest("hex").slice(0, 16)}`,
+    id: `global-${createHash16("sha256").update(normalized).digest("hex").slice(0, 16)}`,
     module: base.domain === "system" ? "system" : "global_policy",
     scope: "global",
     confidenceTier: "global_core",
@@ -31717,7 +32581,7 @@ async function runCyreneBenchmark(options) {
   const thresholdBreaches = caseResults.flatMap((item) => item.thresholdBreaches);
   const aggregatedMetrics = aggregateMetricGroups(caseResults);
   const report = {
-    runId: createHash16("sha256").update(`${startedAt}:${options.profile}:${options.seed ?? ""}`).digest("hex").slice(0, 16),
+    runId: createHash17("sha256").update(`${startedAt}:${options.profile}:${options.seed ?? ""}`).digest("hex").slice(0, 16),
     startedAt,
     completedAt,
     profile: options.profile,
@@ -31730,7 +32594,7 @@ async function runCyreneBenchmark(options) {
     benchmark: {
       version: BENCHMARK_VERSION,
       thresholdVersion: THRESHOLD_VERSION,
-      caseCatalogHash: createHash16("sha256").update(JSON.stringify(BENCHMARK_CASES)).digest("hex")
+      caseCatalogHash: createHash17("sha256").update(JSON.stringify(BENCHMARK_CASES)).digest("hex")
     },
     package: await packageMetadata([join31(resolve5(options.cwd), "package.json"), join31(BENCHMARK_SOURCE_ROOT, "package.json")]),
     git: await gitMetadata(resolve5(options.cwd)),
@@ -31751,6 +32615,7 @@ async function runCyreneBenchmark(options) {
     thresholdBreaches,
     fixtureRuns,
     ...optionalScaleResults(caseResults),
+    ...optionalCandidateHintReports(caseResults),
     ...options.baselineReportPath === void 0 ? {} : { regressionComparison: { baselineReportPath: options.baselineReportPath, regressions: [] } }
   };
   await writeBenchmarkReports(options.outputDir, report);
@@ -31915,6 +32780,10 @@ function optionalScaleResults(caseResults) {
   const scaleResults = buildScaleResults(caseResults);
   return Object.keys(scaleResults).length === 0 ? {} : { scaleResults };
 }
+function optionalCandidateHintReports(caseResults) {
+  const reports = caseResults.flatMap((result3) => result3.candidateHintReport === void 0 ? [] : [result3.candidateHintReport]);
+  return reports.length === 0 ? {} : { candidateHintReports: reports };
+}
 function buildScaleResults(caseResults) {
   const scaleResults = {};
   for (const result3 of caseResults) {
@@ -31967,7 +32836,7 @@ function scaleStorageSource(metrics) {
   return fullTarget ? "full-target-materialized-fixture" : "capped-materialized-fixture";
 }
 async function firstFileHash(paths) {
-  return createHash16("sha256").update(await readFirstFileBuffer(paths)).digest("hex");
+  return createHash17("sha256").update(await readFirstFileBuffer(paths)).digest("hex");
 }
 async function packageMetadata(paths) {
   const parsed = JSON.parse(await readFirstFileText(paths));
@@ -32433,7 +33302,7 @@ function toCandidateDraft(input) {
     type: input.candidate.type
   });
   const scope = input.candidate.scope ?? "project";
-  const sourceOfTruth = nonEmptyString5(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
+  const sourceOfTruth = nonEmptyString6(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
   return {
     id: randomUUID16(),
     content: input.candidate.content,
@@ -32460,7 +33329,7 @@ function sourceOfTruthFromEvidence(evidence) {
   return evidence.map(sourceBoundaryRef).find((value) => value !== void 0);
 }
 function sourceBoundaryRef(entry) {
-  return (entry.traceRefs ?? []).map(nonEmptyString5).find((value) => value !== void 0);
+  return (entry.traceRefs ?? []).map(nonEmptyString6).find((value) => value !== void 0);
 }
 function evidenceRef2(entry) {
   return [
@@ -32470,9 +33339,9 @@ function evidenceRef2(entry) {
     entry.taskHash,
     entry.summary,
     entry.quote
-  ].map(nonEmptyString5).find((value) => value !== void 0);
+  ].map(nonEmptyString6).find((value) => value !== void 0);
 }
-function nonEmptyString5(value) {
+function nonEmptyString6(value) {
   const trimmed = value?.trim();
   return trimmed === void 0 || trimmed === "" ? void 0 : trimmed;
 }
@@ -32801,7 +33670,7 @@ function asString2(value) {
 }
 
 // src/codex/global-memory-capture.ts
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 var GLOBAL_INSTRUCTION_PATTERN = /(以后所有项目|今后所有项目|所有项目|每个项目|all projects|every project|across projects|remember globally|(?:作为|写入|加入|保存到|记到).{0,8}全局记忆|全局(?:记住|保存|默认|规则|使用))/i;
 var PERSONAL_PREFERENCE_PATTERN = /\b(i|my|me)\b.*\b(prefer|like|feel|birthday|relationship)\b/i;
 var AUTOMATION_PROMPT_PATTERN = /^\s*Automation:|\n\s*Automation ID:/i;
@@ -32951,11 +33820,11 @@ function reviewActionForEvent(event) {
   return void 0;
 }
 function shortHash(value) {
-  return createHash17("sha256").update(value).digest("hex").slice(0, 16);
+  return createHash18("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile4 } from "node:child_process";
@@ -33670,7 +34539,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash18("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash19("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -33710,7 +34579,7 @@ function isRecord4(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash19, randomUUID as randomUUID18 } from "node:crypto";
+import { createHash as createHash20, randomUUID as randomUUID18 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile4 } from "node:fs/promises";
@@ -33996,7 +34865,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash19("sha256").update(JSON.stringify({
+  return createHash20("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -35708,7 +36577,7 @@ async function readableMemoryRoot2(memoryRoot) {
 import { randomUUID as randomUUID21 } from "node:crypto";
 
 // src/codex/semantic-rewrite-validator.ts
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 function validateSemanticRewriteCandidate(input) {
   const beforeReadiness = activeReadinessForPending2(input.original);
   const afterReadiness = activeReadinessForPending2(input.next);
@@ -35749,7 +36618,7 @@ function validateSemanticRewriteCandidate(input) {
   };
 }
 function contentHashForSemanticRewrite(content) {
-  return createHash20("sha256").update(content).digest("hex");
+  return createHash21("sha256").update(content).digest("hex");
 }
 function activeReadinessForPending2(candidate) {
   return evaluateActiveMemoryReadiness({
@@ -35878,7 +36747,7 @@ function skipSemanticRewrite(candidate, eligibilityReasons) {
 function semanticPrepareIneligibilityReasons(candidate, externalReasons) {
   return uniqueInOrder6([
     ...externalReasons,
-    ...nonEmptyString6(candidate.sourceOfTruth) === void 0 ? ["source_boundary_unconfirmed"] : [],
+    ...nonEmptyString7(candidate.sourceOfTruth) === void 0 ? ["source_boundary_unconfirmed"] : [],
     ...candidate.domain === "personal" || candidate.domain === "relationship" || candidate.domain === "affective" ? ["high_risk_memory_domain"] : [],
     ...candidate.conflictsWith !== void 0 && candidate.conflictsWith.length > 0 ? ["conflicted_pending"] : [],
     ...candidate.promoteAfter !== void 0 ? ["user_deferred_pending"] : [],
@@ -35921,7 +36790,7 @@ function rewriteRawFileRuleExcerpt(content) {
   const source = /\bAGENTS\.md\b/i.test(content) ? "AGENTS.md" : "the source-of-truth file";
   return `${source} is the source of truth for repository working rules; active memory should reference it instead of copying raw policy text.`;
 }
-function nonEmptyString6(value) {
+function nonEmptyString7(value) {
   if (value === void 0) return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
@@ -40416,7 +41285,7 @@ async function runCodexMemoryAutomation(input) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash21, randomUUID as randomUUID24 } from "node:crypto";
+import { createHash as createHash22, randomUUID as randomUUID24 } from "node:crypto";
 import { lstat as lstat16, readFile as readFile28, rename as rename7, writeFile as writeFile18 } from "node:fs/promises";
 import { join as join40 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
@@ -40435,7 +41304,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash21("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash22("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -40943,7 +41812,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash22, randomUUID as randomUUID25 } from "node:crypto";
+import { createHash as createHash23, randomUUID as randomUUID25 } from "node:crypto";
 import { basename as basename6, dirname as dirname13 } from "node:path";
 function reviewHashForSimilarHintMemory(memory2) {
   const payload = {
@@ -40960,7 +41829,7 @@ function reviewHashForSimilarHintMemory(memory2) {
     updatedAt: memory2.updatedAt,
     tags: memory2.tags
   };
-  return createHash22("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash23("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);

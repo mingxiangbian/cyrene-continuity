@@ -19,8 +19,9 @@ import {
   readMemoryEdgesFromRoot,
   readPendingMemoriesFromRoot
 } from './memory-store.js'
+import { activeMemoryToSemanticMemory } from './semantic-memory-adapter.js'
 import { tokenizeMemoryText } from './tokenizer.js'
-import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, MemoryPortability, PendingMemory } from './types.js'
+import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, MemoryPortability, PendingMemory, SemanticMemory } from './types.js'
 
 export interface MemoryIndexRoot {
   memoryRoot: string
@@ -113,6 +114,13 @@ export interface MemoryIndexSimilarQuery {
   maxTokens: number
 }
 
+export interface MemoryIndexCandidateHintQuery {
+  currentProjectId: string
+  query: string
+  maxItems: number
+  maxConflictItems?: number
+}
+
 export interface IndexedActiveMemory {
   memory: CyreneMemory
   score: number
@@ -134,6 +142,17 @@ export interface IndexedSimilarMemory extends IndexedActiveMemory {
   sourceProjectName?: string
 }
 
+export interface IndexedCandidateHintMemory {
+  memory: SemanticMemory
+  score: number
+  homeProjectId: string | null
+}
+
+export interface IndexedCandidateHintPool {
+  candidates: IndexedCandidateHintMemory[]
+  validatedMemories: IndexedCandidateHintMemory[]
+}
+
 export interface MemoryIndexAdapter {
   initialize(): Promise<MemoryIndexDiagnostics>
   rebuildFromRoots(input: MemoryIndexRebuildInput): Promise<MemoryIndexDiagnostics>
@@ -147,6 +166,7 @@ export interface MemoryIndexAdapter {
   queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]>
   queryPending(input: MemoryIndexPendingQuery): Promise<IndexedPendingMemory[]>
   querySimilarActive(input: MemoryIndexSimilarQuery): Promise<IndexedSimilarMemory[]>
+  queryCandidateHints(input: MemoryIndexCandidateHintQuery): Promise<IndexedCandidateHintPool>
   diagnostics(): MemoryIndexDiagnostics
   close(): void
 }
@@ -294,6 +314,10 @@ class UnavailableMemoryIndexAdapter implements MemoryIndexAdapter {
     return []
   }
 
+  async queryCandidateHints(_input: MemoryIndexCandidateHintQuery): Promise<IndexedCandidateHintPool> {
+    return { candidates: [], validatedMemories: [] }
+  }
+
   diagnostics(): MemoryIndexDiagnostics {
     return {
       available: false,
@@ -405,6 +429,12 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         created_at text not null,
         approved_at text
       );
+
+      create index if not exists idx_memories_candidate_hints
+      on memories(status, scope, home_project_id, portability, domain, updated_at);
+
+      create index if not exists idx_memories_normalized_key
+      on memories(status, normalized_key, scope, home_project_id);
     `)
     this.ensureProjectColumns(db)
     if (!this.initialized) {
@@ -733,6 +763,30 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     )
   }
 
+  async queryCandidateHints(input: MemoryIndexCandidateHintQuery): Promise<IndexedCandidateHintPool> {
+    await this.initialize()
+    const maxItems = Math.max(0, Math.floor(input.maxItems))
+    if (maxItems === 0) {
+      return { candidates: [], validatedMemories: [] }
+    }
+    const ftsMatches = this.queryFtsIds(input.query, 'active')
+    const candidateRows = this.queryCandidateHintRows(input, ftsMatches, maxItems)
+    const candidates = candidateRows.map((row) => indexedCandidateHintFromRow(row, input.query, ftsMatches))
+    const conflictKeys = new Set(candidates
+      .map((item) => item.memory.reviewState?.normalizedKey)
+      .filter((key): key is string => typeof key === 'string' && key.trim() !== '')
+    )
+    const validatedRows = this.queryCandidateHintConflictRows(
+      input.currentProjectId,
+      conflictKeys,
+      input.maxConflictItems ?? 200
+    )
+    return {
+      candidates,
+      validatedMemories: validatedRows.map((row) => indexedCandidateHintFromRow(row, input.query, ftsMatches))
+    }
+  }
+
   diagnostics(): MemoryIndexDiagnostics {
     return this.currentDiagnostics
   }
@@ -832,7 +886,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     const indexId = memoryIndexId(root, memory.id)
     const portability = deriveMemoryPortability(memory)
     const homeProjectId = root.scope === 'global' ? null : root.projectId
-    const tags = memory.tags.join(' ')
+    const tags = memoryIndexTagsText(memory)
     const now = new Date().toISOString()
     db.prepare(`
       insert into memories (
@@ -1056,6 +1110,114 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     return rows.map(rowFromRecord)
   }
 
+  private queryCandidateHintRows(
+    input: MemoryIndexCandidateHintQuery,
+    ftsMatches: Set<string>,
+    maxItems: number
+  ): MemoryIndexRow[] {
+    const matchedIds = Array.from(ftsMatches).slice(0, maxItems * 4)
+    const ftsRows = matchedIds.length === 0
+      ? []
+      : this.queryCandidateHintRowsWithExtraConditions(
+        input.currentProjectId,
+        [`id in (${matchedIds.map(() => '?').join(', ')})`],
+        matchedIds,
+        maxItems
+      )
+    const remaining = maxItems - ftsRows.length
+    if (remaining <= 0) {
+      return ftsRows
+    }
+    const excludeIds = ftsRows.map((row) => row.id)
+    const recentRows = this.queryCandidateHintRowsWithExtraConditions(
+      input.currentProjectId,
+      excludeIds.length === 0 ? [] : [`id not in (${excludeIds.map(() => '?').join(', ')})`],
+      excludeIds,
+      remaining
+    )
+    return [...ftsRows, ...recentRows]
+  }
+
+  private queryCandidateHintRowsWithExtraConditions(
+    currentProjectId: string,
+    extraConditions: string[],
+    extraValues: unknown[],
+    limit: number
+  ): MemoryIndexRow[] {
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        payload_json
+      from memories
+      where status = 'active'
+        and scope = 'project'
+        and home_project_id = ?
+        and portability = 'local_only'
+        and domain in ('project', 'procedural', 'system')
+        and payload_json like '%"confidenceTier":"trial"%'
+        and payload_json like '%workflow_hint%'
+        ${extraConditions.length === 0 ? '' : `and ${extraConditions.join(' and ')}`}
+      order by updated_at desc, created_at desc, id asc
+      limit ?
+    `).all(currentProjectId, ...extraValues, limit)
+    return rows.map(rowFromRecord)
+  }
+
+  private queryCandidateHintConflictRows(
+    currentProjectId: string,
+    normalizedKeys: Set<string>,
+    maxItems: number
+  ): MemoryIndexRow[] {
+    const keys = Array.from(normalizedKeys)
+    const limit = Math.max(0, Math.floor(maxItems))
+    if (keys.length === 0 || limit === 0) {
+      return []
+    }
+    const placeholders = keys.map(() => '?').join(', ')
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        payload_json
+      from memories
+      where status = 'active'
+        and normalized_key in (${placeholders})
+        and (
+          (scope = 'project' and home_project_id = ? and portability = 'local_only') or
+          (scope = 'global' and portability = 'global')
+        )
+        and (
+          payload_json like '%"confidenceTier":"validated"%' or
+          payload_json like '%"confidenceTier":"project_core"%' or
+          payload_json like '%"confidenceTier":"global_core"%'
+        )
+      order by updated_at desc, created_at desc, id asc
+      limit ?
+    `).all(...keys, currentProjectId, limit)
+    return rows.map(rowFromRecord)
+  }
+
   private queryFtsIds(query: string, status: 'active' | 'pending'): Set<string> {
     if (query.trim() === '') {
       return new Set()
@@ -1243,6 +1405,26 @@ function rowFromRecord(row: Record<string, unknown>): MemoryIndexRow {
     scores: JSON.parse(readString(row.scores_json, 'scores_json')) as MemoryIndexRow['scores'],
     payload
   }
+}
+
+function indexedCandidateHintFromRow(
+  row: MemoryIndexRow,
+  query: string,
+  ftsMatches: Set<string>
+): IndexedCandidateHintMemory {
+  return {
+    memory: activeMemoryToSemanticMemory(row.payload as CyreneMemory),
+    score: scoreRow(row, query, ftsMatches),
+    homeProjectId: row.homeProjectId
+  }
+}
+
+function memoryIndexTagsText(memory: CyreneMemory | PendingMemory): string {
+  return [
+    ...memory.tags,
+    ...(memory.useWhen ?? []),
+    ...(memory.doNotUseWhen ?? [])
+  ].join(' ')
 }
 
 function readString(value: unknown, field: string): string {

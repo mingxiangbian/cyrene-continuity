@@ -27,6 +27,7 @@ export interface RetrievalPolicy {
   includeFastSummaries: boolean
   recordRetrievedEvents: boolean
   allowJsonlFallback: boolean
+  candidateHintBudget: number
   allowHotPathIndexRebuild: false
 }
 
@@ -50,6 +51,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFastSummaries: true,
     recordRetrievedEvents: false,
     allowJsonlFallback: false,
+    candidateHintBudget: 0,
     allowHotPathIndexRebuild: false
   },
   balanced: {
@@ -64,6 +66,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFastSummaries: false,
     recordRetrievedEvents: false,
     allowJsonlFallback: false,
+    candidateHintBudget: 1,
     allowHotPathIndexRebuild: false
   },
   review: {
@@ -78,6 +81,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFastSummaries: false,
     recordRetrievedEvents: false,
     allowJsonlFallback: false,
+    candidateHintBudget: 3,
     allowHotPathIndexRebuild: false
   }
 }

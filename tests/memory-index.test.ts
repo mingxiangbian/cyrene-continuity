@@ -9,6 +9,7 @@ import {
   type MemoryIndexRoot
 } from '../src/memory/memory-index.js'
 import { assertEmbeddingSafeText } from '../src/memory/embedding-provider.js'
+import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import { upsertMemoryEdgeFromRoot, writeActiveMemoriesFromRoot, writePendingMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, PendingMemory } from '../src/memory/types.js'
 
@@ -166,6 +167,51 @@ describe('memory SQLite index', () => {
         provider: 'fail',
         fallbackReason: expect.stringContaining('failed')
       })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CYRENE_EMBEDDING_PROVIDER
+      } else {
+        process.env.CYRENE_EMBEDDING_PROVIDER = previous
+      }
+    }
+  })
+
+  it('queries candidate hints without invoking embedding rerank and preserves semantic boundaries', async () => {
+    const previous = process.env.CYRENE_EMBEDDING_PROVIDER
+    process.env.CYRENE_EMBEDDING_PROVIDER = 'fail'
+    try {
+      const root = await createTempDir('cyrene-memory-index-candidate-hints-')
+      const projectRoot = join(root, 'projects', 'project-a', 'memory')
+      await mkdir(projectRoot, { recursive: true })
+      await writeJsonLines(join(projectRoot, 'index.jsonl'), [activeMemory({
+        id: 'candidate-hint-1',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        content: 'Runtime validator workflow should use bounded candidate hints.',
+        normalizedKey: 'runtime-validator-candidate-hint',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        useWhen: ['runtime validator workflow'],
+        doNotUseWhen: ['documentation-only review']
+      })])
+      const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+      await adapter.rebuildFromRoots({ roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }] })
+
+      const pool = await adapter.queryCandidateHints({
+        currentProjectId: 'project-a',
+        query: 'runtime validator workflow',
+        maxItems: 10
+      })
+
+      expect(pool.candidates.map((item) => item.memory.id)).toEqual(['candidate-hint-1'])
+      expect(pool.candidates[0]?.memory.useWhen).toEqual(['runtime validator workflow'])
+      expect(pool.candidates[0]?.memory.doNotUseWhen).toEqual(['documentation-only review'])
+      expect(adapter.diagnostics().embedding).toMatchObject({
+        enabled: true,
+        provider: 'fail',
+        cacheMisses: 0
+      })
+      expect(adapter.diagnostics().embedding).not.toHaveProperty('fallbackReason')
     } finally {
       if (previous === undefined) {
         delete process.env.CYRENE_EMBEDDING_PROVIDER

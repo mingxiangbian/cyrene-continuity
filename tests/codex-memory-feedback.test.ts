@@ -202,6 +202,55 @@ describe('Codex memory feedback', () => {
     expect((events[0] as { idempotencyKey?: string } | undefined)?.idempotencyKey).toMatch(/^[a-f0-9]{16}$/)
   })
 
+  it('records candidate hint feedback with activation id, content hash, project id, and query hash', async () => {
+    const { cwd, memoryRoot, memory } = await seedActiveProjectMemory()
+    const project = await identifyCodexProject(cwd)
+    const contentHash = contentHashForActiveMemory(memory)
+
+    const result = await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: memory.id,
+      contentHash,
+      event: 'applied',
+      activationId: 'candidate-hint:feedback-active-1',
+      query: 'Candidate hint feedback should bind to the shown workflow hint.',
+      now: '2026-06-04T00:00:00.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'recorded',
+      memoryId: memory.id,
+      event: 'applied',
+      queryHash: expect.stringMatching(/^[a-f0-9]{16}$/)
+    })
+    const events = await readActivationEventsFromRoot(memoryRoot)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      memoryId: memory.id,
+      projectId: project.projectId,
+      event: 'applied',
+      activationId: 'candidate-hint:feedback-active-1',
+      contentHash,
+      queryHash: expect.stringMatching(/^[a-f0-9]{16}$/)
+    })
+    expect(JSON.stringify(events)).not.toContain('Candidate hint feedback should bind')
+  })
+
+  it('does not record batched applied feedback from candidate hint memory ids alone', async () => {
+    const root = await createTempDir('cyrene-codex-memory-feedback-candidate-blind-')
+
+    await appendActivationEventsFailOpen({
+      memoryRoot: root,
+      memoryIds: ['candidate-hint-memory-1'],
+      projectId: 'project-1',
+      query: 'Candidate hint trial memory was detected.',
+      event: 'applied',
+      now: '2026-06-04T00:00:00.000Z'
+    })
+
+    expect(await readActivationEventsFromRoot(root)).toEqual([])
+  })
+
   it.each(['corrected', 'violated'] as const)('rejects %s feedback without reason', async (event) => {
     const { cwd, memoryRoot, memory } = await seedActiveProjectMemory()
 

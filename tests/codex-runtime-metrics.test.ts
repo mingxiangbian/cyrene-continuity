@@ -39,4 +39,35 @@ describe('runtime metrics', () => {
     expect(JSON.stringify(metrics)).not.toContain('raw prompt')
     expect(metrics[0]).toMatchObject({ event: 'continuity_get', mode: 'fast', latencyMs: 17 })
   })
+
+  it('records candidate hint aggregate metrics without raw memory text', async () => {
+    const root = await createTempDir('cyrene-runtime-candidate-hints-')
+    await appendRuntimeMetric(root, {
+      event: 'continuity_get',
+      mode: 'balanced',
+      latencyMs: 23,
+      candidateHintLatencyMs: 3,
+      candidateHintEligibleCount: 4,
+      candidateHintRelevantCount: 2,
+      candidateHintSelectedCount: 1,
+      candidateHintTimeoutCount: 0,
+      candidateHintSuppressedByLatencyCount: 0,
+      createdAt: '2026-06-05T00:00:00.000Z',
+      rawMemoryText: 'candidate memory text must not be persisted'
+    } as never)
+
+    const metrics = await readRuntimeMetrics(root)
+    expect(metrics).toHaveLength(1)
+    expect(JSON.stringify(metrics)).not.toContain('candidate memory text')
+    expect(metrics[0]).toMatchObject({
+      event: 'continuity_get',
+      mode: 'balanced',
+      candidateHintLatencyMs: 3,
+      candidateHintEligibleCount: 4,
+      candidateHintRelevantCount: 2,
+      candidateHintSelectedCount: 1,
+      candidateHintTimeoutCount: 0,
+      candidateHintSuppressedByLatencyCount: 0
+    })
+  })
 })

@@ -13,6 +13,21 @@ export const BENCHMARK_METRIC_IDS = [
   'balancedPendingTokens',
   'benchmarkRuntimeMs',
   'boundarySafetyRate',
+  'candidateHintContextLatencyDeltaMs',
+  'candidateHintDisabledContextLatencyMs',
+  'candidateHintEligibleCount',
+  'candidateHintEnabledContextLatencyMs',
+  'candidateHintLatencyMaxBalancedMs',
+  'candidateHintLatencyMaxReviewMs',
+  'candidateHintLatencyMs',
+  'candidateHintLatencyP50BalancedMs',
+  'candidateHintLatencyP50ReviewMs',
+  'candidateHintLatencyP95BalancedMs',
+  'candidateHintLatencyP95ReviewMs',
+  'candidateHintRelevantCount',
+  'candidateHintSelectedCount',
+  'candidateHintSuppressedByLatencyCount',
+  'candidateHintTimeoutCount',
   'continuityGetLatencyMs',
   'continuityGetMaxMs',
   'continuityGetMeanMs',
@@ -221,6 +236,7 @@ export const HARD_GATE_RULE_IDS = [
   'fabricated_evidence',
   'repeated_mistake_not_reduced',
   'workflow_rule_ignored',
+  'candidate_hint_quality_gate',
   'latency_threshold_breach',
   'security_boundary_violation'
 ] as const
@@ -294,6 +310,30 @@ export interface BenchmarkEvidence {
   detail?: unknown
 }
 
+export interface BenchmarkCandidateHintLatencyTarget {
+  mode: 'balanced' | 'review'
+  p50Ms: number
+  p95Ms: number
+  hardCapMs: number
+}
+
+export interface BenchmarkCandidateHintQuality {
+  mode: 'balanced' | 'review'
+  eligibleCount: number
+  relevantCount: number
+  selectedCount: number
+  timeoutCount: number
+  suppressedByLatencyCount: number
+}
+
+export interface BenchmarkCandidateHintReport {
+  latencyTargets: readonly BenchmarkCandidateHintLatencyTarget[]
+  disabledContextLatencyMs: number
+  enabledContextLatencyMs: number
+  contextLatencyDeltaMs: number
+  quality: readonly BenchmarkCandidateHintQuality[]
+}
+
 export interface BenchmarkCaseResult {
   caseId: string
   title: string
@@ -305,6 +345,7 @@ export interface BenchmarkCaseResult {
   evidence: readonly BenchmarkEvidence[]
   skippedReason?: string
   thresholdBreaches: readonly BenchmarkThresholdBreach[]
+  candidateHintReport?: BenchmarkCandidateHintReport
 }
 
 export interface BenchmarkThreshold {
@@ -438,6 +479,7 @@ export interface BenchmarkReport {
   thresholdBreaches: readonly BenchmarkThresholdBreach[]
   fixtureRuns?: readonly BenchmarkFixtureRunMetadata[]
   scaleResults?: BenchmarkScaleResults
+  candidateHintReports?: readonly BenchmarkCandidateHintReport[]
   regressionComparison?: {
     baselineReportPath?: string
     regressions: ReadonlyArray<{ metric: string; baseline: number; current: number; delta: number }>

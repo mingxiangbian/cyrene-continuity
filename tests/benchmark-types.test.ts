@@ -66,6 +66,7 @@ const requiredCaseIds = [
   'T3-RANKING',
   'T3-TOKEN-OVERHEAD',
   'T3-LATENCY',
+  'T3-CANDIDATE-HINTS',
   'T3-INDEX-HEALTH',
   'T4-SQLITE-UNAVAILABLE',
   'T4-JSONL-CORRUPT',
@@ -224,6 +225,21 @@ describe('benchmark contract catalog', () => {
       'continuityGetMinMs',
       'continuityGetMeanMs',
       'continuityGetMaxMs',
+      'candidateHintLatencyMs',
+      'candidateHintLatencyP50BalancedMs',
+      'candidateHintLatencyP95BalancedMs',
+      'candidateHintLatencyMaxBalancedMs',
+      'candidateHintLatencyP50ReviewMs',
+      'candidateHintLatencyP95ReviewMs',
+      'candidateHintLatencyMaxReviewMs',
+      'candidateHintDisabledContextLatencyMs',
+      'candidateHintEnabledContextLatencyMs',
+      'candidateHintContextLatencyDeltaMs',
+      'candidateHintEligibleCount',
+      'candidateHintRelevantCount',
+      'candidateHintSelectedCount',
+      'candidateHintTimeoutCount',
+      'candidateHintSuppressedByLatencyCount',
       'profileReadLatencyMs',
       'fastSummaryReadLatencyMs',
       'sessionHintsReadLatencyMs',
@@ -335,6 +351,31 @@ describe('benchmark contract catalog', () => {
       'averageReviewTimeMs',
       'stalePendingCount'
     ]))
+  })
+
+  it('declares candidate hint scale benchmark gates without raw memory text fields', () => {
+    const candidateHintCase = BENCHMARK_CASES.find((item) => item.id === 'T3-CANDIDATE-HINTS')
+    expect(candidateHintCase?.executionProfiles).toContain('scale')
+    expect(candidateHintCase?.metrics).toEqual(expect.arrayContaining([
+      'candidateHintLatencyMs',
+      'candidateHintLatencyP50BalancedMs',
+      'candidateHintLatencyP95BalancedMs',
+      'candidateHintLatencyMaxBalancedMs',
+      'candidateHintLatencyP50ReviewMs',
+      'candidateHintLatencyP95ReviewMs',
+      'candidateHintLatencyMaxReviewMs',
+      'candidateHintDisabledContextLatencyMs',
+      'candidateHintEnabledContextLatencyMs',
+      'candidateHintContextLatencyDeltaMs',
+      'candidateHintEligibleCount',
+      'candidateHintRelevantCount',
+      'candidateHintSelectedCount'
+    ]))
+    expect(candidateHintCase?.passFail).toEqual(expect.arrayContaining([
+      'candidate_hint_quality_gate',
+      'latency_threshold_breach'
+    ]))
+    expect(JSON.stringify(candidateHintCase)).not.toMatch(/raw(prompt|memory|candidate)/i)
   })
 
   it('keeps catalog metrics and threshold metrics on one vocabulary', () => {

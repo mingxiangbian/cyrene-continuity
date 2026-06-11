@@ -55,6 +55,12 @@ describe('context policy', () => {
     })
   })
 
+  it('sets candidate hint budget by context mode', () => {
+    expect(buildRetrievalPolicy({ mode: 'fast' }).candidateHintBudget).toBe(0)
+    expect(buildRetrievalPolicy({ mode: 'balanced' }).candidateHintBudget).toBe(1)
+    expect(buildRetrievalPolicy({ mode: 'review' }).candidateHintBudget).toBe(3)
+  })
+
   it('lets explicit flags override mode defaults', () => {
     expect(buildRetrievalPolicy({
       mode: 'fast',
