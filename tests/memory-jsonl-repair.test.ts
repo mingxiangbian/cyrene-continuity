@@ -120,6 +120,7 @@ describe('jsonl repair', () => {
     const original = '{"id":"ok"}\n{bad json}\n'
     const changed = '{"id":"external"}\n{bad json}\n'
     await writeFile(sourcePath, original, 'utf8')
+    const resolvedMemoryRoot = await realpath(memoryRoot)
 
     let thrown: unknown
     try {
@@ -138,7 +139,7 @@ describe('jsonl repair', () => {
     expect(thrown).toBeInstanceOf(Error)
     await expect(readFile(sourcePath, 'utf8')).resolves.toBe(changed)
     const [repairTransaction] = await readdir(join(memoryRoot, 'repair'))
-    const summaryPath = join(memoryRoot, 'repair', repairTransaction as string, 'summary.json')
+    const summaryPath = join(resolvedMemoryRoot, 'repair', repairTransaction as string, 'summary.json')
     const summary = JSON.parse(await readFile(summaryPath, 'utf8')) as { status: string; error: string }
     expect((thrown as Error).message).toContain('repair_failed')
     expect((thrown as Error).message).toContain(repairTransaction)
@@ -183,7 +184,7 @@ describe('jsonl repair', () => {
 
     expect(thrown).toBeInstanceOf(Error)
     const [repairTransaction] = await readdir(join(memoryRoot, 'repair'))
-    const summaryPath = join(memoryRoot, 'repair', repairTransaction as string, 'summary.json')
+    const summaryPath = join(resolvedMemoryRoot, 'repair', repairTransaction as string, 'summary.json')
     expect((thrown as Error).message).toContain('repair_failed')
     expect((thrown as Error).message).toContain(repairTransaction)
     expect((thrown as Error).message).toContain(summaryPath)
@@ -192,6 +193,44 @@ describe('jsonl repair', () => {
     const summary = JSON.parse(await readFile(summaryPath, 'utf8')) as { status: string; error: string }
     expect(summary.status).toBe('failed')
     expect(summary.error).toContain('directory fsync failed')
+  })
+
+  it('reports transaction diagnostics when pending summary write fails', async () => {
+    const memoryRoot = await createTempDir('cyrene-jsonl-repair-pending-summary-fail-')
+    const sourcePath = join(memoryRoot, 'semantic_memories.jsonl')
+    await writeFile(sourcePath, '{"id":"ok"}\n{bad json}\n', 'utf8')
+    const resolvedMemoryRoot = await realpath(memoryRoot)
+    const repairRoot = join(resolvedMemoryRoot, 'repair')
+    const restoreHooks = setJsonlRepairTestHooksForTest({
+      fsyncDirectory: async (dirPath) => {
+        if (dirPath.startsWith(`${repairRoot}/`) && !dirPath.endsWith('/backups')) {
+          throw Object.assign(new Error('pending summary fsync failed'), { code: 'EIO' })
+        }
+      }
+    })
+
+    let thrown: unknown
+    try {
+      await runJsonlRepairFromRoot({
+        memoryRoot,
+        apply: true,
+        now: '2026-06-12T01:02:03.004Z'
+      })
+    } catch (error) {
+      thrown = error
+    } finally {
+      restoreHooks()
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    const [repairTransaction] = await readdir(join(memoryRoot, 'repair'))
+    const summaryPath = join(resolvedMemoryRoot, 'repair', repairTransaction as string, 'summary.json')
+    expect((thrown as Error).message).toContain('repair_failed')
+    expect((thrown as Error).message).toContain(`repairTransactionId=${repairTransaction}`)
+    expect((thrown as Error).message).toContain(`summaryPath=${summaryPath}`)
+    expect((thrown as Error).message).toContain('pending summary fsync failed')
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error)
+    await expect(readFile(summaryPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('removes a stale maintenance lock with a dead owner and noops on clean files', async () => {

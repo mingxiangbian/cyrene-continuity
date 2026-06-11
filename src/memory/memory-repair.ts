@@ -248,9 +248,8 @@ async function applyJsonlRepair(input: {
         finishedAt: input.now,
         error: errorMessage(error)
       }).catch(() => undefined)
-      throw createRepairFailedError(input.repairTransactionId, summaryPath, error)
     }
-    throw error
+    throw createRepairFailedError(input.repairTransactionId, summaryPath, error)
   }
 
   return {
