@@ -190,9 +190,6 @@ async function applyJsonlRepair(input: {
   const quarantinePath = join(transactionRoot, 'quarantine.jsonl')
   const pendingSummaryPath = join(transactionRoot, 'summary.pending.json')
   const summaryPath = join(transactionRoot, 'summary.json')
-  await ensureDirectory(repairRoot)
-  await mkdir(transactionRoot)
-  await ensureDirectory(backupRoot)
 
   const sources = input.scannedFiles.filter((source) => source.scan.malformed.length > 0)
   const backupPaths = sources.map((source) => join(backupRoot, source.relativePath))
@@ -212,6 +209,9 @@ async function applyJsonlRepair(input: {
 
   let pendingSummaryWritten = false
   try {
+    await ensureDirectory(repairRoot)
+    await mkdir(transactionRoot)
+    await ensureDirectory(backupRoot)
     await writeJsonFileDurable(pendingSummaryPath, pendingSummary)
     pendingSummaryWritten = true
     for (const source of sources) {

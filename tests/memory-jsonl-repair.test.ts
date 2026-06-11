@@ -233,6 +233,33 @@ describe('jsonl repair', () => {
     await expect(readFile(summaryPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('reports transaction diagnostics when repair path is not a directory', async () => {
+    const memoryRoot = await createTempDir('cyrene-jsonl-repair-path-conflict-')
+    await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), '{"id":"ok"}\n{bad json}\n', 'utf8')
+    await writeFile(join(memoryRoot, 'repair'), 'not a directory\n', 'utf8')
+    const resolvedMemoryRoot = await realpath(memoryRoot)
+
+    let thrown: unknown
+    try {
+      await runJsonlRepairFromRoot({
+        memoryRoot,
+        apply: true,
+        now: '2026-06-12T01:02:03.004Z'
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    const message = (thrown as Error).message
+    const transactionId = message.match(/repairTransactionId=([^ ]+)/)?.[1]
+    expect(message).toContain('repair_failed')
+    expect(transactionId).toEqual(expect.stringMatching(/^repair-/))
+    expect(message).toContain(`summaryPath=${join(resolvedMemoryRoot, 'repair', transactionId as string, 'summary.json')}`)
+    expect(message).toContain('Refusing to use non-directory repair path')
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error)
+  })
+
   it('removes a stale maintenance lock with a dead owner and noops on clean files', async () => {
     const memoryRoot = await createTempDir('cyrene-jsonl-repair-stale-lock-')
     await writeFile(join(memoryRoot, 'semantic_memories.jsonl'), '{"id":"ok"}\n', 'utf8')
