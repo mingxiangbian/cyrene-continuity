@@ -14854,6 +14854,7 @@ function rewriteHintForReasons(reasons) {
 // src/memory/memory-maintenance.ts
 import { randomUUID as randomUUID5 } from "node:crypto";
 import { lstat as lstat10, mkdir as mkdir8, readFile as readFile10, rm as rm3, writeFile as writeFile6 } from "node:fs/promises";
+import { hostname } from "node:os";
 import { join as join15 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -15769,7 +15770,7 @@ async function withMemoryMaintenanceLockFromRoot(memoryRoot, task, options = {})
 async function writeMaintenanceLockOwner(lockDir, token) {
   await writeFile6(
     join15(lockDir, MAINTENANCE_LOCK_OWNER_FILE),
-    `${JSON.stringify({ acquiredAt: (/* @__PURE__ */ new Date()).toISOString(), pid: process.pid, token })}
+    `${JSON.stringify({ acquiredAt: (/* @__PURE__ */ new Date()).toISOString(), hostname: hostname(), pid: process.pid, token })}
 `,
     "utf8"
   );
@@ -15818,6 +15819,7 @@ async function readMaintenanceLockOwner(lockDir) {
     }
     return {
       acquiredAt: parsed.acquiredAt,
+      ...typeof parsed.hostname === "string" ? { hostname: parsed.hostname } : {},
       ...typeof parsed.pid === "number" ? { pid: parsed.pid } : {},
       ...typeof parsed.token === "string" ? { token: parsed.token } : {}
     };
@@ -15851,7 +15853,7 @@ function isSameMaintenanceLockState(left, right) {
   if (left.owner?.token !== void 0 || right.owner?.token !== void 0) {
     return left.owner?.token === right.owner?.token;
   }
-  return left.owner?.acquiredAt === right.owner?.acquiredAt && left.owner?.pid === right.owner?.pid && left.mtimeMs === right.mtimeMs;
+  return left.owner?.acquiredAt === right.owner?.acquiredAt && left.owner?.hostname === right.owner?.hostname && left.owner?.pid === right.owner?.pid && left.mtimeMs === right.mtimeMs;
 }
 function memoryMaintenanceLockTimeoutMs() {
   const raw = process.env[MAINTENANCE_LOCK_TIMEOUT_ENV];
@@ -21866,15 +21868,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage9 = "";
+  let errorMessage10 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage9 = map(fullIssue, { data, defaultError: errorMessage9 }).message;
+    errorMessage10 = map(fullIssue, { data, defaultError: errorMessage10 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage9
+    message: errorMessage10
   };
 };
 var EMPTY_PATH = [];
@@ -41286,10 +41288,346 @@ async function runCodexMemoryAutomation(input) {
   return { job: "weekly", ...result3 };
 }
 
+// src/memory/memory-repair.ts
+import { randomUUID as randomUUID24 } from "node:crypto";
+import { lstat as lstat16, mkdir as mkdir19, open as open5, readFile as readFile28, rm as rm10, rename as rename7 } from "node:fs/promises";
+import { basename as basename6, dirname as dirname13, join as join40 } from "node:path";
+
+// src/memory/jsonl-diagnostics.ts
+import { createHash as createHash22 } from "node:crypto";
+var CANONICAL_JSONL_FILES = [
+  "index.jsonl",
+  "pending.jsonl",
+  "review_queue.jsonl",
+  "episodes.jsonl",
+  "candidate_drafts.jsonl",
+  "admission_decisions.jsonl",
+  "semantic_memories.jsonl",
+  "distillation_inputs.jsonl",
+  "routing_decisions.jsonl",
+  "review_decisions.jsonl",
+  "activation_events.jsonl",
+  "reflection_candidates.jsonl",
+  "semantic_rewrite_receipts.jsonl",
+  "memory_edges.jsonl",
+  "events.jsonl",
+  "tombstones.jsonl"
+];
+var CANONICAL_JSONL_FILE_SET = new Set(CANONICAL_JSONL_FILES);
+function sha256(value) {
+  return createHash22("sha256").update(value).digest("hex");
+}
+
+// src/memory/memory-repair.ts
+var REPAIR_DIR = "repair";
+var TOOL_VERSION = "0.1.0";
+var UNSUPPORTED_DIRECTORY_FSYNC_ERROR_CODES = /* @__PURE__ */ new Set(["EINVAL", "EISDIR", "ENOTSUP", "ENOSYS", "EPERM"]);
+var jsonlRepairTestHooks = {};
+async function runJsonlRepairFromRoot(input) {
+  return withMemoryMaintenanceLockFromRoot(input.memoryRoot, async (lockedRoot) => {
+    const memoryRoot = await ensureWritableMemoryRootPath(lockedRoot);
+    const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+    const repairTransactionId = createRepairTransactionId(now);
+    const scannedFiles = await scanCanonicalJsonlFiles(memoryRoot);
+    const malformedLineCount = scannedFiles.reduce((count, file) => count + file.scan.malformed.length, 0);
+    if (!input.apply) {
+      return {
+        action: "dry_run",
+        repairTransactionId,
+        memoryRoot,
+        filesScanned: scannedFiles.length,
+        filesRepaired: 0,
+        malformedLineCount,
+        backupPaths: []
+      };
+    }
+    if (malformedLineCount === 0) {
+      return {
+        action: "noop",
+        repairTransactionId,
+        memoryRoot,
+        filesScanned: scannedFiles.length,
+        filesRepaired: 0,
+        malformedLineCount: 0,
+        backupPaths: []
+      };
+    }
+    return applyJsonlRepair({
+      memoryRoot,
+      repairTransactionId,
+      scannedFiles,
+      now,
+      beforeRewrite: input.beforeRewrite
+    });
+  });
+}
+async function scanCanonicalJsonlFiles(memoryRoot) {
+  const files = [];
+  for (const relativePath of CANONICAL_JSONL_FILES) {
+    const filePath = join40(memoryRoot, relativePath);
+    if (!await pathExists2(filePath)) {
+      continue;
+    }
+    files.push(await readRepairSource(filePath, relativePath));
+  }
+  return files;
+}
+async function readRepairSource(filePath, relativePath) {
+  const stats = await lstat16(filePath);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to repair JSONL symlink: ${filePath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`);
+  }
+  const bytes = await readFile28(filePath);
+  const content = bytes.toString("utf8");
+  return {
+    relativePath,
+    filePath,
+    scan: parseJsonlContentForRepair(content, relativePath),
+    snapshot: createSourceSnapshot(stats.mtimeMs, content, bytes)
+  };
+}
+function parseJsonlContentForRepair(content, relativePath) {
+  const validRecords = [];
+  const malformed = [];
+  for (const [index, rawLine] of content.split(/\r?\n/).entries()) {
+    const trimmedLine = rawLine.trim();
+    if (trimmedLine === "") {
+      continue;
+    }
+    try {
+      validRecords.push(JSON.parse(trimmedLine));
+    } catch (error2) {
+      malformed.push({
+        lineNumber: index + 1,
+        relativePath,
+        rawLineSha256: sha256(trimmedLine),
+        parseError: errorMessage9(error2),
+        rawLine: trimmedLine
+      });
+    }
+  }
+  return { validRecords, malformed };
+}
+async function applyJsonlRepair(input) {
+  const repairRoot = join40(input.memoryRoot, REPAIR_DIR);
+  const transactionRoot = join40(repairRoot, input.repairTransactionId);
+  const backupRoot = join40(transactionRoot, "backups");
+  const quarantinePath = join40(transactionRoot, "quarantine.jsonl");
+  const pendingSummaryPath = join40(transactionRoot, "summary.pending.json");
+  const summaryPath = join40(transactionRoot, "summary.json");
+  const sources = input.scannedFiles.filter((source) => source.scan.malformed.length > 0);
+  const backupPaths = sources.map((source) => join40(backupRoot, source.relativePath));
+  const malformedLineCount = sources.reduce((count, source) => count + source.scan.malformed.length, 0);
+  const pendingSummary = {
+    status: "pending",
+    repairTransactionId: input.repairTransactionId,
+    memoryRoot: input.memoryRoot,
+    startedAt: input.now,
+    filesScanned: input.scannedFiles.length,
+    filesRepaired: sources.length,
+    malformedLineCount,
+    backupPaths,
+    quarantinePath,
+    toolVersion: TOOL_VERSION
+  };
+  let pendingSummaryWritten = false;
+  try {
+    await ensureDirectory(repairRoot);
+    await mkdir19(transactionRoot);
+    await ensureDirectory(backupRoot);
+    await writeJsonFileDurable(pendingSummaryPath, pendingSummary);
+    pendingSummaryWritten = true;
+    for (const source of sources) {
+      await writeBufferDurable(join40(backupRoot, source.relativePath), source.snapshot.bytes);
+    }
+    await writeJsonLinesDurable(
+      quarantinePath,
+      sources.flatMap((source) => source.scan.malformed.map(
+        (line) => quarantineRecord(input.repairTransactionId, source.relativePath, line, input.now)
+      ))
+    );
+    if (input.beforeRewrite !== void 0) {
+      await input.beforeRewrite();
+    }
+    for (const source of sources) {
+      await assertSourceUnchanged(source.filePath, source.snapshot);
+    }
+    for (const source of sources) {
+      await rewriteCanonicalJsonlFile(source.filePath, source.scan.validRecords);
+    }
+    const repairedSummary = {
+      ...pendingSummary,
+      status: "repaired",
+      finishedAt: input.now
+    };
+    await writeJsonFileDurable(summaryPath, repairedSummary);
+  } catch (error2) {
+    if (pendingSummaryWritten) {
+      await writeJsonFileDurable(summaryPath, {
+        ...pendingSummary,
+        status: "failed",
+        finishedAt: input.now,
+        error: errorMessage9(error2)
+      }).catch(() => void 0);
+    }
+    throw createRepairFailedError(input.repairTransactionId, summaryPath, error2);
+  }
+  return {
+    action: "repaired",
+    repairTransactionId: input.repairTransactionId,
+    memoryRoot: input.memoryRoot,
+    filesScanned: input.scannedFiles.length,
+    filesRepaired: sources.length,
+    malformedLineCount,
+    backupPaths,
+    quarantinePath,
+    summaryPath
+  };
+}
+function quarantineRecord(repairTransactionId, relativePath, line, quarantinedAt) {
+  return {
+    repairTransactionId,
+    source: relativePath,
+    lineNumber: line.lineNumber,
+    rawLineSha256: line.rawLineSha256,
+    rawLine: line.rawLine ?? "",
+    parseError: line.parseError,
+    quarantinedAt
+  };
+}
+async function rewriteCanonicalJsonlFile(filePath, records) {
+  await assertSafeMemoryDataFileTarget(filePath);
+  await writeJsonLinesDurable(filePath, records);
+}
+async function captureSourceSnapshot(filePath) {
+  const stats = await lstat16(filePath);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Refusing to repair JSONL symlink: ${filePath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`);
+  }
+  const bytes = await readFile28(filePath);
+  const content = bytes.toString("utf8");
+  return createSourceSnapshot(stats.mtimeMs, content, bytes);
+}
+function createSourceSnapshot(mtimeMs, content, bytes) {
+  return {
+    size: Buffer.byteLength(content, "utf8"),
+    mtimeMs,
+    sha256: sha256(content),
+    bytes
+  };
+}
+async function assertSourceUnchanged(filePath, expected) {
+  const current = await captureSourceSnapshot(filePath);
+  if (current.size !== expected.size || current.mtimeMs !== expected.mtimeMs || current.sha256 !== expected.sha256) {
+    throw new Error(`JSONL source changed during repair: ${filePath}`);
+  }
+}
+async function writeJsonFileDurable(filePath, value) {
+  await writeBufferDurable(filePath, Buffer.from(`${JSON.stringify(value, null, 2)}
+`, "utf8"));
+}
+async function writeJsonLinesDurable(filePath, values) {
+  const content = values.map((value) => JSON.stringify(value)).join("\n");
+  await writeBufferDurable(filePath, Buffer.from(content === "" ? "" : `${content}
+`, "utf8"));
+}
+async function writeBufferDurable(filePath, content) {
+  await ensureDirectory(dirname13(filePath));
+  const tempPath = join40(dirname13(filePath), `.${basename6(filePath)}.${process.pid}.${Date.now()}.${randomUUID24()}.tmp`);
+  const file = await open5(tempPath, "wx");
+  let closed = false;
+  try {
+    await file.writeFile(content);
+    await file.sync();
+    await file.close();
+    closed = true;
+    await rename7(tempPath, filePath);
+    await fsyncDirectory(dirname13(filePath));
+  } catch (error2) {
+    if (!closed) {
+      await file.close().catch(() => void 0);
+    }
+    await rm10(tempPath, { force: true }).catch(() => void 0);
+    throw error2;
+  }
+}
+async function ensureDirectory(dirPath) {
+  try {
+    const stats = await lstat16(dirPath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to use repair directory symlink: ${dirPath}`);
+    }
+    if (!stats.isDirectory()) {
+      throw new Error(`Refusing to use non-directory repair path: ${dirPath}`);
+    }
+    return;
+  } catch (error2) {
+    if (!isFileErrorCode19(error2, "ENOENT")) {
+      throw error2;
+    }
+  }
+  await mkdir19(dirPath, { recursive: true });
+}
+async function fsyncDirectory(dirPath) {
+  let directory;
+  try {
+    directory = await open5(dirPath, "r");
+    if (jsonlRepairTestHooks.fsyncDirectory !== void 0) {
+      await jsonlRepairTestHooks.fsyncDirectory(dirPath);
+    } else {
+      await directory.sync();
+    }
+  } catch (error2) {
+    if (isUnsupportedDirectoryFsyncError(error2)) {
+      return;
+    }
+    throw error2;
+  } finally {
+    await directory?.close().catch(() => void 0);
+  }
+}
+async function pathExists2(filePath) {
+  try {
+    await lstat16(filePath);
+    return true;
+  } catch (error2) {
+    if (isFileErrorCode19(error2, "ENOENT")) {
+      return false;
+    }
+    throw error2;
+  }
+}
+function createRepairTransactionId(now) {
+  const sanitizedNow = now.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return `repair-${sanitizedNow}-${randomUUID24()}`;
+}
+function errorMessage9(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+function createRepairFailedError(repairTransactionId, summaryPath, cause) {
+  const error2 = new Error(
+    `repair_failed repairTransactionId=${repairTransactionId} summaryPath=${summaryPath}: ${errorMessage9(cause)}`
+  );
+  Object.assign(error2, { cause });
+  return error2;
+}
+function isUnsupportedDirectoryFsyncError(error2) {
+  return error2 instanceof Error && "code" in error2 && typeof error2.code === "string" && UNSUPPORTED_DIRECTORY_FSYNC_ERROR_CODES.has(error2.code);
+}
+function isFileErrorCode19(error2, code) {
+  return error2 instanceof Error && "code" in error2 && error2.code === code;
+}
+
 // src/codex/profile-candidates.ts
-import { createHash as createHash22, randomUUID as randomUUID24 } from "node:crypto";
-import { lstat as lstat16, readFile as readFile28, rename as rename7, writeFile as writeFile18 } from "node:fs/promises";
-import { join as join40 } from "node:path";
+import { createHash as createHash23, randomUUID as randomUUID25 } from "node:crypto";
+import { lstat as lstat17, readFile as readFile29, rename as rename8, writeFile as writeFile18 } from "node:fs/promises";
+import { join as join41 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -41306,7 +41644,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash22("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash23("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -41417,7 +41755,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID24(),
+      id: randomUUID25(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -41648,13 +41986,13 @@ function upsertActiveMemory2(active, memory2) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join40(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join41(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile28(targetPath, "utf8");
+    const content = await readFile29(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
-    if (isFileErrorCode19(error2, "ENOENT")) {
+    if (isFileErrorCode20(error2, "ENOENT")) {
       return [];
     }
     throw error2;
@@ -41662,21 +42000,21 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join40(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join41(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID24()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID25()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
   await writeFile18(tempPath, content === "" ? "" : `${content}
 `, "utf8");
-  await rename7(tempPath, targetPath);
+  await rename8(tempPath, targetPath);
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join40(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join41(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID24()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID25()}.tmp`;
   await writeFile18(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
-  await rename7(tempPath, targetPath);
+  await rename8(tempPath, targetPath);
 }
 function formatPendingProfilePatch(candidates) {
   const pending = candidates.filter((candidate) => candidate.status === "pending");
@@ -41711,7 +42049,7 @@ function formatPendingProfilePatch(candidates) {
 }
 async function assertSafeProfileFileTarget(targetPath, label) {
   try {
-    const stats = await lstat16(targetPath);
+    const stats = await lstat17(targetPath);
     if (stats.isSymbolicLink()) {
       throw new Error(`Refusing to use ${label} symlink: ${targetPath}`);
     }
@@ -41719,13 +42057,13 @@ async function assertSafeProfileFileTarget(targetPath, label) {
       throw new Error(`Refusing to use non-file ${label} path: ${targetPath}`);
     }
   } catch (error2) {
-    if (isFileErrorCode19(error2, "ENOENT")) {
+    if (isFileErrorCode20(error2, "ENOENT")) {
       return;
     }
     throw error2;
   }
 }
-function isFileErrorCode19(error2, code) {
+function isFileErrorCode20(error2, code) {
   return error2 instanceof Error && "code" in error2 && error2.code === code;
 }
 
@@ -41814,8 +42152,8 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash23, randomUUID as randomUUID25 } from "node:crypto";
-import { basename as basename6, dirname as dirname13 } from "node:path";
+import { createHash as createHash24, randomUUID as randomUUID26 } from "node:crypto";
+import { basename as basename7, dirname as dirname14 } from "node:path";
 function reviewHashForSimilarHintMemory(memory2) {
   const payload = {
     id: memory2.id,
@@ -41831,7 +42169,7 @@ function reviewHashForSimilarHintMemory(memory2) {
     updatedAt: memory2.updatedAt,
     tags: memory2.tags
   };
-  return createHash23("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash24("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -41929,7 +42267,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory2) => memory2.id === lockedMemory.id ? nextMemory : memory2)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID25(),
+      id: randomUUID26(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -41986,7 +42324,7 @@ function memoryPortability(memory2) {
   return memory2.portability ?? (memory2.scope === "global" ? "global" : "local_only");
 }
 function projectIdFromMemoryRoot(memoryRoot) {
-  return basename6(dirname13(memoryRoot));
+  return basename7(dirname14(memoryRoot));
 }
 function uniqueInOrder9(values) {
   const seen = /* @__PURE__ */ new Set();
@@ -42202,6 +42540,20 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
+  if (command === "memory" && input.args[1] === "jsonl" && input.args[2] === "repair") {
+    if (input.args.includes("--dry-run") && input.args.includes("--apply")) {
+      throw new Error("memory jsonl repair accepts only one of --dry-run or --apply");
+    }
+    const apply = input.args.includes("--apply");
+    const memoryRoot = input.args.includes("--global") ? codexGlobalMemoryRoot() : codexProjectMemoryRoot((await identifyCodexProject(input.cwd)).projectId);
+    process.stdout.write(`${JSON.stringify({
+      action: "memory_jsonl_repair",
+      dryRun: !apply,
+      roots: [await runJsonlRepairFromRoot({ memoryRoot, apply })]
+    }, null, 2)}
+`);
+    return;
+  }
   if (command === "memory" && input.args[1] === "migrate-v2") {
     process.stdout.write(`${JSON.stringify(await runCodexMemoryMigrateV2({
       cwd: input.cwd,
@@ -42389,7 +42741,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory jsonl repair [--dry-run|--apply] [--global]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -43329,7 +43681,7 @@ var cidrv4 = /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]
 var cidrv6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|::|([0-9a-fA-F]{1,4})?::([0-9a-fA-F]{1,4}:?){0,6})\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
 var base64 = /^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$/;
 var base64url = /^[A-Za-z0-9_-]*$/;
-var hostname = /^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/;
+var hostname2 = /^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/;
 var e164 = /^\+(?:[0-9]){6,14}[0-9]$/;
 var dateSource = `(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))`;
 var date = /* @__PURE__ */ new RegExp(`^${dateSource}$`);
@@ -43941,7 +44293,7 @@ var $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
             code: "invalid_format",
             format: "url",
             note: "Invalid hostname",
-            pattern: hostname.source,
+            pattern: hostname2.source,
             input: payload.value,
             inst,
             continue: !def.abort
@@ -48877,19 +49229,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage9, refs) {
+function addErrorMessage(res, key, errorMessage10, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage9) {
+  if (errorMessage10) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage9
+      [key]: errorMessage10
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage9, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage10, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage9, refs);
+  addErrorMessage(res, key, errorMessage10, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -50200,8 +50552,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage9 = message;
-                    const error2 = new McpError(errorMessage9.error.code, errorMessage9.error.message, errorMessage9.error.data);
+                    const errorMessage10 = message;
+                    const error2 = new McpError(errorMessage10.error.code, errorMessage10.error.message, errorMessage10.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -51501,23 +51853,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage9 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage9}`);
+          const errorMessage10 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage10}`);
         }
         const { params } = validatedRequest.data;
         const result3 = await Promise.resolve(handler(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result3);
           if (!taskValidationResult.success) {
-            const errorMessage9 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage9}`);
+            const errorMessage10 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage10}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result3);
         if (!validationResult.success) {
-          const errorMessage9 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage9}`);
+          const errorMessage10 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage10}`);
         }
         return validationResult.data;
       };
@@ -52011,12 +52363,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage9) {
+  createToolError(errorMessage10) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage9
+          text: errorMessage10
         }
       ],
       isError: true
@@ -52034,8 +52386,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage9 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage9}`);
+      const errorMessage10 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage10}`);
     }
     return parseResult.data;
   }
@@ -52059,8 +52411,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result3.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage9 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage9}`);
+      const errorMessage10 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage10}`);
     }
   }
   /**
@@ -52272,8 +52624,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage9 = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage9}`);
+          const errorMessage10 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage10}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
