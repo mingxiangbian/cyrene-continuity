@@ -1,5 +1,6 @@
 import { lstat } from 'node:fs/promises'
 import {
+  isMemoryJsonlRepairRequiredError,
   migrateMemoryRootToSemanticV2FromRoot,
   type SemanticMemoryV2MigrationResult
 } from '../memory/memory-store.js'
@@ -16,6 +17,7 @@ export interface CodexMemoryMigrateV2RootResult extends Partial<SemanticMemoryV2
   memoryRoot: string
   skipped?: boolean
   reason?: string
+  malformedJsonLines?: number
 }
 
 export interface CodexMemoryMigrateV2Result {
@@ -53,10 +55,22 @@ export async function runCodexMemoryMigrateV2(input: {
       })
       continue
     }
-    results.push({
-      ...root,
-      ...(await migrateMemoryRootToSemanticV2FromRoot(root.memoryRoot, { now: input.now }))
-    })
+    try {
+      results.push({
+        ...root,
+        ...(await migrateMemoryRootToSemanticV2FromRoot(root.memoryRoot, { now: input.now }))
+      })
+    } catch (error) {
+      if (!isMemoryJsonlRepairRequiredError(error)) {
+        throw error
+      }
+      results.push({
+        ...root,
+        skipped: true,
+        reason: 'repair_required',
+        malformedJsonLines: error.malformedLineCount + error.skippedFileCount
+      })
+    }
   }
 
   return {

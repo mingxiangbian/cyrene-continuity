@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { jsonlScanHasCorruption, scanCanonicalJsonlFilesFromRoot } from './jsonl-diagnostics.js'
 import { assertMemoryProjectionTargetsSafe, renderMemoryProjectionsFromRoot } from './memory-exporter.js'
 import { assertMemorySnapshotTargetSafeFromRoot, createMemorySnapshotFromRoot } from './memory-snapshot.js'
 import {
@@ -37,6 +38,9 @@ export interface MemoryMaintenanceBudget {
 export interface MemoryMaintenanceResult {
   memoryRoot: string
   snapshotId: string
+  skipped?: boolean
+  reason?: 'repair_required'
+  malformedJsonLines?: number
   expired: number
   deduped: number
   archived: number
@@ -70,6 +74,10 @@ export async function runMemoryMaintenanceFromRoot(input: {
   preservePendingCandidateIds?: string[]
   preserveDuplicateNormalizedKeys?: string[]
 }): Promise<MemoryMaintenanceResult> {
+  const repairRequired = await readMaintenanceRepairRequired(input.memoryRoot)
+  if (repairRequired !== undefined) {
+    return skippedMaintenanceResult(input.memoryRoot, repairRequired.malformedJsonLines)
+  }
   return withMemoryMaintenanceLockFromRoot(input.memoryRoot, (memoryRoot) =>
     runMemoryMaintenanceFromRootLocked({ ...input, memoryRoot })
   )
@@ -89,6 +97,10 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
   preservePendingCandidateIds?: string[]
   preserveDuplicateNormalizedKeys?: string[]
 }): Promise<MemoryMaintenanceResult> {
+  const repairRequired = await readMaintenanceRepairRequired(input.memoryRoot)
+  if (repairRequired !== undefined) {
+    return skippedMaintenanceResult(input.memoryRoot, repairRequired.malformedJsonLines)
+  }
   const now = input.now ?? new Date().toISOString()
   const snapshot = await createMemorySnapshotFromRoot(
     input.memoryRoot,
@@ -159,6 +171,32 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
     trimmed,
     activeCount: boundedActive.length,
     pendingCount: boundedPending.length
+  }
+}
+
+async function readMaintenanceRepairRequired(memoryRoot: string): Promise<{ malformedJsonLines: number } | undefined> {
+  const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot)
+  if (!jsonlScanHasCorruption(scan)) {
+    return undefined
+  }
+  return {
+    malformedJsonLines: scan.corruptionCount + scan.skippedFiles.length
+  }
+}
+
+function skippedMaintenanceResult(memoryRoot: string, malformedJsonLines: number): MemoryMaintenanceResult {
+  return {
+    memoryRoot,
+    snapshotId: '',
+    skipped: true,
+    reason: 'repair_required',
+    malformedJsonLines,
+    expired: 0,
+    deduped: 0,
+    archived: 0,
+    trimmed: 0,
+    activeCount: 0,
+    pendingCount: 0
   }
 }
 

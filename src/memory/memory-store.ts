@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ensureMemoryRoot, getReadableMemoryRoot } from './paths.js'
+import { jsonlScanHasCorruption, scanCanonicalJsonlFilesFromRoot } from './jsonl-diagnostics.js'
 import {
   activeMemoryToSemanticMemory,
   pendingMemoryToSemanticMemory,
@@ -47,6 +48,29 @@ const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
 
+export class MemoryJsonlRepairRequiredError extends Error {
+  constructor(
+    readonly memoryRoot: string,
+    readonly malformedLineCount: number,
+    readonly skippedFileCount = 0
+  ) {
+    const skippedCopy = skippedFileCount > 0 ? `; ${skippedFileCount} skipped files` : ''
+    super(`repair_required: canonical JSONL corruption detected in ${memoryRoot} (${malformedLineCount} malformed lines${skippedCopy})`)
+    this.name = 'MemoryJsonlRepairRequiredError'
+  }
+}
+
+export function isMemoryJsonlRepairRequiredError(error: unknown): error is MemoryJsonlRepairRequiredError {
+  return error instanceof MemoryJsonlRepairRequiredError
+}
+
+export async function assertCanonicalJsonlHealthyForMutation(memoryRoot: string): Promise<void> {
+  const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot)
+  if (jsonlScanHasCorruption(scan)) {
+    throw new MemoryJsonlRepairRequiredError(memoryRoot, scan.corruptionCount, scan.skippedFiles.length)
+  }
+}
+
 export async function readActiveMemories(cwd: string): Promise<CyreneMemory[]> {
   const root = await getReadableMemoryRoot(cwd)
   if (root === null) {
@@ -83,6 +107,7 @@ export async function readActiveMemoriesFromRoot(memoryRoot: string): Promise<Cy
 
 export async function writeActiveMemoriesFromRoot(memoryRoot: string, memories: CyreneMemory[]): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   const active = memories.filter((memory) => memory.status === 'active')
   const current = await semanticProjectionForWrite(root)
   const next = replaceSemanticMemoriesByStatus(current, 'active', active.map(activeMemoryToSemanticMemory))
@@ -137,6 +162,7 @@ export async function writePendingMemories(cwd: string, memories: PendingMemory[
 
 export async function writePendingMemoriesFromRoot(memoryRoot: string, memories: PendingMemory[]): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   const pending = memories.filter((memory) => memory.status === 'pending')
   const current = await semanticProjectionForWrite(root)
   const next = replaceSemanticMemoriesByStatus(current, 'pending', pending.map(pendingMemoryToSemanticMemory))
@@ -147,6 +173,7 @@ export async function writePendingMemoriesFromRoot(memoryRoot: string, memories:
 
 export async function upsertPendingMemoryFromRoot(memoryRoot: string, candidate: PendingMemory): Promise<PendingMemory> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   const pending = await readPendingMemoriesFromRoot(root)
   const existingIndex = pending.findIndex((memory) => memory.normalizedKey === candidate.normalizedKey)
   let result = candidate
@@ -165,6 +192,7 @@ export async function upsertPendingMemoryFromRoot(memoryRoot: string, candidate:
 
 export async function appendEpisodeMemoryFromRoot(memoryRoot: string, episode: EpisodeMemory): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, EPISODES_FILE), episode)
 }
 
@@ -178,6 +206,7 @@ export async function readEpisodeMemoriesFromRoot(memoryRoot: string): Promise<E
 
 export async function appendCandidateDraftFromRoot(memoryRoot: string, draft: CandidateDraft): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, CANDIDATE_DRAFTS_FILE), draft)
 }
 
@@ -194,6 +223,7 @@ export async function appendAdmissionDecisionFromRoot(
   decision: AdmissionDecision
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, ADMISSION_DECISIONS_FILE), decision)
 }
 
@@ -218,6 +248,7 @@ export async function writeSemanticMemoriesFromRoot(
   memories: SemanticMemory[]
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await writeJsonLinesAtomic(join(root, SEMANTIC_MEMORIES_FILE), memories)
 }
 
@@ -226,6 +257,7 @@ export async function upsertSemanticMemoriesFromRoot(
   replacements: SemanticMemory[]
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   const current = await semanticProjectionForWrite(root)
   const next = upsertSemanticMemories(current, replacements)
   const pending = next
@@ -250,6 +282,7 @@ export async function migrateMemoryRootToSemanticV2FromRoot(
   input: { now?: string } = {}
 ): Promise<SemanticMemoryV2MigrationResult> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   const now = input.now ?? new Date().toISOString()
   const legacyActive = (await readJsonLines<CyreneMemory>(join(root, LEGACY_INDEX_FILE))).filter((memory) => memory.status === 'active')
   const legacyPending = (await readJsonLines<PendingMemory>(join(root, LEGACY_PENDING_FILE))).filter((memory) => memory.status === 'pending')
@@ -300,6 +333,7 @@ export async function appendDistillationInputFromRoot(
   input: DistillationInput
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, DISTILLATION_INPUTS_FILE), input)
 }
 
@@ -316,6 +350,7 @@ export async function appendSemanticRewriteReceiptFromRoot(
   receipt: SemanticRewriteReceipt
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, SEMANTIC_REWRITE_RECEIPTS_FILE), receipt)
 }
 
@@ -337,11 +372,13 @@ export async function readMemoryEdgesFromRoot(memoryRoot: string): Promise<Memor
 
 export async function writeMemoryEdgesFromRoot(memoryRoot: string, edges: MemoryEdge[]): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await writeJsonLinesAtomic(join(root, MEMORY_EDGES_FILE), edges)
 }
 
 export async function upsertMemoryEdgeFromRoot(memoryRoot: string, edge: MemoryEdge): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   const current = await readMemoryEdgesFromRoot(root)
   await writeMemoryEdgesFromRoot(root, upsertMemoryEdges(current, [edge]))
 }
@@ -357,6 +394,7 @@ export async function transitionMemoryEdgeStatusFromRoot(
   }
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   const current = await readMemoryEdgesFromRoot(root)
   const edge = current.find((item) => item.id === input.id)
   if (edge === undefined) {
@@ -389,6 +427,7 @@ export async function appendRoutingDecisionFromRoot(
   decision: RoutingDecision
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, ROUTING_DECISIONS_FILE), decision)
 }
 
@@ -405,6 +444,7 @@ export async function appendReviewDecisionFromRoot(
   decision: ReviewDecision
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, REVIEW_DECISIONS_FILE), decision)
 }
 
@@ -421,6 +461,7 @@ export async function appendActivationEventFromRoot(
   event: ActivationEvent
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, ACTIVATION_EVENTS_FILE), event)
 }
 
@@ -437,6 +478,7 @@ export async function appendReflectionCandidateFromRoot(
   candidate: ReflectionCandidate
 ): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, REFLECTION_CANDIDATES_FILE), candidate)
 }
 
@@ -455,6 +497,7 @@ export async function appendMemoryEvent(cwd: string, event: MemoryEvent): Promis
 
 export async function appendMemoryEventFromRoot(memoryRoot: string, event: MemoryEvent): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, EVENTS_FILE), event)
 }
 
@@ -484,11 +527,13 @@ export async function readTombstonesFromRoot(memoryRoot: string): Promise<Memory
 
 export async function writeTombstones(cwd: string, tombstones: MemoryTombstone[]): Promise<void> {
   const root = await ensureMemoryRoot(cwd)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await writeJsonLinesAtomic(join(root, TOMBSTONES_FILE), tombstones)
 }
 
 export async function appendTombstoneFromRoot(memoryRoot: string, tombstone: MemoryTombstone): Promise<void> {
   const root = await ensureWritableMemoryRoot(memoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(root)
   await appendJsonLine(join(root, TOMBSTONES_FILE), tombstone)
 }
 

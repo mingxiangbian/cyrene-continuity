@@ -4,6 +4,7 @@ import {
   type MemoryIndexDiagnostics,
   type MemoryIndexRoot
 } from '../memory/memory-index.js'
+import { jsonlScanHasCorruption, scanCanonicalJsonlFilesFromRoot } from '../memory/jsonl-diagnostics.js'
 import {
   codexGlobalRoot,
   getReadableCodexGlobalMemoryRoot,
@@ -17,6 +18,13 @@ export interface CodexMemoryIndexRebuildResult {
   dbPath: string
   diagnostics: MemoryIndexDiagnostics
   syncedRoots: number
+  skippedRoots?: CodexMemoryIndexSkippedRoot[]
+}
+
+export interface CodexMemoryIndexSkippedRoot {
+  memoryRoot: string
+  reason: 'repair_required'
+  malformedJsonLines: number
 }
 
 export function codexMemoryDbPath(): string {
@@ -55,17 +63,43 @@ export async function codexMemoryIndexRoots(projectId: string): Promise<MemoryIn
 export async function rebuildCodexMemoryIndex(input: { cwd: string }): Promise<CodexMemoryIndexRebuildResult> {
   const project = await identifyCodexProject(input.cwd)
   const roots = await codexMemoryIndexRoots(project.projectId)
+  const { healthyRoots, skippedRoots } = await filterRepairRequiredRoots(roots)
   const currentProjectMetadata = await buildCodexProjectFingerprint({ cwd: input.cwd, project })
   const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() })
   try {
-    const diagnostics = await adapter.rebuildFromRoots({ roots })
+    const diagnostics = await adapter.rebuildFromRoots({ roots: healthyRoots })
     if (diagnostics.available) {
       await adapter.upsertProjectMetadata(currentProjectMetadata)
     }
-    return { dbPath: codexMemoryDbPath(), diagnostics, syncedRoots: roots.length }
+    return {
+      dbPath: codexMemoryDbPath(),
+      diagnostics,
+      syncedRoots: healthyRoots.length,
+      ...(skippedRoots.length === 0 ? {} : { skippedRoots })
+    }
   } finally {
     adapter.close()
   }
+}
+
+async function filterRepairRequiredRoots(
+  roots: MemoryIndexRoot[]
+): Promise<{ healthyRoots: MemoryIndexRoot[]; skippedRoots: CodexMemoryIndexSkippedRoot[] }> {
+  const healthyRoots: MemoryIndexRoot[] = []
+  const skippedRoots: CodexMemoryIndexSkippedRoot[] = []
+  for (const root of roots) {
+    const scan = await scanCanonicalJsonlFilesFromRoot(root.memoryRoot)
+    if (jsonlScanHasCorruption(scan)) {
+      skippedRoots.push({
+        memoryRoot: root.memoryRoot,
+        reason: 'repair_required',
+        malformedJsonLines: scan.corruptionCount + scan.skippedFiles.length
+      })
+      continue
+    }
+    healthyRoots.push(root)
+  }
+  return { healthyRoots, skippedRoots }
 }
 
 export async function readCodexMemoryIndexDiagnostics(): Promise<MemoryIndexDiagnostics> {

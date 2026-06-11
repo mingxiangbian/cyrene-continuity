@@ -5,6 +5,7 @@ import {
   activationPolicyForConfidenceTier,
   validateSemanticMemoryLifecycle
 } from '../memory/memory-lifecycle.js'
+import { jsonlScanHasCorruption, scanCanonicalJsonlFilesFromRoot } from '../memory/jsonl-diagnostics.js'
 import {
   activeMemoryToSemanticMemory,
   pendingMemoryToSemanticMemory,
@@ -211,6 +212,15 @@ async function migrateReadableRoot(
   root: MemoryRootSpec,
   input: { dryRun: boolean; now: string }
 ): Promise<CodexMemoryLifecycleMigrateV15RootResult> {
+  const canonicalScan = await scanCanonicalJsonlFilesFromRoot(root.memoryRoot)
+  if (jsonlScanHasCorruption(canonicalScan)) {
+    return {
+      ...baseRootResult(root, { malformedJsonLines: canonicalScan.corruptionCount + canonicalScan.skippedFiles.length }),
+      skipped: true,
+      reason: 'repair_required'
+    }
+  }
+
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
     readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, LEGACY_INDEX_FILE), isValidLegacyActiveMemory),
     readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, LEGACY_PENDING_FILE), isValidPendingMemory),
@@ -241,7 +251,7 @@ async function migrateReadableRoot(
     return {
       ...result,
       skipped: true,
-      reason: 'memory root contains malformed JSONL'
+      reason: 'repair_required'
     }
   }
 
