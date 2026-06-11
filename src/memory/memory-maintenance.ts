@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { assertMemoryProjectionTargetsSafe, renderMemoryProjectionsFromRoot } from './memory-exporter.js'
@@ -206,6 +207,7 @@ export async function withMemoryMaintenanceLockFromRoot<T>(
 
 interface MaintenanceLockOwner {
   acquiredAt: string
+  hostname?: string
   pid?: number
   token?: string
 }
@@ -218,7 +220,7 @@ interface MaintenanceLockState {
 async function writeMaintenanceLockOwner(lockDir: string, token: string): Promise<void> {
   await writeFile(
     join(lockDir, MAINTENANCE_LOCK_OWNER_FILE),
-    `${JSON.stringify({ acquiredAt: new Date().toISOString(), pid: process.pid, token })}\n`,
+    `${JSON.stringify({ acquiredAt: new Date().toISOString(), hostname: hostname(), pid: process.pid, token })}\n`,
     'utf8'
   )
 }
@@ -268,6 +270,7 @@ async function readMaintenanceLockOwner(lockDir: string): Promise<MaintenanceLoc
   try {
     const parsed = JSON.parse(await readFile(join(lockDir, MAINTENANCE_LOCK_OWNER_FILE), 'utf8')) as {
       acquiredAt?: unknown
+      hostname?: unknown
       pid?: unknown
       token?: unknown
     }
@@ -276,6 +279,7 @@ async function readMaintenanceLockOwner(lockDir: string): Promise<MaintenanceLoc
     }
     return {
       acquiredAt: parsed.acquiredAt,
+      ...(typeof parsed.hostname === 'string' ? { hostname: parsed.hostname } : {}),
       ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
       ...(typeof parsed.token === 'string' ? { token: parsed.token } : {})
     }
@@ -313,6 +317,7 @@ function isSameMaintenanceLockState(left: MaintenanceLockState, right: Maintenan
     return left.owner?.token === right.owner?.token
   }
   return left.owner?.acquiredAt === right.owner?.acquiredAt &&
+    left.owner?.hostname === right.owner?.hostname &&
     left.owner?.pid === right.owner?.pid &&
     left.mtimeMs === right.mtimeMs
 }

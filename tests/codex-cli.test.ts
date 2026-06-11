@@ -1061,6 +1061,7 @@ describe('cyrene-continuity codex CLI', () => {
       expect(stderr).toContain('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
       expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply] [--all-projects]')
       expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply] [--all-projects]')
+      expect(stderr).toContain('memory jsonl repair [--dry-run|--apply] [--global]')
       expect(stderr).toContain('[--include-pending-notice]')
       expect(stderr).toContain('ui [--port <n>]')
     }
@@ -1258,6 +1259,67 @@ describe('cyrene-continuity codex CLI', () => {
     expect(parsed.dbPath).toBe(join(home, '.cyrene', 'codex', 'memory.db'))
     expect(parsed.diagnostics.available).toBe(true)
     expect(parsed.syncedRoots).toBeGreaterThanOrEqual(1)
+  })
+
+  it('runs jsonl repair dry-run without mutating corrupted project memory', async () => {
+    const home = await createTempDir('cyrene-codex-cli-jsonl-repair-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-jsonl-repair-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    const sourcePath = join(projectMemoryRoot, 'semantic_memories.jsonl')
+    const original = '{"id":"ok"}\n{bad json}\n'
+    await writeFile(sourcePath, original, 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'jsonl', 'repair', '--dry-run'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      action: string
+      dryRun: boolean
+      roots: Array<{ action: string; malformedLineCount: number }>
+    }
+    expect(parsed.action).toBe('memory_jsonl_repair')
+    expect(parsed.dryRun).toBe(true)
+    expect(parsed.roots).toEqual([
+      expect.objectContaining({
+        action: 'dry_run',
+        malformedLineCount: 1
+      })
+    ])
+    await expect(readFile(sourcePath, 'utf8')).resolves.toBe(original)
+  })
+
+  it('rejects jsonl repair with both dry-run and apply flags', async () => {
+    const home = await createTempDir('cyrene-codex-cli-jsonl-repair-flags-home-')
+    const repo = await createTempDir('cyrene-codex-cli-jsonl-repair-flags-repo-')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          'node_modules/tsx/dist/cli.mjs',
+          'src/main.ts',
+          '--cwd',
+          repo,
+          'codex',
+          'memory',
+          'jsonl',
+          'repair',
+          '--dry-run',
+          '--apply'
+        ],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('memory jsonl repair accepts only one of --dry-run or --apply')
+    })
   })
 
   it('runs semantic memory v2 migration from the CLI for global and current project roots', async () => {
