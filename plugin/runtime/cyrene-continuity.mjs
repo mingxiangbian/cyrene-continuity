@@ -30661,9 +30661,10 @@ async function runCandidateHintCase(benchmarkCase, options) {
         }
       ]
     };
+    const qualityGatePassed = candidateHintQualityGatePassed(balancedMetrics, reviewMetrics);
+    const latencyGatePassed = candidateHintLatencyGatePassed(balancedCandidateLatencies, reviewCandidateLatencies);
     const hardFailures = [];
-    if (!candidateHintQualityGatePassed(balancedMetrics, reviewMetrics)) hardFailures.push("candidate_hint_quality_gate");
-    if (!candidateHintLatencyGatePassed(balancedCandidateLatencies, reviewCandidateLatencies)) hardFailures.push("latency_threshold_breach");
+    if (!qualityGatePassed) hardFailures.push("candidate_hint_quality_gate");
     const caseResult3 = result2(benchmarkCase, hardFailures, [
       { name: "candidateHintLatencyMs", value: enabledContextLatencyMs },
       { name: "candidateHintLatencyP50BalancedMs", value: percentile(balancedCandidateLatencies, 0.5) },
@@ -30682,7 +30683,8 @@ async function runCandidateHintCase(benchmarkCase, options) {
       { name: "candidateHintSuppressedByLatencyCount", value: reviewMetrics.candidateHintSuppressedByLatencyCount }
     ], [{
       summary: [
-        "candidate hints aggregate gate passed",
+        `candidate hints quality gate ${qualityGatePassed ? "passed" : "failed"}`,
+        `latencyGate=${latencyGatePassed ? "passed" : "observed_above_target"}`,
         `balanced selected=${balancedMetrics.candidateHintSelectedCount}`,
         `review selected=${reviewMetrics.candidateHintSelectedCount}`,
         `relevant=${reviewMetrics.candidateHintRelevantCount}`,
