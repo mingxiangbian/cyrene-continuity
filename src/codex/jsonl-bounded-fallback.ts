@@ -43,16 +43,25 @@ export async function readBoundedActiveJsonlFallback(input: {
     )
     const tombstones: MemoryTombstone[] = []
     let invalidTombstones = 0
-    for (const record of tombstoneScan.records.slice(0, JSONL_FALLBACK_RECORD_CAP)) {
+    const tombstoneRecordCapExceeded = tombstoneScan.records.length > JSONL_FALLBACK_RECORD_CAP
+    for (const record of tombstoneRecordCapExceeded ? [] : tombstoneScan.records) {
       if (isMemoryTombstone(record)) {
         tombstones.push(record)
       } else {
         invalidTombstones += 1
       }
     }
-    if (tombstoneScan.skippedReason !== undefined || tombstoneScan.malformed.length > 0 || invalidTombstones > 0) {
+    if (
+      tombstoneScan.skippedReason !== undefined ||
+      tombstoneScan.malformed.length > 0 ||
+      invalidTombstones > 0 ||
+      tombstoneRecordCapExceeded
+    ) {
       skippedRoots.add(memoryRoot)
-      corruptionCount += tombstoneScan.malformed.length + invalidTombstones + (tombstoneScan.skippedReason === undefined ? 0 : 1)
+      corruptionCount += tombstoneScan.malformed.length +
+        invalidTombstones +
+        (tombstoneScan.skippedReason === undefined ? 0 : 1) +
+        (tombstoneRecordCapExceeded ? 1 : 0)
       continue
     }
     for (const tombstone of tombstones) {

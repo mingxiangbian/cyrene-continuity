@@ -1847,6 +1847,90 @@ describe('Codex continuity context', () => {
     })
   })
 
+  it('balanced bounded fallback fails closed when tombstone side data exceeds the record cap', async () => {
+    const home = await createTempDir('cyrene-codex-continuity-balanced-tombstone-cap-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-continuity-balanced-tombstone-cap-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const dbPath = join(home, '.cyrene', 'codex', 'memory.db')
+    const sourcePath = join(projectMemoryRoot, 'semantic_memories.jsonl')
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeFile(join(projectMemoryRoot, 'semantic_memories.jsonl'), JSON.stringify(createSemanticMemory({
+      id: 'tombstone-cap-seed',
+      confidenceTier: 'validated',
+      content: 'Seed memory exists only to build the SQLite index.'
+    })) + '\n')
+    await rebuildCodexMemoryIndex({ cwd: repo })
+    await writeFile(join(projectMemoryRoot, 'semantic_memories.jsonl'), JSON.stringify(createSemanticMemory({
+      id: 'tombstone-cap-hidden',
+      confidenceTier: 'validated',
+      content: 'Tombstone cap active runtime validator memory must stay hidden.',
+      reviewState: {
+        normalizedKey: 'tombstone-cap-hidden-key',
+        type: 'procedural_rule',
+        strength: 'hard',
+        source: 'file',
+        scores: {
+          evidenceStrength: 0.9,
+          stability: 0.9,
+          usefulness: 0.9,
+          safety: 0.95,
+          sensitivity: 0.1
+        },
+        tags: ['workflow_rule']
+      }
+    })) + '\n')
+    const tombstones = [
+      ...Array.from({ length: 500 }, (_, index) => ({
+        id: `irrelevant-tombstone-${index}`,
+        memoryId: `irrelevant-memory-${index}`,
+        normalizedKey: `irrelevant-key-${index}`,
+        domain: 'procedural',
+        type: 'procedural_rule',
+        scope: 'project',
+        reason: 'deleted',
+        createdAt: '2026-06-02T00:00:00.000Z'
+      })),
+      {
+        id: 'late-tombstone-cap-hidden',
+        memoryId: 'tombstone-cap-hidden',
+        normalizedKey: 'tombstone-cap-hidden-key',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        scope: 'project',
+        reason: 'deleted',
+        createdAt: '2026-06-02T00:00:00.000Z'
+      }
+    ]
+    await writeFile(join(projectMemoryRoot, 'tombstones.jsonl'), tombstones.map((tombstone) => JSON.stringify(tombstone)).join('\n') + '\n')
+    await utimes(dbPath, new Date('2026-01-01T00:00:00.000Z'), new Date('2026-01-01T00:00:00.000Z'))
+    await utimes(sourcePath, new Date('2026-01-02T00:00:00.000Z'), new Date('2026-01-02T00:00:00.000Z'))
+
+    const context = await getCodexContinuityContext({
+      cwd: repo,
+      userMessage: 'tombstone cap active runtime validator',
+      task: 'planning',
+      mode: 'balanced',
+      includeDiagnostics: true
+    })
+
+    expect(context.memory.items).toEqual([])
+    expect(context.projectMemory).toEqual([])
+    expect(JSON.stringify(context)).not.toContain('Tombstone cap active runtime validator memory must stay hidden.')
+    expect(context.diagnostics?.memoryIndex).toMatchObject({
+      freshness: 'stale',
+      source: 'jsonl',
+      fallbackMode: 'degraded',
+      reason: expect.stringContaining('fail_closed_missing_lifecycle_side_data'),
+      recordCap: 500,
+      fileSizeCap: 5242880,
+      selectedCount: 0,
+      skippedRoots: [projectMemoryRoot],
+      corruptionCount: 1
+    })
+  })
+
   it('keeps JSONL fallback pending memory provisional when explicitly allowed without creating the index', async () => {
     const home = await createTempDir('cyrene-codex-continuity-pending-fallback-home-')
     process.env.HOME = home

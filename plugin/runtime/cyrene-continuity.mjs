@@ -19550,16 +19550,17 @@ async function readBoundedActiveJsonlFallback(input) {
     );
     const tombstones = [];
     let invalidTombstones = 0;
-    for (const record2 of tombstoneScan.records.slice(0, JSONL_FALLBACK_RECORD_CAP)) {
+    const tombstoneRecordCapExceeded = tombstoneScan.records.length > JSONL_FALLBACK_RECORD_CAP;
+    for (const record2 of tombstoneRecordCapExceeded ? [] : tombstoneScan.records) {
       if (isMemoryTombstone(record2)) {
         tombstones.push(record2);
       } else {
         invalidTombstones += 1;
       }
     }
-    if (tombstoneScan.skippedReason !== void 0 || tombstoneScan.malformed.length > 0 || invalidTombstones > 0) {
+    if (tombstoneScan.skippedReason !== void 0 || tombstoneScan.malformed.length > 0 || invalidTombstones > 0 || tombstoneRecordCapExceeded) {
       skippedRoots.add(memoryRoot);
-      corruptionCount += tombstoneScan.malformed.length + invalidTombstones + (tombstoneScan.skippedReason === void 0 ? 0 : 1);
+      corruptionCount += tombstoneScan.malformed.length + invalidTombstones + (tombstoneScan.skippedReason === void 0 ? 0 : 1) + (tombstoneRecordCapExceeded ? 1 : 0);
       continue;
     }
     for (const tombstone of tombstones) {
