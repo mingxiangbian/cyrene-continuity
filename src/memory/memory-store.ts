@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { appendFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -48,6 +49,25 @@ const EVENTS_FILE = 'events.jsonl'
 const TOMBSTONES_FILE = 'tombstones.jsonl'
 const MAX_PENDING_EVIDENCE = 10
 
+interface MemoryStoreTestHooks {
+  onCanonicalJsonlMutationGuardScan?: (memoryRoot: string) => void
+}
+
+interface CanonicalJsonlMutationGuardScope {
+  healthyRoots: Set<string>
+}
+
+const canonicalJsonlMutationGuardStorage = new AsyncLocalStorage<CanonicalJsonlMutationGuardScope>()
+let memoryStoreTestHooks: MemoryStoreTestHooks = {}
+
+export function setMemoryStoreTestHooksForTest(hooks: MemoryStoreTestHooks): () => void {
+  const previousHooks = memoryStoreTestHooks
+  memoryStoreTestHooks = hooks
+  return () => {
+    memoryStoreTestHooks = previousHooks
+  }
+}
+
 export class MemoryJsonlRepairRequiredError extends Error {
   constructor(
     readonly memoryRoot: string,
@@ -64,7 +84,24 @@ export function isMemoryJsonlRepairRequiredError(error: unknown): error is Memor
   return error instanceof MemoryJsonlRepairRequiredError
 }
 
+export async function withCanonicalJsonlMutationGuard<T>(memoryRoot: string, task: () => Promise<T>): Promise<T> {
+  const root = await ensureWritableMemoryRoot(memoryRoot)
+  const existingScope = canonicalJsonlMutationGuardStorage.getStore()
+  if (existingScope?.healthyRoots.has(root) === true) {
+    return task()
+  }
+  await assertCanonicalJsonlHealthyForMutation(root)
+  const healthyRoots = new Set(existingScope?.healthyRoots ?? [])
+  healthyRoots.add(root)
+  return canonicalJsonlMutationGuardStorage.run({ healthyRoots }, task)
+}
+
 export async function assertCanonicalJsonlHealthyForMutation(memoryRoot: string): Promise<void> {
+  const scope = canonicalJsonlMutationGuardStorage.getStore()
+  if (scope?.healthyRoots.has(memoryRoot) === true) {
+    return
+  }
+  memoryStoreTestHooks.onCanonicalJsonlMutationGuardScan?.(memoryRoot)
   const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot)
   if (jsonlScanHasCorruption(scan)) {
     throw new MemoryJsonlRepairRequiredError(memoryRoot, scan.corruptionCount, scan.skippedFiles.length)

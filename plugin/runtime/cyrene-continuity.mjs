@@ -10099,6 +10099,7 @@ function isFileErrorCode(error2, code) {
 }
 
 // src/memory/memory-store.ts
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { appendFile, lstat as lstat4, mkdir as mkdir2, readFile as readFile3, realpath as realpath2, rename, rm, writeFile } from "node:fs/promises";
 import { join as join5 } from "node:path";
@@ -10641,6 +10642,8 @@ var MEMORY_EDGES_FILE = "memory_edges.jsonl";
 var EVENTS_FILE = "events.jsonl";
 var TOMBSTONES_FILE = "tombstones.jsonl";
 var MAX_PENDING_EVIDENCE = 10;
+var canonicalJsonlMutationGuardStorage = new AsyncLocalStorage();
+var memoryStoreTestHooks = {};
 var MemoryJsonlRepairRequiredError = class extends Error {
   constructor(memoryRoot, malformedLineCount, skippedFileCount = 0) {
     const skippedCopy = skippedFileCount > 0 ? `; ${skippedFileCount} skipped files` : "";
@@ -10657,7 +10660,23 @@ var MemoryJsonlRepairRequiredError = class extends Error {
 function isMemoryJsonlRepairRequiredError(error2) {
   return error2 instanceof MemoryJsonlRepairRequiredError;
 }
+async function withCanonicalJsonlMutationGuard(memoryRoot, task) {
+  const root = await ensureWritableMemoryRoot(memoryRoot);
+  const existingScope = canonicalJsonlMutationGuardStorage.getStore();
+  if (existingScope?.healthyRoots.has(root) === true) {
+    return task();
+  }
+  await assertCanonicalJsonlHealthyForMutation(root);
+  const healthyRoots = new Set(existingScope?.healthyRoots ?? []);
+  healthyRoots.add(root);
+  return canonicalJsonlMutationGuardStorage.run({ healthyRoots }, task);
+}
 async function assertCanonicalJsonlHealthyForMutation(memoryRoot) {
+  const scope = canonicalJsonlMutationGuardStorage.getStore();
+  if (scope?.healthyRoots.has(memoryRoot) === true) {
+    return;
+  }
+  memoryStoreTestHooks.onCanonicalJsonlMutationGuardScan?.(memoryRoot);
   const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot);
   if (jsonlScanHasCorruption(scan)) {
     throw new MemoryJsonlRepairRequiredError(memoryRoot, scan.corruptionCount, scan.skippedFiles.length);
@@ -15915,10 +15934,16 @@ async function assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot) {
   return root;
 }
 async function runMemoryMaintenanceFromRootLocked(input) {
-  const repairRequired = await readMaintenanceRepairRequired(input.memoryRoot);
-  if (repairRequired !== void 0) {
-    return skippedMaintenanceResult(input.memoryRoot, repairRequired.malformedJsonLines);
+  try {
+    return await withCanonicalJsonlMutationGuard(input.memoryRoot, () => runMemoryMaintenanceAfterJsonlGuard(input));
+  } catch (error2) {
+    if (isMemoryJsonlRepairRequiredError(error2)) {
+      return skippedMaintenanceResult(input.memoryRoot, error2.malformedLineCount + error2.skippedFileCount);
+    }
+    throw error2;
   }
+}
+async function runMemoryMaintenanceAfterJsonlGuard(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const snapshot = await createMemorySnapshotFromRoot(
     input.memoryRoot,

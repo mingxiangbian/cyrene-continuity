@@ -10,9 +10,11 @@ import {
   appendMemoryEventFromRoot,
   appendTombstoneFromRoot,
   ensureWritableMemoryRootPath,
+  isMemoryJsonlRepairRequiredError,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot,
+  withCanonicalJsonlMutationGuard,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from './memory-store.js'
@@ -97,10 +99,24 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
   preservePendingCandidateIds?: string[]
   preserveDuplicateNormalizedKeys?: string[]
 }): Promise<MemoryMaintenanceResult> {
-  const repairRequired = await readMaintenanceRepairRequired(input.memoryRoot)
-  if (repairRequired !== undefined) {
-    return skippedMaintenanceResult(input.memoryRoot, repairRequired.malformedJsonLines)
+  try {
+    return await withCanonicalJsonlMutationGuard(input.memoryRoot, () => runMemoryMaintenanceAfterJsonlGuard(input))
+  } catch (error) {
+    if (isMemoryJsonlRepairRequiredError(error)) {
+      return skippedMaintenanceResult(input.memoryRoot, error.malformedLineCount + error.skippedFileCount)
+    }
+    throw error
   }
+}
+
+async function runMemoryMaintenanceAfterJsonlGuard(input: {
+  memoryRoot: string
+  budget: MemoryMaintenanceBudget
+  now?: string
+  reason?: string
+  preservePendingCandidateIds?: string[]
+  preserveDuplicateNormalizedKeys?: string[]
+}): Promise<MemoryMaintenanceResult> {
   const now = input.now ?? new Date().toISOString()
   const snapshot = await createMemorySnapshotFromRoot(
     input.memoryRoot,
