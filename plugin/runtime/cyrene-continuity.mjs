@@ -19688,6 +19688,7 @@ import { join as join21 } from "node:path";
 var JSONL_FALLBACK_RECORD_CAP = 500;
 var JSONL_FALLBACK_FILE_SIZE_CAP_BYTES = 5 * 1024 * 1024;
 var BALANCED_CANDIDATE_CAP = 24;
+var HARVEST_PREVIEW_DISPLAY_CAP = 12;
 var HARVEST_PREVIEW_TTL_MS = 24 * 60 * 60 * 1e3;
 
 // src/codex/jsonl-bounded-fallback.ts
@@ -33751,9 +33752,9 @@ async function runCodexBenchmark(input) {
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID19 } from "node:crypto";
-import { lstat as lstat13, open as open4, readFile as readFile25, realpath as realpath6 } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join37, relative as relative5, resolve as resolve6 } from "node:path";
+import { randomUUID as randomUUID20 } from "node:crypto";
+import { lstat as lstat13, open as open4, readFile as readFile26, realpath as realpath6 } from "node:fs/promises";
+import { isAbsolute as isAbsolute5, join as join38, relative as relative5, resolve as resolve6 } from "node:path";
 
 // src/llm-client.ts
 async function callModel(input) {
@@ -34651,7 +34652,7 @@ function shortHash(value) {
 }
 
 // src/codex/project-memory-harvester.ts
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile4 } from "node:child_process";
@@ -35062,6 +35063,111 @@ function isErrorWithStderr(error2) {
   return error2 instanceof Error && "stderr" in error2 && typeof error2.stderr === "string";
 }
 
+// src/codex/project-memory-harvest-preview.ts
+import { createHash as createHash20, randomUUID as randomUUID18 } from "node:crypto";
+import { mkdir as mkdir18, readFile as readFile25, writeFile as writeFile16 } from "node:fs/promises";
+import { join as join36 } from "node:path";
+var HARVEST_PREVIEW_ROUTES = [
+  "trial_eligible",
+  "review_required",
+  "reject_recommended"
+];
+var HARVEST_PREVIEWS_DIR = "harvest_previews";
+var HARVEST_PREVIEW_ID_PATTERN = /^harvest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function stableCanonicalJson(value) {
+  return JSON.stringify(canonicalValue(value));
+}
+function previewHashForPayload(payload) {
+  return createHash20("sha256").update(stableCanonicalJson(payload)).digest("hex");
+}
+async function writeHarvestPreviewArtifact(input) {
+  const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  const expiresAt = new Date(Date.parse(createdAt) + HARVEST_PREVIEW_TTL_MS).toISOString();
+  const payload = {
+    previewId: `harvest-${randomUUID18()}`,
+    projectId: input.projectId,
+    memoryRoot: input.memoryRoot,
+    createdAt,
+    expiresAt,
+    admissionPolicyVersion: input.admissionPolicyVersion,
+    toolVersion: input.toolVersion,
+    candidates: input.candidates,
+    groups: input.groups,
+    warnings: input.warnings,
+    sourceSignalHashes: input.sourceSignalHashes
+  };
+  const artifact = {
+    ...payload,
+    previewHash: previewHashForPayload(payload)
+  };
+  const dir = join36(input.memoryRoot, HARVEST_PREVIEWS_DIR);
+  await mkdir18(dir, { recursive: true });
+  await writeFile16(join36(dir, `${artifact.previewId}.json`), `${stableCanonicalJson(artifact)}
+`, "utf8");
+  return artifact;
+}
+async function readHarvestPreviewArtifact(input) {
+  if (!HARVEST_PREVIEW_ID_PATTERN.test(input.previewId)) {
+    return { action: "preview_not_found", reason: "Harvest preview id is invalid." };
+  }
+  let raw;
+  try {
+    raw = await readFile25(join36(input.memoryRoot, HARVEST_PREVIEWS_DIR, `${input.previewId}.json`), "utf8");
+  } catch {
+    return { action: "preview_not_found", reason: "Harvest preview artifact was not found." };
+  }
+  const artifact = parseHarvestPreviewArtifact(raw);
+  if (artifact === void 0 || artifact.previewId !== input.previewId) {
+    return { action: "preview_hash_mismatch", reason: "Harvest preview artifact is invalid." };
+  }
+  const { previewHash: storedHash, ...payload } = artifact;
+  const expectedHash = previewHashForPayload(payload);
+  if (storedHash !== input.previewHash || expectedHash !== input.previewHash) {
+    return { action: "preview_hash_mismatch", reason: "Harvest preview hash does not match the artifact." };
+  }
+  const createdAtMs = Date.parse(artifact.createdAt);
+  const expiresAtMs = Date.parse(artifact.expiresAt);
+  const now = Date.parse(input.now ?? (/* @__PURE__ */ new Date()).toISOString());
+  if (!Number.isFinite(createdAtMs) || !Number.isFinite(expiresAtMs) || !Number.isFinite(now) || expiresAtMs <= createdAtMs) {
+    return { action: "preview_hash_mismatch", reason: "Harvest preview artifact has invalid timestamps." };
+  }
+  if (now >= expiresAtMs) {
+    return { action: "preview_expired", reason: "Harvest preview expired; run preview again." };
+  }
+  return { action: "ok", artifact };
+}
+function canonicalValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalValue);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).filter((entry) => entry[1] !== void 0).sort(([left], [right]) => left.localeCompare(right)).map(([key, entryValue]) => [key, canonicalValue(entryValue)])
+    );
+  }
+  return value;
+}
+function parseHarvestPreviewArtifact(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!isHarvestPreviewArtifact(parsed)) {
+      return void 0;
+    }
+    return parsed;
+  } catch {
+    return void 0;
+  }
+}
+function isHarvestPreviewArtifact(value) {
+  if (!isRecord5(value)) {
+    return false;
+  }
+  return typeof value.previewId === "string" && typeof value.previewHash === "string" && typeof value.projectId === "string" && typeof value.memoryRoot === "string" && typeof value.createdAt === "string" && typeof value.expiresAt === "string" && typeof value.admissionPolicyVersion === "string" && typeof value.toolVersion === "string" && Array.isArray(value.candidates) && Array.isArray(value.groups) && Array.isArray(value.warnings) && Array.isArray(value.sourceSignalHashes);
+}
+function isRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/codex/project-memory-harvester.ts
 var PROJECT_CANDIDATE_KINDS = [
   "project_fact",
@@ -35074,6 +35180,8 @@ var PROJECT_CANDIDATE_KINDS = [
 var SIGNAL_EVIDENCE_LIMIT = 6;
 var GENERATED_MEMORY_CONTENT_MAX_LENGTH = 240;
 var EVIDENCE_MAX_LENGTH2 = 320;
+var ADMISSION_POLICY_VERSION = "admission_gate_v1";
+var PROJECT_HARVEST_TOOL_VERSION = "project_harvest_preview_v1";
 var SENSITIVE_PROJECT_HARVEST_PATTERN = /\b(?:personal|private|family|medical|password|secret|token|api[_\s-]?key|bearer|sk-[a-z0-9_-]*)\b/i;
 async function runCodexProjectMemoryHarvest(input) {
   const project = await identifyCodexProject(input.cwd);
@@ -35085,6 +35193,9 @@ async function runCodexProjectMemoryHarvest(input) {
       warnings: []
     };
   }
+  if (input.apply === true) {
+    return applyCodexProjectMemoryHarvestPreview(input, project.projectId);
+  }
   const { signals, warnings } = await collectProjectMemorySignals({
     cwd: input.cwd,
     mode: input.mode,
@@ -35092,6 +35203,15 @@ async function runCodexProjectMemoryHarvest(input) {
   });
   if (signals.length === 0) {
     return { action: "noop", reason: "No project memory signals collected.", signals, warnings };
+  }
+  if (isExplicitDryRunFalse(input)) {
+    return {
+      action: "preview_required",
+      reason: "Project harvest requires preview-first apply: rerun without dryRun:false for preview, then use --apply/apply:true with matching previewId and previewHash.",
+      modelCallCount: 0,
+      signals,
+      warnings
+    };
   }
   const missingModelReason = missingModelConfigReason(input.config);
   if (missingModelReason !== void 0) {
@@ -35109,13 +35229,67 @@ async function runCodexProjectMemoryHarvest(input) {
     const sanitized = sanitizeProjectMemoryCandidate(candidate, signals, input.config);
     return sanitized === void 0 ? [] : [sanitized];
   });
-  if (input.dryRun === true) {
-    return { action: "preview", candidates, signals, warnings };
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
+  const classified = await classifyProjectHarvestPreviewCandidates({ memoryRoot, candidates });
+  const groups = groupProjectHarvestPreviewCandidates(classified);
+  const artifact = await writeHarvestPreviewArtifact({
+    projectId: project.projectId,
+    memoryRoot,
+    now: input.now,
+    admissionPolicyVersion: ADMISSION_POLICY_VERSION,
+    toolVersion: PROJECT_HARVEST_TOOL_VERSION,
+    candidates: classified,
+    groups,
+    warnings,
+    sourceSignalHashes: signals.map(sourceSignalHash)
+  });
+  return {
+    action: "preview",
+    previewId: artifact.previewId,
+    previewHash: artifact.previewHash,
+    modelCallCount: 1,
+    candidates: displayPreviewCandidates(classified),
+    groups,
+    signals,
+    warnings
+  };
+}
+async function applyCodexProjectMemoryHarvestPreview(input, projectId) {
+  const memoryRootForPreview = await ensureCodexProjectMemoryRoot(projectId);
+  if (input.previewId === void 0 || input.previewHash === void 0) {
+    return {
+      action: "preview_required",
+      reason: "Project harvest apply requires matching previewId and previewHash.",
+      modelCallCount: 0,
+      signals: [],
+      warnings: []
+    };
   }
+  const preview = await readHarvestPreviewArtifact({
+    memoryRoot: memoryRootForPreview,
+    previewId: input.previewId,
+    previewHash: input.previewHash,
+    now: input.now
+  });
+  if (preview.action === "preview_expired") {
+    return { action: "preview_expired", reason: preview.reason, modelCallCount: 0, signals: [], warnings: [] };
+  }
+  if (preview.action !== "ok") {
+    return { action: "preview_required", reason: preview.reason, modelCallCount: 0, signals: [], warnings: [] };
+  }
+  if (preview.artifact.projectId !== projectId || preview.artifact.memoryRoot !== memoryRootForPreview) {
+    return {
+      action: "preview_required",
+      reason: "Harvest preview artifact does not belong to this project memory root.",
+      modelCallCount: 0,
+      signals: [],
+      warnings: []
+    };
+  }
+  const candidates = preview.artifact.candidates.filter((candidate) => candidate.route === "trial_eligible");
   const candidateIds = [];
   const pendingCandidateIds = [];
   const trialMemoryIds = [];
-  let memoryRoot;
   for (const candidate of candidates) {
     const result3 = await runCodexAdmissionPipeline({
       cwd: input.cwd,
@@ -35125,7 +35299,6 @@ async function runCodexProjectMemoryHarvest(input) {
       now: input.now,
       recordRejectedCandidate: false
     });
-    memoryRoot = result3.memoryRoot;
     if (result3.action === "pending" && result3.result.action === "pending") {
       candidateIds.push(result3.result.candidateId);
       pendingCandidateIds.push(result3.result.candidateId);
@@ -35135,19 +35308,142 @@ async function runCodexProjectMemoryHarvest(input) {
     }
   }
   if (candidateIds.length === 0) {
-    return { action: "noop", reason: "No project memory candidates survived admission.", signals, warnings };
+    return {
+      action: "noop",
+      reason: "No project memory candidates survived admission.",
+      signals: [],
+      warnings: preview.artifact.warnings
+    };
   }
   if (trialMemoryIds.length > 0 && trialMemoryIds.length === candidateIds.length) {
-    return { action: "trial", candidateIds, memoryIds: trialMemoryIds, memoryRoot: memoryRoot ?? "", signals, warnings };
+    return {
+      action: "trial",
+      candidateIds,
+      memoryIds: trialMemoryIds,
+      memoryRoot: memoryRootForPreview,
+      modelCallCount: 0,
+      signals: [],
+      warnings: preview.artifact.warnings
+    };
   }
   return {
     action: "pending",
     candidateIds: pendingCandidateIds,
     trialMemoryIds,
-    memoryRoot: memoryRoot ?? "",
-    signals,
-    warnings
+    memoryRoot: memoryRootForPreview,
+    modelCallCount: 0,
+    signals: [],
+    warnings: preview.artifact.warnings
   };
+}
+async function classifyProjectHarvestPreviewCandidates(input) {
+  const [active, pending] = await Promise.all([
+    readActiveMemoriesFromRoot(input.memoryRoot),
+    readPendingMemoriesFromRoot(input.memoryRoot)
+  ]);
+  const existing = [...active, ...pending];
+  const seenKeys = /* @__PURE__ */ new Set();
+  return input.candidates.map((candidate) => {
+    const normalizedKey = normalizedProjectHarvestCandidateKey(candidate);
+    const conflictKey = conflictComparisonKeyForCandidate(candidate);
+    const existingMatch = existing.find((memory2) => memory2.normalizedKey === normalizedKey);
+    const existingHardConflict = existing.find(
+      (memory2) => conflictComparisonKeyForMemory(memory2) === conflictKey && sameSourceBoundary(memory2.sourceOfTruth, candidate.sourceOfTruth) && hasContradictoryDirective2(memory2.content, candidate.content)
+    );
+    const route = routeProjectHarvestCandidate({
+      candidate,
+      normalizedKey,
+      seenKeys,
+      hasExistingDuplicate: existingMatch !== void 0,
+      hasHardConflict: existingHardConflict !== void 0
+    });
+    seenKeys.add(normalizedKey);
+    return { ...candidate, ...route };
+  });
+}
+function routeProjectHarvestCandidate(input) {
+  if (input.hasHardConflict) {
+    return { route: "review_required", reason: "hard conflict with active project memory" };
+  }
+  if (input.seenKeys.has(input.normalizedKey) || input.hasExistingDuplicate) {
+    return { route: "reject_recommended", reason: "duplicate project harvest candidate" };
+  }
+  if (isInstructionLikeCandidate(input.candidate)) {
+    return { route: "review_required", reason: "instruction-like candidate requires review" };
+  }
+  if (input.candidate.source === "assistant_observed") {
+    return { route: "review_required", reason: "assistant-observed candidate requires review" };
+  }
+  if (input.candidate.scope !== void 0 && input.candidate.scope !== "project") {
+    return { route: "review_required", reason: "non-project scope requires review" };
+  }
+  if (input.candidate.source !== "file" || input.candidate.sourceOfTruth === void 0) {
+    return { route: "review_required", reason: "fresh project file provenance required" };
+  }
+  return { route: "trial_eligible", reason: "fresh project provenance with no duplicate or hard conflict" };
+}
+function groupProjectHarvestPreviewCandidates(candidates) {
+  return HARVEST_PREVIEW_ROUTES.map((route) => ({
+    route,
+    candidates: candidates.filter((candidate) => candidate.route === route)
+  }));
+}
+function displayPreviewCandidates(candidates) {
+  const ordered = HARVEST_PREVIEW_ROUTES.flatMap(
+    (route) => candidates.filter((candidate) => candidate.route === route)
+  );
+  return ordered.slice(0, HARVEST_PREVIEW_DISPLAY_CAP);
+}
+function normalizedProjectHarvestCandidateKey(candidate) {
+  return candidate.normalizedKey ?? normalizeMemoryKey(`${candidate.domain}:${candidate.type}:${candidate.content}`);
+}
+function conflictComparisonKeyForCandidate(candidate) {
+  return directiveSignature(candidate.content)?.key ?? normalizedProjectHarvestCandidateKey(candidate);
+}
+function conflictComparisonKeyForMemory(memory2) {
+  return directiveSignature(memory2.content)?.key ?? memory2.normalizedKey;
+}
+function isInstructionLikeCandidate(candidate) {
+  return /\b(?:from now on|always remember|remember to|user must|assistant must|assistant should)\b/i.test(candidate.content);
+}
+function sameSourceBoundary(left, right) {
+  return left !== void 0 && right !== void 0 && left === right;
+}
+function hasContradictoryDirective2(left, right) {
+  const leftDirective = directiveSignature(left);
+  const rightDirective = directiveSignature(right);
+  if (leftDirective === void 0 || rightDirective === void 0) {
+    return false;
+  }
+  return leftDirective.key === rightDirective.key && leftDirective.value !== rightDirective.value;
+}
+function directiveSignature(content) {
+  const normalized = content.toLowerCase();
+  if (/\bnpm test\b/.test(normalized)) {
+    return { key: "test-command", value: "npm test" };
+  }
+  if (/\bpnpm test\b/.test(normalized)) {
+    return { key: "test-command", value: "pnpm test" };
+  }
+  if (/\bnpm run typecheck\b/.test(normalized)) {
+    return { key: "typecheck-command", value: "npm run typecheck" };
+  }
+  if (/\bpnpm typecheck\b/.test(normalized)) {
+    return { key: "typecheck-command", value: "pnpm typecheck" };
+  }
+  if (/\bbuild:plugin\b/.test(normalized)) {
+    return { key: "plugin-runtime-build", value: "requires build:plugin" };
+  }
+  if (/\bno build\b|\bwithout build\b|不要.*build|无需.*build/.test(normalized)) {
+    return { key: "plugin-runtime-build", value: "no build" };
+  }
+  return void 0;
+}
+function isExplicitDryRunFalse(input) {
+  return Object.prototype.hasOwnProperty.call(input, "dryRun") && input.dryRun === false;
+}
+function sourceSignalHash(signal) {
+  return createHash21("sha256").update(stableCanonicalJson(signal)).digest("hex");
 }
 function buildCodexProjectMemoryHarvestPrompt(signals) {
   return [
@@ -35170,7 +35466,7 @@ function buildCodexProjectMemoryHarvestPrompt(signals) {
 }
 function parseCodexProjectMemoryHarvestResponse(content) {
   const parsed = JSON.parse(extractJsonObject(content));
-  if (!isRecord5(parsed)) {
+  if (!isRecord6(parsed)) {
     throw new Error("Project memory harvest response is not a JSON object.");
   }
   return {
@@ -35179,7 +35475,7 @@ function parseCodexProjectMemoryHarvestResponse(content) {
   };
 }
 function sanitizeProjectMemoryCandidate(value, signals, config2) {
-  if (!isRecord5(value)) {
+  if (!isRecord6(value)) {
     return void 0;
   }
   const candidateKind = parseProjectCandidateKind(value.candidateKind) ?? parseProjectCandidateKind(value.candidate_kind);
@@ -35271,7 +35567,7 @@ function sourceRefsForSignal(signal) {
   }));
 }
 function sourceForSignals(signals) {
-  if (signals.some((signal) => signal.source === "file" || signal.source === "git" || signal.source === "review_summary")) {
+  if (signals.some((signal) => signal.source === "file" || signal.source === "git")) {
     return "file";
   }
   if (signals.some((signal) => signal.source === "tool_trace")) {
@@ -35283,8 +35579,11 @@ function sourceForSignal(signal) {
   if (signal.source === "tool_trace") {
     return "tool_trace";
   }
-  if (signal.source === "file" || signal.source === "git" || signal.source === "review_summary") {
+  if (signal.source === "file" || signal.source === "git") {
     return "file";
+  }
+  if (signal.source === "review_summary") {
+    return "review_event";
   }
   return void 0;
 }
@@ -35366,7 +35665,7 @@ function uniqueNumbers(values) {
   return Array.from(new Set(values));
 }
 function stableEvidenceGroupId(input) {
-  return createHash20("sha256").update(JSON.stringify(input)).digest("hex");
+  return createHash21("sha256").update(JSON.stringify(input)).digest("hex");
 }
 function extractJsonObject(content) {
   const start = content.indexOf("{");
@@ -35401,20 +35700,20 @@ function extractJsonObject(content) {
   }
   throw new Error("Project memory harvest response JSON was incomplete.");
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash21, randomUUID as randomUUID18 } from "node:crypto";
+import { createHash as createHash22, randomUUID as randomUUID19 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile4 } from "node:fs/promises";
-import { join as join36 } from "node:path";
+import { join as join37 } from "node:path";
 var REVIEW_SUMMARIES_FILE3 = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join36(root, REVIEW_SUMMARIES_FILE3);
+  const targetPath = join37(root, REVIEW_SUMMARIES_FILE3);
   await assertSafeMemoryDataFileTarget(targetPath);
   await appendFile4(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
@@ -35437,12 +35736,12 @@ function recentTranscriptMessages(messages, limit = 40) {
   return messages.slice(-limit);
 }
 function parseTranscriptLine(value) {
-  const record2 = isRecord6(value) ? value : void 0;
+  const record2 = isRecord7(value) ? value : void 0;
   const eventMessage = parseCodexEventMessage(record2);
   if (eventMessage !== void 0) {
     return [eventMessage];
   }
-  const source = isRecord6(record2?.message) ? record2.message : record2;
+  const source = isRecord7(record2?.message) ? record2.message : record2;
   const role = asString3(source?.role);
   const content = contentToString(source?.content);
   if (role === void 0 || content === void 0) {
@@ -35454,7 +35753,7 @@ function parseCodexEventMessage(record2) {
   if (record2?.type !== "event_msg") {
     return void 0;
   }
-  const payload = isRecord6(record2.payload) ? record2.payload : void 0;
+  const payload = isRecord7(record2.payload) ? record2.payload : void 0;
   const payloadType = asString3(payload?.type);
   const message = asString3(payload?.message);
   if (message === void 0) {
@@ -35479,7 +35778,7 @@ function contentToString(value) {
     if (typeof entry === "string") {
       return [entry];
     }
-    if (isRecord6(entry) && typeof entry.text === "string") {
+    if (isRecord7(entry) && typeof entry.text === "string") {
       return [entry.text];
     }
     return [];
@@ -35489,7 +35788,7 @@ function contentToString(value) {
 function asString3(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -35505,7 +35804,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID18();
+  const summaryId = randomUUID19();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -35624,7 +35923,7 @@ function buildCodexReviewSummaryPrompt(redactedTranscript) {
 function parseReviewSummaryResponse(content) {
   const objectText = extractJsonObject2(content);
   const parsed = JSON.parse(objectText);
-  if (!isRecord7(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
+  if (!isRecord8(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
     throw new Error("Review summary response is missing summary.");
   }
   return {
@@ -35636,7 +35935,7 @@ function formatMessages(messages) {
   return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
 }
 function redactCandidate(value, runId, sessionId, redactedSummary, redactor, config2) {
-  if (!isRecord7(value)) {
+  if (!isRecord8(value)) {
     return void 0;
   }
   const domain = parseEnum(value.domain, MEMORY_DOMAINS);
@@ -35676,7 +35975,7 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor, con
 }
 function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor, maxLength) {
   const evidence = Array.isArray(value) ? value.flatMap((entry) => {
-    if (!isRecord7(entry)) {
+    if (!isRecord8(entry)) {
       return [];
     }
     const summary = parseBoundedString(entry.summary, redactor, maxLength);
@@ -35692,7 +35991,7 @@ function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, re
   return [evidenceEntry({ runId, sessionId, summary: truncateWithSuffix3(redactedSummary, maxLength), sourceKind })];
 }
 function stableEvidenceGroupId2(input) {
-  return createHash21("sha256").update(JSON.stringify({
+  return createHash22("sha256").update(JSON.stringify({
     runId: input.runId ?? null,
     sessionId: input.sessionId ?? null,
     summary: input.summary ?? null,
@@ -35745,7 +36044,7 @@ function truncateWithSuffix3(value, maxChars) {
   return `${value.slice(0, maxChars - 3)}...`;
 }
 function parseScores(value) {
-  if (!isRecord7(value)) {
+  if (!isRecord8(value)) {
     return void 0;
   }
   const scores = {};
@@ -35806,7 +36105,7 @@ function parseEnum(value, allowed) {
 function parseString(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -35875,7 +36174,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (messages.length === 0) {
     return { action: "noop", reason: "No transcript messages found." };
   }
-  const stopEpisodeId = randomUUID19();
+  const stopEpisodeId = randomUUID20();
   const review = await runReviewSummaryOrSkip({
     payload,
     cwd,
@@ -36050,7 +36349,7 @@ async function recordStopHookFailureSummary(cwd, payload, error2) {
       return { action: "noop", reason: "Project memory is disabled for this project." };
     }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID19();
+    const summaryId = randomUUID20();
     const sessionId = asString4(payload.session_id);
     const turnId = asString4(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -36085,7 +36384,7 @@ async function recordModelConfigSkippedSummary(cwd, payload) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID19();
+  const summaryId = randomUUID20();
   const sessionId = asString4(payload.session_id);
   const turnId = asString4(payload.turn_id);
   const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -36215,7 +36514,7 @@ async function readTranscriptText(cwd, transcriptPath) {
     if (safePath.size > MAX_TRANSCRIPT_BYTES) {
       return readTranscriptTail(safePath);
     }
-    return await readFile25(safePath.path, "utf8");
+    return await readFile26(safePath.path, "utf8");
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return void 0;
@@ -36277,7 +36576,7 @@ function codexHomePath() {
     return configured;
   }
   const home = process.env.HOME?.trim();
-  return home === void 0 || home === "" ? void 0 : join37(home, ".codex");
+  return home === void 0 || home === "" ? void 0 : join38(home, ".codex");
 }
 function isPathInside5(parent, child) {
   const path = relative5(parent, child);
@@ -36288,9 +36587,9 @@ function asString4(value) {
 }
 
 // src/codex/codex-install.ts
-import { lstat as lstat14, mkdir as mkdir18, rm as rm8, symlink, writeFile as writeFile16 } from "node:fs/promises";
+import { lstat as lstat14, mkdir as mkdir19, rm as rm8, symlink, writeFile as writeFile17 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname12, join as join38, resolve as resolve7 } from "node:path";
+import { dirname as dirname12, join as join39, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -36302,13 +36601,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join38(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join39(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
-  await mkdir18(dirname12(skillTarget), { recursive: true });
+  await mkdir19(dirname12(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
-  await mkdir18(stateRoot, { recursive: true });
-  await writeFile16(join38(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await mkdir19(stateRoot, { recursive: true });
+  await writeFile17(join39(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -36377,9 +36676,9 @@ async function runCodexMemoryActiveSupersede(input) {
 }
 
 // src/codex/codex-memory-dashboard.ts
-import { readFile as readFile26 } from "node:fs/promises";
+import { readFile as readFile27 } from "node:fs/promises";
 import { homedir as homedir6 } from "node:os";
-import { join as join39 } from "node:path";
+import { join as join40 } from "node:path";
 var REVIEW_SUMMARIES_FILE4 = "review-summaries.jsonl";
 var STOP_HOOK_STALE_MS = 24 * 60 * 60 * 1e3;
 async function formatCodexMemoryDashboard(input) {
@@ -36394,7 +36693,7 @@ async function formatCodexMemoryDashboard(input) {
     readReviewSummaries(projectRoot),
     readDashboardDreamState(projectRoot),
     readModelProfileFromRootIfExists(projectRoot),
-    readOptional2(input.configPath ?? join39(homedir6(), ".codex", "config.toml"))
+    readOptional2(input.configPath ?? join40(homedir6(), ".codex", "config.toml"))
   ]);
   const pendingSummaries = pending.map((candidate) => summarizePendingMemory(candidate, now));
   const warnings = buildDashboardWarnings({
@@ -36440,7 +36739,7 @@ async function readDashboardPendingMemories(roots) {
 async function readReviewSummaries(root) {
   let content;
   try {
-    content = await readOptionalMemoryDataFile(join39(root, REVIEW_SUMMARIES_FILE4));
+    content = await readOptionalMemoryDataFile(join40(root, REVIEW_SUMMARIES_FILE4));
   } catch {
     return [];
   }
@@ -36578,7 +36877,7 @@ function hasEnabledMcpServer2(configText, name) {
 }
 async function readOptional2(path) {
   try {
-    return await readFile26(path, "utf8");
+    return await readFile27(path, "utf8");
   } catch (error2) {
     if (isErrorCode5(error2, "ENOENT")) {
       return "";
@@ -36589,7 +36888,7 @@ async function readOptional2(path) {
 async function readOptionalMemoryDataFile(path) {
   try {
     await assertSafeMemoryDataFileTarget(path);
-    return await readFile26(path, "utf8");
+    return await readFile27(path, "utf8");
   } catch (error2) {
     if (isErrorCode5(error2, "ENOENT")) {
       return "";
@@ -36615,9 +36914,9 @@ function errorMessage6(error2) {
 }
 
 // src/codex/codex-memory-lifecycle-migrate-v1-5.ts
-import { randomUUID as randomUUID20 } from "node:crypto";
-import { lstat as lstat15, readFile as readFile27, realpath as realpath7, rename as rename6, rm as rm9, writeFile as writeFile17 } from "node:fs/promises";
-import { join as join40 } from "node:path";
+import { randomUUID as randomUUID21 } from "node:crypto";
+import { lstat as lstat15, readFile as readFile28, realpath as realpath7, rename as rename6, rm as rm9, writeFile as writeFile18 } from "node:fs/promises";
+import { join as join41 } from "node:path";
 var LEGACY_INDEX_FILE2 = "index.jsonl";
 var LEGACY_PENDING_FILE2 = "pending.jsonl";
 var SEMANTIC_MEMORIES_FILE4 = "semantic_memories.jsonl";
@@ -36655,7 +36954,7 @@ async function runCodexMemoryLifecycleMigrateV15(input) {
       }
     } catch (error2) {
       registryFailure = skippedRootResult(
-        { scope: "project", memoryRoot: join40(codexGlobalMemoryRoot(), "..", "..", "projects") },
+        { scope: "project", memoryRoot: join41(codexGlobalMemoryRoot(), "..", "..", "projects") },
         `project registry listing failed: ${errorMessage7(error2)}`
       );
     }
@@ -36707,9 +37006,9 @@ async function migrateReadableRoot(root, input) {
     };
   }
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
-    readJsonLinesWithMalformed(join40(root.memoryRoot, LEGACY_INDEX_FILE2), isValidLegacyActiveMemory),
-    readJsonLinesWithMalformed(join40(root.memoryRoot, LEGACY_PENDING_FILE2), isValidPendingMemory),
-    readJsonLinesWithMalformed(join40(root.memoryRoot, SEMANTIC_MEMORIES_FILE4), isValidSemanticMemory)
+    readJsonLinesWithMalformed(join41(root.memoryRoot, LEGACY_INDEX_FILE2), isValidLegacyActiveMemory),
+    readJsonLinesWithMalformed(join41(root.memoryRoot, LEGACY_PENDING_FILE2), isValidPendingMemory),
+    readJsonLinesWithMalformed(join41(root.memoryRoot, SEMANTIC_MEMORIES_FILE4), isValidSemanticMemory)
   ]);
   const legacyActive = legacyActiveRead.records;
   const legacyPending = legacyPendingRead.records;
@@ -36920,9 +37219,9 @@ async function migrateReadableRoot(root, input) {
       await appendMemoryEventFromRoot(root.memoryRoot, dropAuditEvent(root, audit, input.now));
     }
     await writeSemanticMemoriesFromRoot(root.memoryRoot, nextSemantic);
-    await writeJsonLinesAtomic3(join40(root.memoryRoot, REVIEW_QUEUE_FILE2), []);
-    await removeMemoryDataFileIfExists2(join40(root.memoryRoot, LEGACY_INDEX_FILE2));
-    await removeMemoryDataFileIfExists2(join40(root.memoryRoot, LEGACY_PENDING_FILE2));
+    await writeJsonLinesAtomic3(join41(root.memoryRoot, REVIEW_QUEUE_FILE2), []);
+    await removeMemoryDataFileIfExists2(join41(root.memoryRoot, LEGACY_INDEX_FILE2));
+    await removeMemoryDataFileIfExists2(join41(root.memoryRoot, LEGACY_PENDING_FILE2));
     await appendMemoryEventFromRoot(root.memoryRoot, completionEvent(result3, input.now));
   }
   return result3;
@@ -37140,7 +37439,7 @@ function dropAuditForSemantic(memory2, sourceStatus, normalizedMemory, dropReaso
 }
 function recommendationEvent2(root, recommendation, now) {
   return {
-    id: randomUUID20(),
+    id: randomUUID21(),
     action: "audit",
     at: now,
     reason: "v1.5 migration recommended manual review for high-risk memory",
@@ -37161,7 +37460,7 @@ function recommendationEvent2(root, recommendation, now) {
 }
 function dropAuditEvent(root, audit, now) {
   return {
-    id: randomUUID20(),
+    id: randomUUID21(),
     action: "audit",
     at: now,
     reason: audit.dropReason === "low-value memory" ? "v1.5 migration dropped low-value memory" : "v1.5 migration dropped memory",
@@ -37184,7 +37483,7 @@ function dropAuditEvent(root, audit, now) {
 }
 function completionEvent(result3, now) {
   return {
-    id: randomUUID20(),
+    id: randomUUID21(),
     action: "audit",
     at: now,
     reason: "completed v1.5 memory lifecycle migration",
@@ -37269,7 +37568,7 @@ async function readJsonLinesWithMalformed(filePath, isValidRecord) {
   let content;
   try {
     await assertSafeMemoryDataFileTarget(filePath);
-    content = await readFile27(filePath, "utf8");
+    content = await readFile28(filePath, "utf8");
   } catch (error2) {
     if (isFileErrorCode18(error2, "ENOENT")) {
       return { records: [], malformedLines: 0 };
@@ -37297,24 +37596,24 @@ async function readJsonLinesWithMalformed(filePath, isValidRecord) {
   return { records, malformedLines };
 }
 function isValidLegacyActiveMemory(value) {
-  return isRecord8(value) && isNonEmptyString(value.id) && value.status === "active" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt) && isStringArray3(value.tags);
+  return isRecord9(value) && isNonEmptyString(value.id) && value.status === "active" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt) && isStringArray3(value.tags);
 }
 function isValidPendingMemory(value) {
-  return isRecord8(value) && isNonEmptyString(value.id) && value.status === "pending" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isStringArray3(value.useWhen, true) && isStringArray3(value.doNotUseWhen, true) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && typeof value.seenCount === "number" && isNonEmptyString(value.firstSeenAt) && isNonEmptyString(value.lastSeenAt) && isNonEmptyString(value.expiresAt) && isStringArray3(value.tags);
+  return isRecord9(value) && isNonEmptyString(value.id) && value.status === "pending" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isStringArray3(value.useWhen, true) && isStringArray3(value.doNotUseWhen, true) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && typeof value.seenCount === "number" && isNonEmptyString(value.firstSeenAt) && isNonEmptyString(value.lastSeenAt) && isNonEmptyString(value.expiresAt) && isStringArray3(value.tags);
 }
 function isValidSemanticMemory(value) {
-  return isRecord8(value) && isNonEmptyString(value.id) && oneOf(SEMANTIC_MEMORY_STATUSES, value.status) && oneOf(MEMORY_MODULES, value.module) && oneOf(MEMORY_CANDIDATE_KINDS2, value.kind) && oneOf(MEMORY_SCOPES, value.scope) && oneOf(MEMORY_DOMAINS, value.domain) && isNonEmptyString(value.content) && isStringArray3(value.useWhen) && isStringArray3(value.doNotUseWhen) && isOptionalString2(value.sourceOfTruth) && isStructuredEvidenceArray(value.evidence) && (value.routing === void 0 || isValidRouting(value.routing)) && oneOf(UPDATE_POLICIES, value.reviewPolicy) && (value.reviewState === void 0 || isValidSemanticReviewState(value.reviewState)) && (value.confidenceTier === void 0 || oneOf(CONFIDENCE_TIERS, value.confidenceTier)) && (value.activationPolicy === void 0 || isValidActivationPolicy(value.activationPolicy)) && isStringArray3(value.supersedes) && isOptionalString2(value.expiresAt) && isOptionalString2(value.reviewAfter) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt);
+  return isRecord9(value) && isNonEmptyString(value.id) && oneOf(SEMANTIC_MEMORY_STATUSES, value.status) && oneOf(MEMORY_MODULES, value.module) && oneOf(MEMORY_CANDIDATE_KINDS2, value.kind) && oneOf(MEMORY_SCOPES, value.scope) && oneOf(MEMORY_DOMAINS, value.domain) && isNonEmptyString(value.content) && isStringArray3(value.useWhen) && isStringArray3(value.doNotUseWhen) && isOptionalString2(value.sourceOfTruth) && isStructuredEvidenceArray(value.evidence) && (value.routing === void 0 || isValidRouting(value.routing)) && oneOf(UPDATE_POLICIES, value.reviewPolicy) && (value.reviewState === void 0 || isValidSemanticReviewState(value.reviewState)) && (value.confidenceTier === void 0 || oneOf(CONFIDENCE_TIERS, value.confidenceTier)) && (value.activationPolicy === void 0 || isValidActivationPolicy(value.activationPolicy)) && isStringArray3(value.supersedes) && isOptionalString2(value.expiresAt) && isOptionalString2(value.reviewAfter) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt);
 }
 function isValidRouting(value) {
-  return isRecord8(value) && oneOf(MEMORY_MODULES, value.module) && oneOf(UPDATE_POLICIES, value.updatePolicy) && oneOf(ROUTING_RISKS, value.risk) && isStringArray3(value.reasons);
+  return isRecord9(value) && oneOf(MEMORY_MODULES, value.module) && oneOf(UPDATE_POLICIES, value.updatePolicy) && oneOf(ROUTING_RISKS, value.risk) && isStringArray3(value.reasons);
 }
 function isValidSemanticReviewState(value) {
-  return isRecord8(value) && isOptionalString2(value.normalizedKey) && isOptionalString2(value.sourceOfTruth) && (value.type === void 0 || oneOf(MEMORY_TYPES, value.type)) && (value.strength === void 0 || oneOf(MEMORY_STRENGTHS, value.strength)) && (value.source === void 0 || oneOf(MEMORY_SOURCES2, value.source)) && (value.portability === void 0 || oneOf(MEMORY_PORTABILITIES, value.portability)) && (value.profileVisibility === void 0 || oneOf(MEMORY_PROFILE_VISIBILITIES, value.profileVisibility)) && (value.scores === void 0 || isMemoryScores(value.scores)) && isStringArray3(value.tags, true) && isOptionalFiniteNumber(value.seenCount) && isOptionalString2(value.firstSeenAt) && isOptionalString2(value.lastSeenAt) && isOptionalString2(value.expiresAt) && isOptionalString2(value.promoteAfter) && (value.admittedBy === void 0 || oneOf(ADMITTED_BY_VALUES, value.admittedBy)) && (value.admissionAction === void 0 || oneOf(ADMISSION_ACTIONS, value.admissionAction)) && isOptionalFiniteNumber(value.admissionScore) && isStringArray3(value.admissionReasons, true) && isStringArray3(value.sourceEpisodeIds, true) && isStringArray3(value.sourceDraftIds, true) && isOptionalBoolean2(value.userConfirmed) && (value.normalizedKeyConflictResolution === void 0 || oneOf(NORMALIZED_KEY_CONFLICT_RESOLUTIONS2, value.normalizedKeyConflictResolution)) && isStringArray3(value.conflictsWith, true);
+  return isRecord9(value) && isOptionalString2(value.normalizedKey) && isOptionalString2(value.sourceOfTruth) && (value.type === void 0 || oneOf(MEMORY_TYPES, value.type)) && (value.strength === void 0 || oneOf(MEMORY_STRENGTHS, value.strength)) && (value.source === void 0 || oneOf(MEMORY_SOURCES2, value.source)) && (value.portability === void 0 || oneOf(MEMORY_PORTABILITIES, value.portability)) && (value.profileVisibility === void 0 || oneOf(MEMORY_PROFILE_VISIBILITIES, value.profileVisibility)) && (value.scores === void 0 || isMemoryScores(value.scores)) && isStringArray3(value.tags, true) && isOptionalFiniteNumber(value.seenCount) && isOptionalString2(value.firstSeenAt) && isOptionalString2(value.lastSeenAt) && isOptionalString2(value.expiresAt) && isOptionalString2(value.promoteAfter) && (value.admittedBy === void 0 || oneOf(ADMITTED_BY_VALUES, value.admittedBy)) && (value.admissionAction === void 0 || oneOf(ADMISSION_ACTIONS, value.admissionAction)) && isOptionalFiniteNumber(value.admissionScore) && isStringArray3(value.admissionReasons, true) && isStringArray3(value.sourceEpisodeIds, true) && isStringArray3(value.sourceDraftIds, true) && isOptionalBoolean2(value.userConfirmed) && (value.normalizedKeyConflictResolution === void 0 || oneOf(NORMALIZED_KEY_CONFLICT_RESOLUTIONS2, value.normalizedKeyConflictResolution)) && isStringArray3(value.conflictsWith, true);
 }
 function isValidActivationPolicy(value) {
-  return isRecord8(value) && Array.isArray(value.allowedModes) && value.allowedModes.every((mode) => oneOf(ACTIVATION_MODES, mode)) && oneOf(RUNTIME_ACTIVATION_STRENGTHS, value.maxRuntimeStrength);
+  return isRecord9(value) && Array.isArray(value.allowedModes) && value.allowedModes.every((mode) => oneOf(ACTIVATION_MODES, mode)) && oneOf(RUNTIME_ACTIVATION_STRENGTHS, value.maxRuntimeStrength);
 }
-function isRecord8(value) {
+function isRecord9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonEmptyString(value) {
@@ -37330,15 +37629,15 @@ function oneOf(values, value) {
   return typeof value === "string" && values.includes(value);
 }
 function isEvidenceArray(value) {
-  return Array.isArray(value) && value.every(isRecord8);
+  return Array.isArray(value) && value.every(isRecord9);
 }
 function isStructuredEvidenceArray(value) {
   return Array.isArray(value) && value.every(
-    (entry) => isRecord8(entry) && isNonEmptyString(entry.id) && isNonEmptyString(entry.sourceKind) && isNonEmptyString(entry.sourceRef) && isNonEmptyString(entry.whatHappened) && isNonEmptyString(entry.whyImportant)
+    (entry) => isRecord9(entry) && isNonEmptyString(entry.id) && isNonEmptyString(entry.sourceKind) && isNonEmptyString(entry.sourceRef) && isNonEmptyString(entry.whatHappened) && isNonEmptyString(entry.whyImportant)
   );
 }
 function isMemoryScores(value) {
-  return isRecord8(value) && isFiniteNumber(value.evidenceStrength) && isFiniteNumber(value.stability) && isFiniteNumber(value.usefulness) && isFiniteNumber(value.safety) && isFiniteNumber(value.sensitivity);
+  return isRecord9(value) && isFiniteNumber(value.evidenceStrength) && isFiniteNumber(value.stability) && isFiniteNumber(value.usefulness) && isFiniteNumber(value.safety) && isFiniteNumber(value.sensitivity);
 }
 function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -37351,9 +37650,9 @@ function isOptionalBoolean2(value) {
 }
 async function writeJsonLinesAtomic3(filePath, values) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID20()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID21()}.tmp`;
   const content = values.map((value) => JSON.stringify(value)).join("\n");
-  await writeFile17(tempPath, content === "" ? "" : `${content}
+  await writeFile18(tempPath, content === "" ? "" : `${content}
 `, "utf8");
   await rename6(tempPath, filePath);
 }
@@ -37431,10 +37730,10 @@ async function readableMemoryRoot2(memoryRoot) {
 }
 
 // src/codex/semantic-rewrite.ts
-import { randomUUID as randomUUID21 } from "node:crypto";
+import { randomUUID as randomUUID22 } from "node:crypto";
 
 // src/codex/semantic-rewrite-validator.ts
-import { createHash as createHash22 } from "node:crypto";
+import { createHash as createHash23 } from "node:crypto";
 function validateSemanticRewriteCandidate(input) {
   const beforeReadiness = activeReadinessForPending2(input.original);
   const afterReadiness = activeReadinessForPending2(input.next);
@@ -37475,7 +37774,7 @@ function validateSemanticRewriteCandidate(input) {
   };
 }
 function contentHashForSemanticRewrite(content) {
-  return createHash22("sha256").update(content).digest("hex");
+  return createHash23("sha256").update(content).digest("hex");
 }
 function activeReadinessForPending2(candidate) {
   return evaluateActiveMemoryReadiness({
@@ -37660,7 +37959,7 @@ function semanticRewriteReceipt(input) {
   const newReviewHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? reviewHashForPendingMemory(input.next) : void 0;
   const rewrittenContentHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? contentHashForSemanticRewrite(input.next.content) : void 0;
   return {
-    id: randomUUID21(),
+    id: randomUUID22(),
     pendingMemoryId: input.original.id,
     action: input.action,
     method: input.method,
@@ -37796,7 +38095,7 @@ async function resolveMemoryRoot(input) {
 }
 
 // src/codex/triage-apply.ts
-import { randomUUID as randomUUID22 } from "node:crypto";
+import { randomUUID as randomUUID23 } from "node:crypto";
 function applySafeTriageDecisions(input) {
   const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
   const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
@@ -37890,7 +38189,7 @@ function tombstoneForAutoDroppedCandidate(candidate, now) {
 }
 function memoryEventForTriageDecision(action2, candidate, now, reason, details) {
   return {
-    id: randomUUID22(),
+    id: randomUUID23(),
     action: action2,
     at: now,
     reason,
@@ -37993,9 +38292,9 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
-import { randomUUID as randomUUID23 } from "node:crypto";
-import { readFile as readFile28 } from "node:fs/promises";
-import { join as join41 } from "node:path";
+import { randomUUID as randomUUID24 } from "node:crypto";
+import { readFile as readFile29 } from "node:fs/promises";
+import { join as join42 } from "node:path";
 
 // src/codex/memory-distill.ts
 async function runCodexMemoryDistill(input) {
@@ -38649,7 +38948,7 @@ async function handleCodexUiApiRequest(input) {
 }
 async function handleBatchPendingReject(input, selection) {
   const body = input.body;
-  if (!isRecord9(body) || !Array.isArray(body.candidates)) {
+  if (!isRecord10(body) || !Array.isArray(body.candidates)) {
     return failure(400, "invalid_request", "Batch pending reject requires candidates.");
   }
   const candidates = parseBatchRejectCandidates(body.candidates);
@@ -38718,7 +39017,7 @@ async function rejectPendingCandidatesFromRoot(input) {
       for (const candidate of rejected) {
         await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForBatchRejectedCandidate(candidate, now));
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID23(),
+          id: randomUUID24(),
           action: "reject",
           at: now,
           reason: input.reason ?? "Rejected by Codex pending memory review",
@@ -38761,7 +39060,7 @@ function tombstoneForBatchRejectedCandidate(candidate, now) {
 function parseBatchRejectCandidates(value) {
   const candidates = [];
   for (const item of value) {
-    if (!isRecord9(item) || typeof item.id !== "string" || item.id.trim() === "") {
+    if (!isRecord10(item) || typeof item.id !== "string" || item.id.trim() === "") {
       return { error: failure(400, "invalid_request", "Batch pending reject candidate id is required.") };
     }
     if (typeof item.reviewHash !== "string" || item.reviewHash.trim() === "") {
@@ -38792,7 +39091,7 @@ function parseProjectDeleteRoute(pathname) {
 }
 async function handleProjectDeleteRoute(input, route) {
   const body = input.body;
-  if (!isRecord9(body) || typeof body.confirmProjectId !== "string") {
+  if (!isRecord10(body) || typeof body.confirmProjectId !== "string") {
     return failure(400, "invalid_request", "Project memory deletion requires confirmProjectId.");
   }
   if (body.confirmProjectId.trim() !== route.projectId) {
@@ -38814,7 +39113,7 @@ async function handleProjectDeleteRoute(input, route) {
 }
 async function handleMemoryWriteRoute(input, route, selection) {
   const body = input.body;
-  if (!isRecord9(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
+  if (!isRecord10(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
     return failure(400, "invalid_request", "Write requests require reviewHash.");
   }
   const reviewHash = body.reviewHash.trim();
@@ -38865,7 +39164,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
   if (typeof body.changeNote !== "string" || body.changeNote.trim() === "") {
     return failure(400, "invalid_request", "Edit requires a change note.");
   }
-  if (!isRecord9(body.patch)) {
+  if (!isRecord10(body.patch)) {
     return failure(400, "invalid_request", "Edit requires a patch object.");
   }
   const patch = parseEditPatch(body.patch);
@@ -38887,7 +39186,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
 }
 async function handleActiveMemoryWriteRoute(input, route) {
   const body = input.body;
-  if (!isRecord9(body) || typeof body.contentHash !== "string" || body.contentHash.trim() === "") {
+  if (!isRecord10(body) || typeof body.contentHash !== "string" || body.contentHash.trim() === "") {
     return failure(400, "invalid_request", "Active memory write requests require contentHash.");
   }
   if (typeof body.reason !== "string" || body.reason.trim() === "") {
@@ -38983,7 +39282,7 @@ function parseEditPatch(value) {
     patch.tags = value.tags.map((item) => item.trim()).filter(Boolean);
   }
   if (value.scores !== void 0) {
-    if (!isRecord9(value.scores)) {
+    if (!isRecord10(value.scores)) {
       return { error: failure(400, "invalid_request", "Edit patch scores must be an object.") };
     }
     const scores = parseScorePatch(value.scores);
@@ -39340,7 +39639,7 @@ function rootScopeForMemoryRoot(selection, memoryRoot) {
   return memoryRoot === selection.globalMemoryRoot ? "global" : "project";
 }
 function sourceBoundaryForMemory(memory2) {
-  const semanticMemory = isRecord9(memory2.semanticMemory) ? memory2.semanticMemory : void 0;
+  const semanticMemory = isRecord10(memory2.semanticMemory) ? memory2.semanticMemory : void 0;
   const normalizedKey = stringValue(memory2.normalizedKey);
   const evidenceRecords = [
     ...evidenceRecordsFor(memory2.evidence),
@@ -39360,7 +39659,7 @@ function sourceBoundaryForMemory(memory2) {
       evidenceRefs: uniqueInOrder8([sourceOfTruth, ...evidenceRefs2])
     };
   }
-  const episodeEvidence = isRecord9(memory2.episodeEvidence) ? memory2.episodeEvidence : void 0;
+  const episodeEvidence = isRecord10(memory2.episodeEvidence) ? memory2.episodeEvidence : void 0;
   const episodeSource = usableSourceKind(episodeEvidence?.source);
   if (evidenceRefs2.length > 0) {
     const sourceKind = evidenceSourceKind ?? episodeSource ?? directSource;
@@ -39402,7 +39701,7 @@ function pollutionFlagsForMemory(origin, memory2, sourceBoundary) {
 }
 function evidenceRecordsFor(value) {
   if (!Array.isArray(value)) return [];
-  return value.filter((item) => isRecord9(item));
+  return value.filter((item) => isRecord10(item));
 }
 function evidenceRefsForEvidence(evidence) {
   return [
@@ -39612,11 +39911,11 @@ function uniqueInOrder8(values) {
   });
 }
 async function readReviewSummaryRecordsForUi(memoryRoot) {
-  const targetPath = join41(memoryRoot, REVIEW_SUMMARIES_FILE5);
+  const targetPath = join42(memoryRoot, REVIEW_SUMMARIES_FILE5);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
-    content = await readFile28(targetPath, "utf8");
+    content = await readFile29(targetPath, "utf8");
   } catch (error2) {
     if (isFileErrorCode19(error2, "ENOENT")) {
       return [];
@@ -39674,16 +39973,16 @@ function labelForGlobalLifecycleMemory(memory2) {
   return void 0;
 }
 function isReviewSummaryRecord2(value) {
-  if (!isRecord9(value)) return false;
+  if (!isRecord10(value)) return false;
   return typeof value.id === "string" && typeof value.runId === "string" && optionalString(value.sessionId) && optionalString(value.turnId) && typeof value.createdAt === "string" && (value.status === "ok" || value.status === "failed") && typeof value.summary === "string" && isRedaction(value.redaction) && Array.isArray(value.candidateIds) && value.candidateIds.every((item) => typeof item === "string") && optionalString(value.failureReason);
 }
 function isRedaction(value) {
-  return isRecord9(value) && isRecord9(value.input) && isRecord9(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
+  return isRecord10(value) && isRecord10(value.input) && isRecord10(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
 }
 function optionalString(value) {
   return value === void 0 || typeof value === "string";
 }
-function isRecord9(value) {
+function isRecord10(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function ok(data) {
@@ -42142,9 +42441,9 @@ async function runCodexMemoryAutomation(input) {
 }
 
 // src/memory/memory-repair.ts
-import { randomUUID as randomUUID24 } from "node:crypto";
-import { lstat as lstat17, mkdir as mkdir19, open as open5, readFile as readFile29, rm as rm10, rename as rename7 } from "node:fs/promises";
-import { basename as basename6, dirname as dirname13, join as join42 } from "node:path";
+import { randomUUID as randomUUID25 } from "node:crypto";
+import { lstat as lstat17, mkdir as mkdir20, open as open5, readFile as readFile30, rm as rm10, rename as rename7 } from "node:fs/promises";
+import { basename as basename6, dirname as dirname13, join as join43 } from "node:path";
 var REPAIR_DIR = "repair";
 var TOOL_VERSION = "0.1.0";
 var UNSUPPORTED_DIRECTORY_FSYNC_ERROR_CODES = /* @__PURE__ */ new Set(["EINVAL", "EISDIR", "ENOTSUP", "ENOSYS", "EPERM"]);
@@ -42190,7 +42489,7 @@ async function runJsonlRepairFromRoot(input) {
 async function scanCanonicalJsonlFiles(memoryRoot) {
   const files = [];
   for (const relativePath of CANONICAL_JSONL_FILES) {
-    const filePath = join42(memoryRoot, relativePath);
+    const filePath = join43(memoryRoot, relativePath);
     if (!await pathExists3(filePath)) {
       continue;
     }
@@ -42206,7 +42505,7 @@ async function readRepairSource(filePath, relativePath) {
   if (!stats.isFile()) {
     throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`);
   }
-  const bytes = await readFile29(filePath);
+  const bytes = await readFile30(filePath);
   const content = bytes.toString("utf8");
   return {
     relativePath,
@@ -42238,14 +42537,14 @@ function parseJsonlContentForRepair(content, relativePath) {
   return { validRecords, malformed };
 }
 async function applyJsonlRepair(input) {
-  const repairRoot = join42(input.memoryRoot, REPAIR_DIR);
-  const transactionRoot = join42(repairRoot, input.repairTransactionId);
-  const backupRoot = join42(transactionRoot, "backups");
-  const quarantinePath = join42(transactionRoot, "quarantine.jsonl");
-  const pendingSummaryPath = join42(transactionRoot, "summary.pending.json");
-  const summaryPath = join42(transactionRoot, "summary.json");
+  const repairRoot = join43(input.memoryRoot, REPAIR_DIR);
+  const transactionRoot = join43(repairRoot, input.repairTransactionId);
+  const backupRoot = join43(transactionRoot, "backups");
+  const quarantinePath = join43(transactionRoot, "quarantine.jsonl");
+  const pendingSummaryPath = join43(transactionRoot, "summary.pending.json");
+  const summaryPath = join43(transactionRoot, "summary.json");
   const sources = input.scannedFiles.filter((source) => source.scan.malformed.length > 0);
-  const backupPaths = sources.map((source) => join42(backupRoot, source.relativePath));
+  const backupPaths = sources.map((source) => join43(backupRoot, source.relativePath));
   const malformedLineCount = sources.reduce((count, source) => count + source.scan.malformed.length, 0);
   const pendingSummary = {
     status: "pending",
@@ -42262,12 +42561,12 @@ async function applyJsonlRepair(input) {
   let pendingSummaryWritten = false;
   try {
     await ensureDirectory(repairRoot);
-    await mkdir19(transactionRoot);
+    await mkdir20(transactionRoot);
     await ensureDirectory(backupRoot);
     await writeJsonFileDurable(pendingSummaryPath, pendingSummary);
     pendingSummaryWritten = true;
     for (const source of sources) {
-      await writeBufferDurable(join42(backupRoot, source.relativePath), source.snapshot.bytes);
+      await writeBufferDurable(join43(backupRoot, source.relativePath), source.snapshot.bytes);
     }
     await writeJsonLinesDurable(
       quarantinePath,
@@ -42336,7 +42635,7 @@ async function captureSourceSnapshot(filePath) {
   if (!stats.isFile()) {
     throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`);
   }
-  const bytes = await readFile29(filePath);
+  const bytes = await readFile30(filePath);
   const content = bytes.toString("utf8");
   return createSourceSnapshot(stats.mtimeMs, content, bytes);
 }
@@ -42365,7 +42664,7 @@ async function writeJsonLinesDurable(filePath, values) {
 }
 async function writeBufferDurable(filePath, content) {
   await ensureDirectory(dirname13(filePath));
-  const tempPath = join42(dirname13(filePath), `.${basename6(filePath)}.${process.pid}.${Date.now()}.${randomUUID24()}.tmp`);
+  const tempPath = join43(dirname13(filePath), `.${basename6(filePath)}.${process.pid}.${Date.now()}.${randomUUID25()}.tmp`);
   const file = await open5(tempPath, "wx");
   let closed = false;
   try {
@@ -42398,7 +42697,7 @@ async function ensureDirectory(dirPath) {
       throw error2;
     }
   }
-  await mkdir19(dirPath, { recursive: true });
+  await mkdir20(dirPath, { recursive: true });
 }
 async function fsyncDirectory(dirPath) {
   let directory;
@@ -42431,7 +42730,7 @@ async function pathExists3(filePath) {
 }
 function createRepairTransactionId(now) {
   const sanitizedNow = now.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  return `repair-${sanitizedNow}-${randomUUID24()}`;
+  return `repair-${sanitizedNow}-${randomUUID25()}`;
 }
 function errorMessage10(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
@@ -42451,9 +42750,9 @@ function isFileErrorCode20(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash23, randomUUID as randomUUID25 } from "node:crypto";
-import { lstat as lstat18, readFile as readFile30, rename as rename8, writeFile as writeFile18 } from "node:fs/promises";
-import { join as join43 } from "node:path";
+import { createHash as createHash24, randomUUID as randomUUID26 } from "node:crypto";
+import { lstat as lstat18, readFile as readFile31, rename as rename8, writeFile as writeFile19 } from "node:fs/promises";
+import { join as join44 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -42470,7 +42769,7 @@ function reviewHashForProfileCandidate(candidate) {
     evidenceSummary: candidate.evidenceSummary,
     createdAt: candidate.createdAt
   };
-  return createHash23("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash24("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function runCodexProfileReflection(input) {
   const now = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -42581,7 +42880,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID25(),
+      id: randomUUID26(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -42812,10 +43111,10 @@ function upsertActiveMemory2(active, memory2) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join43(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join44(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile30(targetPath, "utf8");
+    const content = await readFile31(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
     if (isFileErrorCode21(error2, "ENOENT")) {
@@ -42826,20 +43125,20 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join43(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join44(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID25()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
-  await writeFile18(tempPath, content === "" ? "" : `${content}
+  await writeFile19(tempPath, content === "" ? "" : `${content}
 `, "utf8");
   await rename8(tempPath, targetPath);
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join43(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join44(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID25()}.tmp`;
-  await writeFile18(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
+  await writeFile19(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename8(tempPath, targetPath);
 }
 function formatPendingProfilePatch(candidates) {
@@ -42978,7 +43277,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash24, randomUUID as randomUUID26 } from "node:crypto";
+import { createHash as createHash25, randomUUID as randomUUID27 } from "node:crypto";
 import { basename as basename7, dirname as dirname14 } from "node:path";
 function reviewHashForSimilarHintMemory(memory2) {
   const payload = {
@@ -42995,7 +43294,7 @@ function reviewHashForSimilarHintMemory(memory2) {
     updatedAt: memory2.updatedAt,
     tags: memory2.tags
   };
-  return createHash24("sha256").update(JSON.stringify(payload)).digest("hex");
+  return createHash25("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 async function explainSimilarHints(input) {
   const current = await identifyCodexProject(input.cwd);
@@ -43093,7 +43392,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory2) => memory2.id === lockedMemory.id ? nextMemory : memory2)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID26(),
+      id: randomUUID27(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -43272,12 +43571,18 @@ async function handleCodexCommand(input) {
     return;
   }
   if (command === "memory" && input.args[1] === "harvest-project") {
+    if (input.args.includes("--dry-run") && input.args.includes("--apply")) {
+      throw new Error("memory harvest-project accepts only one of --apply or --dry-run");
+    }
     const sinceWarning = harvestProjectSinceWarning(input.args);
     const result3 = await runCodexProjectMemoryHarvest({
       cwd: input.cwd,
       config: createDefaultConfig(input.cwd),
       callModel,
-      dryRun: input.args.includes("--dry-run"),
+      dryRun: input.args.includes("--dry-run") ? true : void 0,
+      apply: input.args.includes("--apply"),
+      previewId: parseOptionalOption(input.args, "--preview-id"),
+      previewHash: parseOptionalOption(input.args, "--preview-hash"),
       mode: parseHarvestProjectMode(input.args)
     });
     process.stdout.write(`${JSON.stringify(addHarvestProjectCompatibilityWarnings(result3, sinceWarning), null, 2)}
@@ -43567,7 +43872,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory jsonl repair [--dry-run|--apply] [--global]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory jsonl repair [--dry-run|--apply] [--global]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run|--apply --preview-id <id> --preview-hash <hash>] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -54045,15 +54350,24 @@ async function handleMemoryPropose(input, fallbackCwd) {
 // src/mcp/tools/memory-harvest-project.ts
 var memoryHarvestProjectInputSchema = {
   dryRun: external_exports.boolean().optional(),
+  apply: external_exports.boolean().optional(),
+  previewId: external_exports.string().optional(),
+  previewHash: external_exports.string().optional(),
   changedFiles: external_exports.boolean().optional(),
   since: external_exports.enum(["last-summary"]).optional()
 };
 async function handleMemoryHarvestProject(input, fallbackCwd) {
+  if (input.dryRun === true && input.apply === true) {
+    throw new Error("memory harvest-project accepts only one of apply or dryRun");
+  }
   const result3 = await runCodexProjectMemoryHarvest({
     cwd: fallbackCwd,
     config: createDefaultConfig(fallbackCwd),
     callModel,
     dryRun: input.dryRun,
+    apply: input.apply,
+    previewId: input.previewId,
+    previewHash: input.previewHash,
     mode: harvestProjectMode(input)
   });
   return jsonText(withHarvestProjectCompatibilityWarnings(result3, input));
@@ -54114,7 +54428,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_harvest_project",
     {
-      description: "Harvest project signals into low-risk trial memories or manual review candidates; use dryRun to preview candidates without writing memory.",
+      description: "Preview project harvest candidates first; apply only with a matching previewId and previewHash.",
       inputSchema: memoryHarvestProjectInputSchema
     },
     async (input) => handleMemoryHarvestProject(input, options.cwd)

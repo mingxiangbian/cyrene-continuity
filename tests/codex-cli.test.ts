@@ -671,6 +671,60 @@ describe('cyrene-continuity codex CLI', () => {
     })
   })
 
+  it('rejects project memory harvest apply with dry-run', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-apply-dry-run-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-apply-dry-run-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-apply-dry-run-test' }), 'utf8')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+          join(process.cwd(), 'src/main.ts'),
+          'codex',
+          'memory',
+          'harvest-project',
+          '--apply',
+          '--dry-run',
+          '--preview-id',
+          'preview-1',
+          '--preview-hash',
+          'a'.repeat(64)
+        ],
+        { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('memory harvest-project accepts only one of --apply or --dry-run')
+    })
+  })
+
+  it('defaults project memory harvest to the preview path', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-preview-default-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-preview-default-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-preview-default-test' }), 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project'
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; signals?: unknown[] }
+    expect(parsed).toMatchObject({
+      action: 'needs_model_config'
+    })
+    expect(parsed.signals?.length).toBeGreaterThan(0)
+  })
+
   it('doctor rejects --config without a path', async () => {
     const home = await createTempDir('cyrene-codex-cli-config-missing-home-')
 

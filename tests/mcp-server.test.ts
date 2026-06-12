@@ -381,6 +381,10 @@ describe('Cyrene MCP server', () => {
     const source = await readFile(new URL('../src/mcp/tools/memory-harvest-project.ts', import.meta.url), 'utf8')
 
     expect(memoryHarvestProjectInputSchema).not.toHaveProperty('cwd')
+    expect(memoryHarvestProjectInputSchema).toHaveProperty('dryRun')
+    expect(memoryHarvestProjectInputSchema).toHaveProperty('apply')
+    expect(memoryHarvestProjectInputSchema).toHaveProperty('previewId')
+    expect(memoryHarvestProjectInputSchema).toHaveProperty('previewHash')
     expect(source).not.toContain('input.cwd')
 
     const result = await handleMemoryHarvestProject({ dryRun: true }, cwd)
@@ -389,6 +393,38 @@ describe('Cyrene MCP server', () => {
     expect(result.content[0]?.type).toBe('text')
     expect(parsed.action).toBe('needs_model_config')
     expect(parsed.signals?.some((signal) => signal.files?.includes('package.json'))).toBe(true)
+  })
+
+  it('returns preview_required for MCP project harvest dryRun false without apply credentials', async () => {
+    const home = await createTempDir('cyrene-mcp-harvest-preview-required-home-')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('CYRENE_BASE_URL', '')
+    vi.stubEnv('CYRENE_MODEL', '')
+    const cwd = await createTempDir('cyrene-mcp-harvest-preview-required-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-mcp-preview-required-test' }), 'utf8')
+
+    const result = await handleMemoryHarvestProject({ dryRun: false }, cwd)
+    const parsed = JSON.parse(result.content[0]?.text ?? '{}') as { action?: string; modelCallCount?: number; reason?: string }
+
+    expect(parsed).toMatchObject({
+      action: 'preview_required',
+      modelCallCount: 0
+    })
+    expect(parsed.reason).toContain('apply')
+  })
+
+  it('rejects MCP project harvest apply with dryRun', async () => {
+    const home = await createTempDir('cyrene-mcp-harvest-apply-dry-run-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-mcp-harvest-apply-dry-run-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-mcp-apply-dry-run-test' }), 'utf8')
+
+    await expect(handleMemoryHarvestProject({
+      dryRun: true,
+      apply: true,
+      previewId: 'harvest-00000000-0000-4000-8000-000000000000',
+      previewHash: 'a'.repeat(64)
+    }, cwd)).rejects.toThrow('memory harvest-project accepts only one of apply or dryRun')
   })
 
   it('requires explicit user consent in memory review tool descriptions', async () => {

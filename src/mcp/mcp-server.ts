@@ -72,7 +72,7 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
     'cyrene_memory_harvest_project',
     {
       description:
-        'Harvest project signals into low-risk trial memories or manual review candidates; use dryRun to preview candidates without writing memory.',
+        'Preview project harvest candidates first; apply only with a matching previewId and previewHash.',
       inputSchema: memoryHarvestProjectInputSchema
     },
     async (input) => handleMemoryHarvestProject(input, options.cwd)

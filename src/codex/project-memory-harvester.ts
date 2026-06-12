@@ -1,16 +1,29 @@
 import { createHash } from 'node:crypto'
 import { runCodexAdmissionPipeline } from './admission-pipeline.js'
+import { ensureCodexProjectMemoryRoot } from './codex-memory-root.js'
 import type { CodexMemoryCandidateInput } from './memory-propose.js'
 import {
   collectProjectMemorySignals,
   type CodexProjectHarvestMode,
   type ProjectMemorySignal
 } from './project-memory-signals.js'
+import {
+  HARVEST_PREVIEW_ROUTES,
+  readHarvestPreviewArtifact,
+  stableCanonicalJson,
+  writeHarvestPreviewArtifact,
+  type ProjectHarvestPreviewCandidate,
+  type ProjectHarvestPreviewGroup,
+  type ProjectHarvestPreviewRoute
+} from './project-memory-harvest-preview.js'
 import { identifyCodexProject } from './project-id.js'
 import { isCodexProjectMemoryDisabled } from './project-registry.js'
 import { redactReviewText } from './review-redaction.js'
+import { HARVEST_PREVIEW_DISPLAY_CAP } from './retrieval-v2-constants.js'
 import type { AppConfig } from '../config.js'
 import { modelBaseUrlRequiresApiKey, type CallModelInput, type ModelResponse } from '../llm-client.js'
+import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot } from '../memory/memory-store.js'
+import { normalizeMemoryKey } from '../memory/tokenizer.js'
 import type { MemoryDomain, MemoryEvidence, MemorySource, MemoryType } from '../memory/types.js'
 
 export type ProjectMemoryHarvesterCandidateKind =
@@ -27,6 +40,9 @@ export interface RunCodexProjectMemoryHarvestInput {
   callModel: (input: CallModelInput) => Promise<ModelResponse>
   mode?: CodexProjectHarvestMode
   dryRun?: boolean
+  apply?: boolean
+  previewId?: string
+  previewHash?: string
   sourceEpisodeIds?: string[]
   now?: string
   signal?: AbortSignal
@@ -35,9 +51,20 @@ export interface RunCodexProjectMemoryHarvestInput {
 export type CodexProjectMemoryHarvestResult =
   | { action: 'noop'; reason: string; signals: ProjectMemorySignal[]; warnings: string[] }
   | { action: 'needs_model_config'; reason: string; signals: ProjectMemorySignal[]; warnings: string[] }
-  | { action: 'preview'; candidates: CodexMemoryCandidateInput[]; signals: ProjectMemorySignal[]; warnings: string[] }
-  | { action: 'pending'; candidateIds: string[]; trialMemoryIds?: string[]; memoryRoot: string; signals: ProjectMemorySignal[]; warnings: string[] }
-  | { action: 'trial'; candidateIds: string[]; memoryIds: string[]; memoryRoot: string; signals: ProjectMemorySignal[]; warnings: string[] }
+  | { action: 'preview_required'; reason: string; modelCallCount: 0; signals: ProjectMemorySignal[]; warnings: string[] }
+  | { action: 'preview_expired'; reason: string; modelCallCount: 0; signals: ProjectMemorySignal[]; warnings: string[] }
+  | {
+      action: 'preview'
+      previewId: string
+      previewHash: string
+      modelCallCount: 1
+      candidates: ProjectHarvestPreviewCandidate[]
+      groups: ProjectHarvestPreviewGroup[]
+      signals: ProjectMemorySignal[]
+      warnings: string[]
+    }
+  | { action: 'pending'; candidateIds: string[]; trialMemoryIds?: string[]; memoryRoot: string; modelCallCount: 0; signals: ProjectMemorySignal[]; warnings: string[] }
+  | { action: 'trial'; candidateIds: string[]; memoryIds: string[]; memoryRoot: string; modelCallCount: 0; signals: ProjectMemorySignal[]; warnings: string[] }
 
 interface ParsedProjectMemoryHarvestResponse {
   candidates: unknown[]
@@ -56,6 +83,8 @@ const PROJECT_CANDIDATE_KINDS = [
 const SIGNAL_EVIDENCE_LIMIT = 6
 const GENERATED_MEMORY_CONTENT_MAX_LENGTH = 240
 const EVIDENCE_MAX_LENGTH = 320
+const ADMISSION_POLICY_VERSION = 'admission_gate_v1'
+const PROJECT_HARVEST_TOOL_VERSION = 'project_harvest_preview_v1'
 const SENSITIVE_PROJECT_HARVEST_PATTERN =
   /\b(?:personal|private|family|medical|password|secret|token|api[_\s-]?key|bearer|sk-[a-z0-9_-]*)\b/i
 
@@ -72,6 +101,10 @@ export async function runCodexProjectMemoryHarvest(
     }
   }
 
+  if (input.apply === true) {
+    return applyCodexProjectMemoryHarvestPreview(input, project.projectId)
+  }
+
   const { signals, warnings } = await collectProjectMemorySignals({
     cwd: input.cwd,
     mode: input.mode,
@@ -80,6 +113,16 @@ export async function runCodexProjectMemoryHarvest(
 
   if (signals.length === 0) {
     return { action: 'noop', reason: 'No project memory signals collected.', signals, warnings }
+  }
+
+  if (isExplicitDryRunFalse(input)) {
+    return {
+      action: 'preview_required',
+      reason: 'Project harvest requires preview-first apply: rerun without dryRun:false for preview, then use --apply/apply:true with matching previewId and previewHash.',
+      modelCallCount: 0,
+      signals,
+      warnings
+    }
   }
 
   const missingModelReason = missingModelConfigReason(input.config)
@@ -100,14 +143,74 @@ export async function runCodexProjectMemoryHarvest(
     return sanitized === undefined ? [] : [sanitized]
   })
 
-  if (input.dryRun === true) {
-    return { action: 'preview', candidates, signals, warnings }
+  const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId)
+  const classified = await classifyProjectHarvestPreviewCandidates({ memoryRoot, candidates })
+  const groups = groupProjectHarvestPreviewCandidates(classified)
+  const artifact = await writeHarvestPreviewArtifact({
+    projectId: project.projectId,
+    memoryRoot,
+    now: input.now,
+    admissionPolicyVersion: ADMISSION_POLICY_VERSION,
+    toolVersion: PROJECT_HARVEST_TOOL_VERSION,
+    candidates: classified,
+    groups,
+    warnings,
+    sourceSignalHashes: signals.map(sourceSignalHash)
+  })
+
+  return {
+    action: 'preview',
+    previewId: artifact.previewId,
+    previewHash: artifact.previewHash,
+    modelCallCount: 1,
+    candidates: displayPreviewCandidates(classified),
+    groups,
+    signals,
+    warnings
+  }
+}
+
+async function applyCodexProjectMemoryHarvestPreview(
+  input: RunCodexProjectMemoryHarvestInput,
+  projectId: string
+): Promise<CodexProjectMemoryHarvestResult> {
+  const memoryRootForPreview = await ensureCodexProjectMemoryRoot(projectId)
+  if (input.previewId === undefined || input.previewHash === undefined) {
+    return {
+      action: 'preview_required',
+      reason: 'Project harvest apply requires matching previewId and previewHash.',
+      modelCallCount: 0,
+      signals: [],
+      warnings: []
+    }
   }
 
+  const preview = await readHarvestPreviewArtifact({
+    memoryRoot: memoryRootForPreview,
+    previewId: input.previewId,
+    previewHash: input.previewHash,
+    now: input.now
+  })
+  if (preview.action === 'preview_expired') {
+    return { action: 'preview_expired', reason: preview.reason, modelCallCount: 0, signals: [], warnings: [] }
+  }
+  if (preview.action !== 'ok') {
+    return { action: 'preview_required', reason: preview.reason, modelCallCount: 0, signals: [], warnings: [] }
+  }
+  if (preview.artifact.projectId !== projectId || preview.artifact.memoryRoot !== memoryRootForPreview) {
+    return {
+      action: 'preview_required',
+      reason: 'Harvest preview artifact does not belong to this project memory root.',
+      modelCallCount: 0,
+      signals: [],
+      warnings: []
+    }
+  }
+
+  const candidates = preview.artifact.candidates.filter((candidate) => candidate.route === 'trial_eligible')
   const candidateIds: string[] = []
   const pendingCandidateIds: string[] = []
   const trialMemoryIds: string[] = []
-  let memoryRoot: string | undefined
   for (const candidate of candidates) {
     const result = await runCodexAdmissionPipeline({
       cwd: input.cwd,
@@ -121,7 +224,6 @@ export async function runCodexProjectMemoryHarvest(
       now: input.now,
       recordRejectedCandidate: false
     })
-    memoryRoot = result.memoryRoot
     if (result.action === 'pending' && result.result.action === 'pending') {
       candidateIds.push(result.result.candidateId)
       pendingCandidateIds.push(result.result.candidateId)
@@ -132,21 +234,168 @@ export async function runCodexProjectMemoryHarvest(
   }
 
   if (candidateIds.length === 0) {
-    return { action: 'noop', reason: 'No project memory candidates survived admission.', signals, warnings }
+    return {
+      action: 'noop',
+      reason: 'No project memory candidates survived admission.',
+      signals: [],
+      warnings: preview.artifact.warnings
+    }
   }
 
   if (trialMemoryIds.length > 0 && trialMemoryIds.length === candidateIds.length) {
-    return { action: 'trial', candidateIds, memoryIds: trialMemoryIds, memoryRoot: memoryRoot ?? '', signals, warnings }
+    return {
+      action: 'trial',
+      candidateIds,
+      memoryIds: trialMemoryIds,
+      memoryRoot: memoryRootForPreview,
+      modelCallCount: 0,
+      signals: [],
+      warnings: preview.artifact.warnings
+    }
   }
 
   return {
     action: 'pending',
     candidateIds: pendingCandidateIds,
     trialMemoryIds,
-    memoryRoot: memoryRoot ?? '',
-    signals,
-    warnings
+    memoryRoot: memoryRootForPreview,
+    modelCallCount: 0,
+    signals: [],
+    warnings: preview.artifact.warnings
   }
+}
+
+async function classifyProjectHarvestPreviewCandidates(input: {
+  memoryRoot: string
+  candidates: CodexMemoryCandidateInput[]
+}): Promise<ProjectHarvestPreviewCandidate[]> {
+  const [active, pending] = await Promise.all([
+    readActiveMemoriesFromRoot(input.memoryRoot),
+    readPendingMemoriesFromRoot(input.memoryRoot)
+  ])
+  const existing = [...active, ...pending]
+  const seenKeys = new Set<string>()
+  return input.candidates.map((candidate) => {
+    const normalizedKey = normalizedProjectHarvestCandidateKey(candidate)
+    const conflictKey = conflictComparisonKeyForCandidate(candidate)
+    const existingMatch = existing.find((memory) => memory.normalizedKey === normalizedKey)
+    const existingHardConflict = existing.find((memory) =>
+      conflictComparisonKeyForMemory(memory) === conflictKey &&
+      sameSourceBoundary(memory.sourceOfTruth, candidate.sourceOfTruth) &&
+      hasContradictoryDirective(memory.content, candidate.content)
+    )
+    const route = routeProjectHarvestCandidate({
+      candidate,
+      normalizedKey,
+      seenKeys,
+      hasExistingDuplicate: existingMatch !== undefined,
+      hasHardConflict: existingHardConflict !== undefined
+    })
+    seenKeys.add(normalizedKey)
+    return { ...candidate, ...route }
+  })
+}
+
+function routeProjectHarvestCandidate(input: {
+  candidate: CodexMemoryCandidateInput
+  normalizedKey: string
+  seenKeys: Set<string>
+  hasExistingDuplicate: boolean
+  hasHardConflict: boolean
+}): { route: ProjectHarvestPreviewRoute; reason: string } {
+  if (input.hasHardConflict) {
+    return { route: 'review_required', reason: 'hard conflict with active project memory' }
+  }
+  if (input.seenKeys.has(input.normalizedKey) || input.hasExistingDuplicate) {
+    return { route: 'reject_recommended', reason: 'duplicate project harvest candidate' }
+  }
+  if (isInstructionLikeCandidate(input.candidate)) {
+    return { route: 'review_required', reason: 'instruction-like candidate requires review' }
+  }
+  if (input.candidate.source === 'assistant_observed') {
+    return { route: 'review_required', reason: 'assistant-observed candidate requires review' }
+  }
+  if (input.candidate.scope !== undefined && input.candidate.scope !== 'project') {
+    return { route: 'review_required', reason: 'non-project scope requires review' }
+  }
+  if (input.candidate.source !== 'file' || input.candidate.sourceOfTruth === undefined) {
+    return { route: 'review_required', reason: 'fresh project file provenance required' }
+  }
+  return { route: 'trial_eligible', reason: 'fresh project provenance with no duplicate or hard conflict' }
+}
+
+function groupProjectHarvestPreviewCandidates(candidates: ProjectHarvestPreviewCandidate[]): ProjectHarvestPreviewGroup[] {
+  return HARVEST_PREVIEW_ROUTES.map((route) => ({
+    route,
+    candidates: candidates.filter((candidate) => candidate.route === route)
+  }))
+}
+
+function displayPreviewCandidates(candidates: ProjectHarvestPreviewCandidate[]): ProjectHarvestPreviewCandidate[] {
+  const ordered = HARVEST_PREVIEW_ROUTES.flatMap((route) =>
+    candidates.filter((candidate) => candidate.route === route)
+  )
+  return ordered.slice(0, HARVEST_PREVIEW_DISPLAY_CAP)
+}
+
+function normalizedProjectHarvestCandidateKey(candidate: CodexMemoryCandidateInput): string {
+  return candidate.normalizedKey ?? normalizeMemoryKey(`${candidate.domain}:${candidate.type}:${candidate.content}`)
+}
+
+function conflictComparisonKeyForCandidate(candidate: CodexMemoryCandidateInput): string {
+  return directiveSignature(candidate.content)?.key ?? normalizedProjectHarvestCandidateKey(candidate)
+}
+
+function conflictComparisonKeyForMemory(memory: { content: string; normalizedKey: string }): string {
+  return directiveSignature(memory.content)?.key ?? memory.normalizedKey
+}
+
+function isInstructionLikeCandidate(candidate: CodexMemoryCandidateInput): boolean {
+  return /\b(?:from now on|always remember|remember to|user must|assistant must|assistant should)\b/i.test(candidate.content)
+}
+
+function sameSourceBoundary(left: string | undefined, right: string | undefined): boolean {
+  return left !== undefined && right !== undefined && left === right
+}
+
+function hasContradictoryDirective(left: string, right: string): boolean {
+  const leftDirective = directiveSignature(left)
+  const rightDirective = directiveSignature(right)
+  if (leftDirective === undefined || rightDirective === undefined) {
+    return false
+  }
+  return leftDirective.key === rightDirective.key && leftDirective.value !== rightDirective.value
+}
+
+function directiveSignature(content: string): { key: string; value: string } | undefined {
+  const normalized = content.toLowerCase()
+  if (/\bnpm test\b/.test(normalized)) {
+    return { key: 'test-command', value: 'npm test' }
+  }
+  if (/\bpnpm test\b/.test(normalized)) {
+    return { key: 'test-command', value: 'pnpm test' }
+  }
+  if (/\bnpm run typecheck\b/.test(normalized)) {
+    return { key: 'typecheck-command', value: 'npm run typecheck' }
+  }
+  if (/\bpnpm typecheck\b/.test(normalized)) {
+    return { key: 'typecheck-command', value: 'pnpm typecheck' }
+  }
+  if (/\bbuild:plugin\b/.test(normalized)) {
+    return { key: 'plugin-runtime-build', value: 'requires build:plugin' }
+  }
+  if (/\bno build\b|\bwithout build\b|不要.*build|无需.*build/.test(normalized)) {
+    return { key: 'plugin-runtime-build', value: 'no build' }
+  }
+  return undefined
+}
+
+function isExplicitDryRunFalse(input: RunCodexProjectMemoryHarvestInput): boolean {
+  return Object.prototype.hasOwnProperty.call(input, 'dryRun') && input.dryRun === false
+}
+
+function sourceSignalHash(signal: ProjectMemorySignal): string {
+  return createHash('sha256').update(stableCanonicalJson(signal)).digest('hex')
 }
 
 export function buildCodexProjectMemoryHarvestPrompt(signals: ProjectMemorySignal[]): string {
@@ -299,7 +548,7 @@ function sourceRefsForSignal(signal: ProjectMemorySignal): string[] {
 }
 
 function sourceForSignals(signals: ProjectMemorySignal[]): MemorySource {
-  if (signals.some((signal) => signal.source === 'file' || signal.source === 'git' || signal.source === 'review_summary')) {
+  if (signals.some((signal) => signal.source === 'file' || signal.source === 'git')) {
     return 'file'
   }
   if (signals.some((signal) => signal.source === 'tool_trace')) {
@@ -312,8 +561,11 @@ function sourceForSignal(signal: ProjectMemorySignal): MemorySource | undefined 
   if (signal.source === 'tool_trace') {
     return 'tool_trace'
   }
-  if (signal.source === 'file' || signal.source === 'git' || signal.source === 'review_summary') {
+  if (signal.source === 'file' || signal.source === 'git') {
     return 'file'
+  }
+  if (signal.source === 'review_summary') {
+    return 'review_event'
   }
   return undefined
 }
