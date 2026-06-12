@@ -185,7 +185,7 @@ async function runProjectWeeklyLocked(input: {
   dailyCap: number
 }): Promise<{ result: WeeklyProjectRootResult; coreMemories: ProjectCoreMemory[] }> {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.root.memoryRoot])
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.root.memoryRoot, input.dryRun)
+  const repairRequiredLines = await repairRequiredMalformedJsonLines(input.root.memoryRoot)
   if (repairRequiredLines !== null) {
     return {
       result: {
@@ -423,7 +423,7 @@ async function runGlobalWeeklyLocked(input: {
   dailyCap: number
 }): Promise<WeeklyGlobalResult> {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.memoryRoot])
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.memoryRoot, input.dryRun)
+  const repairRequiredLines = await repairRequiredMalformedJsonLines(input.memoryRoot)
   if (repairRequiredLines !== null) {
     return {
       ...repairRequiredGlobalResult(input.memoryRoot, repairRequiredLines),
@@ -969,10 +969,7 @@ function repairRequiredGlobalResult(memoryRoot: string, malformedJsonLines: numb
   }
 }
 
-async function repairRequiredMalformedJsonLinesForApply(memoryRoot: string, dryRun: boolean): Promise<number | null> {
-  if (dryRun) {
-    return null
-  }
+async function repairRequiredMalformedJsonLines(memoryRoot: string): Promise<number | null> {
   try {
     await assertCanonicalJsonlHealthyForMutation(memoryRoot)
     return null

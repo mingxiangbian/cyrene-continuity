@@ -479,6 +479,55 @@ describe('runCodexProjectMemoryHarvest', () => {
     await expect(readPending(cwd)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('reports a next action for preview artifacts from another project memory root', async () => {
+    const home = await createTempDir('cyrene-harvester-preview-root-mismatch-home-')
+    vi.stubEnv('HOME', home)
+    const cwd = await createTempDir('cyrene-harvester-preview-root-mismatch-project-')
+    collectSignals.mockResolvedValue({ signals: sampleSignals(), warnings: [] })
+
+    const preview = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd),
+      callModel: async () =>
+        modelResponse(JSON.stringify({
+          candidates: [{
+            candidateKind: 'workflow_rule',
+            content: 'Project harvest preview apply requires same project root.',
+            signalIndexes: [1]
+          }]
+        })),
+      now: '2026-06-12T00:00:00.000Z'
+    })
+    expect(preview.action).toBe('preview')
+    if (preview.action !== 'preview') throw new Error(`Expected preview, got ${preview.action}`)
+    const memoryRoot = await projectMemoryRoot(cwd)
+    const previewPath = join(memoryRoot, 'harvest_previews', `${preview.previewId}.json`)
+    const artifact = JSON.parse(await readFile(previewPath, 'utf8')) as ProjectHarvestPreviewArtifact
+    artifact.projectId = 'different-project'
+    artifact.memoryRoot = join(home, 'different-memory-root')
+    const { previewHash: _oldHash, ...payload } = artifact
+    artifact.previewHash = previewHashForPayload(payload)
+    await writeFile(previewPath, `${JSON.stringify(artifact)}\n`, 'utf8')
+
+    const result = await runCodexProjectMemoryHarvest({
+      cwd,
+      config: createConfig(cwd),
+      callModel: async () => {
+        throw new Error('apply must not call the LLM')
+      },
+      apply: true,
+      previewId: preview.previewId,
+      previewHash: artifact.previewHash,
+      now: '2026-06-12T00:00:00.000Z'
+    })
+
+    expect(result).toMatchObject({ action: 'preview_required', modelCallCount: 0 })
+    if (result.action !== 'preview_required') throw new Error(`Expected preview_required, got ${result.action}`)
+    expect(result.reason).toContain('cyrene-continuity codex memory harvest-project')
+    await expect(readFile(join(memoryRoot, 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readPending(cwd)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('rejects malformed preview expiry even when the preview hash is recomputed', async () => {
     const home = await createTempDir('cyrene-harvester-preview-malformed-home-')
     vi.stubEnv('HOME', home)

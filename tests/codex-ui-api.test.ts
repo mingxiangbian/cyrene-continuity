@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -472,6 +472,55 @@ describe('handleCodexUiApiRequest', () => {
           id: 'active-1',
           explain: expect.arrayContaining(['exact_project'])
         })
+      ])
+    }
+  })
+
+  it('returns next actions for repair-required dashboard diagnostics', async () => {
+    const home = await createTempDir('cyrene-ui-repair-actions-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+    await writeFile(semanticPath, `${await readFile(semanticPath, 'utf8')}{bad json}\n`, 'utf8')
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/dashboard' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        diagnostics?: {
+          nextActions?: string[]
+        }
+      }
+      expect(data.diagnostics?.nextActions).toEqual([
+        'action: run cyrene-continuity codex memory jsonl repair --dry-run',
+        'action: after reviewing the preview, run cyrene-continuity codex memory jsonl repair --apply'
+      ])
+    }
+  })
+
+  it('returns next action for stale index dashboard diagnostics', async () => {
+    const home = await createTempDir('cyrene-ui-stale-index-actions-home-')
+    vi.stubEnv('HOME', home)
+    const { cwd, memoryRoot } = await seedProject()
+    await rebuildCodexMemoryIndex({ cwd })
+    const semanticPath = join(memoryRoot, 'semantic_memories.jsonl')
+    const future = new Date(Date.now() + 3000)
+    await utimes(semanticPath, future, future)
+
+    const result = await handleCodexUiApiRequest({ cwd, method: 'GET', pathname: '/api/dashboard' })
+
+    expect(result.status).toBe(200)
+    expect(result.body.ok).toBe(true)
+    if (result.body.ok) {
+      const data = result.body.data as {
+        diagnostics?: {
+          nextActions?: string[]
+        }
+      }
+      expect(data.diagnostics?.nextActions).toEqual([
+        'action: run cyrene-continuity codex memory db rebuild'
       ])
     }
   })

@@ -710,6 +710,52 @@ describe('weekly core and global consolidation job', () => {
     await expect(readMemoryEventsFromRoot(globalRoot)).resolves.toEqual([])
   })
 
+  it('skips malformed semantic JSONL dry-run with repair_required and leaves file bytes unchanged', async () => {
+    const root = await createTempDir('cyrene-weekly-malformed-dry-run-project-')
+    const globalRoot = await createTempDir('cyrene-weekly-malformed-dry-run-global-')
+    const semanticPath = join(root, 'semantic_memories.jsonl')
+    const globalSemanticPath = join(globalRoot, 'semantic_memories.jsonl')
+    await writeSemanticMemoriesFromRoot(root, [semanticMemory({ id: 'validated-1' })])
+    await appendAppliedContexts(root, 'validated-1')
+    const malformed = `${await readFile(semanticPath, 'utf8')}{not-json}\n`
+    const malformedGlobal = `${JSON.stringify(semanticMemory({ id: 'global-core', scope: 'global', confidenceTier: 'global_core' }))}\n{not-json}\n`
+    await writeFile(semanticPath, malformed, 'utf8')
+    await writeFile(globalSemanticPath, malformedGlobal, 'utf8')
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      globalRoot,
+      apply: false,
+      now: NOW
+    })
+
+    expect(result).toMatchObject({ dryRun: true })
+    expect(result.projectRoots[0]).toMatchObject({
+      skipped: true,
+      reason: 'repair_required',
+      malformedJsonLines: 1,
+      promotedValidatedToProjectCore: 0,
+      invalidMemories: 1,
+      recommendations: 0,
+      malformedSemanticMemories: 1
+    })
+    expect(result.global).toMatchObject({
+      skipped: true,
+      reason: 'repair_required',
+      malformedJsonLines: 1,
+      promotedToGlobalCore: 0,
+      invalidMemories: 1,
+      recommendations: 0,
+      malformedSemanticMemories: 1
+    })
+    await expect(readFile(join(root, 'semantic_memories.jsonl'), 'utf8')).resolves.toBe(malformed)
+    await expect(readFile(globalSemanticPath, 'utf8')).resolves.toBe(malformedGlobal)
+    await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(globalRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readMemoryEventsFromRoot(root)).resolves.toEqual([])
+    await expect(readMemoryEventsFromRoot(globalRoot)).resolves.toEqual([])
+  })
+
   it('skips non-semantic canonical JSONL corruption during apply before mutation', async () => {
     const root = await createTempDir('cyrene-weekly-malformed-activation-project-')
     const globalRoot = await createTempDir('cyrene-weekly-malformed-activation-global-')
@@ -736,6 +782,56 @@ describe('weekly core and global consolidation job', () => {
       now: NOW
     })
 
+    expect(result.projectRoots[0]).toMatchObject({
+      skipped: true,
+      reason: 'repair_required',
+      malformedJsonLines: 1,
+      promotedValidatedToProjectCore: 0,
+      recommendations: 0
+    })
+    expect(result.global).toMatchObject({
+      skipped: true,
+      reason: 'repair_required',
+      malformedJsonLines: 1,
+      promotedToGlobalCore: 0,
+      recommendations: 0
+    })
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(originalSemantic)
+    await expect(readFile(activationPath, 'utf8')).resolves.toBe(malformedActivationEvents)
+    await expect(readFile(globalActivationPath, 'utf8')).resolves.toBe(malformedGlobalActivationEvents)
+    await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(globalRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readMemoryEventsFromRoot(root)).resolves.toEqual([])
+    await expect(readMemoryEventsFromRoot(globalRoot)).resolves.toEqual([])
+  })
+
+  it('skips non-semantic canonical JSONL corruption during dry-run before processing', async () => {
+    const root = await createTempDir('cyrene-weekly-malformed-activation-dry-run-project-')
+    const globalRoot = await createTempDir('cyrene-weekly-malformed-activation-dry-run-global-')
+    const semanticPath = join(root, 'semantic_memories.jsonl')
+    const activationPath = join(root, 'activation_events.jsonl')
+    const globalActivationPath = join(globalRoot, 'activation_events.jsonl')
+    await writeSemanticMemoriesFromRoot(root, [semanticMemory({ id: 'validated-1' })])
+    await appendAppliedContexts(root, 'validated-1')
+    const originalSemantic = await readFile(semanticPath, 'utf8')
+    const malformedActivationEvents = `${await readFile(activationPath, 'utf8')}{not-json}\n`
+    const malformedGlobalActivationEvents = `${JSON.stringify({
+      id: 'global-activation-1',
+      memoryId: 'global-core',
+      event: 'applied',
+      createdAt: NOW
+    })}\n{not-json}\n`
+    await writeFile(activationPath, malformedActivationEvents, 'utf8')
+    await writeFile(globalActivationPath, malformedGlobalActivationEvents, 'utf8')
+
+    const result = await runCodexMemoryLifecycleWeekly({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      globalRoot,
+      apply: false,
+      now: NOW
+    })
+
+    expect(result).toMatchObject({ dryRun: true })
     expect(result.projectRoots[0]).toMatchObject({
       skipped: true,
       reason: 'repair_required',

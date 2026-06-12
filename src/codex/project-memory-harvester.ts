@@ -25,6 +25,7 @@ import { modelBaseUrlRequiresApiKey, type CallModelInput, type ModelResponse } f
 import { readActiveMemoriesFromRoot, readPendingMemoriesFromRoot } from '../memory/memory-store.js'
 import { normalizeMemoryKey } from '../memory/tokenizer.js'
 import type { MemoryDomain, MemoryEvidence, MemorySource, MemoryType } from '../memory/types.js'
+import { previewRequiredAction } from './memory-diagnostics-copy.js'
 
 export type ProjectMemoryHarvesterCandidateKind =
   | 'project_fact'
@@ -118,7 +119,7 @@ export async function runCodexProjectMemoryHarvest(
   if (isExplicitDryRunFalse(input)) {
     return {
       action: 'preview_required',
-      reason: 'Project harvest requires preview-first apply: rerun without dryRun:false for preview, then use --apply/apply:true with matching previewId and previewHash.',
+      reason: `Project harvest requires preview-first apply. ${previewRequiredAction()}`,
       modelCallCount: 0,
       signals,
       warnings
@@ -178,7 +179,7 @@ async function applyCodexProjectMemoryHarvestPreview(
   if (input.previewId === undefined || input.previewHash === undefined) {
     return {
       action: 'preview_required',
-      reason: 'Project harvest apply requires matching previewId and previewHash.',
+      reason: `Project harvest apply requires matching previewId and previewHash. ${previewRequiredAction()}`,
       modelCallCount: 0,
       signals: [],
       warnings: []
@@ -200,7 +201,7 @@ async function applyCodexProjectMemoryHarvestPreview(
   if (preview.artifact.projectId !== projectId || preview.artifact.memoryRoot !== memoryRootForPreview) {
     return {
       action: 'preview_required',
-      reason: 'Harvest preview artifact does not belong to this project memory root.',
+      reason: `Harvest preview artifact does not belong to this project memory root. ${previewRequiredAction()}`,
       modelCallCount: 0,
       signals: [],
       warnings: []

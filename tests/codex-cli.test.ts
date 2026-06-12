@@ -13,6 +13,7 @@ import {
   writeFastSummaryProjection
 } from '../src/codex/fast-summary-store.js'
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
+import { writeHarvestPreviewArtifact } from '../src/codex/project-memory-harvest-preview.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { reviewHashForSimilarHintMemory } from '../src/codex/similar-hints-review.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
@@ -723,6 +724,72 @@ describe('cyrene-continuity codex CLI', () => {
       action: 'needs_model_config'
     })
     expect(parsed.signals?.length).toBeGreaterThan(0)
+  })
+
+  it('reports project memory harvest apply missing preview with next action', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-preview-required-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-preview-required-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-preview-required-test' }), 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project',
+        '--apply'
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; reason?: string }
+    expect(parsed.action).toBe('preview_required')
+    expect(parsed.reason).toContain('cyrene-continuity codex memory harvest-project')
+  })
+
+  it('reports expired project harvest preview with next action', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-preview-expired-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-preview-expired-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-preview-expired-test' }), 'utf8')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const artifact = await writeHarvestPreviewArtifact({
+      projectId: identity.projectId,
+      memoryRoot,
+      now: '2000-01-01T00:00:00.000Z',
+      admissionPolicyVersion: 'admission_gate_v1',
+      toolVersion: 'project_harvest_preview_v1',
+      candidates: [],
+      groups: [],
+      warnings: [],
+      sourceSignalHashes: []
+    })
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project',
+        '--apply',
+        '--preview-id',
+        artifact.previewId,
+        '--preview-hash',
+        artifact.previewHash
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; reason?: string }
+    expect(parsed.action).toBe('preview_expired')
+    expect(parsed.reason).toContain('cyrene-continuity codex memory harvest-project')
   })
 
   it('doctor rejects --config without a path', async () => {

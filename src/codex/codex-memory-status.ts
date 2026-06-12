@@ -16,6 +16,12 @@ import {
 import type { CodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import { readCodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
+import {
+  indexStaleAction,
+  repairRequiredAction,
+  MEMORY_JSONL_REPAIR_APPLY_ACTION,
+  MEMORY_JSONL_REPAIR_DRY_RUN_ACTION
+} from './memory-diagnostics-copy.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
 
@@ -87,8 +93,7 @@ export interface CodexMemoryStatus {
 
 const PROFILE_CANDIDATES_FILE = 'profile_candidates.jsonl'
 const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
-export const MEMORY_JSONL_REPAIR_DRY_RUN_ACTION = 'action: run cyrene-continuity codex memory jsonl repair --dry-run'
-export const MEMORY_JSONL_REPAIR_APPLY_ACTION = 'action: after reviewing the preview, run cyrene-continuity codex memory jsonl repair --apply'
+export { MEMORY_JSONL_REPAIR_DRY_RUN_ACTION, MEMORY_JSONL_REPAIR_APPLY_ACTION }
 
 export async function readCodexMemoryStatus(input: { cwd: string }): Promise<CodexMemoryStatus> {
   const project = await identifyCodexProject(input.cwd)
@@ -182,7 +187,7 @@ export async function formatCodexMemoryStatus(input: { cwd: string }): Promise<s
     status.index.sourceLatestAt === undefined ? undefined : `  source latest: ${status.index.sourceLatestAt}`,
     status.index.staleReason === undefined ? undefined : `  stale reason: ${status.index.staleReason}`,
     `  similar-project retrieval: ${status.similarProjectRetrieval}`,
-    status.index.freshness === 'stale' && status.repair.state === 'ok' ? '  action: run cyrene-continuity codex memory db rebuild' : undefined,
+    status.index.freshness === 'stale' && status.repair.state === 'ok' ? `  ${indexStaleAction()}` : undefined,
     '',
     'hooks:',
     `  stop hook: ${status.stopHook.configured ? 'configured' : 'missing'}`,
@@ -207,8 +212,7 @@ export function formatCodexMemoryRepairLines(repair: CodexMemoryRepairStatus): s
     ...repair.corruptedRoots.map((root) =>
       `  repair root: ${root.memoryRoot} (${root.malformedJsonLines} malformed json lines)`
     ),
-    `  ${MEMORY_JSONL_REPAIR_DRY_RUN_ACTION}`,
-    `  ${MEMORY_JSONL_REPAIR_APPLY_ACTION}`
+    ...repairRequiredAction().map((action) => `  ${action}`)
   ]
 }
 

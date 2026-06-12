@@ -179,7 +179,7 @@ async function runDailyForReadableRoot(
   root: LifecycleRootSpec,
   input: DailyLifecycleRunInput
 ): Promise<DailyLifecycleRootResult> {
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(root.memoryRoot, input.dryRun)
+  const repairRequiredLines = await repairRequiredMalformedJsonLines(root.memoryRoot)
   if (repairRequiredLines !== null) {
     return repairRequiredRootResult(root, repairRequiredLines)
   }
@@ -457,10 +457,7 @@ function repairRequiredRootResult(root: LifecycleRootSpec, malformedJsonLines: n
   return malformedRootResult(root, { ok: false, malformedJsonLines, reason: 'repair_required' })
 }
 
-async function repairRequiredMalformedJsonLinesForApply(memoryRoot: string, dryRun: boolean): Promise<number | null> {
-  if (dryRun) {
-    return null
-  }
+async function repairRequiredMalformedJsonLines(memoryRoot: string): Promise<number | null> {
   try {
     await assertCanonicalJsonlHealthyForMutation(memoryRoot)
     return null

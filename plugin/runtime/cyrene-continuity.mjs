@@ -13795,6 +13795,28 @@ function isRecord(value) {
   return typeof value === "object" && value !== null;
 }
 
+// src/codex/memory-diagnostics-copy.ts
+var MEMORY_JSONL_REPAIR_DRY_RUN_ACTION = "action: run cyrene-continuity codex memory jsonl repair --dry-run";
+var MEMORY_JSONL_REPAIR_APPLY_ACTION = "action: after reviewing the preview, run cyrene-continuity codex memory jsonl repair --apply";
+var MEMORY_INDEX_REBUILD_ACTION = "action: run cyrene-continuity codex memory db rebuild";
+var PROJECT_HARVEST_PREVIEW_REQUIRED_ACTION = "action: run cyrene-continuity codex memory harvest-project, then apply with --apply --preview-id <id> --preview-hash <hash>";
+var PROJECT_HARVEST_PREVIEW_EXPIRED_ACTION = "action: preview expired; run cyrene-continuity codex memory harvest-project again";
+function repairRequiredAction() {
+  return [
+    MEMORY_JSONL_REPAIR_DRY_RUN_ACTION,
+    MEMORY_JSONL_REPAIR_APPLY_ACTION
+  ];
+}
+function indexStaleAction() {
+  return MEMORY_INDEX_REBUILD_ACTION;
+}
+function previewRequiredAction() {
+  return PROJECT_HARVEST_PREVIEW_REQUIRED_ACTION;
+}
+function previewExpiredAction() {
+  return PROJECT_HARVEST_PREVIEW_EXPIRED_ACTION;
+}
+
 // src/codex/memory-dream-state.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { lstat as lstat7, readFile as readFile6, rename as rename2, writeFile as writeFile4 } from "node:fs/promises";
@@ -13862,8 +13884,6 @@ function isFileErrorCode6(error2, code) {
 // src/codex/codex-memory-status.ts
 var PROFILE_CANDIDATES_FILE = "profile_candidates.jsonl";
 var REVIEW_SUMMARIES_FILE = "review-summaries.jsonl";
-var MEMORY_JSONL_REPAIR_DRY_RUN_ACTION = "action: run cyrene-continuity codex memory jsonl repair --dry-run";
-var MEMORY_JSONL_REPAIR_APPLY_ACTION = "action: after reviewing the preview, run cyrene-continuity codex memory jsonl repair --apply";
 async function readCodexMemoryStatus(input) {
   const project = await identifyCodexProject(input.cwd);
   const globalRoot = codexGlobalMemoryRoot();
@@ -13953,7 +13973,7 @@ async function formatCodexMemoryStatus(input) {
     status.index.sourceLatestAt === void 0 ? void 0 : `  source latest: ${status.index.sourceLatestAt}`,
     status.index.staleReason === void 0 ? void 0 : `  stale reason: ${status.index.staleReason}`,
     `  similar-project retrieval: ${status.similarProjectRetrieval}`,
-    status.index.freshness === "stale" && status.repair.state === "ok" ? "  action: run cyrene-continuity codex memory db rebuild" : void 0,
+    status.index.freshness === "stale" && status.repair.state === "ok" ? `  ${indexStaleAction()}` : void 0,
     "",
     "hooks:",
     `  stop hook: ${status.stopHook.configured ? "configured" : "missing"}`,
@@ -13977,8 +13997,7 @@ function formatCodexMemoryRepairLines(repair) {
     ...repair.corruptedRoots.map(
       (root) => `  repair root: ${root.memoryRoot} (${root.malformedJsonLines} malformed json lines)`
     ),
-    `  ${MEMORY_JSONL_REPAIR_DRY_RUN_ACTION}`,
-    `  ${MEMORY_JSONL_REPAIR_APPLY_ACTION}`
+    ...repairRequiredAction().map((action2) => `  ${action2}`)
   ];
 }
 async function readCodexMemoryRepairStatus(memoryRoots) {
@@ -14429,7 +14448,7 @@ async function formatCodexDoctor(input) {
     memoryIndex.lastSyncAt === void 0 ? void 0 : `  memory index last sync: ${memoryIndex.lastSyncAt}`,
     memoryIndex.sourceLatestAt === void 0 ? void 0 : `  memory index source latest: ${memoryIndex.sourceLatestAt}`,
     memoryIndex.staleReason === void 0 ? void 0 : `  memory index stale reason: ${memoryIndex.staleReason}`,
-    memoryIndex.freshness === "stale" && memoryStatus.repair.state === "ok" ? "  action: run cyrene-continuity codex memory db rebuild" : void 0,
+    memoryIndex.freshness === "stale" && memoryStatus.repair.state === "ok" ? `  ${indexStaleAction()}` : void 0,
     `  similar-project retrieval: ${memoryStatus.similarProjectRetrieval}`,
     `  session summaries: ${memoryStatus.stopHook.sessionSummaries}`,
     `  last stop hook run: ${memoryStatus.stopHook.lastRunAt === void 0 ? "never" : `${memoryStatus.stopHook.lastRunAt} (${memoryStatus.stopHook.lastRunStatus ?? "unknown"})`}`,
@@ -27453,7 +27472,7 @@ async function runDailyForRoot(root, input) {
   );
 }
 async function runDailyForReadableRoot(root, input) {
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(root.memoryRoot, input.dryRun);
+  const repairRequiredLines = await repairRequiredMalformedJsonLines(root.memoryRoot);
   if (repairRequiredLines !== null) {
     return repairRequiredRootResult(root, repairRequiredLines);
   }
@@ -27697,10 +27716,7 @@ function malformedRootResult(root, readResult) {
 function repairRequiredRootResult(root, malformedJsonLines) {
   return malformedRootResult(root, { ok: false, malformedJsonLines, reason: "repair_required" });
 }
-async function repairRequiredMalformedJsonLinesForApply(memoryRoot, dryRun) {
-  if (dryRun) {
-    return null;
-  }
+async function repairRequiredMalformedJsonLines(memoryRoot) {
   try {
     await assertCanonicalJsonlHealthyForMutation(memoryRoot);
     return null;
@@ -32015,7 +32031,7 @@ async function runProjectWeekly(input) {
 }
 async function runProjectWeeklyLocked(input) {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.root.memoryRoot]);
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply2(input.root.memoryRoot, input.dryRun);
+  const repairRequiredLines = await repairRequiredMalformedJsonLines2(input.root.memoryRoot);
   if (repairRequiredLines !== null) {
     return {
       result: {
@@ -32211,7 +32227,7 @@ async function runGlobalWeekly(input) {
 }
 async function runGlobalWeeklyLocked(input) {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.memoryRoot]);
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply2(input.memoryRoot, input.dryRun);
+  const repairRequiredLines = await repairRequiredMalformedJsonLines2(input.memoryRoot);
   if (repairRequiredLines !== null) {
     return {
       ...repairRequiredGlobalResult(input.memoryRoot, repairRequiredLines),
@@ -32660,10 +32676,7 @@ function repairRequiredGlobalResult(memoryRoot, malformedJsonLines) {
     reason: "repair_required"
   };
 }
-async function repairRequiredMalformedJsonLinesForApply2(memoryRoot, dryRun) {
-  if (dryRun) {
-    return null;
-  }
+async function repairRequiredMalformedJsonLines2(memoryRoot) {
   try {
     await assertCanonicalJsonlHealthyForMutation(memoryRoot);
     return null;
@@ -35108,31 +35121,31 @@ async function writeHarvestPreviewArtifact(input) {
 }
 async function readHarvestPreviewArtifact(input) {
   if (!HARVEST_PREVIEW_ID_PATTERN.test(input.previewId)) {
-    return { action: "preview_not_found", reason: "Harvest preview id is invalid." };
+    return { action: "preview_not_found", reason: `Harvest preview id is invalid. ${previewRequiredAction()}` };
   }
   let raw;
   try {
     raw = await readFile25(join36(input.memoryRoot, HARVEST_PREVIEWS_DIR, `${input.previewId}.json`), "utf8");
   } catch {
-    return { action: "preview_not_found", reason: "Harvest preview artifact was not found." };
+    return { action: "preview_not_found", reason: `Harvest preview artifact was not found. ${previewRequiredAction()}` };
   }
   const artifact = parseHarvestPreviewArtifact(raw);
   if (artifact === void 0 || artifact.previewId !== input.previewId) {
-    return { action: "preview_hash_mismatch", reason: "Harvest preview artifact is invalid." };
+    return { action: "preview_hash_mismatch", reason: `Harvest preview artifact is invalid. ${previewRequiredAction()}` };
   }
   const { previewHash: storedHash, ...payload } = artifact;
   const expectedHash = previewHashForPayload(payload);
   if (storedHash !== input.previewHash || expectedHash !== input.previewHash) {
-    return { action: "preview_hash_mismatch", reason: "Harvest preview hash does not match the artifact." };
+    return { action: "preview_hash_mismatch", reason: `Harvest preview hash does not match the artifact. ${previewRequiredAction()}` };
   }
   const createdAtMs = Date.parse(artifact.createdAt);
   const expiresAtMs = Date.parse(artifact.expiresAt);
   const now = Date.parse(input.now ?? (/* @__PURE__ */ new Date()).toISOString());
   if (!Number.isFinite(createdAtMs) || !Number.isFinite(expiresAtMs) || !Number.isFinite(now) || expiresAtMs <= createdAtMs) {
-    return { action: "preview_hash_mismatch", reason: "Harvest preview artifact has invalid timestamps." };
+    return { action: "preview_hash_mismatch", reason: `Harvest preview artifact has invalid timestamps. ${previewRequiredAction()}` };
   }
   if (now >= expiresAtMs) {
-    return { action: "preview_expired", reason: "Harvest preview expired; run preview again." };
+    return { action: "preview_expired", reason: previewExpiredAction() };
   }
   return { action: "ok", artifact };
 }
@@ -35207,7 +35220,7 @@ async function runCodexProjectMemoryHarvest(input) {
   if (isExplicitDryRunFalse(input)) {
     return {
       action: "preview_required",
-      reason: "Project harvest requires preview-first apply: rerun without dryRun:false for preview, then use --apply/apply:true with matching previewId and previewHash.",
+      reason: `Project harvest requires preview-first apply. ${previewRequiredAction()}`,
       modelCallCount: 0,
       signals,
       warnings
@@ -35259,7 +35272,7 @@ async function applyCodexProjectMemoryHarvestPreview(input, projectId) {
   if (input.previewId === void 0 || input.previewHash === void 0) {
     return {
       action: "preview_required",
-      reason: "Project harvest apply requires matching previewId and previewHash.",
+      reason: `Project harvest apply requires matching previewId and previewHash. ${previewRequiredAction()}`,
       modelCallCount: 0,
       signals: [],
       warnings: []
@@ -35280,7 +35293,7 @@ async function applyCodexProjectMemoryHarvestPreview(input, projectId) {
   if (preview.artifact.projectId !== projectId || preview.artifact.memoryRoot !== memoryRootForPreview) {
     return {
       action: "preview_required",
-      reason: "Harvest preview artifact does not belong to this project memory root.",
+      reason: `Harvest preview artifact does not belong to this project memory root. ${previewRequiredAction()}`,
       modelCallCount: 0,
       signals: [],
       warnings: []
@@ -39436,8 +39449,18 @@ function readDashboardDiagnostics(status, continuity) {
       globalMemory: continuity.globalMemory,
       projectMemory: continuity.projectMemory,
       similarProjectHints: continuity.similarProjectHints
-    }
+    },
+    nextActions: memoryDiagnosticNextActions(status)
   };
+}
+function memoryDiagnosticNextActions(status) {
+  if (status.repair.state !== "ok") {
+    return repairRequiredAction();
+  }
+  if (status.index.freshness === "stale") {
+    return [indexStaleAction()];
+  }
+  return [];
 }
 async function runUiMemoryTriage(input) {
   const selection = await resolveSelection(input.cwd, input.selection);
@@ -40407,6 +40430,7 @@ function renderOverview() {
         \${metric('Signals', signals.length, 'Current workspace inputs')}
       </div>
       \${renderModelConfigPanel()}
+      \${renderDiagnosticActionsPanel()}
       \${renderTimelineDiagnostic()}
       \${renderRetrievalExplainPanel()}
       <div class="soft-panel">
@@ -41881,6 +41905,21 @@ function renderModelConfigPanel() {
     ? \`Model \${escapeHtml(config.model || 'configured')} at \${escapeHtml(config.baseUrl || 'configured endpoint')}. API key: \${escapeHtml(config.apiKeyPreview || 'not set')}.\`
     : \`Reviewing existing memory works without a key. Harvest and model summaries need \${escapeHtml(missing.join(', ') || 'CYRENE_BASE_URL and CYRENE_MODEL')}; set CYRENE_API_KEY if the provider requires bearer auth.\`
   return panel(title, body, config.configured ? 'muted' : 'warn')
+}
+
+function renderDiagnosticActionsPanel() {
+  const actions = Array.isArray(state.dashboard.diagnostics?.nextActions)
+    ? state.dashboard.diagnostics.nextActions.filter(Boolean)
+    : []
+  if (actions.length === 0) return ''
+  return \`
+    <div class="soft-panel notice warn">
+      <h3>Diagnostics next actions</h3>
+      <ul class="explain-list">
+        \${actions.map((action) => \`<li class="soft-inset rail-item"><span>\${escapeHtml(action)}</span></li>\`).join('')}
+      </ul>
+    </div>
+  \`
 }
 
 function renderRetrievalExplainPanel() {

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CodexMemoryCandidateInput } from './memory-propose.js'
+import { previewExpiredAction, previewRequiredAction } from './memory-diagnostics-copy.js'
 import { HARVEST_PREVIEW_TTL_MS } from './retrieval-v2-constants.js'
 
 export type ProjectHarvestPreviewRoute = 'trial_eligible' | 'review_required' | 'reject_recommended'
@@ -96,35 +97,35 @@ export async function readHarvestPreviewArtifact(input: {
   now?: string
 }): Promise<ReadHarvestPreviewArtifactResult> {
   if (!HARVEST_PREVIEW_ID_PATTERN.test(input.previewId)) {
-    return { action: 'preview_not_found', reason: 'Harvest preview id is invalid.' }
+    return { action: 'preview_not_found', reason: `Harvest preview id is invalid. ${previewRequiredAction()}` }
   }
 
   let raw: string
   try {
     raw = await readFile(join(input.memoryRoot, HARVEST_PREVIEWS_DIR, `${input.previewId}.json`), 'utf8')
   } catch {
-    return { action: 'preview_not_found', reason: 'Harvest preview artifact was not found.' }
+    return { action: 'preview_not_found', reason: `Harvest preview artifact was not found. ${previewRequiredAction()}` }
   }
 
   const artifact = parseHarvestPreviewArtifact(raw)
   if (artifact === undefined || artifact.previewId !== input.previewId) {
-    return { action: 'preview_hash_mismatch', reason: 'Harvest preview artifact is invalid.' }
+    return { action: 'preview_hash_mismatch', reason: `Harvest preview artifact is invalid. ${previewRequiredAction()}` }
   }
 
   const { previewHash: storedHash, ...payload } = artifact
   const expectedHash = previewHashForPayload(payload)
   if (storedHash !== input.previewHash || expectedHash !== input.previewHash) {
-    return { action: 'preview_hash_mismatch', reason: 'Harvest preview hash does not match the artifact.' }
+    return { action: 'preview_hash_mismatch', reason: `Harvest preview hash does not match the artifact. ${previewRequiredAction()}` }
   }
 
   const createdAtMs = Date.parse(artifact.createdAt)
   const expiresAtMs = Date.parse(artifact.expiresAt)
   const now = Date.parse(input.now ?? new Date().toISOString())
   if (!Number.isFinite(createdAtMs) || !Number.isFinite(expiresAtMs) || !Number.isFinite(now) || expiresAtMs <= createdAtMs) {
-    return { action: 'preview_hash_mismatch', reason: 'Harvest preview artifact has invalid timestamps.' }
+    return { action: 'preview_hash_mismatch', reason: `Harvest preview artifact has invalid timestamps. ${previewRequiredAction()}` }
   }
   if (now >= expiresAtMs) {
-    return { action: 'preview_expired', reason: 'Harvest preview expired; run preview again.' }
+    return { action: 'preview_expired', reason: previewExpiredAction() }
   }
 
   return { action: 'ok', artifact }

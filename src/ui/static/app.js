@@ -383,6 +383,7 @@ function renderOverview() {
         ${metric('Signals', signals.length, 'Current workspace inputs')}
       </div>
       ${renderModelConfigPanel()}
+      ${renderDiagnosticActionsPanel()}
       ${renderTimelineDiagnostic()}
       ${renderRetrievalExplainPanel()}
       <div class="soft-panel">
@@ -1857,6 +1858,21 @@ function renderModelConfigPanel() {
     ? `Model ${escapeHtml(config.model || 'configured')} at ${escapeHtml(config.baseUrl || 'configured endpoint')}. API key: ${escapeHtml(config.apiKeyPreview || 'not set')}.`
     : `Reviewing existing memory works without a key. Harvest and model summaries need ${escapeHtml(missing.join(', ') || 'CYRENE_BASE_URL and CYRENE_MODEL')}; set CYRENE_API_KEY if the provider requires bearer auth.`
   return panel(title, body, config.configured ? 'muted' : 'warn')
+}
+
+function renderDiagnosticActionsPanel() {
+  const actions = Array.isArray(state.dashboard.diagnostics?.nextActions)
+    ? state.dashboard.diagnostics.nextActions.filter(Boolean)
+    : []
+  if (actions.length === 0) return ''
+  return `
+    <div class="soft-panel notice warn">
+      <h3>Diagnostics next actions</h3>
+      <ul class="explain-list">
+        ${actions.map((action) => `<li class="soft-inset rail-item"><span>${escapeHtml(action)}</span></li>`).join('')}
+      </ul>
+    </div>
+  `
 }
 
 function renderRetrievalExplainPanel() {

@@ -26,6 +26,7 @@ import type { CyreneMemory, MemoryCandidateKind, MemoryScores, MemoryTombstone, 
 import { codexMemoryDbPath, syncCurrentCodexMemoryIndex } from './codex-memory-index.js'
 import { readCodexMemoryStatus } from './codex-memory-status.js'
 import { getCodexContinuityContext, type CodexContinuityContext } from './continuity-context.js'
+import { indexStaleAction, repairRequiredAction } from './memory-diagnostics-copy.js'
 import { runCodexMemoryDistill } from './memory-distill.js'
 import {
   archiveCodexActiveMemory,
@@ -981,6 +982,7 @@ function readDashboardDiagnostics(
     projectMemory: CodexContinuityContext['projectMemory']
     similarProjectHints: CodexContinuityContext['similarProjectHints']
   }
+  nextActions: string[]
 } {
   return {
     memoryIndex: status.index,
@@ -989,8 +991,19 @@ function readDashboardDiagnostics(
       globalMemory: continuity.globalMemory,
       projectMemory: continuity.projectMemory,
       similarProjectHints: continuity.similarProjectHints
-    }
+    },
+    nextActions: memoryDiagnosticNextActions(status)
   }
+}
+
+function memoryDiagnosticNextActions(status: Awaited<ReturnType<typeof readCodexMemoryStatus>>): string[] {
+  if (status.repair.state !== 'ok') {
+    return repairRequiredAction()
+  }
+  if (status.index.freshness === 'stale') {
+    return [indexStaleAction()]
+  }
+  return []
 }
 
 async function runUiMemoryTriage(input: {

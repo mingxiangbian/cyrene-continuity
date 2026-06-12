@@ -16,6 +16,7 @@ import {
 } from './codex-memory-root.js'
 import { formatCodexMemoryRepairLines, readCodexMemoryStatus } from './codex-memory-status.js'
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
+import { indexStaleAction } from './memory-diagnostics-copy.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
 import { resolveDevRepoRoot, resolvePluginRoot, resolvePluginRuntimePath } from './runtime-paths.js'
@@ -128,7 +129,7 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     memoryIndex.sourceLatestAt === undefined ? undefined : `  memory index source latest: ${memoryIndex.sourceLatestAt}`,
     memoryIndex.staleReason === undefined ? undefined : `  memory index stale reason: ${memoryIndex.staleReason}`,
     memoryIndex.freshness === 'stale' && memoryStatus.repair.state === 'ok'
-      ? '  action: run cyrene-continuity codex memory db rebuild'
+      ? `  ${indexStaleAction()}`
       : undefined,
     `  similar-project retrieval: ${memoryStatus.similarProjectRetrieval}`,
     `  session summaries: ${memoryStatus.stopHook.sessionSummaries}`,
