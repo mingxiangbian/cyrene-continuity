@@ -26965,9 +26965,13 @@ async function runDailyForRoot(root, input) {
   );
 }
 async function runDailyForReadableRoot(root, input) {
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(root.memoryRoot, input.dryRun);
+  if (repairRequiredLines !== null) {
+    return repairRequiredRootResult(root, repairRequiredLines);
+  }
   const semanticRead = await readSemanticMemoriesStrictFromRoot(root.memoryRoot);
   if (!semanticRead.ok) {
-    return malformedRootResult(root, semanticRead);
+    return input.dryRun ? malformedRootResult(root, semanticRead) : repairRequiredRootResult(root, semanticRead.malformedJsonLines);
   }
   const [memories, activationEvents, memoryEvents, relationEdges] = await Promise.all([
     Promise.resolve(semanticRead.records),
@@ -27201,6 +27205,29 @@ function malformedRootResult(root, readResult) {
     skipped: true,
     reason: readResult.reason
   };
+}
+function repairRequiredRootResult(root, malformedJsonLines) {
+  return malformedRootResult(root, { ok: false, malformedJsonLines, reason: "repair_required" });
+}
+async function repairRequiredMalformedJsonLinesForApply(memoryRoot, dryRun) {
+  if (dryRun) {
+    return null;
+  }
+  try {
+    await assertCanonicalJsonlHealthyForMutation(memoryRoot);
+    return null;
+  } catch (error2) {
+    if (isMemoryJsonlRepairRequiredError(error2)) {
+      return error2.malformedLineCount + error2.skippedFileCount;
+    }
+    if (isJsonlScanPathSafetyError(error2)) {
+      return null;
+    }
+    throw error2;
+  }
+}
+function isJsonlScanPathSafetyError(error2) {
+  return error2 instanceof Error && (error2.message.startsWith("Refusing to scan non-file JSONL path:") || error2.message.startsWith("Refusing to scan JSONL symlink:"));
 }
 function relationEdgeMaintenanceTransitions(memories, edges) {
   const memoryIds = new Set(memories.map((memory2) => memory2.id));
@@ -31491,7 +31518,7 @@ async function runProjectWeekly(input) {
 }
 async function runProjectWeeklyLocked(input) {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.root.memoryRoot]);
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.root.memoryRoot, input.dryRun);
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply2(input.root.memoryRoot, input.dryRun);
   if (repairRequiredLines !== null) {
     return {
       result: {
@@ -31687,7 +31714,7 @@ async function runGlobalWeekly(input) {
 }
 async function runGlobalWeeklyLocked(input) {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.memoryRoot]);
-  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.memoryRoot, input.dryRun);
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply2(input.memoryRoot, input.dryRun);
   if (repairRequiredLines !== null) {
     return {
       ...repairRequiredGlobalResult(input.memoryRoot, repairRequiredLines),
@@ -32136,7 +32163,7 @@ function repairRequiredGlobalResult(memoryRoot, malformedJsonLines) {
     reason: "repair_required"
   };
 }
-async function repairRequiredMalformedJsonLinesForApply(memoryRoot, dryRun) {
+async function repairRequiredMalformedJsonLinesForApply2(memoryRoot, dryRun) {
   if (dryRun) {
     return null;
   }
@@ -32147,13 +32174,13 @@ async function repairRequiredMalformedJsonLinesForApply(memoryRoot, dryRun) {
     if (isMemoryJsonlRepairRequiredError(error2)) {
       return error2.malformedLineCount + error2.skippedFileCount;
     }
-    if (isJsonlScanPathSafetyError(error2)) {
+    if (isJsonlScanPathSafetyError2(error2)) {
       return null;
     }
     throw error2;
   }
 }
-function isJsonlScanPathSafetyError(error2) {
+function isJsonlScanPathSafetyError2(error2) {
   return error2 instanceof Error && (error2.message.startsWith("Refusing to scan non-file JSONL path:") || error2.message.startsWith("Refusing to scan JSONL symlink:"));
 }
 async function readSemanticMemoriesStrictFromRoot2(memoryRoot) {

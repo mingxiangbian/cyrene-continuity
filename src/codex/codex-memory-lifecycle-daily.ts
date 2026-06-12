@@ -9,7 +9,9 @@ import {
 } from '../memory/memory-lifecycle.js'
 import {
   appendMemoryEventFromRoot,
+  assertCanonicalJsonlHealthyForMutation,
   assertSafeMemoryDataFileTarget,
+  isMemoryJsonlRepairRequiredError,
   readActivationEventsFromRoot,
   readMemoryEdgesFromRoot,
   readMemoryEventsFromRoot,
@@ -177,9 +179,14 @@ async function runDailyForReadableRoot(
   root: LifecycleRootSpec,
   input: DailyLifecycleRunInput
 ): Promise<DailyLifecycleRootResult> {
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(root.memoryRoot, input.dryRun)
+  if (repairRequiredLines !== null) {
+    return repairRequiredRootResult(root, repairRequiredLines)
+  }
+
   const semanticRead = await readSemanticMemoriesStrictFromRoot(root.memoryRoot)
   if (!semanticRead.ok) {
-    return malformedRootResult(root, semanticRead)
+    return input.dryRun ? malformedRootResult(root, semanticRead) : repairRequiredRootResult(root, semanticRead.malformedJsonLines)
   }
   const [memories, activationEvents, memoryEvents, relationEdges] = await Promise.all([
     Promise.resolve(semanticRead.records),
@@ -444,6 +451,36 @@ function malformedRootResult(
     skipped: true,
     reason: readResult.reason
   }
+}
+
+function repairRequiredRootResult(root: LifecycleRootSpec, malformedJsonLines: number): DailyLifecycleRootResult {
+  return malformedRootResult(root, { ok: false, malformedJsonLines, reason: 'repair_required' })
+}
+
+async function repairRequiredMalformedJsonLinesForApply(memoryRoot: string, dryRun: boolean): Promise<number | null> {
+  if (dryRun) {
+    return null
+  }
+  try {
+    await assertCanonicalJsonlHealthyForMutation(memoryRoot)
+    return null
+  } catch (error) {
+    if (isMemoryJsonlRepairRequiredError(error)) {
+      return error.malformedLineCount + error.skippedFileCount
+    }
+    if (isJsonlScanPathSafetyError(error)) {
+      return null
+    }
+    throw error
+  }
+}
+
+function isJsonlScanPathSafetyError(error: unknown): boolean {
+  return error instanceof Error &&
+    (
+      error.message.startsWith('Refusing to scan non-file JSONL path:') ||
+      error.message.startsWith('Refusing to scan JSONL symlink:')
+    )
 }
 
 interface RelationEdgeTransition {

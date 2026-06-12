@@ -841,6 +841,36 @@ describe('daily memory lifecycle automation', () => {
     expect(await readMemoryEventsFromRoot(root)).toEqual([])
   })
 
+  it('reports non-semantic canonical JSONL corruption during apply before mutation', async () => {
+    const root = await createTempDir('cyrene-daily-malformed-activation-root-')
+    const semanticPath = join(root, 'semantic_memories.jsonl')
+    const activationPath = join(root, 'activation_events.jsonl')
+    await writeSemanticMemoriesFromRoot(root, [trialMemory()])
+    await appendAppliedEvents(root)
+    const originalSemantic = await readFile(semanticPath, 'utf8')
+    const malformedActivationEvents = `${await readFile(activationPath, 'utf8')}{bad json}\n`
+    await writeFile(activationPath, malformedActivationEvents, 'utf8')
+
+    const result = await runCodexMemoryLifecycleDaily({
+      projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
+      apply: true,
+      now: '2026-06-03T00:00:00.000Z'
+    })
+
+    expect(result.roots[0]).toMatchObject({
+      skipped: true,
+      reason: 'repair_required',
+      malformedJsonLines: 1,
+      promotedTrialToValidated: 0,
+      invalidMemories: 1,
+      needsMigration: 1
+    })
+    await expect(readFile(semanticPath, 'utf8')).resolves.toBe(originalSemantic)
+    await expect(readFile(activationPath, 'utf8')).resolves.toBe(malformedActivationEvents)
+    expect(await readMemoryEventsFromRoot(root)).toEqual([])
+    await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('does not write promoted state when the promotion receipt cannot be written', async () => {
     const root = await createTempDir('cyrene-daily-receipt-failure-root-')
     await writeSemanticMemoriesFromRoot(root, [trialMemory()])
