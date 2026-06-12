@@ -202,6 +202,8 @@ interface MemoryIndexRow {
   content: string
   normalizedKey: string
   tags: string[]
+  updatedAt: string
+  expiresAt?: string
   scores: {
     evidenceStrength?: number
     safety?: number
@@ -210,6 +212,25 @@ interface MemoryIndexRow {
   }
   payload: CyreneMemory | PendingMemory
 }
+
+const QUERY_ACTIVE_SCORE = {
+  relevanceExact: 100,
+  relevanceToken: 20,
+  scopeProject: 30,
+  scopeGlobal: 20,
+  strengthHard: 20,
+  strengthMedium: 12,
+  strengthSoft: 5,
+  confidenceCore: 15,
+  confidenceValidated: 10,
+  confidenceTrial: -100,
+  recencyFresh: 5,
+  conflictPenalty: 80,
+  stalePenalty: 20
+} as const
+
+const RAW_MEMORY_ID_FALLBACK_LIMIT = 50
+const RECENCY_FRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
 export async function openMemoryIndexAdapter(input: OpenMemoryIndexAdapterInput): Promise<MemoryIndexAdapter> {
   if (input.forceUnavailableReason !== undefined) {
@@ -435,6 +456,15 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
 
       create index if not exists idx_memories_normalized_key
       on memories(status, normalized_key, scope, home_project_id);
+
+      create index if not exists idx_memory_edges_from_status
+      on memory_edges(from_id, status);
+
+      create index if not exists idx_memory_edges_to_status
+      on memory_edges(to_id, status);
+
+      create index if not exists idx_memory_edges_type_status
+      on memory_edges(edge_type, status);
     `)
     this.ensureProjectColumns(db)
     if (!this.initialized) {
@@ -618,8 +648,27 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
 
   async queryMemoryEdges(input: MemoryEdgeQuery): Promise<MemoryEdge[]> {
     await this.initialize()
+    const directEdges = this.queryMemoryEdgesByIndexedIds(input)
+    if (directEdges.length > 0 || input.fromId === undefined || isIndexedMemoryId(input.fromId)) {
+      return directEdges
+    }
+    const indexedFromIds = this.resolveIndexedMemoryIdsFromPublicId(input.fromId)
+    if (indexedFromIds.length === 0) {
+      return []
+    }
+    return this.queryMemoryEdgesByIndexedIds({ ...input, fromId: undefined }, indexedFromIds)
+  }
+
+  private queryMemoryEdgesByIndexedIds(input: MemoryEdgeQuery, indexedFromIds?: string[]): MemoryEdge[] {
     const conditions: string[] = []
     const values: unknown[] = []
+    if (indexedFromIds !== undefined) {
+      conditions.push(`from_id in (${indexedFromIds.map(() => '?').join(', ')})`)
+      values.push(...indexedFromIds)
+    } else if (input.fromId !== undefined) {
+      conditions.push('from_id = ?')
+      values.push(input.fromId)
+    }
     if (input.toId !== undefined) {
       conditions.push('to_id = ?')
       values.push(input.toId)
@@ -648,7 +697,22 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       order by created_at asc, id asc
     `).all(...values)
       .map(memoryEdgeFromRecord)
-      .filter((edge) => input.fromId === undefined || edge.fromId === input.fromId || indexedMemoryIdPayload(edge.fromId) === input.fromId)
+  }
+
+  private resolveIndexedMemoryIdsFromPublicId(publicId: string): string[] {
+    try {
+      return this.requireDatabase().prepare(`
+        select id
+        from memories
+        where json_extract(payload_json, '$.id') = ?
+        order by updated_at desc, id asc
+        limit ?
+      `).all(publicId, RAW_MEMORY_ID_FALLBACK_LIMIT)
+        .map((row) => typeof row.id === 'string' ? row.id : '')
+        .filter(Boolean)
+    } catch {
+      return []
+    }
   }
 
   async queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]> {
@@ -1071,6 +1135,8 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where ${conditions.join(' and ')}
@@ -1098,6 +1164,8 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where status = 'active'
@@ -1158,6 +1226,8 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where status = 'active'
@@ -1199,6 +1269,8 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where status = 'active'
@@ -1323,6 +1395,10 @@ function indexedMemoryIdPayload(fromId: string): string | undefined {
   }
 }
 
+function isIndexedMemoryId(value: string): boolean {
+  return indexedMemoryIdPayload(value) !== undefined
+}
+
 function memoryEdgeFromRecord(row: Record<string, unknown>): MemoryEdge {
   return {
     id: readString(row.id, 'id'),
@@ -1402,6 +1478,8 @@ function rowFromRecord(row: Record<string, unknown>): MemoryIndexRow {
     content: readString(row.content, 'content'),
     normalizedKey: readString(row.normalized_key, 'normalized_key'),
     tags: JSON.parse(readString(row.tags_json, 'tags_json')) as string[],
+    updatedAt: readString(row.updated_at, 'updated_at'),
+    expiresAt: row.expires_at === null ? undefined : readString(row.expires_at, 'expires_at'),
     scores: JSON.parse(readString(row.scores_json, 'scores_json')) as MemoryIndexRow['scores'],
     payload
   }
@@ -1436,17 +1514,32 @@ function readString(value: unknown, field: string): string {
 
 function scoreRow(row: MemoryIndexRow, query: string, ftsMatches: Set<string>): number {
   const tokens = tokenizeMemoryText(query)
-  const relevance = tokens.length === 0 ? 0.2 : relevanceScore(row, tokens)
-  const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0
-  const safety = typeof row.scores.safety === 'number' ? row.scores.safety : 0.8
-  const usefulness = typeof row.scores.usefulness === 'number' ? row.scores.usefulness : 0.7
-  const evidence = typeof row.scores.evidenceStrength === 'number' ? row.scores.evidenceStrength : 0.7
-  const sensitivity = typeof row.scores.sensitivity === 'number' ? row.scores.sensitivity : 0.2
-  return relevance * 0.45 + usefulness * 0.2 + evidence * 0.15 + safety * 0.1 + ftsBoost - sensitivity * 0.1
+  const relevance = relevanceScore(row, tokens, query)
+  const confidenceTier = (row.payload as { confidenceTier?: string }).confidenceTier
+  let score = relevance
+  score += row.scope === 'global' ? QUERY_ACTIVE_SCORE.scopeGlobal : QUERY_ACTIVE_SCORE.scopeProject
+  score += strengthScore(row.strength)
+  score += confidenceScore(confidenceTier)
+  score += ftsMatches.has(row.id) ? QUERY_ACTIVE_SCORE.relevanceToken : 0
+  score += isRecentlyUpdated(row.updatedAt) ? QUERY_ACTIVE_SCORE.recencyFresh : 0
+  score -= isStale(row.expiresAt) ? QUERY_ACTIVE_SCORE.stalePenalty : 0
+  score -= hasConflictInstruction(row, tokens) ? QUERY_ACTIVE_SCORE.conflictPenalty : 0
+  return score
 }
 
-function relevanceScore(row: MemoryIndexRow, queryTokens: string[]): number {
-  const haystack = tokenizeMemoryText([
+function relevanceScore(row: MemoryIndexRow, queryTokens: string[], query: string): number {
+  if (queryTokens.length === 0) return QUERY_ACTIVE_SCORE.relevanceToken
+  const text = searchableRowText(row)
+  const normalizedQuery = query.trim().toLowerCase()
+  const exact = normalizedQuery !== '' && text.includes(normalizedQuery)
+    ? QUERY_ACTIVE_SCORE.relevanceExact
+    : 0
+  const matches = matchedTokenCount(text, queryTokens)
+  return exact + Math.min(matches, 8) * QUERY_ACTIVE_SCORE.relevanceToken
+}
+
+function searchableRowText(row: MemoryIndexRow): string {
+  return [
     row.content,
     row.normalizedKey,
     row.domain,
@@ -1454,10 +1547,55 @@ function relevanceScore(row: MemoryIndexRow, queryTokens: string[]): number {
     row.strength,
     row.portability,
     ...row.tags
+  ].join(' ').toLowerCase()
+}
+
+function matchedTokenCount(text: string, queryTokens: string[]): number {
+  const haystack = tokenizeMemoryText([
+    text
   ].join(' '))
-  const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)))
-  const denominator = Math.min(queryTokens.length, 8)
-  return Math.min(matches.length, denominator) / denominator
+  return queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token))).length
+}
+
+function strengthScore(strength: string): number {
+  if (strength === 'hard') return QUERY_ACTIVE_SCORE.strengthHard
+  if (strength === 'soft') return QUERY_ACTIVE_SCORE.strengthSoft
+  return QUERY_ACTIVE_SCORE.strengthMedium
+}
+
+function confidenceScore(confidenceTier: string | undefined): number {
+  switch (confidenceTier) {
+    case 'global_core':
+    case 'project_core':
+      return QUERY_ACTIVE_SCORE.confidenceCore
+    case 'validated':
+      return QUERY_ACTIVE_SCORE.confidenceValidated
+    case 'trial':
+      return QUERY_ACTIVE_SCORE.confidenceTrial
+    default:
+      return 0
+  }
+}
+
+function hasConflictInstruction(row: MemoryIndexRow, queryTokens: string[]): boolean {
+  if (queryTokens.length === 0) return false
+  const text = searchableRowText(row)
+  const hasNegation = /\b(do not|don't|never|avoid|skip|must not|without)\b/.test(text)
+  if (!hasNegation) return false
+  return matchedTokenCount(text, queryTokens) >= Math.min(3, queryTokens.length)
+}
+
+function isRecentlyUpdated(updatedAt: string): boolean {
+  const timestamp = Date.parse(updatedAt)
+  if (!Number.isFinite(timestamp)) return false
+  return Date.now() - timestamp <= RECENCY_FRESH_WINDOW_MS
+}
+
+function isStale(expiresAt: string | undefined): boolean {
+  if (expiresAt === undefined) return false
+  const timestamp = Date.parse(expiresAt)
+  if (!Number.isFinite(timestamp)) return false
+  return timestamp <= Date.now()
 }
 
 function compareIndexedItems<T extends { score: number; memory: { id: string } }>(left: T, right: T): number {

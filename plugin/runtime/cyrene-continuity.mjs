@@ -11911,6 +11911,23 @@ function domainPriority(domain) {
 }
 
 // src/memory/memory-index.ts
+var QUERY_ACTIVE_SCORE = {
+  relevanceExact: 100,
+  relevanceToken: 20,
+  scopeProject: 30,
+  scopeGlobal: 20,
+  strengthHard: 20,
+  strengthMedium: 12,
+  strengthSoft: 5,
+  confidenceCore: 15,
+  confidenceValidated: 10,
+  confidenceTrial: -100,
+  recencyFresh: 5,
+  conflictPenalty: 80,
+  stalePenalty: 20
+};
+var RAW_MEMORY_ID_FALLBACK_LIMIT = 50;
+var RECENCY_FRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1e3;
 async function openMemoryIndexAdapter(input) {
   if (input.forceUnavailableReason !== void 0) {
     return new UnavailableMemoryIndexAdapter(input.dbPath, input.forceUnavailableReason);
@@ -12118,6 +12135,15 @@ var SqliteMemoryIndexAdapter = class {
 
       create index if not exists idx_memories_normalized_key
       on memories(status, normalized_key, scope, home_project_id);
+
+      create index if not exists idx_memory_edges_from_status
+      on memory_edges(from_id, status);
+
+      create index if not exists idx_memory_edges_to_status
+      on memory_edges(to_id, status);
+
+      create index if not exists idx_memory_edges_type_status
+      on memory_edges(edge_type, status);
     `);
     this.ensureProjectColumns(db);
     if (!this.initialized) {
@@ -12290,8 +12316,26 @@ var SqliteMemoryIndexAdapter = class {
   }
   async queryMemoryEdges(input) {
     await this.initialize();
+    const directEdges = this.queryMemoryEdgesByIndexedIds(input);
+    if (directEdges.length > 0 || input.fromId === void 0 || isIndexedMemoryId(input.fromId)) {
+      return directEdges;
+    }
+    const indexedFromIds = this.resolveIndexedMemoryIdsFromPublicId(input.fromId);
+    if (indexedFromIds.length === 0) {
+      return [];
+    }
+    return this.queryMemoryEdgesByIndexedIds({ ...input, fromId: void 0 }, indexedFromIds);
+  }
+  queryMemoryEdgesByIndexedIds(input, indexedFromIds) {
     const conditions = [];
     const values = [];
+    if (indexedFromIds !== void 0) {
+      conditions.push(`from_id in (${indexedFromIds.map(() => "?").join(", ")})`);
+      values.push(...indexedFromIds);
+    } else if (input.fromId !== void 0) {
+      conditions.push("from_id = ?");
+      values.push(input.fromId);
+    }
     if (input.toId !== void 0) {
       conditions.push("to_id = ?");
       values.push(input.toId);
@@ -12318,7 +12362,20 @@ var SqliteMemoryIndexAdapter = class {
       from memory_edges
       ${where}
       order by created_at asc, id asc
-    `).all(...values).map(memoryEdgeFromRecord).filter((edge) => input.fromId === void 0 || edge.fromId === input.fromId || indexedMemoryIdPayload(edge.fromId) === input.fromId);
+    `).all(...values).map(memoryEdgeFromRecord);
+  }
+  resolveIndexedMemoryIdsFromPublicId(publicId) {
+    try {
+      return this.requireDatabase().prepare(`
+        select id
+        from memories
+        where json_extract(payload_json, '$.id') = ?
+        order by updated_at desc, id asc
+        limit ?
+      `).all(publicId, RAW_MEMORY_ID_FALLBACK_LIMIT).map((row) => typeof row.id === "string" ? row.id : "").filter(Boolean);
+    } catch {
+      return [];
+    }
   }
   async queryActive(input) {
     await this.initialize();
@@ -12704,6 +12761,8 @@ var SqliteMemoryIndexAdapter = class {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where ${conditions.join(" and ")}
@@ -12727,6 +12786,8 @@ var SqliteMemoryIndexAdapter = class {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where status = 'active'
@@ -12774,6 +12835,8 @@ var SqliteMemoryIndexAdapter = class {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where status = 'active'
@@ -12810,6 +12873,8 @@ var SqliteMemoryIndexAdapter = class {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where status = 'active'
@@ -12918,6 +12983,9 @@ function indexedMemoryIdPayload(fromId) {
     return void 0;
   }
 }
+function isIndexedMemoryId(value) {
+  return indexedMemoryIdPayload(value) !== void 0;
+}
 function memoryEdgeFromRecord(row) {
   return {
     id: readString(row.id, "id"),
@@ -12986,6 +13054,8 @@ function rowFromRecord(row) {
     content: readString(row.content, "content"),
     normalizedKey: readString(row.normalized_key, "normalized_key"),
     tags: JSON.parse(readString(row.tags_json, "tags_json")),
+    updatedAt: readString(row.updated_at, "updated_at"),
+    expiresAt: row.expires_at === null ? void 0 : readString(row.expires_at, "expires_at"),
     scores: JSON.parse(readString(row.scores_json, "scores_json")),
     payload
   };
@@ -13012,16 +13082,28 @@ function readString(value, field) {
 }
 function scoreRow(row, query, ftsMatches) {
   const tokens = tokenizeMemoryText(query);
-  const relevance = tokens.length === 0 ? 0.2 : relevanceScore2(row, tokens);
-  const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0;
-  const safety = typeof row.scores.safety === "number" ? row.scores.safety : 0.8;
-  const usefulness = typeof row.scores.usefulness === "number" ? row.scores.usefulness : 0.7;
-  const evidence = typeof row.scores.evidenceStrength === "number" ? row.scores.evidenceStrength : 0.7;
-  const sensitivity = typeof row.scores.sensitivity === "number" ? row.scores.sensitivity : 0.2;
-  return relevance * 0.45 + usefulness * 0.2 + evidence * 0.15 + safety * 0.1 + ftsBoost - sensitivity * 0.1;
+  const relevance = relevanceScore2(row, tokens, query);
+  const confidenceTier = row.payload.confidenceTier;
+  let score = relevance;
+  score += row.scope === "global" ? QUERY_ACTIVE_SCORE.scopeGlobal : QUERY_ACTIVE_SCORE.scopeProject;
+  score += strengthScore(row.strength);
+  score += confidenceScore(confidenceTier);
+  score += ftsMatches.has(row.id) ? QUERY_ACTIVE_SCORE.relevanceToken : 0;
+  score += isRecentlyUpdated(row.updatedAt) ? QUERY_ACTIVE_SCORE.recencyFresh : 0;
+  score -= isStale(row.expiresAt) ? QUERY_ACTIVE_SCORE.stalePenalty : 0;
+  score -= hasConflictInstruction(row, tokens) ? QUERY_ACTIVE_SCORE.conflictPenalty : 0;
+  return score;
 }
-function relevanceScore2(row, queryTokens) {
-  const haystack = tokenizeMemoryText([
+function relevanceScore2(row, queryTokens, query) {
+  if (queryTokens.length === 0) return QUERY_ACTIVE_SCORE.relevanceToken;
+  const text = searchableRowText(row);
+  const normalizedQuery = query.trim().toLowerCase();
+  const exact = normalizedQuery !== "" && text.includes(normalizedQuery) ? QUERY_ACTIVE_SCORE.relevanceExact : 0;
+  const matches2 = matchedTokenCount(text, queryTokens);
+  return exact + Math.min(matches2, 8) * QUERY_ACTIVE_SCORE.relevanceToken;
+}
+function searchableRowText(row) {
+  return [
     row.content,
     row.normalizedKey,
     row.domain,
@@ -13029,10 +13111,49 @@ function relevanceScore2(row, queryTokens) {
     row.strength,
     row.portability,
     ...row.tags
+  ].join(" ").toLowerCase();
+}
+function matchedTokenCount(text, queryTokens) {
+  const haystack = tokenizeMemoryText([
+    text
   ].join(" "));
-  const matches2 = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)));
-  const denominator = Math.min(queryTokens.length, 8);
-  return Math.min(matches2.length, denominator) / denominator;
+  return queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token))).length;
+}
+function strengthScore(strength) {
+  if (strength === "hard") return QUERY_ACTIVE_SCORE.strengthHard;
+  if (strength === "soft") return QUERY_ACTIVE_SCORE.strengthSoft;
+  return QUERY_ACTIVE_SCORE.strengthMedium;
+}
+function confidenceScore(confidenceTier) {
+  switch (confidenceTier) {
+    case "global_core":
+    case "project_core":
+      return QUERY_ACTIVE_SCORE.confidenceCore;
+    case "validated":
+      return QUERY_ACTIVE_SCORE.confidenceValidated;
+    case "trial":
+      return QUERY_ACTIVE_SCORE.confidenceTrial;
+    default:
+      return 0;
+  }
+}
+function hasConflictInstruction(row, queryTokens) {
+  if (queryTokens.length === 0) return false;
+  const text = searchableRowText(row);
+  const hasNegation = /\b(do not|don't|never|avoid|skip|must not|without)\b/.test(text);
+  if (!hasNegation) return false;
+  return matchedTokenCount(text, queryTokens) >= Math.min(3, queryTokens.length);
+}
+function isRecentlyUpdated(updatedAt) {
+  const timestamp = Date.parse(updatedAt);
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp <= RECENCY_FRESH_WINDOW_MS;
+}
+function isStale(expiresAt) {
+  if (expiresAt === void 0) return false;
+  const timestamp = Date.parse(expiresAt);
+  if (!Number.isFinite(timestamp)) return false;
+  return timestamp <= Date.now();
 }
 function compareIndexedItems(left, right) {
   const scoreDiff = right.score - left.score;
