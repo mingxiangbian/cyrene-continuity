@@ -916,6 +916,45 @@ describe('memory SQLite index', () => {
     })])
   })
 
+  it('queries public memory id edges after applying edge predicates across duplicate raw ids', async () => {
+    const root = await createTempDir('cyrene-memory-index-public-edge-duplicate-cap-')
+    const roots: MemoryIndexRoot[] = []
+    for (let index = 0; index < 51; index += 1) {
+      const projectId = `project-${String(index).padStart(2, '0')}`
+      const projectRoot = join(root, 'projects', projectId, 'memory')
+      await mkdir(projectRoot, { recursive: true })
+      await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+        activeMemory({
+          id: 'shared-public-id',
+          content: index === 0
+            ? 'Old duplicate public id memory mentions the target file.'
+            : `New duplicate public id memory ${index}.`,
+          normalizedKey: `shared-public-id-${index}`,
+          updatedAt: index === 0 ? '2026-01-01T00:00:00.000Z' : `2026-06-${String((index % 28) + 1).padStart(2, '0')}T00:00:00.000Z`,
+          evidence: index === 0
+            ? [{ summary: 'Target trace ref.', traceRefs: ['src/target.ts'] }]
+            : [{ summary: 'No target trace ref.' }]
+        })
+      ])
+      roots.push({ memoryRoot: projectRoot, projectId, scope: 'project' })
+    }
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({ roots })
+
+    const edges = await adapter.queryMemoryEdges({
+      fromId: 'shared-public-id',
+      toId: 'src/target.ts',
+      status: 'approved'
+    })
+
+    expect(edges).toEqual([expect.objectContaining({
+      fromId: JSON.stringify(['project', 'project-00', 'shared-public-id']),
+      toId: 'src/target.ts',
+      status: 'approved'
+    })])
+  })
+
   it('projects durable memory relation edges during index rebuild', async () => {
     const root = await createTempDir('cyrene-memory-index-relation-edge-')
     const projectRoot = join(root, 'projects', 'project-a', 'memory')
@@ -1007,6 +1046,72 @@ describe('memory SQLite index', () => {
     })
 
     expect(result.map((item) => item.memory.id)).toEqual(['high-match'])
+  })
+
+  it('does not return unrelated active memories from metadata boosts alone', async () => {
+    const root = await createTempDir('cyrene-memory-index-score-relevance-gate-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'unrelated-hard-rule',
+        content: 'Relation model hint target must stay out of active context.',
+        normalizedKey: 'model-hint-target-unrelated',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        strength: 'hard',
+        scores: {
+          evidenceStrength: 0,
+          stability: 0.9,
+          usefulness: 0,
+          safety: 0,
+          sensitivity: 0
+        }
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const result = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'derivedbenchalpha',
+      route: 'project',
+      task: 'memory',
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(result).toEqual([])
+  })
+
+  it('does not return expired active memories without a task filter', async () => {
+    const root = await createTempDir('cyrene-memory-index-expired-active-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'expired-exact-match',
+        content: 'Use npm test and npm run typecheck before completion.',
+        normalizedKey: 'expired-exact-match',
+        expiresAt: '2000-01-01T00:00:00.000Z'
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const result = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'npm test typecheck before completion',
+      route: 'project',
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(result).toEqual([])
   })
 
   it('returns unavailable diagnostics when forced unavailable', async () => {

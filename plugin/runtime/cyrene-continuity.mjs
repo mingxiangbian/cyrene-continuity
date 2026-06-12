@@ -11928,6 +11928,7 @@ var QUERY_ACTIVE_SCORE = {
 };
 var RAW_MEMORY_ID_FALLBACK_LIMIT = 50;
 var RECENCY_FRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1e3;
+var MIN_UNRELATED_QUALITY_SIGNAL = 0.1;
 async function openMemoryIndexAdapter(input) {
   if (input.forceUnavailableReason !== void 0) {
     return new UnavailableMemoryIndexAdapter(input.dbPath, input.forceUnavailableReason);
@@ -12136,6 +12137,9 @@ var SqliteMemoryIndexAdapter = class {
       create index if not exists idx_memories_normalized_key
       on memories(status, normalized_key, scope, home_project_id);
 
+      create index if not exists idx_memories_payload_public_id
+      on memories(json_extract(payload_json, '$.id'));
+
       create index if not exists idx_memory_edges_from_status
       on memory_edges(from_id, status);
 
@@ -12320,11 +12324,7 @@ var SqliteMemoryIndexAdapter = class {
     if (directEdges.length > 0 || input.fromId === void 0 || isIndexedMemoryId(input.fromId)) {
       return directEdges;
     }
-    const indexedFromIds = this.resolveIndexedMemoryIdsFromPublicId(input.fromId);
-    if (indexedFromIds.length === 0) {
-      return [];
-    }
-    return this.queryMemoryEdgesByIndexedIds({ ...input, fromId: void 0 }, indexedFromIds);
+    return this.queryMemoryEdgesByPublicFromId(input.fromId, input);
   }
   queryMemoryEdgesByIndexedIds(input, indexedFromIds) {
     const conditions = [];
@@ -12364,15 +12364,38 @@ var SqliteMemoryIndexAdapter = class {
       order by created_at asc, id asc
     `).all(...values).map(memoryEdgeFromRecord);
   }
-  resolveIndexedMemoryIdsFromPublicId(publicId) {
+  queryMemoryEdgesByPublicFromId(publicId, input) {
+    const conditions = ["json_extract(m.payload_json, '$.id') = ?"];
+    const values = [publicId];
+    if (input.toId !== void 0) {
+      conditions.push("e.to_id = ?");
+      values.push(input.toId);
+    }
+    if (input.status !== void 0) {
+      conditions.push("e.status = ?");
+      values.push(input.status);
+    }
     try {
       return this.requireDatabase().prepare(`
-        select id
-        from memories
-        where json_extract(payload_json, '$.id') = ?
-        order by updated_at desc, id asc
+        select
+          e.id,
+          e.from_id,
+          e.from_kind,
+          e.to_id,
+          e.to_kind,
+          e.edge_type,
+          e.weight,
+          e.source,
+          e.status,
+          e.evidence_id,
+          e.created_at,
+          e.approved_at
+        from memory_edges e
+        join memories m on m.id = e.from_id
+        where ${conditions.join(" and ")}
+        order by e.created_at asc, e.id asc
         limit ?
-      `).all(publicId, RAW_MEMORY_ID_FALLBACK_LIMIT).map((row) => typeof row.id === "string" ? row.id : "").filter(Boolean);
+      `).all(...values, RAW_MEMORY_ID_FALLBACK_LIMIT).map(memoryEdgeFromRecord);
     } catch {
       return [];
     }
@@ -12386,7 +12409,8 @@ var SqliteMemoryIndexAdapter = class {
     });
     const ftsMatches = this.queryFtsIds(input.query, "active");
     const task = input.task;
-    const eligibleRows = task === void 0 ? structuredRows : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+    const freshRows = structuredRows.filter((row) => !isExpiredRow(row));
+    const eligibleRows = task === void 0 ? freshRows : freshRows.filter((row) => isMemoryEligibleForRetrieval(
       row.payload,
       {
         cwd: "",
@@ -12419,7 +12443,7 @@ var SqliteMemoryIndexAdapter = class {
     });
     const ftsMatches = this.queryFtsIds(input.query, "pending");
     return selectWithinBudget(
-      structuredRows.map((row) => ({
+      structuredRows.filter((row) => !isExpiredRow(row)).map((row) => ({
         memory: row.payload,
         score: scoreRow(row, input.query, ftsMatches),
         portability: row.portability,
@@ -12440,7 +12464,8 @@ var SqliteMemoryIndexAdapter = class {
     });
     const ftsMatches = this.queryFtsIds(input.query, "active");
     const task = input.task;
-    const eligibleRows = task === void 0 ? structuredRows : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+    const freshRows = structuredRows.filter((row) => !isExpiredRow(row));
+    const eligibleRows = task === void 0 ? freshRows : freshRows.filter((row) => isMemoryEligibleForRetrieval(
       row.payload,
       {
         cwd: "",
@@ -13083,12 +13108,16 @@ function readString(value, field) {
 function scoreRow(row, query, ftsMatches) {
   const tokens = tokenizeMemoryText(query);
   const relevance = relevanceScore2(row, tokens, query);
+  const ftsBoost = ftsMatches.has(row.id) ? QUERY_ACTIVE_SCORE.relevanceToken : 0;
+  if (tokens.length > 0 && relevance + ftsBoost <= 0 && !hasUnrelatedQualitySignal(row)) {
+    return 0;
+  }
   const confidenceTier = row.payload.confidenceTier;
   let score = relevance;
   score += row.scope === "global" ? QUERY_ACTIVE_SCORE.scopeGlobal : QUERY_ACTIVE_SCORE.scopeProject;
   score += strengthScore(row.strength);
   score += confidenceScore(confidenceTier);
-  score += ftsMatches.has(row.id) ? QUERY_ACTIVE_SCORE.relevanceToken : 0;
+  score += ftsBoost;
   score += isRecentlyUpdated(row.updatedAt) ? QUERY_ACTIVE_SCORE.recencyFresh : 0;
   score -= isStale(row.expiresAt) ? QUERY_ACTIVE_SCORE.stalePenalty : 0;
   score -= hasConflictInstruction(row, tokens) ? QUERY_ACTIVE_SCORE.conflictPenalty : 0;
@@ -13144,10 +13173,16 @@ function hasConflictInstruction(row, queryTokens) {
   if (!hasNegation) return false;
   return matchedTokenCount(text, queryTokens) >= Math.min(3, queryTokens.length);
 }
+function hasUnrelatedQualitySignal(row) {
+  return (row.scores.evidenceStrength ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL || (row.scores.usefulness ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL || (row.scores.safety ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL;
+}
 function isRecentlyUpdated(updatedAt) {
   const timestamp = Date.parse(updatedAt);
   if (!Number.isFinite(timestamp)) return false;
   return Date.now() - timestamp <= RECENCY_FRESH_WINDOW_MS;
+}
+function isExpiredRow(row) {
+  return isStale(row.expiresAt);
 }
 function isStale(expiresAt) {
   if (expiresAt === void 0) return false;

@@ -231,6 +231,7 @@ const QUERY_ACTIVE_SCORE = {
 
 const RAW_MEMORY_ID_FALLBACK_LIMIT = 50
 const RECENCY_FRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+const MIN_UNRELATED_QUALITY_SIGNAL = 0.1
 
 export async function openMemoryIndexAdapter(input: OpenMemoryIndexAdapterInput): Promise<MemoryIndexAdapter> {
   if (input.forceUnavailableReason !== undefined) {
@@ -457,6 +458,9 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       create index if not exists idx_memories_normalized_key
       on memories(status, normalized_key, scope, home_project_id);
 
+      create index if not exists idx_memories_payload_public_id
+      on memories(json_extract(payload_json, '$.id'));
+
       create index if not exists idx_memory_edges_from_status
       on memory_edges(from_id, status);
 
@@ -652,11 +656,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     if (directEdges.length > 0 || input.fromId === undefined || isIndexedMemoryId(input.fromId)) {
       return directEdges
     }
-    const indexedFromIds = this.resolveIndexedMemoryIdsFromPublicId(input.fromId)
-    if (indexedFromIds.length === 0) {
-      return []
-    }
-    return this.queryMemoryEdgesByIndexedIds({ ...input, fromId: undefined }, indexedFromIds)
+    return this.queryMemoryEdgesByPublicFromId(input.fromId, input)
   }
 
   private queryMemoryEdgesByIndexedIds(input: MemoryEdgeQuery, indexedFromIds?: string[]): MemoryEdge[] {
@@ -699,17 +699,39 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       .map(memoryEdgeFromRecord)
   }
 
-  private resolveIndexedMemoryIdsFromPublicId(publicId: string): string[] {
+  private queryMemoryEdgesByPublicFromId(publicId: string, input: MemoryEdgeQuery): MemoryEdge[] {
+    const conditions = ["json_extract(m.payload_json, '$.id') = ?"]
+    const values: unknown[] = [publicId]
+    if (input.toId !== undefined) {
+      conditions.push('e.to_id = ?')
+      values.push(input.toId)
+    }
+    if (input.status !== undefined) {
+      conditions.push('e.status = ?')
+      values.push(input.status)
+    }
     try {
       return this.requireDatabase().prepare(`
-        select id
-        from memories
-        where json_extract(payload_json, '$.id') = ?
-        order by updated_at desc, id asc
+        select
+          e.id,
+          e.from_id,
+          e.from_kind,
+          e.to_id,
+          e.to_kind,
+          e.edge_type,
+          e.weight,
+          e.source,
+          e.status,
+          e.evidence_id,
+          e.created_at,
+          e.approved_at
+        from memory_edges e
+        join memories m on m.id = e.from_id
+        where ${conditions.join(' and ')}
+        order by e.created_at asc, e.id asc
         limit ?
-      `).all(publicId, RAW_MEMORY_ID_FALLBACK_LIMIT)
-        .map((row) => typeof row.id === 'string' ? row.id : '')
-        .filter(Boolean)
+      `).all(...values, RAW_MEMORY_ID_FALLBACK_LIMIT)
+        .map(memoryEdgeFromRecord)
     } catch {
       return []
     }
@@ -724,9 +746,10 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     })
     const ftsMatches = this.queryFtsIds(input.query, 'active')
     const task = input.task
+    const freshRows = structuredRows.filter((row) => !isExpiredRow(row))
     const eligibleRows = task === undefined
-      ? structuredRows
-      : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+      ? freshRows
+      : freshRows.filter((row) => isMemoryEligibleForRetrieval(
         row.payload as CyreneMemory,
         {
           cwd: '',
@@ -764,6 +787,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     const ftsMatches = this.queryFtsIds(input.query, 'pending')
     return selectWithinBudget(
       structuredRows
+        .filter((row) => !isExpiredRow(row))
         .map((row) => ({
           memory: row.payload as PendingMemory,
           score: scoreRow(row, input.query, ftsMatches),
@@ -788,9 +812,10 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     })
     const ftsMatches = this.queryFtsIds(input.query, 'active')
     const task = input.task
+    const freshRows = structuredRows.filter((row) => !isExpiredRow(row))
     const eligibleRows = task === undefined
-      ? structuredRows
-      : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+      ? freshRows
+      : freshRows.filter((row) => isMemoryEligibleForRetrieval(
         row.payload as CyreneMemory,
         {
           cwd: '',
@@ -1515,12 +1540,16 @@ function readString(value: unknown, field: string): string {
 function scoreRow(row: MemoryIndexRow, query: string, ftsMatches: Set<string>): number {
   const tokens = tokenizeMemoryText(query)
   const relevance = relevanceScore(row, tokens, query)
+  const ftsBoost = ftsMatches.has(row.id) ? QUERY_ACTIVE_SCORE.relevanceToken : 0
+  if (tokens.length > 0 && relevance + ftsBoost <= 0 && !hasUnrelatedQualitySignal(row)) {
+    return 0
+  }
   const confidenceTier = (row.payload as { confidenceTier?: string }).confidenceTier
   let score = relevance
   score += row.scope === 'global' ? QUERY_ACTIVE_SCORE.scopeGlobal : QUERY_ACTIVE_SCORE.scopeProject
   score += strengthScore(row.strength)
   score += confidenceScore(confidenceTier)
-  score += ftsMatches.has(row.id) ? QUERY_ACTIVE_SCORE.relevanceToken : 0
+  score += ftsBoost
   score += isRecentlyUpdated(row.updatedAt) ? QUERY_ACTIVE_SCORE.recencyFresh : 0
   score -= isStale(row.expiresAt) ? QUERY_ACTIVE_SCORE.stalePenalty : 0
   score -= hasConflictInstruction(row, tokens) ? QUERY_ACTIVE_SCORE.conflictPenalty : 0
@@ -1585,10 +1614,22 @@ function hasConflictInstruction(row: MemoryIndexRow, queryTokens: string[]): boo
   return matchedTokenCount(text, queryTokens) >= Math.min(3, queryTokens.length)
 }
 
+function hasUnrelatedQualitySignal(row: MemoryIndexRow): boolean {
+  return (
+    (row.scores.evidenceStrength ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL ||
+    (row.scores.usefulness ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL ||
+    (row.scores.safety ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL
+  )
+}
+
 function isRecentlyUpdated(updatedAt: string): boolean {
   const timestamp = Date.parse(updatedAt)
   if (!Number.isFinite(timestamp)) return false
   return Date.now() - timestamp <= RECENCY_FRESH_WINDOW_MS
+}
+
+function isExpiredRow(row: MemoryIndexRow): boolean {
+  return isStale(row.expiresAt)
 }
 
 function isStale(expiresAt: string | undefined): boolean {
