@@ -29797,6 +29797,7 @@ async function runRelationDerivedTrialBlock(input) {
       "Relation model hint target must stay out of active context.",
       "model-hint-target-unrelated",
       {
+        // Empty-query relation candidate lookup can still find this; direct non-empty retrieval cannot.
         scores: { evidenceStrength: 0, stability: 0.9, usefulness: 0, safety: 0, sensitivity: 0 }
       }
     )
