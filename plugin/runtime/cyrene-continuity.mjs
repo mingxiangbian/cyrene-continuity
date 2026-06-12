@@ -10677,7 +10677,16 @@ async function assertCanonicalJsonlHealthyForMutation(memoryRoot) {
     return;
   }
   memoryStoreTestHooks.onCanonicalJsonlMutationGuardScan?.(memoryRoot);
-  const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot);
+  let scan;
+  try {
+    scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot);
+  } catch (error2) {
+    const pathSafetyError = memoryDataFilePathSafetyErrorFromJsonlScan(error2);
+    if (pathSafetyError !== void 0) {
+      throw pathSafetyError;
+    }
+    throw error2;
+  }
   if (jsonlScanHasCorruption(scan)) {
     throw new MemoryJsonlRepairRequiredError(memoryRoot, scan.corruptionCount, scan.skippedFiles.length);
   }
@@ -10726,6 +10735,20 @@ async function assertSafeMemoryDataFileTarget(filePath) {
     }
     throw error2;
   }
+}
+function memoryDataFilePathSafetyErrorFromJsonlScan(error2) {
+  if (!(error2 instanceof Error)) {
+    return void 0;
+  }
+  const symlinkPrefix = "Refusing to scan JSONL symlink: ";
+  if (error2.message.startsWith(symlinkPrefix)) {
+    return new Error(`Refusing to use memory data file symlink: ${error2.message.slice(symlinkPrefix.length)}`);
+  }
+  const nonFilePrefix = "Refusing to scan non-file JSONL path: ";
+  if (error2.message.startsWith(nonFilePrefix)) {
+    return new Error(`Refusing to use non-file memory data path: ${error2.message.slice(nonFilePrefix.length)}`);
+  }
+  return void 0;
 }
 async function readPendingMemoriesFromRoot(memoryRoot) {
   const readable = await isReadableMemoryRoot(memoryRoot);
@@ -29769,13 +29792,21 @@ async function runRelationSimilarNoExpansion(input) {
 async function runRelationDerivedTrialBlock(input) {
   return withActiveFixture(input, [
     activeRelationMemory("derived-seed-rule", "Derivedbenchalpha seed relation memory.", "derivedbenchalpha-seed"),
-    activeRelationMemory("derived-hint-rule", "Derived model hint target must stay out of active context.", "derived-model-hint-target")
+    activeRelationMemory(
+      "derived-hint-rule",
+      "Relation model hint target must stay out of active context.",
+      "model-hint-target-unrelated",
+      {
+        scores: { evidenceStrength: 0, stability: 0.9, usefulness: 0, safety: 0, sensitivity: 0 }
+      }
+    )
   ], async (fixture) => {
     await upsertModelHintEdge(input, fixture, {
       fromMemoryId: "derived-seed-rule",
       toMemoryId: "derived-hint-rule",
       relationType: "derived_from"
     });
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd });
     const preview = await runCodexMemoryContextPreview({
       cwd: fixture.cwd,
       userMessage: "derivedbenchalpha",
@@ -32590,7 +32621,6 @@ async function runJsonlCorrupt(benchmarkCase, options) {
     const original = `${JSON.stringify(tier4TrialMemory("tier4-jsonl-corrupt-trial"))}
 {bad json}
 `;
-    await writeFile15(semanticPath, original, "utf8");
     await appendActivationEventFromRoot(fixture.projectMemoryRoot, tier4ActivationEvent({
       id: "tier4-jsonl-corrupt-applied-1",
       memoryId: "tier4-jsonl-corrupt-trial",
@@ -32603,6 +32633,7 @@ async function runJsonlCorrupt(benchmarkCase, options) {
       projectId: fixture.projectId,
       createdAt: options.now ?? benchmarkCase.fixture.now
     }));
+    await writeFile15(semanticPath, original, "utf8");
     const result3 = await runCodexMemoryLifecycleDaily({
       cwd: fixture.cwd,
       projectRoots: [{ projectId: fixture.projectId, memoryRoot: fixture.projectMemoryRoot }],
@@ -36440,6 +36471,7 @@ var REVIEW_SUMMARY_NOISE_PHRASES = [
   "merged branch",
   "deleted local branch"
 ];
+var REPAIR_REQUIRED_MALFORMED_JSONL_REASON = "repair_required: malformed JSONL repair required";
 var MEMORY_PORTABILITIES = ["local_only", "project_family", "similar_project", "global"];
 var MEMORY_PROFILE_VISIBILITIES = ["always", "safe_summary", "retrieval_only", "never"];
 var ROUTING_RISKS = ["low", "medium", "high"];
@@ -36499,12 +36531,21 @@ async function runCodexMemoryLifecycleMigrateV15(input) {
   };
 }
 async function migrateReadableRoot(root, input) {
-  const canonicalScan = await scanCanonicalJsonlFilesFromRoot(root.memoryRoot);
+  let canonicalScan;
+  try {
+    canonicalScan = await scanCanonicalJsonlFilesFromRoot(root.memoryRoot);
+  } catch (error2) {
+    const pathSafetyError = memoryDataFilePathSafetyErrorFromJsonlScan(error2);
+    if (pathSafetyError !== void 0) {
+      throw pathSafetyError;
+    }
+    throw error2;
+  }
   if (jsonlScanHasCorruption(canonicalScan)) {
     return {
       ...baseRootResult2(root, { malformedJsonLines: canonicalScan.corruptionCount + canonicalScan.skippedFiles.length }),
       skipped: true,
-      reason: "repair_required"
+      reason: REPAIR_REQUIRED_MALFORMED_JSONL_REASON
     };
   }
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
@@ -36537,7 +36578,7 @@ async function migrateReadableRoot(root, input) {
     return {
       ...result3,
       skipped: true,
-      reason: "repair_required"
+      reason: REPAIR_REQUIRED_MALFORMED_JSONL_REASON
     };
   }
   const semanticOwnedIds = new Set(existingSemantic.map((memory2) => memory2.id));

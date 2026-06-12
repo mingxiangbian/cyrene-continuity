@@ -111,7 +111,6 @@ async function runJsonlCorrupt(
   return withTier4Fixture(benchmarkCase, options, {}, async (fixture) => {
     const semanticPath = join(fixture.projectMemoryRoot, 'semantic_memories.jsonl')
     const original = `${JSON.stringify(tier4TrialMemory('tier4-jsonl-corrupt-trial'))}\n{bad json}\n`
-    await writeFile(semanticPath, original, 'utf8')
     await appendActivationEventFromRoot(fixture.projectMemoryRoot, tier4ActivationEvent({
       id: 'tier4-jsonl-corrupt-applied-1',
       memoryId: 'tier4-jsonl-corrupt-trial',
@@ -124,6 +123,7 @@ async function runJsonlCorrupt(
       projectId: fixture.projectId,
       createdAt: options.now ?? benchmarkCase.fixture.now
     }))
+    await writeFile(semanticPath, original, 'utf8')
 
     const result = await runCodexMemoryLifecycleDaily({
       cwd: fixture.cwd,

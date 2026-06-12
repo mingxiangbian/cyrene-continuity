@@ -407,13 +407,22 @@ async function runRelationSimilarNoExpansion(input: Parameters<CaseAssertion>[0]
 async function runRelationDerivedTrialBlock(input: Parameters<CaseAssertion>[0]): Promise<readonly BenchmarkEvidence[]> {
   return withActiveFixture(input, [
     activeRelationMemory('derived-seed-rule', 'Derivedbenchalpha seed relation memory.', 'derivedbenchalpha-seed'),
-    activeRelationMemory('derived-hint-rule', 'Derived model hint target must stay out of active context.', 'derived-model-hint-target')
+    activeRelationMemory(
+      'derived-hint-rule',
+      'Relation model hint target must stay out of active context.',
+      'model-hint-target-unrelated',
+      {
+        // Empty-query relation candidate lookup can still find this; direct non-empty retrieval cannot.
+        scores: { evidenceStrength: 0, stability: 0.9, usefulness: 0, safety: 0, sensitivity: 0 }
+      }
+    )
   ], async (fixture) => {
     await upsertModelHintEdge(input, fixture, {
       fromMemoryId: 'derived-seed-rule',
       toMemoryId: 'derived-hint-rule',
       relationType: 'derived_from'
     })
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd })
 
     const preview = await runCodexMemoryContextPreview({
       cwd: fixture.cwd,

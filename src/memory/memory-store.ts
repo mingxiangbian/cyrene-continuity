@@ -102,7 +102,16 @@ export async function assertCanonicalJsonlHealthyForMutation(memoryRoot: string)
     return
   }
   memoryStoreTestHooks.onCanonicalJsonlMutationGuardScan?.(memoryRoot)
-  const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot)
+  let scan: Awaited<ReturnType<typeof scanCanonicalJsonlFilesFromRoot>>
+  try {
+    scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot)
+  } catch (error) {
+    const pathSafetyError = memoryDataFilePathSafetyErrorFromJsonlScan(error)
+    if (pathSafetyError !== undefined) {
+      throw pathSafetyError
+    }
+    throw error
+  }
   if (jsonlScanHasCorruption(scan)) {
     throw new MemoryJsonlRepairRequiredError(memoryRoot, scan.corruptionCount, scan.skippedFiles.length)
   }
@@ -171,6 +180,21 @@ export async function assertSafeMemoryDataFileTarget(filePath: string): Promise<
     }
     throw error
   }
+}
+
+export function memoryDataFilePathSafetyErrorFromJsonlScan(error: unknown): Error | undefined {
+  if (!(error instanceof Error)) {
+    return undefined
+  }
+  const symlinkPrefix = 'Refusing to scan JSONL symlink: '
+  if (error.message.startsWith(symlinkPrefix)) {
+    return new Error(`Refusing to use memory data file symlink: ${error.message.slice(symlinkPrefix.length)}`)
+  }
+  const nonFilePrefix = 'Refusing to scan non-file JSONL path: '
+  if (error.message.startsWith(nonFilePrefix)) {
+    return new Error(`Refusing to use non-file memory data path: ${error.message.slice(nonFilePrefix.length)}`)
+  }
+  return undefined
 }
 
 export async function readPendingMemoriesFromRoot(memoryRoot: string): Promise<PendingMemory[]> {
