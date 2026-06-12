@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { buildContinuitySnapshot } from '../affect/affect-runtime.js'
 import type { PrincipledDissentPolicy } from '../affect/types.js'
 import { createDefaultConfig } from '../config.js'
@@ -49,6 +49,7 @@ import { getCodexPendingReviewNotice } from './memory-review.js'
 import { buildCodexProjectFingerprint } from './project-fingerprint.js'
 import { identifyCodexProject } from './project-id.js'
 import { appendActivationEventsFailOpen } from './memory-feedback.js'
+import { createCandidateHintSelectionReceipt } from './candidate-hint-receipts.js'
 import type { CodexPendingReviewNotice } from './memory-review.js'
 import { buildMemoryActivations, type MemoryActivation } from './memory-activation.js'
 import {
@@ -778,8 +779,16 @@ async function selectSqliteCandidateHints(input: {
       validatedMemories: candidateHintValidatedMemoryCandidates(pool),
       maxItems: input.policy.candidateHintBudget
     })
+    const selectedAt = new Date().toISOString()
+    const contextId = randomUUID()
+    const hints = await Promise.all(result.hints.map((hint) => labelModelVisibleCandidateHint({
+      hint,
+      contextId,
+      selectedAt,
+      mode: input.policy.mode === 'review' ? 'review' : 'balanced'
+    })))
     return {
-      hints: result.hints.map(labelModelVisibleCandidateHint),
+      hints,
       metrics: {
         ...result.metrics,
         candidateHintLatencyMs: elapsedSince(startedAt)
@@ -848,10 +857,26 @@ function isValidatedConflictMemory(memory: SemanticMemory): boolean {
   )
 }
 
-function labelModelVisibleCandidateHint(hint: CandidateHint): CandidateHint {
+async function labelModelVisibleCandidateHint(input: {
+  hint: CandidateHint
+  contextId: string
+  selectedAt: string
+  mode: 'balanced' | 'review'
+}): Promise<CandidateHint> {
+  const selectionReceipt = await createCandidateHintSelectionReceipt({
+    version: 1,
+    contextId: input.contextId,
+    hintId: input.hint.id,
+    memoryId: input.hint.memoryId,
+    contentHash: input.hint.contentHash,
+    projectId: input.hint.projectId,
+    mode: input.mode,
+    selectedAt: input.selectedAt
+  })
   return {
-    ...hint,
-    text: `Candidate project workflow hint, not validated:\n- ${hint.text.trim()}`
+    ...input.hint,
+    text: `Candidate project workflow hint, not validated:\n- ${input.hint.text.trim()}`,
+    selectionReceipt
   }
 }
 

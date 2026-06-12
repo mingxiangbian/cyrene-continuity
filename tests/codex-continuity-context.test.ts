@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { validateCandidateHintSelectionReceipt } from '../src/codex/candidate-hint-receipts.js'
 import { codexMemoryDbPath, rebuildCodexMemoryIndex } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { getCodexContinuityContext } from '../src/codex/continuity-context.js'
@@ -585,6 +586,24 @@ describe('Codex continuity context', () => {
         text: 'Candidate project workflow hint, not validated:\n- Runtime activation validator changes should stay as workflow hints.'
       })
     ])
+    const hint = context.candidateHints[0]
+    expect(hint?.selectionReceipt).toEqual(expect.objectContaining({
+      version: 1,
+      hintId: hint?.id,
+      memoryId: 'candidate-trial-strong',
+      contentHash: hint?.contentHash,
+      projectId: identity.projectId,
+      mode: 'balanced',
+      receiptHash: expect.stringMatching(/^[a-f0-9]{32}$/)
+    }))
+    expect(JSON.stringify(hint?.selectionReceipt)).not.toContain('Runtime activation validator changes')
+    await expect(validateCandidateHintSelectionReceipt(hint?.selectionReceipt, {
+      memoryId: 'candidate-trial-strong',
+      contentHash: hint?.contentHash ?? '',
+      projectId: identity.projectId,
+      activationId: `candidate-hint:${hint?.id}`,
+      now: hint?.selectionReceipt?.selectedAt
+    })).resolves.toMatchObject({ ok: true })
     expect(context.memory.items.map((item) => item.id)).not.toContain('candidate-trial-strong')
     expect(context.globalMemory.map((item) => item.id)).not.toContain('candidate-trial-strong')
     expect(context.projectMemory.map((item) => item.id)).not.toContain('candidate-trial-strong')
@@ -651,6 +670,10 @@ describe('Codex continuity context', () => {
 
     expect(context.candidateHints).toHaveLength(3)
     expect(context.candidateHints.every((hint) => hint.validated === false)).toBe(true)
+    const contextIds = new Set(context.candidateHints.map((hint) => hint.selectionReceipt?.contextId))
+    expect(contextIds.size).toBe(1)
+    expect([...contextIds][0]).toEqual(expect.any(String))
+    expect(context.candidateHints.every((hint) => hint.selectionReceipt?.mode === 'review')).toBe(true)
   })
 
   it('balanced mode does not backfill candidate hints with weak or unrelated project trials', async () => {

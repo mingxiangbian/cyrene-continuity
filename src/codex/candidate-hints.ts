@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { contentHashForActiveMemory } from './active-memory-review.js'
+import type { CandidateHintSelectionReceipt } from './candidate-hint-receipts.js'
 import { isRuntimeActivatableSemanticMemory } from '../memory/memory-lifecycle.js'
 import { semanticMemoryToActiveMemory } from '../memory/semantic-memory-adapter.js'
 import type { SemanticMemory } from '../memory/types.js'
@@ -17,6 +18,7 @@ export interface CandidateHint {
   projectId: string
   risk: 'low'
   triggerReason: string
+  selectionReceipt?: CandidateHintSelectionReceipt
 }
 
 export interface CandidateHintSelectionMetrics {
