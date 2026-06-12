@@ -23,6 +23,11 @@ export async function ensureCodexGlobalMemoryRoot(): Promise<string> {
   return ensureSafeDirectory(join(globalRoot, 'memory'), globalRoot)
 }
 
+export async function ensureCodexRuntimeRoot(): Promise<string> {
+  const codexDir = await ensureCodexBaseRoot()
+  return ensureSafeDirectory(join(codexDir, 'runtime'), codexDir)
+}
+
 export async function ensureCodexProjectMemoryRoot(projectId: string): Promise<string> {
   const projectRoot = await ensureCodexProjectRoot(projectId)
   return ensureSafeDirectory(join(projectRoot, 'memory'), projectRoot)
@@ -34,6 +39,12 @@ export async function getReadableCodexGlobalMemoryRoot(): Promise<string | null>
     return null
   }
   return getSafeDirectoryOrNull(join(globalRoot, 'memory'), globalRoot)
+}
+
+export async function getReadableCodexRuntimeRoot(): Promise<string | null> {
+  const codexDir = await getReadableCodexBaseRoot()
+  if (codexDir === null) return null
+  return getSafeDirectoryOrNull(join(codexDir, 'runtime'), codexDir)
 }
 
 export async function getReadableCodexProjectMemoryRoot(projectId: string): Promise<string | null> {
