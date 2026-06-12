@@ -146,7 +146,7 @@ async function runJsonlCorrupt(
       hardFailures,
       metrics: metricsFor(benchmarkCase, hardFailures),
       evidence: [{
-        summary: `corrupt jsonl rejected; malformed=${root?.malformedJsonLines ?? 0}; promoted=${root?.promotedTrialToValidated ?? 'missing'}; bytes unchanged=${after === original ? 1 : 0}`
+        summary: `gate=jsonl-corruption-write-block; corrupt jsonl rejected; malformed=${root?.malformedJsonLines ?? 0}; promoted=${root?.promotedTrialToValidated ?? 'missing'}; bytes unchanged=${after === original ? 1 : 0}`
       }]
     }
   })

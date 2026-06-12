@@ -94,8 +94,16 @@ describe('benchmark Tier 3 scale and efficiency cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
+    for (const [caseId, gateId] of [
+      ['T3-RANKING', 'gate=retrieval-quality-tight-budget'],
+      ['T3-INDEX-HEALTH', 'gate=index-stale-mode-matrix']
+    ] as const) {
+      expect(evidenceText(report.caseResults.find((item) => item.caseId === caseId))).toContain(gateId)
+    }
 
     const ranking = report.caseResults.find((item) => item.caseId === 'T3-RANKING')
+    expect(evidenceText(ranking)).toContain('maxTokens=24')
+    expect(evidenceText(ranking)).toContain('oversizedExcluded=1')
     expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt3')
     expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt1')
     expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt5')

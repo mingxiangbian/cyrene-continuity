@@ -107,9 +107,11 @@ async function runScaleCase(
 
 async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRunOptions): Promise<BenchmarkCaseResult> {
   const now = options.now ?? benchmarkCase.fixture.now
+  const tightBudgetMaxTokens = 24
   return withTier3Fixture(benchmarkCase, options, {
     activeMemories: [
-      activeMemory('ranking-target', 'Target project memory: use quartz-alpha fixture isolation for ranking benchmark.', now),
+      activeMemory('ranking-oversized-exact', `quartz-alpha fixture isolation ranking benchmark ${'oversized '.repeat(120)}`, now),
+      activeMemory('ranking-target', 'quartz-alpha fixture isolation ranking benchmark.', now),
       activeMemory('ranking-distractor-1', 'Similar distractor memory: use quartz-beta fixture isolation for unrelated benchmark.', now),
       activeMemory('ranking-distractor-2', 'Similar distractor memory: use quartz-gamma project cleanup for unrelated benchmark.', now)
     ]
@@ -123,7 +125,7 @@ async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
         route: 'project',
         task: 'coding',
         maxItems: 3,
-        maxTokens: 2_000
+        maxTokens: tightBudgetMaxTokens
       })
       const rank = rows.findIndex((row) => row.memory.id === 'ranking-target')
       const top1 = rows[0]?.memory.id === 'ranking-target'
@@ -131,8 +133,9 @@ async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
       const recallAt5 = rank >= 0 && rank < 5 ? 1 : 0
       const mrr = rank >= 0 ? 1 / (rank + 1) : 0
       const wrongTop1Rate = top1 ? 0 : 1
+      const oversizedExcluded = rows.some((row) => row.memory.id === 'ranking-oversized-exact') ? 0 : 1
       const similarInterference = rows.slice(0, Math.max(rank, 0)).some((row) => row.memory.id.startsWith('ranking-distractor')) ? 1 : 0
-      const hardFailures: HardGateRuleId[] = recallAt3 === 1 && wrongTop1Rate === 0 ? [] : ['index_source_mismatch']
+      const hardFailures: HardGateRuleId[] = recallAt3 === 1 && wrongTop1Rate === 0 && oversizedExcluded === 1 ? [] : ['index_source_mismatch']
       return result(benchmarkCase, hardFailures, [
         { name: 'recallAt1', value: top1 ? 1 : 0 },
         { name: 'recallAt3', value: recallAt3 },
@@ -146,7 +149,7 @@ async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
         { name: 'oldMemoryRetrievalRate', value: 0 },
         { name: 'newMemoryRetrievalRate', value: top1 ? 1 : 0 }
       ], [{
-        summary: `ranking ok; recallAt3=${recallAt3}; mrr=${mrr}; wrongTop1=${wrongTop1Rate}; top=${rows[0]?.memory.id ?? 'none'}`
+        summary: `gate=retrieval-quality-tight-budget; ranking ok; maxTokens=${tightBudgetMaxTokens}; oversizedExcluded=${oversizedExcluded}; recallAt3=${recallAt3}; mrr=${mrr}; wrongTop1=${wrongTop1Rate}; top=${rows[0]?.memory.id ?? 'none'}`
       }])
     } finally {
       adapter.close()
@@ -416,7 +419,7 @@ async function runIndexHealthCase(benchmarkCase: BenchmarkCase, options: Benchma
         { name: 'indexSourceMismatchCount', value: 0 },
         { name: 'hotPathRebuildCount', value: 0 },
         { name: 'undetectedStaleIndexCount', value: 0 }
-      ], [{ summary: `index health ok; sqlite hit rate=${sqliteHit}; jsonl fallback=0; stale rate=0` }])
+      ], [{ summary: `gate=index-stale-mode-matrix; index health ok; sqlite hit rate=${sqliteHit}; jsonl fallback=0; stale rate=0` }])
     } finally {
       adapter.close()
     }

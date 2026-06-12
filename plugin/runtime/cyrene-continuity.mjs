@@ -31245,9 +31245,11 @@ async function runScaleCase(benchmarkCase, options, target) {
 }
 async function runRankingCase(benchmarkCase, options) {
   const now = options.now ?? benchmarkCase.fixture.now;
+  const tightBudgetMaxTokens = 24;
   return withTier3Fixture(benchmarkCase, options, {
     activeMemories: [
-      activeMemory2("ranking-target", "Target project memory: use quartz-alpha fixture isolation for ranking benchmark.", now),
+      activeMemory2("ranking-oversized-exact", `quartz-alpha fixture isolation ranking benchmark ${"oversized ".repeat(120)}`, now),
+      activeMemory2("ranking-target", "quartz-alpha fixture isolation ranking benchmark.", now),
       activeMemory2("ranking-distractor-1", "Similar distractor memory: use quartz-beta fixture isolation for unrelated benchmark.", now),
       activeMemory2("ranking-distractor-2", "Similar distractor memory: use quartz-gamma project cleanup for unrelated benchmark.", now)
     ]
@@ -31261,7 +31263,7 @@ async function runRankingCase(benchmarkCase, options) {
         route: "project",
         task: "coding",
         maxItems: 3,
-        maxTokens: 2e3
+        maxTokens: tightBudgetMaxTokens
       });
       const rank2 = rows.findIndex((row) => row.memory.id === "ranking-target");
       const top1 = rows[0]?.memory.id === "ranking-target";
@@ -31269,8 +31271,9 @@ async function runRankingCase(benchmarkCase, options) {
       const recallAt5 = rank2 >= 0 && rank2 < 5 ? 1 : 0;
       const mrr = rank2 >= 0 ? 1 / (rank2 + 1) : 0;
       const wrongTop1Rate = top1 ? 0 : 1;
+      const oversizedExcluded = rows.some((row) => row.memory.id === "ranking-oversized-exact") ? 0 : 1;
       const similarInterference = rows.slice(0, Math.max(rank2, 0)).some((row) => row.memory.id.startsWith("ranking-distractor")) ? 1 : 0;
-      const hardFailures = recallAt3 === 1 && wrongTop1Rate === 0 ? [] : ["index_source_mismatch"];
+      const hardFailures = recallAt3 === 1 && wrongTop1Rate === 0 && oversizedExcluded === 1 ? [] : ["index_source_mismatch"];
       return result2(benchmarkCase, hardFailures, [
         { name: "recallAt1", value: top1 ? 1 : 0 },
         { name: "recallAt3", value: recallAt3 },
@@ -31284,7 +31287,7 @@ async function runRankingCase(benchmarkCase, options) {
         { name: "oldMemoryRetrievalRate", value: 0 },
         { name: "newMemoryRetrievalRate", value: top1 ? 1 : 0 }
       ], [{
-        summary: `ranking ok; recallAt3=${recallAt3}; mrr=${mrr}; wrongTop1=${wrongTop1Rate}; top=${rows[0]?.memory.id ?? "none"}`
+        summary: `gate=retrieval-quality-tight-budget; ranking ok; maxTokens=${tightBudgetMaxTokens}; oversizedExcluded=${oversizedExcluded}; recallAt3=${recallAt3}; mrr=${mrr}; wrongTop1=${wrongTop1Rate}; top=${rows[0]?.memory.id ?? "none"}`
       }]);
     } finally {
       adapter.close();
@@ -31548,7 +31551,7 @@ async function runIndexHealthCase(benchmarkCase, options) {
         { name: "indexSourceMismatchCount", value: 0 },
         { name: "hotPathRebuildCount", value: 0 },
         { name: "undetectedStaleIndexCount", value: 0 }
-      ], [{ summary: `index health ok; sqlite hit rate=${sqliteHit}; jsonl fallback=0; stale rate=0` }]);
+      ], [{ summary: `gate=index-stale-mode-matrix; index health ok; sqlite hit rate=${sqliteHit}; jsonl fallback=0; stale rate=0` }]);
     } finally {
       adapter.close();
     }
@@ -32827,7 +32830,7 @@ async function runJsonlCorrupt(benchmarkCase, options) {
       hardFailures,
       metrics: metricsFor(benchmarkCase, hardFailures),
       evidence: [{
-        summary: `corrupt jsonl rejected; malformed=${root?.malformedJsonLines ?? 0}; promoted=${root?.promotedTrialToValidated ?? "missing"}; bytes unchanged=${after === original ? 1 : 0}`
+        summary: `gate=jsonl-corruption-write-block; corrupt jsonl rejected; malformed=${root?.malformedJsonLines ?? 0}; promoted=${root?.promotedTrialToValidated ?? "missing"}; bytes unchanged=${after === original ? 1 : 0}`
       }]
     };
   });
