@@ -78,7 +78,7 @@ export interface CodexMemoryFeedbackResult {
       }
 }
 
-type ActivationFeedbackEvent = ActivationEvent & { idempotencyKey?: string }
+type ActivationFeedbackEvent = ActivationEvent & { contentHash?: string; idempotencyKey?: string }
 
 function queryHashFor(query: string): string {
   return createHash('sha256').update(query).digest('hex').slice(0, 16)
@@ -165,6 +165,7 @@ export async function recordCodexMemoryFeedback(
       id: eventId,
       memoryId: memory.id,
       projectId: project.projectId,
+      contentHash: input.contentHash,
       ...(queryHash === undefined ? {} : { queryHash }),
       event: input.event,
       ...(input.activationId === undefined ? {} : { activationId: input.activationId }),
@@ -325,6 +326,10 @@ export async function appendActivationEventsFailOpen(input: {
   now?: string
 }): Promise<void> {
   try {
+    const event = input.event ?? 'retrieved'
+    if (event !== 'retrieved') {
+      return
+    }
     const memoryIds = [...new Set(input.memoryIds)].sort()
     const createdAt = input.now ?? new Date().toISOString()
     for (const memoryId of memoryIds) {
@@ -333,7 +338,7 @@ export async function appendActivationEventsFailOpen(input: {
         memoryId,
         projectId: input.projectId,
         query: input.query,
-        event: input.event ?? 'retrieved',
+        event,
         evidenceRef: input.evidenceRef,
         now: createdAt
       })

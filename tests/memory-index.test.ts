@@ -9,6 +9,7 @@ import {
   type MemoryIndexRoot
 } from '../src/memory/memory-index.js'
 import { assertEmbeddingSafeText } from '../src/memory/embedding-provider.js'
+import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
 import { upsertMemoryEdgeFromRoot, writeActiveMemoriesFromRoot, writePendingMemoriesFromRoot } from '../src/memory/memory-store.js'
 import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, PendingMemory } from '../src/memory/types.js'
 
@@ -112,6 +113,24 @@ async function writeJsonLines(filePath: string, values: unknown[]): Promise<void
   await writeFile(filePath, values.map((value) => JSON.stringify(value)).join('\n') + '\n', 'utf8')
 }
 
+function explainQueryPlan(dbPath: string, sql: string, values: unknown[]): string {
+  const require = createRequire(import.meta.url)
+  const sqlite = require('node:sqlite') as {
+    DatabaseSync: new (path: string) => {
+      prepare(sql: string): { all(...values: unknown[]): Array<Record<string, unknown>> }
+      close(): void
+    }
+  }
+  const db = new sqlite.DatabaseSync(dbPath)
+  try {
+    return db.prepare(`explain query plan ${sql}`).all(...values)
+      .map((row) => Object.values(row).join(' '))
+      .join('\n')
+  } finally {
+    db.close()
+  }
+}
+
 describe('memory SQLite index', () => {
   it('initializes memory.db and reports tokenizer diagnostics', async () => {
     const root = await createTempDir('cyrene-memory-index-init-')
@@ -166,6 +185,51 @@ describe('memory SQLite index', () => {
         provider: 'fail',
         fallbackReason: expect.stringContaining('failed')
       })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CYRENE_EMBEDDING_PROVIDER
+      } else {
+        process.env.CYRENE_EMBEDDING_PROVIDER = previous
+      }
+    }
+  })
+
+  it('queries candidate hints without invoking embedding rerank and preserves semantic boundaries', async () => {
+    const previous = process.env.CYRENE_EMBEDDING_PROVIDER
+    process.env.CYRENE_EMBEDDING_PROVIDER = 'fail'
+    try {
+      const root = await createTempDir('cyrene-memory-index-candidate-hints-')
+      const projectRoot = join(root, 'projects', 'project-a', 'memory')
+      await mkdir(projectRoot, { recursive: true })
+      await writeJsonLines(join(projectRoot, 'index.jsonl'), [activeMemory({
+        id: 'candidate-hint-1',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        content: 'Runtime validator workflow should use bounded candidate hints.',
+        normalizedKey: 'runtime-validator-candidate-hint',
+        confidenceTier: 'trial',
+        activationPolicy: activationPolicyForConfidenceTier('trial'),
+        useWhen: ['runtime validator workflow'],
+        doNotUseWhen: ['documentation-only review']
+      })])
+      const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+      await adapter.rebuildFromRoots({ roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }] })
+
+      const pool = await adapter.queryCandidateHints({
+        currentProjectId: 'project-a',
+        query: 'runtime validator workflow',
+        maxItems: 10
+      })
+
+      expect(pool.candidates.map((item) => item.memory.id)).toEqual(['candidate-hint-1'])
+      expect(pool.candidates[0]?.memory.useWhen).toEqual(['runtime validator workflow'])
+      expect(pool.candidates[0]?.memory.doNotUseWhen).toEqual(['documentation-only review'])
+      expect(adapter.diagnostics().embedding).toMatchObject({
+        enabled: true,
+        provider: 'fail',
+        cacheMisses: 0
+      })
+      expect(adapter.diagnostics().embedding).not.toHaveProperty('fallbackReason')
     } finally {
       if (previous === undefined) {
         delete process.env.CYRENE_EMBEDDING_PROVIDER
@@ -467,8 +531,8 @@ describe('memory SQLite index', () => {
     })
 
     expect(result[0]?.memory.id).toBe('project-a-long-full-match')
-    expect(result[0]?.score).toBeGreaterThan(0.44)
-    expect(result[0]?.score).toBeLessThanOrEqual(0.66)
+    expect(result[0]?.score).toBeGreaterThan(250)
+    expect(result[0]?.score).toBeLessThanOrEqual(335)
   })
 
   it('stores project metadata and project similarity rows across rebuilds', async () => {
@@ -711,6 +775,53 @@ describe('memory SQLite index', () => {
     })])
   })
 
+  it('uses indexed predicates for memory edge lookup', async () => {
+    const root = await createTempDir('cyrene-memory-index-edge-query-plan-')
+    const dbPath = join(root, 'memory.db')
+    const adapter = await openMemoryIndexAdapter({ dbPath })
+    await adapter.initialize()
+
+    await adapter.upsertMemoryEdge({
+      id: 'edge-1',
+      fromId: 'from-1',
+      fromKind: 'memory',
+      toId: 'to-1',
+      toKind: 'memory',
+      edgeType: 'relation:supersedes',
+      weight: 1,
+      source: 'deterministic',
+      status: 'approved',
+      createdAt: '2026-06-11T00:00:00.000Z'
+    })
+
+    expect(await adapter.queryMemoryEdges({ fromId: 'from-1', status: 'approved' })).toHaveLength(1)
+    expect(await adapter.queryMemoryEdges({ toId: 'to-1', status: 'approved' })).toHaveLength(1)
+    expect(await adapter.queryMemoryEdges({ fromId: 'missing', toId: 'to-1', status: 'approved' })).toHaveLength(0)
+
+    const fromPlan = explainQueryPlan(
+      dbPath,
+      'select * from memory_edges where from_id = ? and status = ?',
+      ['from-1', 'approved']
+    )
+    const toPlan = explainQueryPlan(
+      dbPath,
+      'select * from memory_edges where to_id = ? and status = ?',
+      ['to-1', 'approved']
+    )
+    const typePlan = explainQueryPlan(
+      dbPath,
+      'select * from memory_edges where edge_type = ? and status = ?',
+      ['relation:supersedes', 'approved']
+    )
+
+    expect(fromPlan).toContain('USING INDEX idx_memory_edges_from_status')
+    expect(fromPlan).not.toContain('SCAN memory_edges')
+    expect(toPlan).toContain('USING INDEX idx_memory_edges_to_status')
+    expect(toPlan).not.toContain('SCAN memory_edges')
+    expect(typePlan).toContain('USING INDEX idx_memory_edges_type_status')
+    expect(typePlan).not.toContain('SCAN memory_edges')
+  })
+
   it('keeps deterministic memory edges distinct for duplicate raw ids across roots', async () => {
     const root = await createTempDir('cyrene-memory-index-edge-duplicate-ids-')
     const currentRoot = join(root, 'projects', 'project-a', 'memory')
@@ -805,6 +916,45 @@ describe('memory SQLite index', () => {
     })])
   })
 
+  it('queries public memory id edges after applying edge predicates across duplicate raw ids', async () => {
+    const root = await createTempDir('cyrene-memory-index-public-edge-duplicate-cap-')
+    const roots: MemoryIndexRoot[] = []
+    for (let index = 0; index < 51; index += 1) {
+      const projectId = `project-${String(index).padStart(2, '0')}`
+      const projectRoot = join(root, 'projects', projectId, 'memory')
+      await mkdir(projectRoot, { recursive: true })
+      await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+        activeMemory({
+          id: 'shared-public-id',
+          content: index === 0
+            ? 'Old duplicate public id memory mentions the target file.'
+            : `New duplicate public id memory ${index}.`,
+          normalizedKey: `shared-public-id-${index}`,
+          updatedAt: index === 0 ? '2026-01-01T00:00:00.000Z' : `2026-06-${String((index % 28) + 1).padStart(2, '0')}T00:00:00.000Z`,
+          evidence: index === 0
+            ? [{ summary: 'Target trace ref.', traceRefs: ['src/target.ts'] }]
+            : [{ summary: 'No target trace ref.' }]
+        })
+      ])
+      roots.push({ memoryRoot: projectRoot, projectId, scope: 'project' })
+    }
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+
+    await adapter.rebuildFromRoots({ roots })
+
+    const edges = await adapter.queryMemoryEdges({
+      fromId: 'shared-public-id',
+      toId: 'src/target.ts',
+      status: 'approved'
+    })
+
+    expect(edges).toEqual([expect.objectContaining({
+      fromId: JSON.stringify(['project', 'project-00', 'shared-public-id']),
+      toId: 'src/target.ts',
+      status: 'approved'
+    })])
+  })
+
   it('projects durable memory relation edges during index rebuild', async () => {
     const root = await createTempDir('cyrene-memory-index-relation-edge-')
     const projectRoot = join(root, 'projects', 'project-a', 'memory')
@@ -847,6 +997,121 @@ describe('memory SQLite index', () => {
       evidenceId: 'evidence-1',
       approvedAt: '2026-05-26T00:00:00.000Z'
     })])
+  })
+
+  it('orders active retrieval by score before candidate and token caps', async () => {
+    const root = await createTempDir('cyrene-memory-index-query-active-score-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'low-recent',
+        content: 'Recent unrelated release note for local development.',
+        normalizedKey: 'recent-unrelated-note',
+        updatedAt: '2026-06-11T00:00:00.000Z',
+        tags: ['recent']
+      }),
+      activeMemory({
+        id: 'high-match',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        strength: 'hard',
+        content: 'Use npm test and npm run typecheck before completion.',
+        normalizedKey: 'completion-test-typecheck-command',
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        tags: ['workflow', 'verification']
+      }),
+      activeMemory({
+        id: 'conflict-penalty',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        strength: 'hard',
+        content: 'Do not use npm test or npm run typecheck before completion.',
+        normalizedKey: 'completion-test-typecheck-command',
+        updatedAt: '2026-06-10T00:00:00.000Z',
+        tags: ['workflow', 'verification']
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const result = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'npm test typecheck before completion',
+      route: 'project',
+      maxItems: 1,
+      maxTokens: 50
+    })
+
+    expect(result.map((item) => item.memory.id)).toEqual(['high-match'])
+  })
+
+  it('does not return unrelated active memories from metadata boosts alone', async () => {
+    const root = await createTempDir('cyrene-memory-index-score-relevance-gate-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'unrelated-hard-rule',
+        content: 'Relation model hint target must stay out of active context.',
+        normalizedKey: 'model-hint-target-unrelated',
+        domain: 'procedural',
+        type: 'procedural_rule',
+        strength: 'hard',
+        scores: {
+          evidenceStrength: 0,
+          stability: 0.9,
+          usefulness: 0,
+          safety: 0,
+          sensitivity: 0
+        }
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const result = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'derivedbenchalpha',
+      route: 'project',
+      task: 'memory',
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(result).toEqual([])
+  })
+
+  it('does not return expired active memories without a task filter', async () => {
+    const root = await createTempDir('cyrene-memory-index-expired-active-')
+    const projectRoot = join(root, 'projects', 'project-a', 'memory')
+    await mkdir(projectRoot, { recursive: true })
+    await writeJsonLines(join(projectRoot, 'index.jsonl'), [
+      activeMemory({
+        id: 'expired-exact-match',
+        content: 'Use npm test and npm run typecheck before completion.',
+        normalizedKey: 'expired-exact-match',
+        expiresAt: '2000-01-01T00:00:00.000Z'
+      })
+    ])
+    const adapter = await openMemoryIndexAdapter({ dbPath: join(root, 'memory.db') })
+    await adapter.rebuildFromRoots({
+      roots: [{ memoryRoot: projectRoot, projectId: 'project-a', scope: 'project' }]
+    })
+
+    const result = await adapter.queryActive({
+      currentProjectId: 'project-a',
+      query: 'npm test typecheck before completion',
+      route: 'project',
+      maxItems: 10,
+      maxTokens: 2_000
+    })
+
+    expect(result).toEqual([])
   })
 
   it('returns unavailable diagnostics when forced unavailable', async () => {

@@ -124,9 +124,12 @@ is persisted as a hash, and feedback cannot promote memory by itself.
 
 ```bash
 npm run dev -- codex memory db rebuild
+npm run dev -- codex memory jsonl repair --dry-run
+npm run dev -- codex memory jsonl repair --apply
 npm run dev -- codex memory summary refresh [--scope project|global]
 npm run dev -- codex memory distill --dry-run
-npm run dev -- codex memory harvest-project [--dry-run] [--changed-files] [--since last-summary]
+npm run dev -- codex memory harvest-project [--changed-files] [--since last-summary]
+npm run dev -- codex memory harvest-project --apply --preview-id <id> --preview-hash <hash>
 npm run dev -- codex memory triage [--dry-run|--apply]
 npm run dev -- codex memory prepare [--dry-run|--apply] [--max-items <n>]
 npm run dev -- codex memory automation --job daily --dry-run
@@ -148,8 +151,29 @@ ambiguous, personal, relationship, affective, similar-project, and
 assistant-observed-only memory remains in manual review unless the user approves
 it with hash validation.
 
-`harvest-project --dry-run` previews project memory candidates without writing
-pending review items.
+### JSONL Repair
+
+`cyrene-continuity codex memory jsonl repair --dry-run` scans canonical memory
+JSONL and reports malformed lines without modifying memory.
+
+`cyrene-continuity codex memory jsonl repair --apply` backs up original
+canonical JSONL, quarantines malformed lines under
+`repair/<repairTransactionId>/`, rewrites valid records atomically, and rebuilds
+derived projections only after repair succeeds.
+
+`doctor`, `status`, lifecycle automation, maintenance, migration, and context
+reads never repair canonical memory implicitly. When corruption is detected,
+run the dry-run first, inspect the preview, then apply repair explicitly.
+
+### Project Harvest
+
+`cyrene-continuity codex memory harvest-project` creates a preview artifact and
+writes no memory.
+
+`cyrene-continuity codex memory harvest-project --apply --preview-id <id> --preview-hash <hash>`
+applies a matching unexpired preview without another model call. Expired,
+missing, or hash-mismatched previews must be regenerated with
+`cyrene-continuity codex memory harvest-project`.
 
 ## Active Memory
 

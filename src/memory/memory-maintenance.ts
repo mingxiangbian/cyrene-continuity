@@ -1,16 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { jsonlScanHasCorruption, scanCanonicalJsonlFilesFromRoot } from './jsonl-diagnostics.js'
 import { assertMemoryProjectionTargetsSafe, renderMemoryProjectionsFromRoot } from './memory-exporter.js'
 import { assertMemorySnapshotTargetSafeFromRoot, createMemorySnapshotFromRoot } from './memory-snapshot.js'
 import {
   appendMemoryEventFromRoot,
   appendTombstoneFromRoot,
   ensureWritableMemoryRootPath,
+  isMemoryJsonlRepairRequiredError,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot,
+  withCanonicalJsonlMutationGuard,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from './memory-store.js'
@@ -36,6 +40,9 @@ export interface MemoryMaintenanceBudget {
 export interface MemoryMaintenanceResult {
   memoryRoot: string
   snapshotId: string
+  skipped?: boolean
+  reason?: 'repair_required'
+  malformedJsonLines?: number
   expired: number
   deduped: number
   archived: number
@@ -69,6 +76,10 @@ export async function runMemoryMaintenanceFromRoot(input: {
   preservePendingCandidateIds?: string[]
   preserveDuplicateNormalizedKeys?: string[]
 }): Promise<MemoryMaintenanceResult> {
+  const repairRequired = await readMaintenanceRepairRequired(input.memoryRoot)
+  if (repairRequired !== undefined) {
+    return skippedMaintenanceResult(input.memoryRoot, repairRequired.malformedJsonLines)
+  }
   return withMemoryMaintenanceLockFromRoot(input.memoryRoot, (memoryRoot) =>
     runMemoryMaintenanceFromRootLocked({ ...input, memoryRoot })
   )
@@ -81,6 +92,24 @@ export async function assertMemoryMaintenanceTargetsSafeFromRoot(memoryRoot: str
 }
 
 export async function runMemoryMaintenanceFromRootLocked(input: {
+  memoryRoot: string
+  budget: MemoryMaintenanceBudget
+  now?: string
+  reason?: string
+  preservePendingCandidateIds?: string[]
+  preserveDuplicateNormalizedKeys?: string[]
+}): Promise<MemoryMaintenanceResult> {
+  try {
+    return await withCanonicalJsonlMutationGuard(input.memoryRoot, () => runMemoryMaintenanceAfterJsonlGuard(input))
+  } catch (error) {
+    if (isMemoryJsonlRepairRequiredError(error)) {
+      return skippedMaintenanceResult(input.memoryRoot, error.malformedLineCount + error.skippedFileCount)
+    }
+    throw error
+  }
+}
+
+async function runMemoryMaintenanceAfterJsonlGuard(input: {
   memoryRoot: string
   budget: MemoryMaintenanceBudget
   now?: string
@@ -161,6 +190,32 @@ export async function runMemoryMaintenanceFromRootLocked(input: {
   }
 }
 
+async function readMaintenanceRepairRequired(memoryRoot: string): Promise<{ malformedJsonLines: number } | undefined> {
+  const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot)
+  if (!jsonlScanHasCorruption(scan)) {
+    return undefined
+  }
+  return {
+    malformedJsonLines: scan.corruptionCount + scan.skippedFiles.length
+  }
+}
+
+function skippedMaintenanceResult(memoryRoot: string, malformedJsonLines: number): MemoryMaintenanceResult {
+  return {
+    memoryRoot,
+    snapshotId: '',
+    skipped: true,
+    reason: 'repair_required',
+    malformedJsonLines,
+    expired: 0,
+    deduped: 0,
+    archived: 0,
+    trimmed: 0,
+    activeCount: 0,
+    pendingCount: 0
+  }
+}
+
 export async function withMemoryMaintenanceLockFromRoot<T>(
   memoryRoot: string,
   task: (memoryRoot: string) => Promise<T>,
@@ -206,6 +261,7 @@ export async function withMemoryMaintenanceLockFromRoot<T>(
 
 interface MaintenanceLockOwner {
   acquiredAt: string
+  hostname?: string
   pid?: number
   token?: string
 }
@@ -218,7 +274,7 @@ interface MaintenanceLockState {
 async function writeMaintenanceLockOwner(lockDir: string, token: string): Promise<void> {
   await writeFile(
     join(lockDir, MAINTENANCE_LOCK_OWNER_FILE),
-    `${JSON.stringify({ acquiredAt: new Date().toISOString(), pid: process.pid, token })}\n`,
+    `${JSON.stringify({ acquiredAt: new Date().toISOString(), hostname: hostname(), pid: process.pid, token })}\n`,
     'utf8'
   )
 }
@@ -268,6 +324,7 @@ async function readMaintenanceLockOwner(lockDir: string): Promise<MaintenanceLoc
   try {
     const parsed = JSON.parse(await readFile(join(lockDir, MAINTENANCE_LOCK_OWNER_FILE), 'utf8')) as {
       acquiredAt?: unknown
+      hostname?: unknown
       pid?: unknown
       token?: unknown
     }
@@ -276,6 +333,7 @@ async function readMaintenanceLockOwner(lockDir: string): Promise<MaintenanceLoc
     }
     return {
       acquiredAt: parsed.acquiredAt,
+      ...(typeof parsed.hostname === 'string' ? { hostname: parsed.hostname } : {}),
       ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
       ...(typeof parsed.token === 'string' ? { token: parsed.token } : {})
     }
@@ -313,6 +371,7 @@ function isSameMaintenanceLockState(left: MaintenanceLockState, right: Maintenan
     return left.owner?.token === right.owner?.token
   }
   return left.owner?.acquiredAt === right.owner?.acquiredAt &&
+    left.owner?.hostname === right.owner?.hostname &&
     left.owner?.pid === right.owner?.pid &&
     left.mtimeMs === right.mtimeMs
 }

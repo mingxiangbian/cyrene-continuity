@@ -424,6 +424,7 @@ export interface ActivationEvent {
   queryHash?: string
   event: ActivationEventType
   activationId?: string
+  contentHash?: string
   reason?: string
   evidenceRef?: string
   createdAt: string
@@ -481,6 +482,8 @@ export interface CyreneMemory {
   profileVisibility?: MemoryProfileVisibility
   confidenceTier?: ConfidenceTier
   activationPolicy?: ActivationPolicy
+  useWhen?: string[]
+  doNotUseWhen?: string[]
   candidateKind?: MemoryCandidateKind
   candidate_kind?: MemoryCandidateKind
   normalizedKeyConflictResolution?: 'keep_both'

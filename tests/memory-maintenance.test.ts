@@ -2,9 +2,14 @@ import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { runMemoryMaintenanceFromRoot, type MemoryMaintenanceBudget } from '../src/memory/memory-maintenance.js'
+import {
+  runMemoryMaintenanceFromRoot,
+  runMemoryMaintenanceFromRootLocked,
+  type MemoryMaintenanceBudget
+} from '../src/memory/memory-maintenance.js'
 import {
   readActiveMemoriesFromRoot,
+  setMemoryStoreTestHooksForTest,
   writeActiveMemoriesFromRoot,
   writePendingMemoriesFromRoot
 } from '../src/memory/memory-store.js'
@@ -104,6 +109,34 @@ describe('root memory maintenance', () => {
         reason: 'expired'
       })
     ])
+  })
+
+  it('scans canonical JSONL once for guarded writes during locked maintenance', async () => {
+    const memoryRoot = await createMemoryRoot()
+    const expired = createMemory({
+      id: 'expired-1',
+      normalizedKey: 'expired-memory',
+      expiresAt: '2026-05-25T00:00:00.000Z'
+    })
+    await seedMemoryRoot({ memoryRoot, active: [expired] })
+    let guardScanCount = 0
+    const restoreHooks = setMemoryStoreTestHooksForTest({
+      onCanonicalJsonlMutationGuardScan: () => {
+        guardScanCount += 1
+      }
+    })
+
+    try {
+      await runMemoryMaintenanceFromRootLocked({
+        memoryRoot,
+        budget: createBudget(),
+        now: '2026-05-26T00:00:00.000Z'
+      })
+    } finally {
+      restoreHooks()
+    }
+
+    expect(guardScanCount).toBe(1)
   })
 
   it('serializes concurrent maintenance for the same root', async () => {

@@ -5,6 +5,7 @@ import {
   activationPolicyForConfidenceTier,
   validateSemanticMemoryLifecycle
 } from '../memory/memory-lifecycle.js'
+import { jsonlScanHasCorruption, scanCanonicalJsonlFilesFromRoot } from '../memory/jsonl-diagnostics.js'
 import {
   activeMemoryToSemanticMemory,
   pendingMemoryToSemanticMemory,
@@ -14,6 +15,7 @@ import {
 import {
   appendMemoryEventFromRoot,
   assertSafeMemoryDataFileTarget,
+  memoryDataFilePathSafetyErrorFromJsonlScan,
   writeSemanticMemoriesFromRoot
 } from '../memory/memory-store.js'
 import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
@@ -60,6 +62,7 @@ const REVIEW_SUMMARY_NOISE_PHRASES = [
   'merged branch',
   'deleted local branch'
 ]
+const REPAIR_REQUIRED_MALFORMED_JSONL_REASON = 'repair_required: malformed JSONL repair required'
 const MEMORY_PORTABILITIES = ['local_only', 'project_family', 'similar_project', 'global'] as const
 const MEMORY_PROFILE_VISIBILITIES = ['always', 'safe_summary', 'retrieval_only', 'never'] as const
 const ROUTING_RISKS = ['low', 'medium', 'high'] as const
@@ -211,6 +214,24 @@ async function migrateReadableRoot(
   root: MemoryRootSpec,
   input: { dryRun: boolean; now: string }
 ): Promise<CodexMemoryLifecycleMigrateV15RootResult> {
+  let canonicalScan: Awaited<ReturnType<typeof scanCanonicalJsonlFilesFromRoot>>
+  try {
+    canonicalScan = await scanCanonicalJsonlFilesFromRoot(root.memoryRoot)
+  } catch (error) {
+    const pathSafetyError = memoryDataFilePathSafetyErrorFromJsonlScan(error)
+    if (pathSafetyError !== undefined) {
+      throw pathSafetyError
+    }
+    throw error
+  }
+  if (jsonlScanHasCorruption(canonicalScan)) {
+    return {
+      ...baseRootResult(root, { malformedJsonLines: canonicalScan.corruptionCount + canonicalScan.skippedFiles.length }),
+      skipped: true,
+      reason: REPAIR_REQUIRED_MALFORMED_JSONL_REASON
+    }
+  }
+
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
     readJsonLinesWithMalformed<CyreneMemory>(join(root.memoryRoot, LEGACY_INDEX_FILE), isValidLegacyActiveMemory),
     readJsonLinesWithMalformed<PendingMemory>(join(root.memoryRoot, LEGACY_PENDING_FILE), isValidPendingMemory),
@@ -241,7 +262,7 @@ async function migrateReadableRoot(
     return {
       ...result,
       skipped: true,
-      reason: 'memory root contains malformed JSONL'
+      reason: REPAIR_REQUIRED_MALFORMED_JSONL_REASON
     }
   }
 

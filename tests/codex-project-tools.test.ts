@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexProjectMemoryRoot, ensureCodexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import {
@@ -205,6 +205,50 @@ describe('Codex project tools', () => {
       /Unsafe project merge target JSONL file/
     )
     await expect(readFile(outsideFile, 'utf8')).resolves.not.toContain('From project memory.')
+  })
+
+  it('rejects corrupted source canonical JSONL during project merge without mutating target or metadata', async () => {
+    const home = await createTempDir('cyrene-project-merge-corrupt-source-home-')
+    vi.stubEnv('HOME', home)
+    const fromRoot = await ensureCodexProjectMemoryRoot('from-project')
+    const toRoot = await ensureCodexProjectMemoryRoot('to-project')
+    await writeActiveMemoriesFromRoot(fromRoot, [createActive({ id: 'from-active', content: 'From project memory.' })])
+    await writeActiveMemoriesFromRoot(toRoot, [createActive({ id: 'to-active', content: 'To project memory.' })])
+    const sourceSemanticPath = join(fromRoot, 'semantic_memories.jsonl')
+    const targetSemanticPath = join(toRoot, 'semantic_memories.jsonl')
+    const corruptedSource = `${await readFile(sourceSemanticPath, 'utf8')}{bad json}\n`
+    const originalTarget = await readFile(targetSemanticPath, 'utf8')
+    await writeFile(sourceSemanticPath, corruptedSource, 'utf8')
+
+    await expect(mergeCodexProjects({ fromProjectId: 'from-project', toProjectId: 'to-project' })).rejects.toThrow(
+      /repair_required/
+    )
+
+    await expect(readFile(targetSemanticPath, 'utf8')).resolves.toBe(originalTarget)
+    await expect(readFile(targetSemanticPath, 'utf8')).resolves.not.toContain('From project memory.')
+    await expect(readFile(targetSemanticPath, 'utf8')).resolves.not.toContain('{bad json}')
+    await expect(readFile(join(dirname(fromRoot), 'project.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(dirname(toRoot), 'project.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects corrupted target canonical JSONL during project merge without rewriting target bytes', async () => {
+    const home = await createTempDir('cyrene-project-merge-corrupt-target-home-')
+    vi.stubEnv('HOME', home)
+    const fromRoot = await ensureCodexProjectMemoryRoot('from-project')
+    const toRoot = await ensureCodexProjectMemoryRoot('to-project')
+    await writeActiveMemoriesFromRoot(fromRoot, [createActive({ id: 'from-active', content: 'From project memory.' })])
+    await writeActiveMemoriesFromRoot(toRoot, [createActive({ id: 'to-active', content: 'To project memory.' })])
+    const targetSemanticPath = join(toRoot, 'semantic_memories.jsonl')
+    const corruptedTarget = `${await readFile(targetSemanticPath, 'utf8')}{bad json}\n`
+    await writeFile(targetSemanticPath, corruptedTarget, 'utf8')
+
+    await expect(mergeCodexProjects({ fromProjectId: 'from-project', toProjectId: 'to-project' })).rejects.toThrow(
+      /repair_required/
+    )
+
+    await expect(readFile(targetSemanticPath, 'utf8')).resolves.toBe(corruptedTarget)
+    await expect(readFile(join(dirname(fromRoot), 'project.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(dirname(toRoot), 'project.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('blocks cross-project migration of personal relationship or affective memory', async () => {

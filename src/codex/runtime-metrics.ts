@@ -15,6 +15,12 @@ export interface RuntimeMetricEvent {
   similarLatencyMs?: number
   pendingLatencyMs?: number
   profileReadLatencyMs?: number
+  candidateHintLatencyMs?: number
+  candidateHintEligibleCount?: number
+  candidateHintRelevantCount?: number
+  candidateHintSelectedCount?: number
+  candidateHintTimeoutCount?: number
+  candidateHintSuppressedByLatencyCount?: number
   tokenOverhead?: number
   jsonlFallback?: boolean
   indexStale?: boolean
@@ -64,6 +70,14 @@ function runtimeMetricRecord(metric: RuntimeMetricEvent): RuntimeMetricEvent {
     ...(metric.similarLatencyMs === undefined ? {} : { similarLatencyMs: metric.similarLatencyMs }),
     ...(metric.pendingLatencyMs === undefined ? {} : { pendingLatencyMs: metric.pendingLatencyMs }),
     ...(metric.profileReadLatencyMs === undefined ? {} : { profileReadLatencyMs: metric.profileReadLatencyMs }),
+    ...(metric.candidateHintLatencyMs === undefined ? {} : { candidateHintLatencyMs: metric.candidateHintLatencyMs }),
+    ...(metric.candidateHintEligibleCount === undefined ? {} : { candidateHintEligibleCount: metric.candidateHintEligibleCount }),
+    ...(metric.candidateHintRelevantCount === undefined ? {} : { candidateHintRelevantCount: metric.candidateHintRelevantCount }),
+    ...(metric.candidateHintSelectedCount === undefined ? {} : { candidateHintSelectedCount: metric.candidateHintSelectedCount }),
+    ...(metric.candidateHintTimeoutCount === undefined ? {} : { candidateHintTimeoutCount: metric.candidateHintTimeoutCount }),
+    ...(metric.candidateHintSuppressedByLatencyCount === undefined
+      ? {}
+      : { candidateHintSuppressedByLatencyCount: metric.candidateHintSuppressedByLatencyCount }),
     ...(metric.tokenOverhead === undefined ? {} : { tokenOverhead: metric.tokenOverhead }),
     ...(metric.jsonlFallback === undefined ? {} : { jsonlFallback: metric.jsonlFallback }),
     ...(metric.indexStale === undefined ? {} : { indexStale: metric.indexStale }),
@@ -86,6 +100,12 @@ function isRuntimeMetricEvent(value: unknown): value is RuntimeMetricEvent {
     isOptionalNumber(value.similarLatencyMs) &&
     isOptionalNumber(value.pendingLatencyMs) &&
     isOptionalNumber(value.profileReadLatencyMs) &&
+    isOptionalNumber(value.candidateHintLatencyMs) &&
+    isOptionalNumber(value.candidateHintEligibleCount) &&
+    isOptionalNumber(value.candidateHintRelevantCount) &&
+    isOptionalNumber(value.candidateHintSelectedCount) &&
+    isOptionalNumber(value.candidateHintTimeoutCount) &&
+    isOptionalNumber(value.candidateHintSuppressedByLatencyCount) &&
     isOptionalNumber(value.tokenOverhead) &&
     isOptionalBoolean(value.jsonlFallback) &&
     isOptionalBoolean(value.indexStale) &&

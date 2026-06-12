@@ -14,7 +14,7 @@ import type {
   MemoryRoutingSimilarHintItem
 } from '../eval/eval-runner.js'
 import { readModelProfileFromRootIfExists } from '../memory/model-profile.js'
-import type { IndexedActiveMemory, IndexedPendingMemory, IndexedSimilarMemory, MemoryEdge as IndexedMemoryEdge, MemoryIndexDiagnostics } from '../memory/memory-index.js'
+import type { IndexedActiveMemory, IndexedCandidateHintPool, IndexedPendingMemory, IndexedSimilarMemory, MemoryEdge as IndexedMemoryEdge, MemoryIndexDiagnostics } from '../memory/memory-index.js'
 import { deriveMemoryPortability, openMemoryIndexAdapter } from '../memory/memory-index.js'
 import { relationExpansionPolicy, resolveRelationExpansion } from '../memory/memory-relations.js'
 import { selectSimilarProjects } from '../memory/project-similarity.js'
@@ -36,11 +36,7 @@ import {
   type RetrievalFacet,
   type RetrievalPlan
 } from './retrieval-planner.js'
-import type {
-  CodexMemoryFallbackMode,
-  CodexMemoryIndexFreshness,
-  CodexMemoryIndexStatus
-} from './codex-memory-index-status.js'
+import type { CodexMemoryIndexFreshness, CodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import { readCodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import {
   codexGlobalMemoryRoot,
@@ -63,8 +59,20 @@ import {
 import { readFastSummaryProjection, type FastSummaryProjection } from './fast-summary-store.js'
 import { appendRuntimeMetric, type RuntimeMetricEvent } from './runtime-metrics.js'
 import { readCodexSessionHints, replaceCodexSessionHints, type CodexSessionHint } from './session-hints.js'
+import {
+  selectCandidateHints,
+  type CandidateHint,
+  type CandidateHintMemoryCandidate,
+  type CandidateHintSelectionMetrics,
+  type CandidateHintValidatedMemoryCandidate
+} from './candidate-hints.js'
+import {
+  readBoundedActiveJsonlFallback,
+  type BoundedActiveJsonlFallbackDiagnostics
+} from './jsonl-bounded-fallback.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
+type CodexRetrievalFallbackMode = 'sqlite' | 'jsonl' | 'jsonl_bounded_fallback' | 'degraded'
 
 interface RoutedMemoryDigestItem {
   id: string
@@ -89,6 +97,7 @@ interface PendingHypothesisDigestItem {
   status: 'pending'
   content: string
   provisional: true
+  reviewOnly: true
   score: number
 }
 
@@ -153,11 +162,16 @@ export interface RetrievalExcludedMemory {
 interface RetrievalDiagnostics extends MemoryIndexDiagnostics {
   source: RetrievalSource
   routes: RetrievalRoute[]
-  fallbackMode: CodexMemoryFallbackMode
+  fallbackMode: CodexRetrievalFallbackMode
   freshness: CodexMemoryIndexFreshness
   lastSyncAt?: string
   sourceLatestAt?: string
   staleReason?: string
+  recordCap?: number
+  fileSizeCap?: number
+  selectedCount?: number
+  skippedRoots?: string[]
+  corruptionCount?: number
 }
 
 interface ReviewReminder {
@@ -169,7 +183,10 @@ interface ReviewReminder {
 interface RoutedMemoryRuntimeMetrics {
   pendingLatencyMs: number
   similarLatencyMs: number
+  candidateHintMetrics: CandidateHintSelectionMetrics
 }
+
+const CANDIDATE_HINT_QUERY_MAX_ITEMS = 20
 
 export interface CodexContinuityContext {
   project: {
@@ -189,6 +206,7 @@ export interface CodexContinuityContext {
   projectMemory: RoutedMemoryDigestItem[]
   pendingHypotheses: PendingHypothesisDigestItem[]
   similarProjectHints: SimilarProjectHintDigestItem[]
+  candidateHints: CandidateHint[]
   sessionHints: SessionHintDigestItem[]
   activation: {
     workflowHints: MemoryActivation[]
@@ -210,11 +228,16 @@ export interface CodexContinuityContext {
       ftsTokenizer?: string
       source: RetrievalSource
       routes: RetrievalRoute[]
-      fallbackMode: CodexMemoryFallbackMode
+      fallbackMode: CodexRetrievalFallbackMode
       freshness: CodexMemoryIndexFreshness
       lastSyncAt?: string
       sourceLatestAt?: string
       staleReason?: string
+      recordCap?: number
+      fileSizeCap?: number
+      selectedCount?: number
+      skippedRoots?: string[]
+      corruptionCount?: number
     }
     projectSimilarity?: ProjectSimilarityDiagnostics
     evalGate?: EvalGateDiagnostics
@@ -295,7 +318,7 @@ export async function getCodexContinuityContext(input: {
       cwd: input.cwd,
       userCyreneDir: config.userCyreneDir,
       memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-      extraMemories: policy.mode === 'fast' || !policy.allowJsonlFallback ? [] : await readLegacyGlobalCodexMemories(project.projectId),
+      extraMemories: policy.mode === 'review' && policy.allowJsonlFallback ? await readLegacyGlobalCodexMemories(project.projectId) : [],
       currentProjectId: project.projectId,
       query: input.userMessage,
       task,
@@ -426,6 +449,7 @@ export async function getCodexContinuityContext(input: {
       retrievalPlan,
       edgeTypes: routedMemory.graphEdgeTypesByMemoryKey.get(memoryGraphKeyForRoutedItem(item, project.projectId)) ?? []
     })),
+    candidateHints: routedMemory.candidateHints,
     sessionHints: sessionHints.map(toSessionHintDigestItem),
     activation,
     responseStrategy: {
@@ -453,7 +477,12 @@ export async function getCodexContinuityContext(input: {
             freshness: routedMemory.diagnostics.freshness,
             lastSyncAt: routedMemory.diagnostics.lastSyncAt,
             sourceLatestAt: routedMemory.diagnostics.sourceLatestAt,
-            staleReason: routedMemory.diagnostics.staleReason
+            staleReason: routedMemory.diagnostics.staleReason,
+            recordCap: routedMemory.diagnostics.recordCap,
+            fileSizeCap: routedMemory.diagnostics.fileSizeCap,
+            selectedCount: routedMemory.diagnostics.selectedCount,
+            skippedRoots: routedMemory.diagnostics.skippedRoots,
+            corruptionCount: routedMemory.diagnostics.corruptionCount
           },
           projectSimilarity: routedMemory.projectSimilarityDiagnostics,
           evalGate: routedMemory.evalGateDiagnostics,
@@ -501,6 +530,7 @@ export async function getCodexContinuityContext(input: {
     similarLatencyMs: routedMemory.runtimeMetrics.similarLatencyMs,
     pendingLatencyMs: routedMemory.runtimeMetrics.pendingLatencyMs,
     profileReadLatencyMs,
+    ...routedMemory.runtimeMetrics.candidateHintMetrics,
     tokenOverhead: estimateContinuityContextTokens(context),
     jsonlFallback: routedMemory.diagnostics.source === 'jsonl',
     indexStale: routedMemory.diagnostics.freshness === 'stale',
@@ -531,6 +561,7 @@ interface RoutedMemoryResult {
   projectMemory: Array<IndexedActiveMemory | RetrievedMemory>
   pendingHypotheses: IndexedPendingMemory[]
   similarProjectHints: IndexedSimilarMemory[]
+  candidateHints: CandidateHint[]
   graphEdgeTypesByMemoryKey: Map<string, string[]>
   diagnostics: RetrievalDiagnostics
   projectSimilarityDiagnostics: ProjectSimilarityDiagnostics
@@ -549,6 +580,9 @@ async function retrieveRoutedMemory(input: {
 }): Promise<RoutedMemoryResult> {
   const roots = await codexMemoryIndexRoots(input.projectId)
   const indexStatus = await readCodexMemoryIndexStatus(roots.map((root) => root.memoryRoot))
+  if (indexStatus.available && indexStatus.freshness === 'empty' && !input.policy.includeSimilarProjectHints) {
+    return emptyRoutedMemory(emptySqliteRetrievalDiagnostics(indexStatus, input.policy), 'memory_index_empty')
+  }
   if (!isQueryableIndexStatus(indexStatus)) {
     return fallbackRoutedMemory(input.fallback, jsonlRetrievalDiagnostics(indexStatus, input.policy), input.projectId, input.policy)
   }
@@ -593,7 +627,16 @@ async function retrieveRoutedMemory(input: {
           pendingLatencyMs = latencyMs
         })
       : Promise.resolve([])
-    const [globalMemory, projectMemory, pendingHypotheses] = await Promise.all([
+    const candidateHintQuery = shouldQueryCandidateHints(input.policy, indexStatus, diagnostics)
+      ? selectSqliteCandidateHints({
+          adapter,
+          projectId: input.projectId,
+          query: input.query,
+          task: input.task,
+          policy: input.policy
+        })
+      : Promise.resolve(emptyCandidateHintSelection())
+    const [globalMemory, projectMemory, pendingHypotheses, candidateHintSelection] = await Promise.all([
       adapter.queryActive({
         currentProjectId: input.projectId,
         query: input.query,
@@ -610,7 +653,8 @@ async function retrieveRoutedMemory(input: {
         maxItems: 12,
         maxTokens: 900
       }),
-      pendingQuery
+      pendingQuery,
+      candidateHintQuery
     ])
     const memoryRoutingGate = runMemoryRoutingEvalGate({
       currentProjectId: input.projectId,
@@ -653,6 +697,7 @@ async function retrieveRoutedMemory(input: {
       projectMemory: relationExpandedMemory.projectMemory,
       pendingHypotheses,
       similarProjectHints: safeSimilarProjectHints,
+      candidateHints: candidateHintSelection.hints,
       graphEdgeTypesByMemoryKey,
       diagnostics: sqliteRetrievalDiagnostics(indexStatus, diagnostics, input.policy),
       projectSimilarityDiagnostics: similarRetrieval.projectSimilarityDiagnostics,
@@ -662,7 +707,8 @@ async function retrieveRoutedMemory(input: {
       },
       runtimeMetrics: {
         pendingLatencyMs,
-        similarLatencyMs
+        similarLatencyMs,
+        candidateHintMetrics: candidateHintSelection.metrics
       }
     }
   } catch (error) {
@@ -685,6 +731,128 @@ async function retrieveRoutedMemory(input: {
 
 function isQueryableIndexStatus(status: CodexMemoryIndexStatus): boolean {
   return status.available && (status.freshness === 'fresh' || (status.freshness === 'empty' && status.lastSyncAt !== undefined))
+}
+
+function shouldQueryCandidateHints(
+  policy: RetrievalPolicy,
+  status: CodexMemoryIndexStatus,
+  diagnostics: MemoryIndexDiagnostics
+): boolean {
+  return policy.candidateHintBudget > 0 && status.available && status.freshness === 'fresh' && diagnostics.available
+}
+
+async function selectSqliteCandidateHints(input: {
+  adapter: Pick<MemoryIndexAdapter, 'queryCandidateHints'>
+  projectId: string
+  query: string
+  task: CodexContinuityTask
+  policy: RetrievalPolicy
+}): Promise<{ hints: CandidateHint[]; metrics: CandidateHintSelectionMetrics }> {
+  const startedAt = Date.now()
+  if (input.policy.candidateHintBudget <= 0) {
+    return emptyCandidateHintSelection()
+  }
+  try {
+    const pool = await input.adapter.queryCandidateHints({
+      currentProjectId: input.projectId,
+      query: input.query,
+      maxItems: CANDIDATE_HINT_QUERY_MAX_ITEMS
+    })
+    const candidates = candidateHintMemoryCandidates(pool, input.projectId)
+    if (candidates.length === 0) {
+      return {
+        hints: [],
+        metrics: {
+          ...emptyCandidateHintMetrics(),
+          candidateHintLatencyMs: elapsedSince(startedAt)
+        }
+      }
+    }
+
+    const result = selectCandidateHints({
+      mode: input.policy.mode,
+      query: input.query,
+      projectId: input.projectId,
+      task: input.task,
+      candidates,
+      validatedMemories: candidateHintValidatedMemoryCandidates(pool),
+      maxItems: input.policy.candidateHintBudget
+    })
+    return {
+      hints: result.hints.map(labelModelVisibleCandidateHint),
+      metrics: {
+        ...result.metrics,
+        candidateHintLatencyMs: elapsedSince(startedAt)
+      }
+    }
+  } catch {
+    // Candidate hints must fail closed without changing ordinary continuity retrieval.
+    return {
+      hints: [],
+      metrics: {
+        ...emptyCandidateHintMetrics(),
+        candidateHintLatencyMs: elapsedSince(startedAt)
+      }
+    }
+  }
+}
+
+function candidateHintMemoryCandidates(
+  pool: IndexedCandidateHintPool,
+  projectId: string
+): CandidateHintMemoryCandidate[] {
+  return pool.candidates.map((item) => ({
+    memory: item.memory,
+    projectId: item.homeProjectId ?? projectId,
+    sqliteRelevanceScore: item.score
+  }))
+}
+
+function candidateHintValidatedMemoryCandidates(
+  pool: IndexedCandidateHintPool
+): CandidateHintValidatedMemoryCandidate[] {
+  return pool.validatedMemories
+    .filter((item) => isValidatedConflictMemory(item.memory))
+    .map((item) => ({
+      memory: item.memory,
+      ...(item.homeProjectId === null ? {} : { projectId: item.homeProjectId })
+    }))
+}
+
+function emptyCandidateHintSelection(): { hints: CandidateHint[]; metrics: CandidateHintSelectionMetrics } {
+  return {
+    hints: [],
+    metrics: emptyCandidateHintMetrics()
+  }
+}
+
+function emptyCandidateHintMetrics(): CandidateHintSelectionMetrics {
+  return {
+    candidateHintLatencyMs: 0,
+    candidateHintEligibleCount: 0,
+    candidateHintRelevantCount: 0,
+    candidateHintSelectedCount: 0,
+    candidateHintTimeoutCount: 0,
+    candidateHintSuppressedByLatencyCount: 0
+  }
+}
+
+function isValidatedConflictMemory(memory: SemanticMemory): boolean {
+  return (
+    memory.status === 'active' &&
+    (
+      memory.confidenceTier === 'validated' ||
+      memory.confidenceTier === 'project_core' ||
+      memory.confidenceTier === 'global_core'
+    )
+  )
+}
+
+function labelModelVisibleCandidateHint(hint: CandidateHint): CandidateHint {
+  return {
+    ...hint,
+    text: `Candidate project workflow hint, not validated:\n- ${hint.text.trim()}`
+  }
 }
 
 function isModelVisibleRoutedMemory(item: IndexedActiveMemory | RetrievedMemory): boolean {
@@ -737,6 +905,7 @@ function estimateContinuityContextTokens(context: CodexContinuityContext): numbe
     projectMemory: context.projectMemory,
     pendingHypotheses: context.pendingHypotheses,
     similarProjectHints: context.similarProjectHints,
+    candidateHints: context.candidateHints,
     sessionHints: context.sessionHints,
     activation: context.activation,
     profile: context.profile,
@@ -751,8 +920,14 @@ async function fallbackRoutedMemory(
   projectId: string,
   policy: RetrievalPolicy
 ): Promise<RoutedMemoryResult> {
+  if (policy.mode === 'fast') {
+    return emptyRoutedMemory(degradedIndexDiagnostics(diagnostics, policy), 'index_stale')
+  }
   if (!policy.allowJsonlFallback) {
     return emptyRoutedMemory(jsonlFallbackDisabledDiagnostics(diagnostics, policy), 'jsonl_fallback_disabled')
+  }
+  if (policy.mode === 'balanced') {
+    return boundedJsonlFallbackRoutedMemory(input, diagnostics, projectId, policy)
   }
   const memories = await retrieveMemories(input)
   let pendingLatencyMs = 0
@@ -766,6 +941,7 @@ async function fallbackRoutedMemory(
     projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
     pendingHypotheses,
     similarProjectHints: [],
+    candidateHints: [],
     graphEdgeTypesByMemoryKey: new Map(),
     diagnostics,
     projectSimilarityDiagnostics: {
@@ -780,7 +956,53 @@ async function fallbackRoutedMemory(
     },
     runtimeMetrics: {
       pendingLatencyMs,
-      similarLatencyMs: 0
+      similarLatencyMs: 0,
+      candidateHintMetrics: emptyCandidateHintMetrics()
+    }
+  }
+}
+
+async function boundedJsonlFallbackRoutedMemory(
+  input: RetrieveMemoriesInput,
+  diagnostics: RetrievalDiagnostics,
+  projectId: string,
+  policy: RetrievalPolicy
+): Promise<RoutedMemoryResult> {
+  const memoryRoots = input.memoryRoots ?? (input.memoryRoot === undefined ? [] : [input.memoryRoot])
+  const result = await readBoundedActiveJsonlFallback({
+    memoryRoots,
+    currentProjectId: projectId,
+    query: input.query,
+    maxTokens: input.maxTokens
+  })
+  const memories = result.memories.map((memory) => ({
+    memory,
+    score: 1,
+    explain: ['jsonl_bounded_fallback']
+  }))
+  const boundedDiagnostics = boundedJsonlRetrievalDiagnostics(diagnostics, policy, result.diagnostics)
+  return {
+    globalMemory: memories.filter(({ memory }) => memory.scope === 'global'),
+    projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
+    pendingHypotheses: [],
+    similarProjectHints: [],
+    candidateHints: [],
+    graphEdgeTypesByMemoryKey: new Map(),
+    diagnostics: boundedDiagnostics,
+    projectSimilarityDiagnostics: {
+      indexedProjects: 0,
+      candidateProjects: 0,
+      selectedProjects: 0,
+      reason: result.diagnostics.reason ?? (diagnostics.freshness === 'stale' ? 'memory_index_stale' : 'memory_index_unavailable')
+    },
+    evalGateDiagnostics: {
+      passed: true,
+      failedChecks: []
+    },
+    runtimeMetrics: {
+      pendingLatencyMs: 0,
+      similarLatencyMs: 0,
+      candidateHintMetrics: emptyCandidateHintMetrics()
     }
   }
 }
@@ -899,6 +1121,7 @@ function emptyRoutedMemory(diagnostics: RetrievalDiagnostics, reason: string): R
     projectMemory: [],
     pendingHypotheses: [],
     similarProjectHints: [],
+    candidateHints: [],
     graphEdgeTypesByMemoryKey: new Map(),
     diagnostics,
     projectSimilarityDiagnostics: {
@@ -913,7 +1136,8 @@ function emptyRoutedMemory(diagnostics: RetrievalDiagnostics, reason: string): R
     },
     runtimeMetrics: {
       pendingLatencyMs: 0,
-      similarLatencyMs: 0
+      similarLatencyMs: 0,
+      candidateHintMetrics: emptyCandidateHintMetrics()
     }
   }
 }
@@ -930,12 +1154,56 @@ function jsonlFallbackDisabledDiagnostics(
   }
 }
 
+function degradedIndexDiagnostics(
+  diagnostics: RetrievalDiagnostics,
+  policy: RetrievalPolicy
+): RetrievalDiagnostics {
+  return {
+    ...diagnostics,
+    source: 'sqlite',
+    routes: routesForPolicy('sqlite', policy),
+    fallbackMode: 'sqlite',
+    reason: diagnostics.freshness === 'stale' ? 'index_stale' : 'index_unavailable'
+  }
+}
+
+function boundedJsonlRetrievalDiagnostics(
+  diagnostics: RetrievalDiagnostics,
+  policy: RetrievalPolicy,
+  fallback: BoundedActiveJsonlFallbackDiagnostics
+): RetrievalDiagnostics {
+  return {
+    ...diagnostics,
+    source: 'jsonl',
+    routes: routesForPolicy('jsonl', policy),
+    fallbackMode: fallback.fallbackMode,
+    ...(fallback.reason === undefined ? {} : { reason: fallback.reason }),
+    recordCap: fallback.recordCap,
+    fileSizeCap: fallback.fileSizeCap,
+    selectedCount: fallback.selectedCount,
+    skippedRoots: fallback.skippedRoots,
+    corruptionCount: fallback.corruptionCount
+  }
+}
+
 function sqliteRetrievalDiagnostics(
   status: CodexMemoryIndexStatus,
   diagnostics: MemoryIndexDiagnostics,
   policy: RetrievalPolicy
 ): RetrievalDiagnostics {
   return retrievalDiagnosticsFromStatus(status, 'sqlite', routesForPolicy('sqlite', policy), diagnostics)
+}
+
+function emptySqliteRetrievalDiagnostics(
+  status: CodexMemoryIndexStatus,
+  policy: RetrievalPolicy
+): RetrievalDiagnostics {
+  return retrievalDiagnosticsFromStatus(status, 'sqlite', routesForPolicy('sqlite', policy), {
+    available: status.available,
+    dbPath: status.dbPath,
+    ftsTokenizer: status.ftsTokenizer,
+    reason: status.reason
+  })
 }
 
 function jsonlRetrievalDiagnostics(
@@ -1351,6 +1619,7 @@ function toPendingHypothesisDigestItem(item: IndexedPendingMemory): PendingHypot
     status: item.memory.status,
     content: item.memory.content,
     provisional: true,
+    reviewOnly: true,
     score: item.score
   }
 }

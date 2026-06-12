@@ -85,6 +85,7 @@ describe('benchmark Tier 3 scale and efficiency cases', () => {
       ['T3-RANKING', 'recallAt3=1'],
       ['T3-TOKEN-OVERHEAD', 'profile token overhead recorded'],
       ['T3-LATENCY', 'latency p50/p95/p99 recorded'],
+      ['T3-CANDIDATE-HINTS', 'candidate hints quality gate passed'],
       ['T3-INDEX-HEALTH', 'sqlite hit rate=1']
     ] as const) {
       const result = report.caseResults.find((item) => item.caseId === caseId)
@@ -93,8 +94,16 @@ describe('benchmark Tier 3 scale and efficiency cases', () => {
       expect(evidenceText(result)).not.toContain('catalog contract executed')
       expect(result?.hardFailures).toEqual([])
     }
+    for (const [caseId, gateId] of [
+      ['T3-RANKING', 'gate=retrieval-quality-tight-budget'],
+      ['T3-INDEX-HEALTH', 'gate=index-stale-mode-matrix']
+    ] as const) {
+      expect(evidenceText(report.caseResults.find((item) => item.caseId === caseId))).toContain(gateId)
+    }
 
     const ranking = report.caseResults.find((item) => item.caseId === 'T3-RANKING')
+    expect(evidenceText(ranking)).toContain('maxTokens=24')
+    expect(evidenceText(ranking)).toContain('oversizedExcluded=1')
     expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt3')
     expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt1')
     expect(ranking?.metrics.map((item) => item.name)).toContain('recallAt5')
@@ -142,6 +151,42 @@ describe('benchmark Tier 3 scale and efficiency cases', () => {
     ]) {
       expect(latency.has(metric)).toBe(true)
     }
+
+    const candidateHints = metricMap(report.caseResults.find((item) => item.caseId === 'T3-CANDIDATE-HINTS'))
+    for (const metric of [
+      'candidateHintLatencyMs',
+      'candidateHintLatencyP50BalancedMs',
+      'candidateHintLatencyP95BalancedMs',
+      'candidateHintLatencyMaxBalancedMs',
+      'candidateHintLatencyP50ReviewMs',
+      'candidateHintLatencyP95ReviewMs',
+      'candidateHintLatencyMaxReviewMs',
+      'candidateHintDisabledContextLatencyMs',
+      'candidateHintEnabledContextLatencyMs',
+      'candidateHintContextLatencyDeltaMs',
+      'candidateHintEligibleCount',
+      'candidateHintRelevantCount',
+      'candidateHintSelectedCount',
+      'candidateHintTimeoutCount',
+      'candidateHintSuppressedByLatencyCount'
+    ]) {
+      expect(candidateHints.has(metric)).toBe(true)
+    }
+    expect(candidateHints.get('candidateHintEligibleCount')).toBeGreaterThanOrEqual(3)
+    expect(candidateHints.get('candidateHintRelevantCount')).toBeGreaterThanOrEqual(2)
+    expect(candidateHints.get('candidateHintSelectedCount')).toBeGreaterThanOrEqual(1)
+    for (const metric of [
+      'candidateHintLatencyP50BalancedMs',
+      'candidateHintLatencyP95BalancedMs',
+      'candidateHintLatencyMaxBalancedMs',
+      'candidateHintLatencyP50ReviewMs',
+      'candidateHintLatencyP95ReviewMs',
+      'candidateHintLatencyMaxReviewMs'
+    ]) {
+      expect(candidateHints.get(metric)).toBeGreaterThanOrEqual(0)
+    }
+    expect(evidenceText(report.caseResults.find((item) => item.caseId === 'T3-CANDIDATE-HINTS'))).not.toMatch(/raw memory|candidate content/i)
+    expect(report.candidateHintReports?.[0]?.quality.map((item) => item.mode)).toEqual(['balanced', 'review'])
 
     const index = metricMap(report.caseResults.find((item) => item.caseId === 'T3-INDEX-HEALTH'))
     for (const metric of [
@@ -198,6 +243,19 @@ describe('benchmark Tier 3 scale and efficiency cases', () => {
     expect(latency.get('runtimeHookTimeoutCount')).toBe(0)
     expect(latency.get('runtimeHookFailOpenCount')).toBe(0)
     expect(evidenceText(report.caseResults.find((item) => item.caseId === 'T3-LATENCY'))).toContain('componentZeroMeans=not_executed_or_below_timer_resolution')
+
+    const candidateHints = metricMap(report.caseResults.find((item) => item.caseId === 'T3-CANDIDATE-HINTS'))
+    expect(candidateHints.get('candidateHintContextLatencyDeltaMs')).toBe(Math.max(
+      0,
+      (candidateHints.get('candidateHintEnabledContextLatencyMs') ?? 0) -
+        (candidateHints.get('candidateHintDisabledContextLatencyMs') ?? 0)
+    ))
+    expect(candidateHints.get('candidateHintTimeoutCount')).toBe(0)
+    expect(candidateHints.get('candidateHintSuppressedByLatencyCount')).toBe(0)
+    expect(report.metricAggregation?.candidateHintSelectedCount?.group).toBe('capability')
+    expect(report.metricAggregation?.candidateHintLatencyMs?.group).toBe('efficiency')
+    expect(report.metrics.efficiency.candidateHintContextLatencyDeltaMs).toBeGreaterThanOrEqual(0)
+    expect(report.metrics.capability.candidateHintRelevantCount).toBeGreaterThanOrEqual(2)
 
     const token = metricMap(report.caseResults.find((item) => item.caseId === 'T3-TOKEN-OVERHEAD'))
     expect(token.get('fastPendingTokens')).toBe(0)

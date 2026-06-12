@@ -14,8 +14,9 @@ import {
   getReadableCodexGlobalMemoryRoot,
   getReadableCodexProjectMemoryRoot
 } from './codex-memory-root.js'
-import { readCodexMemoryStatus } from './codex-memory-status.js'
+import { formatCodexMemoryRepairLines, readCodexMemoryStatus } from './codex-memory-status.js'
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
+import { indexStaleAction } from './memory-diagnostics-copy.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
 import { resolveDevRepoRoot, resolvePluginRoot, resolvePluginRuntimePath } from './runtime-paths.js'
@@ -117,6 +118,7 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     `  project profile: ${memoryState.projectProfilePresent ? 'present' : 'missing'}`,
     `  project review queue: ${memoryState.projectPendingCount}`,
     `  profile candidates: ${memoryState.profileCandidates}`,
+    ...formatCodexMemoryRepairLines(memoryStatus.repair),
     `  memory index: ${memoryIndex.available ? 'available' : 'unavailable'}`,
     `  memory db: ${memoryIndex.dbPath}`,
     memoryIndex.ftsTokenizer === undefined ? undefined : `  memory fts: ${memoryIndex.ftsTokenizer}`,
@@ -126,6 +128,9 @@ export async function formatCodexDoctor(input: { cwd: string; configPath?: strin
     memoryIndex.lastSyncAt === undefined ? undefined : `  memory index last sync: ${memoryIndex.lastSyncAt}`,
     memoryIndex.sourceLatestAt === undefined ? undefined : `  memory index source latest: ${memoryIndex.sourceLatestAt}`,
     memoryIndex.staleReason === undefined ? undefined : `  memory index stale reason: ${memoryIndex.staleReason}`,
+    memoryIndex.freshness === 'stale' && memoryStatus.repair.state === 'ok'
+      ? `  ${indexStaleAction()}`
+      : undefined,
     `  similar-project retrieval: ${memoryStatus.similarProjectRetrieval}`,
     `  session summaries: ${memoryStatus.stopHook.sessionSummaries}`,
     `  last stop hook run: ${memoryStatus.stopHook.lastRunAt === undefined ? 'never' : `${memoryStatus.stopHook.lastRunAt} (${memoryStatus.stopHook.lastRunStatus ?? 'unknown'})`}`,

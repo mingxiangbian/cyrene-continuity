@@ -217,6 +217,8 @@ function activeMemory(input: BenchmarkFixtureInput, memory: Partial<CyreneMemory
     confidenceTier,
     activationPolicy: memory.activationPolicy ?? activationPolicyForConfidenceTier(confidenceTier),
     portability: memory.portability ?? portabilityForScope(scope),
+    ...(memory.useWhen === undefined ? {} : { useWhen: memory.useWhen }),
+    ...(memory.doNotUseWhen === undefined ? {} : { doNotUseWhen: memory.doNotUseWhen }),
     ...(memory.sourceOfTruth === undefined ? {} : { sourceOfTruth: memory.sourceOfTruth }),
     ...(memory.expiresAt === undefined ? {} : { expiresAt: memory.expiresAt }),
     ...(memory.profileVisibility === undefined ? {} : { profileVisibility: memory.profileVisibility }),

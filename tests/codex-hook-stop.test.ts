@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -764,7 +764,7 @@ describe('Codex Stop hook runtime', () => {
     expect(result.action).toBe('pending')
   })
 
-  it('appends stop trace and records trial project harvest memories', async () => {
+  it('appends stop trace and previews project harvest without writing trial or pending memory', async () => {
     const home = await createTempDir('cyrene-codex-stop-harvest-home-')
     vi.stubEnv('HOME', home)
     vi.stubEnv('CYRENE_BASE_URL', 'https://example.invalid/v1')
@@ -802,26 +802,20 @@ describe('Codex Stop hook runtime', () => {
     )
 
     expect(callModel).toHaveBeenCalledTimes(2)
-    expect(result.action).toBe('trial')
-    expect(result.reason).toContain('project memory harvest')
-    expect(result).toMatchObject({ memoryIds: [expect.any(String)] })
+    expect(result.action).toBe('summary')
     const identity = await identifyCodexProject(cwd)
     const memoryRoot = codexProjectMemoryRoot(identity.projectId)
     const semantic = await readSemanticMemoriesFromRoot(memoryRoot)
-    const harvestTrial = semantic.find((record) =>
+    expect(semantic.find((record) =>
       record.content.includes('The plugin hook lifecycle config lives at plugin/hooks/hooks.json.')
-    )
+    )).toBeUndefined()
     const [episode] = (await readFile(join(memoryRoot, 'episodes.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as {
       id: string
     })
-    expect(harvestTrial).toMatchObject({
-      status: 'active',
-      confidenceTier: 'trial',
-      reviewState: {
-        sourceEpisodeIds: [episode.id]
-      }
-    })
-    await expect(readFile(join(memoryRoot, 'review_queue.jsonl'), 'utf8')).resolves.toBe('')
+    expect(episode.id).toEqual(expect.any(String))
+    await expectMemoryFileMissing(memoryRoot, 'review_queue.jsonl')
+    const previews = await readdir(join(memoryRoot, 'harvest_previews'))
+    expect(previews).toHaveLength(1)
     const trace = await readRecentCodexHookTrace({ cwd })
     expect(trace.records.some((record) => record.event === 'stop' && record.sessionId === 's-harvest')).toBe(true)
   })

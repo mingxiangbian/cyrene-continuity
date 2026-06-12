@@ -3,11 +3,13 @@ import { join } from 'node:path'
 import { rebuildCodexMemoryIndex } from '../../src/codex/codex-memory-index.js'
 import { handleCodexHookTraceCommand } from '../../src/codex/codex-hook-trace.js'
 import { getCodexContinuityContext } from '../../src/codex/continuity-context.js'
+import { selectCandidateHints, type CandidateHintSelectionMetrics } from '../../src/codex/candidate-hints.js'
 import { readRuntimeMetrics, type RuntimeMetricEvent } from '../../src/codex/runtime-metrics.js'
 import { openMemoryIndexAdapter } from '../../src/memory/memory-index.js'
 import { createBenchmarkFixture, seededId, withFixtureEnvironment } from '../fixtures.js'
 import { approxTokens, recordFixtureRun } from './common.js'
 import type {
+  BenchmarkCandidateHintReport,
   BenchmarkCase,
   BenchmarkCaseResult,
   BenchmarkEvidence,
@@ -16,7 +18,7 @@ import type {
   BenchmarkRunOptions,
   HardGateRuleId
 } from '../types.js'
-import type { CyreneMemory, PendingMemory } from '../../src/memory/types.js'
+import type { CyreneMemory, PendingMemory, SemanticMemory } from '../../src/memory/types.js'
 
 type Tier3CaseId =
   | 'T3-S-SCALE'
@@ -26,6 +28,7 @@ type Tier3CaseId =
   | 'T3-RANKING'
   | 'T3-TOKEN-OVERHEAD'
   | 'T3-LATENCY'
+  | 'T3-CANDIDATE-HINTS'
   | 'T3-INDEX-HEALTH'
 
 interface ScaleTarget {
@@ -44,6 +47,11 @@ const SCALE_TARGETS: Record<Extract<Tier3CaseId, 'T3-S-SCALE' | 'T3-M-SCALE' | '
   'T3-XL-SCALE': { label: 'XL', projects: 100, active: 50_000, pending: 5_000, runtimeMetric: 'scaleXLRuntimeMs', runtimeMs: 180_000 }
 }
 
+const CANDIDATE_HINT_LATENCY_TARGETS = {
+  balanced: { p50Ms: 3, p95Ms: 10, hardCapMs: 20 },
+  review: { p50Ms: 8, p95Ms: 25, hardCapMs: 50 }
+} as const
+
 export async function runTier3Case(
   benchmarkCase: BenchmarkCase,
   options: BenchmarkRunOptions
@@ -53,6 +61,7 @@ export async function runTier3Case(
   if (id === 'T3-RANKING') return runRankingCase(benchmarkCase, options)
   if (id === 'T3-TOKEN-OVERHEAD') return runTokenOverheadCase(benchmarkCase, options)
   if (id === 'T3-LATENCY') return runLatencyCase(benchmarkCase, options)
+  if (id === 'T3-CANDIDATE-HINTS') return runCandidateHintCase(benchmarkCase, options)
   if (id === 'T3-INDEX-HEALTH') return runIndexHealthCase(benchmarkCase, options)
   return undefined
 }
@@ -98,9 +107,11 @@ async function runScaleCase(
 
 async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRunOptions): Promise<BenchmarkCaseResult> {
   const now = options.now ?? benchmarkCase.fixture.now
+  const tightBudgetMaxTokens = 24
   return withTier3Fixture(benchmarkCase, options, {
     activeMemories: [
-      activeMemory('ranking-target', 'Target project memory: use quartz-alpha fixture isolation for ranking benchmark.', now),
+      activeMemory('ranking-oversized-exact', `quartz-alpha fixture isolation ranking benchmark ${'oversized '.repeat(120)}`, now),
+      activeMemory('ranking-target', 'quartz-alpha fixture isolation ranking benchmark.', now),
       activeMemory('ranking-distractor-1', 'Similar distractor memory: use quartz-beta fixture isolation for unrelated benchmark.', now),
       activeMemory('ranking-distractor-2', 'Similar distractor memory: use quartz-gamma project cleanup for unrelated benchmark.', now)
     ]
@@ -114,7 +125,7 @@ async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
         route: 'project',
         task: 'coding',
         maxItems: 3,
-        maxTokens: 2_000
+        maxTokens: tightBudgetMaxTokens
       })
       const rank = rows.findIndex((row) => row.memory.id === 'ranking-target')
       const top1 = rows[0]?.memory.id === 'ranking-target'
@@ -122,8 +133,9 @@ async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
       const recallAt5 = rank >= 0 && rank < 5 ? 1 : 0
       const mrr = rank >= 0 ? 1 / (rank + 1) : 0
       const wrongTop1Rate = top1 ? 0 : 1
+      const oversizedExcluded = rows.some((row) => row.memory.id === 'ranking-oversized-exact') ? 0 : 1
       const similarInterference = rows.slice(0, Math.max(rank, 0)).some((row) => row.memory.id.startsWith('ranking-distractor')) ? 1 : 0
-      const hardFailures: HardGateRuleId[] = recallAt3 === 1 && wrongTop1Rate === 0 ? [] : ['index_source_mismatch']
+      const hardFailures: HardGateRuleId[] = recallAt3 === 1 && wrongTop1Rate === 0 && oversizedExcluded === 1 ? [] : ['index_source_mismatch']
       return result(benchmarkCase, hardFailures, [
         { name: 'recallAt1', value: top1 ? 1 : 0 },
         { name: 'recallAt3', value: recallAt3 },
@@ -137,7 +149,7 @@ async function runRankingCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
         { name: 'oldMemoryRetrievalRate', value: 0 },
         { name: 'newMemoryRetrievalRate', value: top1 ? 1 : 0 }
       ], [{
-        summary: `ranking ok; recallAt3=${recallAt3}; mrr=${mrr}; wrongTop1=${wrongTop1Rate}; top=${rows[0]?.memory.id ?? 'none'}`
+        summary: `gate=retrieval-quality-tight-budget; ranking ok; maxTokens=${tightBudgetMaxTokens}; oversizedExcluded=${oversizedExcluded}; recallAt3=${recallAt3}; mrr=${mrr}; wrongTop1=${wrongTop1Rate}; top=${rows[0]?.memory.id ?? 'none'}`
       }])
     } finally {
       adapter.close()
@@ -265,6 +277,116 @@ async function runLatencyCase(benchmarkCase: BenchmarkCase, options: BenchmarkRu
   })
 }
 
+async function runCandidateHintCase(benchmarkCase: BenchmarkCase, options: BenchmarkRunOptions): Promise<BenchmarkCaseResult> {
+  const now = options.now ?? benchmarkCase.fixture.now
+  return withTier3Fixture(benchmarkCase, options, {
+    activeMemories: candidateHintBenchmarkActiveMemories(now)
+  }, async (fixture) => {
+    const candidates = candidateHintBenchmarkCandidates(now)
+    const query = 'candidate hint benchmark npm test typecheck runtime metrics'
+    await rebuildCodexMemoryIndex({ cwd: fixture.cwd })
+    const selectorBalancedRuns = runCandidateHintSamples({
+      mode: 'balanced',
+      query,
+      projectId: fixture.projectId,
+      now,
+      candidates
+    })
+    const selectorReviewRuns = runCandidateHintSamples({
+      mode: 'review',
+      query,
+      projectId: fixture.projectId,
+      now,
+      candidates
+    })
+    const disabledContextRuns = await runCandidateHintContextSamples({
+      cwd: fixture.cwd,
+      projectMemoryRoot: fixture.projectMemoryRoot,
+      mode: 'fast',
+      query
+    })
+    const balancedContextRuns = await runCandidateHintContextSamples({
+      cwd: fixture.cwd,
+      projectMemoryRoot: fixture.projectMemoryRoot,
+      mode: 'balanced',
+      query
+    })
+    const reviewContextRuns = await runCandidateHintContextSamples({
+      cwd: fixture.cwd,
+      projectMemoryRoot: fixture.projectMemoryRoot,
+      mode: 'review',
+      query
+    })
+    const balancedMetrics = candidateHintMetricsForMode('balanced', balancedContextRuns.metrics)
+    const reviewMetrics = candidateHintMetricsForMode('review', reviewContextRuns.metrics)
+    const balancedCandidateLatencies = candidateHintMetricLatencies(balancedContextRuns.metrics)
+    const reviewCandidateLatencies = candidateHintMetricLatencies(reviewContextRuns.metrics)
+    const enabledContextLatencyMs = percentile([...balancedContextRuns.latencies, ...reviewContextRuns.latencies], 0.95)
+    const disabledContextLatencyMs = percentile(disabledContextRuns.latencies, 0.95)
+    const contextLatencyDeltaMs = Math.max(0, enabledContextLatencyMs - disabledContextLatencyMs)
+    const candidateHintReport: BenchmarkCandidateHintReport = {
+      latencyTargets: [
+        { mode: 'balanced', ...CANDIDATE_HINT_LATENCY_TARGETS.balanced },
+        { mode: 'review', ...CANDIDATE_HINT_LATENCY_TARGETS.review }
+      ],
+      disabledContextLatencyMs,
+      enabledContextLatencyMs,
+      contextLatencyDeltaMs,
+      quality: [
+        {
+          mode: 'balanced',
+          eligibleCount: balancedMetrics.candidateHintEligibleCount,
+          relevantCount: balancedMetrics.candidateHintRelevantCount,
+          selectedCount: balancedMetrics.candidateHintSelectedCount,
+          timeoutCount: balancedMetrics.candidateHintTimeoutCount,
+          suppressedByLatencyCount: balancedMetrics.candidateHintSuppressedByLatencyCount
+        },
+        {
+          mode: 'review',
+          eligibleCount: reviewMetrics.candidateHintEligibleCount,
+          relevantCount: reviewMetrics.candidateHintRelevantCount,
+          selectedCount: reviewMetrics.candidateHintSelectedCount,
+          timeoutCount: reviewMetrics.candidateHintTimeoutCount,
+          suppressedByLatencyCount: reviewMetrics.candidateHintSuppressedByLatencyCount
+        }
+      ]
+    }
+    const qualityGatePassed = candidateHintQualityGatePassed(balancedMetrics, reviewMetrics)
+    const latencyGatePassed = candidateHintLatencyGatePassed(balancedCandidateLatencies, reviewCandidateLatencies)
+    const hardFailures: HardGateRuleId[] = []
+    if (!qualityGatePassed) hardFailures.push('candidate_hint_quality_gate')
+    const caseResult = result(benchmarkCase, hardFailures, [
+      { name: 'candidateHintLatencyMs', value: enabledContextLatencyMs },
+      { name: 'candidateHintLatencyP50BalancedMs', value: percentile(balancedCandidateLatencies, 0.5) },
+      { name: 'candidateHintLatencyP95BalancedMs', value: percentile(balancedCandidateLatencies, 0.95) },
+      { name: 'candidateHintLatencyMaxBalancedMs', value: maximum(balancedCandidateLatencies) },
+      { name: 'candidateHintLatencyP50ReviewMs', value: percentile(reviewCandidateLatencies, 0.5) },
+      { name: 'candidateHintLatencyP95ReviewMs', value: percentile(reviewCandidateLatencies, 0.95) },
+      { name: 'candidateHintLatencyMaxReviewMs', value: maximum(reviewCandidateLatencies) },
+      { name: 'candidateHintDisabledContextLatencyMs', value: disabledContextLatencyMs },
+      { name: 'candidateHintEnabledContextLatencyMs', value: enabledContextLatencyMs },
+      { name: 'candidateHintContextLatencyDeltaMs', value: contextLatencyDeltaMs },
+      { name: 'candidateHintEligibleCount', value: reviewMetrics.candidateHintEligibleCount },
+      { name: 'candidateHintRelevantCount', value: reviewMetrics.candidateHintRelevantCount },
+      { name: 'candidateHintSelectedCount', value: reviewMetrics.candidateHintSelectedCount },
+      { name: 'candidateHintTimeoutCount', value: reviewMetrics.candidateHintTimeoutCount },
+      { name: 'candidateHintSuppressedByLatencyCount', value: reviewMetrics.candidateHintSuppressedByLatencyCount }
+    ], [{
+      summary: [
+        `candidate hints quality gate ${qualityGatePassed ? 'passed' : 'failed'}`,
+        `latencyGate=${latencyGatePassed ? 'passed' : 'observed_above_target'}`,
+        `balanced selected=${balancedMetrics.candidateHintSelectedCount}`,
+        `review selected=${reviewMetrics.candidateHintSelectedCount}`,
+        `relevant=${reviewMetrics.candidateHintRelevantCount}`,
+        `latencyDeltaMs=${contextLatencyDeltaMs}`,
+        `selectorBalancedP95Ms=${percentile(selectorBalancedRuns.latencies, 0.95)}`,
+        `selectorReviewP95Ms=${percentile(selectorReviewRuns.latencies, 0.95)}`
+      ].join('; ')
+    }])
+    return { ...caseResult, candidateHintReport }
+  })
+}
+
 async function runIndexHealthCase(benchmarkCase: BenchmarkCase, options: BenchmarkRunOptions): Promise<BenchmarkCaseResult> {
   const now = options.now ?? benchmarkCase.fixture.now
   return withTier3Fixture(benchmarkCase, options, {
@@ -297,11 +419,70 @@ async function runIndexHealthCase(benchmarkCase: BenchmarkCase, options: Benchma
         { name: 'indexSourceMismatchCount', value: 0 },
         { name: 'hotPathRebuildCount', value: 0 },
         { name: 'undetectedStaleIndexCount', value: 0 }
-      ], [{ summary: `index health ok; sqlite hit rate=${sqliteHit}; jsonl fallback=0; stale rate=0` }])
+      ], [{ summary: `gate=index-stale-mode-matrix; index health ok; sqlite hit rate=${sqliteHit}; jsonl fallback=0; stale rate=0` }])
     } finally {
       adapter.close()
     }
   })
+}
+
+function runCandidateHintSamples(input: {
+  mode: 'balanced' | 'review'
+  query: string
+  projectId: string
+  now: string
+  candidates: SemanticMemory[]
+}): {
+    results: ReturnType<typeof selectCandidateHints>[]
+    latencies: number[]
+  } {
+  const results = Array.from({ length: 5 }, () => selectCandidateHints({
+    mode: input.mode,
+    query: input.query,
+    projectId: input.projectId,
+    task: 'coding',
+    candidates: input.candidates.map((memory, index) => ({
+      memory,
+      projectId: input.projectId,
+      sqliteRelevanceScore: 1 - index / 10,
+      appliedCount: index === 0 ? 2 : 0
+    })),
+    now: input.now
+  }))
+  return {
+    results,
+    latencies: results.map((item) => item.metrics.candidateHintLatencyMs)
+  }
+}
+
+function candidateHintQualityGatePassed(
+  balanced: CandidateHintSelectionMetrics,
+  review: CandidateHintSelectionMetrics
+): boolean {
+  return (
+    balanced.candidateHintEligibleCount >= 3 &&
+    balanced.candidateHintRelevantCount >= 2 &&
+    balanced.candidateHintSelectedCount >= 1 &&
+    review.candidateHintEligibleCount >= 3 &&
+    review.candidateHintRelevantCount >= 2 &&
+    review.candidateHintSelectedCount >= 2 &&
+    review.candidateHintTimeoutCount === 0 &&
+    review.candidateHintSuppressedByLatencyCount === 0
+  )
+}
+
+function candidateHintLatencyGatePassed(
+  balancedLatencies: readonly number[],
+  reviewLatencies: readonly number[]
+): boolean {
+  return (
+    percentile(balancedLatencies, 0.5) <= CANDIDATE_HINT_LATENCY_TARGETS.balanced.p50Ms &&
+    percentile(balancedLatencies, 0.95) <= CANDIDATE_HINT_LATENCY_TARGETS.balanced.p95Ms &&
+    maximum(balancedLatencies) <= CANDIDATE_HINT_LATENCY_TARGETS.balanced.hardCapMs &&
+    percentile(reviewLatencies, 0.5) <= CANDIDATE_HINT_LATENCY_TARGETS.review.p50Ms &&
+    percentile(reviewLatencies, 0.95) <= CANDIDATE_HINT_LATENCY_TARGETS.review.p95Ms &&
+    maximum(reviewLatencies) <= CANDIDATE_HINT_LATENCY_TARGETS.review.hardCapMs
+  )
 }
 
 async function withTier3Fixture(
@@ -334,6 +515,56 @@ async function withTier3Fixture(
       recordFixtureRun(options, fixture.metadata)
     }
   }
+}
+
+async function runCandidateHintContextSamples(input: {
+  cwd: string
+  projectMemoryRoot: string
+  mode: 'fast' | 'balanced' | 'review'
+  query: string
+}): Promise<{ latencies: number[]; metrics: RuntimeMetricEvent[] }> {
+  const sampleCount = 5
+  const latencies: number[] = []
+  for (let index = 0; index < sampleCount; index += 1) {
+    const startedAt = Date.now()
+    await getCodexContinuityContext({
+      cwd: input.cwd,
+      userMessage: `${input.query} sample ${index}`,
+      task: 'coding',
+      mode: input.mode
+    })
+    latencies.push(Math.max(0, Date.now() - startedAt))
+  }
+  const metrics = await readRuntimeMetrics(input.projectMemoryRoot)
+  return {
+    latencies,
+    metrics: metrics
+      .filter((metric) => metric.event === 'continuity_get' && metric.mode === input.mode)
+      .slice(-sampleCount)
+  }
+}
+
+function candidateHintMetricsForMode(
+  _mode: 'balanced' | 'review',
+  metrics: readonly RuntimeMetricEvent[]
+): CandidateHintSelectionMetrics {
+  const metric = metrics[metrics.length - 1]
+  return {
+    candidateHintLatencyMs: numberOrZero(metric?.candidateHintLatencyMs),
+    candidateHintEligibleCount: numberOrZero(metric?.candidateHintEligibleCount),
+    candidateHintRelevantCount: numberOrZero(metric?.candidateHintRelevantCount),
+    candidateHintSelectedCount: numberOrZero(metric?.candidateHintSelectedCount),
+    candidateHintTimeoutCount: numberOrZero(metric?.candidateHintTimeoutCount),
+    candidateHintSuppressedByLatencyCount: numberOrZero(metric?.candidateHintSuppressedByLatencyCount)
+  }
+}
+
+function candidateHintMetricLatencies(metrics: readonly RuntimeMetricEvent[]): number[] {
+  return metrics.map((metric) => numberOrZero(metric.candidateHintLatencyMs))
+}
+
+function numberOrZero(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 function scaleMetrics(
@@ -421,6 +652,122 @@ function generatePendingMemories(caseId: string, count: number): Array<Partial<P
     scores: { evidenceStrength: 0.9, stability: 0.85, usefulness: 0.85, safety: 0.95, sensitivity: 0.05 },
     evidence: [{ runId: `${caseId}-pending-${index}`, summary: 'Scale pending benchmark evidence.', traceRefs: [`benchmark:${caseId}:pending:${index}`] }]
   }))
+}
+
+function candidateHintBenchmarkActiveMemories(now: string): Array<Partial<CyreneMemory> & { id: string; content: string }> {
+  return [
+    ...candidateHintBenchmarkCandidates(now).map((memory) => ({
+      id: memory.id,
+      domain: memory.domain,
+      type: 'procedural_rule' as const,
+      strength: 'hard' as const,
+      scope: 'project' as const,
+      content: memory.content,
+      normalizedKey: memory.id,
+      source: 'user_explicit' as const,
+      scores: {
+        evidenceStrength: 0.95,
+        stability: 0.9,
+        usefulness: 0.9,
+        safety: 0.95,
+        sensitivity: 0.05
+      },
+      tags: ['benchmark', 'candidate-hint'],
+      confidenceTier: 'trial' as const,
+      activationPolicy: memory.activationPolicy,
+      useWhen: memory.useWhen,
+      doNotUseWhen: memory.doNotUseWhen,
+      candidateKind: memory.kind,
+      createdAt: now,
+      updatedAt: now
+    })),
+    ...Array.from({ length: 20 }, (_, index) => ({
+      id: `candidate-hint-distractor-${index}`,
+      domain: 'procedural' as const,
+      type: 'procedural_rule' as const,
+      strength: 'hard' as const,
+      scope: 'project' as const,
+      content: `Archival cleanup candidate hint distractor ${index}.`,
+      normalizedKey: `candidate-hint-distractor-${index}`,
+      source: 'user_explicit' as const,
+      tags: ['benchmark', 'candidate-hint', 'distractor'],
+      confidenceTier: 'trial' as const,
+      activationPolicy: {
+        allowedModes: ['workflow_hint' as const],
+        maxRuntimeStrength: 'hint' as const
+      },
+      useWhen: [`archival cleanup distractor ${index}`],
+      doNotUseWhen: [],
+      candidateKind: 'workflow_rule' as const,
+      scores: {
+        evidenceStrength: 0.9,
+        stability: 0.85,
+        usefulness: 0.7,
+        safety: 0.95,
+        sensitivity: 0.05
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z'
+    }))
+  ]
+}
+
+function candidateHintBenchmarkCandidates(now: string): SemanticMemory[] {
+  return [
+    semanticCandidateHintMemory('candidate-hint-test-command', {
+      content: 'Run npm test and npm run typecheck before final verification.',
+      useWhen: ['candidate hint benchmark npm test typecheck verification']
+    }, now),
+    semanticCandidateHintMemory('candidate-hint-runtime-metrics', {
+      content: 'Runtime metrics changes should record aggregate candidate hint counts.',
+      useWhen: ['candidate hint benchmark runtime metrics aggregate counts']
+    }, now),
+    semanticCandidateHintMemory('candidate-hint-scale-review', {
+      content: 'Scale benchmark changes should report quality gates and latency deltas.',
+      useWhen: ['candidate hint benchmark scale quality latency']
+    }, now),
+    semanticCandidateHintMemory('candidate-hint-unrelated', {
+      content: 'Unrelated fixture cleanup reminder for archival benchmark notes.',
+      useWhen: ['archival fixture cleanup reminder']
+    }, now)
+  ]
+}
+
+function semanticCandidateHintMemory(
+  id: string,
+  input: {
+    content: string
+    useWhen: string[]
+  },
+  now: string
+): SemanticMemory {
+  return {
+    id,
+    status: 'active',
+    module: 'procedural',
+    kind: 'workflow_rule',
+    scope: 'project',
+    domain: 'procedural',
+    content: input.content,
+    useWhen: input.useWhen,
+    doNotUseWhen: [],
+    evidence: [{
+      id: `${id}-evidence`,
+      sourceKind: 'user_explicit',
+      sourceRef: `benchmark:${id}`,
+      whatHappened: 'Benchmark candidate hint fixture was prepared.',
+      whyImportant: 'Measures candidate hint aggregate quality and latency.'
+    }],
+    reviewPolicy: 'pending_review',
+    confidenceTier: 'trial',
+    activationPolicy: {
+      allowedModes: ['workflow_hint'],
+      maxRuntimeStrength: 'hint'
+    },
+    supersedes: [],
+    createdAt: now,
+    updatedAt: now
+  }
 }
 
 function activeMemory(id: string, content: string, now: string, overrides: Partial<CyreneMemory> = {}): CyreneMemory {

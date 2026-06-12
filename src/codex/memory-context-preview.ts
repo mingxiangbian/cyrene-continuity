@@ -32,6 +32,7 @@ export interface CodexMemoryContextPreview {
     globalMemory: PreviewMemory[]
     projectMemory: PreviewMemory[]
     similarProjectHints: PreviewMemory[]
+    candidateHints: CodexContinuityContext['candidateHints']
   }
   activation: CodexContinuityContext['activation']
   exclusions: {
@@ -182,7 +183,8 @@ export async function runCodexMemoryContextPreview(input: {
     activeContext: {
       globalMemory: context.globalMemory.map(previewMemory),
       projectMemory: context.projectMemory.map(previewMemory),
-      similarProjectHints: context.similarProjectHints.map(previewMemory)
+      similarProjectHints: context.similarProjectHints.map(previewMemory),
+      candidateHints: context.candidateHints
     },
     activation: context.activation,
     exclusions: {

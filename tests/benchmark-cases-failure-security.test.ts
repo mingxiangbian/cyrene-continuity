@@ -79,6 +79,9 @@ describe('benchmark Tier 4 failure, security, and adapter cases', () => {
     expect(hook.has('stopHookP95Ms')).toBe(true)
     expect(report.metrics.efficiency.runtimeHookTimeoutCount).toBe(0)
     expect(report.metrics.efficiency.simulatedHookTimeoutCount).toBe(1)
+    expect(evidenceText(report.caseResults.find((item) => item.caseId === 'T4-JSONL-CORRUPT'))).toContain(
+      'gate=jsonl-corruption-write-block'
+    )
   }, 20_000)
 
   it('marks llm and external adapter cases unsupported when provider env is missing', async () => {

@@ -103,6 +103,7 @@ export async function runCyreneBenchmark(options: BenchmarkRunOptions): Promise<
     thresholdBreaches,
     fixtureRuns,
     ...optionalScaleResults(caseResults),
+    ...optionalCandidateHintReports(caseResults),
     ...(options.baselineReportPath === undefined
       ? {}
       : { regressionComparison: { baselineReportPath: options.baselineReportPath, regressions: [] } })
@@ -389,6 +390,15 @@ function optionalScaleResults(
 ): { scaleResults?: BenchmarkScaleResults } {
   const scaleResults = buildScaleResults(caseResults)
   return Object.keys(scaleResults).length === 0 ? {} : { scaleResults }
+}
+
+function optionalCandidateHintReports(
+  caseResults: readonly BenchmarkCaseResult[]
+): { candidateHintReports?: BenchmarkReport['candidateHintReports'] } {
+  const reports = caseResults.flatMap((result) => (
+    result.candidateHintReport === undefined ? [] : [result.candidateHintReport]
+  ))
+  return reports.length === 0 ? {} : { candidateHintReports: reports }
 }
 
 function buildScaleResults(caseResults: readonly BenchmarkCaseResult[]): BenchmarkScaleResults {

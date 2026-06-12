@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
+import { codexMemoryDbPath } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import {
   markFastSummaryProjectionStale,
@@ -12,9 +13,11 @@ import {
   writeFastSummaryProjection
 } from '../src/codex/fast-summary-store.js'
 import { reviewHashForPendingMemory } from '../src/codex/memory-review.js'
+import { writeHarvestPreviewArtifact } from '../src/codex/project-memory-harvest-preview.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { reviewHashForSimilarHintMemory } from '../src/codex/similar-hints-review.js'
 import { activationPolicyForConfidenceTier } from '../src/memory/memory-lifecycle.js'
+import { openMemoryIndexAdapter } from '../src/memory/memory-index.js'
 import {
   appendTombstoneFromRoot,
   readActivationEventsFromRoot,
@@ -669,6 +672,126 @@ describe('cyrene-continuity codex CLI', () => {
     })
   })
 
+  it('rejects project memory harvest apply with dry-run', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-apply-dry-run-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-apply-dry-run-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-apply-dry-run-test' }), 'utf8')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+          join(process.cwd(), 'src/main.ts'),
+          'codex',
+          'memory',
+          'harvest-project',
+          '--apply',
+          '--dry-run',
+          '--preview-id',
+          'preview-1',
+          '--preview-hash',
+          'a'.repeat(64)
+        ],
+        { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('memory harvest-project accepts only one of --apply or --dry-run')
+    })
+  })
+
+  it('defaults project memory harvest to the preview path', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-preview-default-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-preview-default-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-preview-default-test' }), 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project'
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; signals?: unknown[] }
+    expect(parsed).toMatchObject({
+      action: 'needs_model_config'
+    })
+    expect(parsed.signals?.length).toBeGreaterThan(0)
+  })
+
+  it('reports project memory harvest apply missing preview with next action', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-preview-required-home-')
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-preview-required-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-preview-required-test' }), 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project',
+        '--apply'
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; reason?: string }
+    expect(parsed.action).toBe('preview_required')
+    expect(parsed.reason).toContain('cyrene-continuity codex memory harvest-project')
+  })
+
+  it('reports expired project harvest preview with next action', async () => {
+    const home = await createTempDir('cyrene-codex-cli-harvest-preview-expired-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-harvest-preview-expired-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'harvest-cli-preview-expired-test' }), 'utf8')
+    const identity = await identifyCodexProject(cwd)
+    const memoryRoot = codexProjectMemoryRoot(identity.projectId)
+    const artifact = await writeHarvestPreviewArtifact({
+      projectId: identity.projectId,
+      memoryRoot,
+      now: '2000-01-01T00:00:00.000Z',
+      admissionPolicyVersion: 'admission_gate_v1',
+      toolVersion: 'project_harvest_preview_v1',
+      candidates: [],
+      groups: [],
+      warnings: [],
+      sourceSignalHashes: []
+    })
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        'codex',
+        'memory',
+        'harvest-project',
+        '--apply',
+        '--preview-id',
+        artifact.previewId,
+        '--preview-hash',
+        artifact.previewHash
+      ],
+      { cwd, env: { ...cliEnv(home), CYRENE_BASE_URL: '', CYRENE_MODEL: '' } }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { action?: string; reason?: string }
+    expect(parsed.action).toBe('preview_expired')
+    expect(parsed.reason).toContain('cyrene-continuity codex memory harvest-project')
+  })
+
   it('doctor rejects --config without a path', async () => {
     const home = await createTempDir('cyrene-codex-cli-config-missing-home-')
 
@@ -1061,6 +1184,7 @@ describe('cyrene-continuity codex CLI', () => {
       expect(stderr).toContain('hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop')
       expect(stderr).toContain('memory lifecycle daily [--dry-run|--apply] [--all-projects]')
       expect(stderr).toContain('memory lifecycle weekly [--dry-run|--apply] [--all-projects]')
+      expect(stderr).toContain('memory jsonl repair [--dry-run|--apply] [--global]')
       expect(stderr).toContain('[--include-pending-notice]')
       expect(stderr).toContain('ui [--port <n>]')
     }
@@ -1258,6 +1382,113 @@ describe('cyrene-continuity codex CLI', () => {
     expect(parsed.dbPath).toBe(join(home, '.cyrene', 'codex', 'memory.db'))
     expect(parsed.diagnostics.available).toBe(true)
     expect(parsed.syncedRoots).toBeGreaterThanOrEqual(1)
+  })
+
+  it('memory db rebuild skips corrupted roots without indexing valid subsets', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-db-repair-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-db-repair-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await writeActiveMemoriesFromRoot(projectMemoryRoot, [createActive({
+      id: 'corrupted-db-rebuild-valid-subset',
+      content: 'Corrupted rebuild subset must not be indexed.',
+      normalizedKey: 'corrupted-db-rebuild-valid-subset'
+    })])
+    const realProjectMemoryRoot = await realpath(projectMemoryRoot)
+    const semanticFile = join(projectMemoryRoot, 'semantic_memories.jsonl')
+    await writeFile(semanticFile, `${await readFile(semanticFile, 'utf8')}{malformed semantic memory}\n`, 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'db', 'rebuild'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      diagnostics: { available: boolean }
+      skippedRoots?: Array<{ memoryRoot: string; reason: string; malformedJsonLines: number }>
+    }
+    expect(parsed.diagnostics.available).toBe(true)
+    expect(parsed.skippedRoots).toEqual([
+      { memoryRoot: realProjectMemoryRoot, reason: 'repair_required', malformedJsonLines: 1 }
+    ])
+
+    const adapter = await openMemoryIndexAdapter({ dbPath: codexMemoryDbPath() })
+    try {
+      const matches = await adapter.queryActive({
+        currentProjectId: identity.projectId,
+        query: 'Corrupted rebuild subset must not be indexed.',
+        route: 'project',
+        maxItems: 10,
+        maxTokens: 2_000
+      })
+      expect(matches.map((item) => item.memory.id)).not.toContain('corrupted-db-rebuild-valid-subset')
+    } finally {
+      adapter.close()
+    }
+  })
+
+  it('runs jsonl repair dry-run without mutating corrupted project memory', async () => {
+    const home = await createTempDir('cyrene-codex-cli-jsonl-repair-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-jsonl-repair-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    const sourcePath = join(projectMemoryRoot, 'semantic_memories.jsonl')
+    const original = '{"id":"ok"}\n{bad json}\n'
+    await writeFile(sourcePath, original, 'utf8')
+
+    const result = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'jsonl', 'repair', '--dry-run'],
+      { env: cliEnv(home) }
+    )
+
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      action: string
+      dryRun: boolean
+      roots: Array<{ action: string; malformedLineCount: number }>
+    }
+    expect(parsed.action).toBe('memory_jsonl_repair')
+    expect(parsed.dryRun).toBe(true)
+    expect(parsed.roots).toEqual([
+      expect.objectContaining({
+        action: 'dry_run',
+        malformedLineCount: 1
+      })
+    ])
+    await expect(readFile(sourcePath, 'utf8')).resolves.toBe(original)
+  })
+
+  it('rejects jsonl repair with both dry-run and apply flags', async () => {
+    const home = await createTempDir('cyrene-codex-cli-jsonl-repair-flags-home-')
+    const repo = await createTempDir('cyrene-codex-cli-jsonl-repair-flags-repo-')
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          'node_modules/tsx/dist/cli.mjs',
+          'src/main.ts',
+          '--cwd',
+          repo,
+          'codex',
+          'memory',
+          'jsonl',
+          'repair',
+          '--dry-run',
+          '--apply'
+        ],
+        { env: cliEnv(home) }
+      )
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('memory jsonl repair accepts only one of --dry-run or --apply')
+    })
   })
 
   it('runs semantic memory v2 migration from the CLI for global and current project roots', async () => {
@@ -1550,6 +1781,49 @@ describe('cyrene-continuity codex CLI', () => {
     expect(doctor.stdout).toContain('memory fallback mode:')
     expect(doctor.stdout).toContain('memory index freshness: stale')
     await expect(readFile(join(home, '.cyrene', 'codex', 'memory.db'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reports repair-required actions before stale index rebuild advice in memory status and doctor', async () => {
+    const home = await createTempDir('cyrene-codex-cli-memory-status-repair-home-')
+    process.env.HOME = home
+    const repo = await createTempDir('cyrene-codex-cli-memory-status-repair-repo-')
+    const identity = await identifyCodexProject(repo)
+    const projectMemoryRoot = codexProjectMemoryRoot(identity.projectId)
+    await mkdir(projectMemoryRoot, { recursive: true })
+    await writeActiveMemoriesFromRoot(projectMemoryRoot, [createActive({
+      id: 'repair-required-active',
+      content: 'Corrupted canonical JSONL requires repair before index rebuild.',
+      normalizedKey: 'repair-required-active'
+    })])
+    const semanticFile = join(projectMemoryRoot, 'semantic_memories.jsonl')
+    await writeFile(semanticFile, `${await readFile(semanticFile, 'utf8')}{malformed semantic memory}\n`, 'utf8')
+
+    const status = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'memory', 'status'],
+      { env: cliEnv(home) }
+    )
+    const doctor = await execFileAsync(
+      process.execPath,
+      ['node_modules/tsx/dist/cli.mjs', 'src/main.ts', '--cwd', repo, 'codex', 'doctor'],
+      { env: cliEnv(home) }
+    )
+
+    const dryRunAction = 'action: run cyrene-continuity codex memory jsonl repair --dry-run'
+    const applyAction = 'action: after reviewing the preview, run cyrene-continuity codex memory jsonl repair --apply'
+
+    expect(status.stderr).toBe('')
+    expect(status.stdout).toContain('memory repair: repair_required')
+    expect(status.stdout).toContain(dryRunAction)
+    expect(status.stdout).toContain(applyAction)
+    expect(status.stdout).not.toContain('action: run cyrene-continuity codex memory db rebuild')
+    expect(status.stdout.indexOf(dryRunAction)).toBeGreaterThan(status.stdout.indexOf('memory repair: repair_required'))
+    expect(status.stdout.indexOf(applyAction)).toBeGreaterThan(status.stdout.indexOf(dryRunAction))
+    expect(doctor.stderr).toBe('')
+    expect(doctor.stdout).toContain('memory repair: repair_required')
+    expect(doctor.stdout).toContain(dryRunAction)
+    expect(doctor.stdout).toContain(applyAction)
+    expect(doctor.stdout).not.toContain('action: run cyrene-continuity codex memory db rebuild')
   })
 
   it('reports stale shared index when another readable project root has newer memory source', async () => {

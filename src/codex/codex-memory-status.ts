@@ -7,6 +7,7 @@ import {
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot
 } from '../memory/memory-store.js'
+import { jsonlScanHasCorruption, scanCanonicalJsonlFilesFromRoot } from '../memory/jsonl-diagnostics.js'
 import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
@@ -15,6 +16,12 @@ import {
 import type { CodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import { readCodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import { isCodexStopHookConfigured } from './codex-hook-install.js'
+import {
+  indexStaleAction,
+  repairRequiredAction,
+  MEMORY_JSONL_REPAIR_APPLY_ACTION,
+  MEMORY_JSONL_REPAIR_DRY_RUN_ACTION
+} from './memory-diagnostics-copy.js'
 import { readCodexMemoryDreamState } from './memory-dream-state.js'
 import { identifyCodexProject } from './project-id.js'
 
@@ -34,6 +41,17 @@ interface CodexMemoryCounts {
   tombstones: number
   profileCandidates: number
   reason?: string
+}
+
+export interface CodexMemoryRepairRoot {
+  memoryRoot: string
+  reason: 'repair_required'
+  malformedJsonLines: number
+}
+
+export interface CodexMemoryRepairStatus {
+  state: 'ok' | 'repair_required'
+  corruptedRoots: CodexMemoryRepairRoot[]
 }
 
 interface CodexStopHookStatus {
@@ -60,6 +78,7 @@ export interface CodexMemoryStatus {
     global: CodexMemoryRootStatus & { counts: CodexMemoryCounts }
     project: CodexMemoryRootStatus & { counts: CodexMemoryCounts }
   }
+  repair: CodexMemoryRepairStatus
   index: CodexMemoryIndexStatus
   similarProjectRetrieval: CodexSimilarProjectRetrieval
   stopHookConfigured: boolean
@@ -74,6 +93,7 @@ export interface CodexMemoryStatus {
 
 const PROFILE_CANDIDATES_FILE = 'profile_candidates.jsonl'
 const REVIEW_SUMMARIES_FILE = 'review-summaries.jsonl'
+export { MEMORY_JSONL_REPAIR_DRY_RUN_ACTION, MEMORY_JSONL_REPAIR_APPLY_ACTION }
 
 export async function readCodexMemoryStatus(input: { cwd: string }): Promise<CodexMemoryStatus> {
   const project = await identifyCodexProject(input.cwd)
@@ -92,6 +112,7 @@ export async function readCodexMemoryStatus(input: { cwd: string }): Promise<Cod
   const indexedMemoryRoots = uniqueStrings([globalRoot, projectRoot, ...knownProjectMemoryRoots])
   const knownProjectIds = projectIdsFromMemoryRoots(knownProjectMemoryRoots)
   const index = await readCodexMemoryIndexStatus(indexedMemoryRoots)
+  const repair = await readCodexMemoryRepairStatus(indexedMemoryRoots)
 
   return {
     nodeVersion: process.versions.node,
@@ -109,6 +130,7 @@ export async function readCodexMemoryStatus(input: { cwd: string }): Promise<Cod
       global: { ...globalStatus, counts: globalCounts },
       project: { ...projectStatus, counts: projectCounts }
     },
+    repair,
     index,
     similarProjectRetrieval: index.available && index.freshness !== 'stale' ? 'ready' : 'degraded',
     stopHookConfigured: stopHook.configured,
@@ -152,6 +174,7 @@ export async function formatCodexMemoryStatus(input: { cwd: string }): Promise<s
     `  project profile candidates: ${status.roots.project.counts.profileCandidates}`,
     status.roots.global.counts.reason === undefined ? undefined : `  global counts reason: ${status.roots.global.counts.reason}`,
     status.roots.project.counts.reason === undefined ? undefined : `  project counts reason: ${status.roots.project.counts.reason}`,
+    ...formatCodexMemoryRepairLines(status.repair),
     '',
     'index:',
     `  sqlite index: ${status.index.available ? 'available' : 'unavailable'}`,
@@ -164,7 +187,7 @@ export async function formatCodexMemoryStatus(input: { cwd: string }): Promise<s
     status.index.sourceLatestAt === undefined ? undefined : `  source latest: ${status.index.sourceLatestAt}`,
     status.index.staleReason === undefined ? undefined : `  stale reason: ${status.index.staleReason}`,
     `  similar-project retrieval: ${status.similarProjectRetrieval}`,
-    status.index.freshness === 'stale' ? '  action: run cyrene-continuity codex memory db rebuild' : undefined,
+    status.index.freshness === 'stale' && status.repair.state === 'ok' ? `  ${indexStaleAction()}` : undefined,
     '',
     'hooks:',
     `  stop hook: ${status.stopHook.configured ? 'configured' : 'missing'}`,
@@ -178,6 +201,38 @@ export async function formatCodexMemoryStatus(input: { cwd: string }): Promise<s
     `  automation due: ${status.dream.due ? 'yes' : 'no'}`,
     `  last automation run: ${status.dream.lastDreamAt ?? 'never'}`
   ].filter((line): line is string => line !== undefined && line !== '').join('\n') + '\n'
+}
+
+export function formatCodexMemoryRepairLines(repair: CodexMemoryRepairStatus): string[] {
+  if (repair.state === 'ok') {
+    return ['  memory repair: ok']
+  }
+  return [
+    '  memory repair: repair_required',
+    ...repair.corruptedRoots.map((root) =>
+      `  repair root: ${root.memoryRoot} (${root.malformedJsonLines} malformed json lines)`
+    ),
+    ...repairRequiredAction().map((action) => `  ${action}`)
+  ]
+}
+
+async function readCodexMemoryRepairStatus(memoryRoots: string[]): Promise<CodexMemoryRepairStatus> {
+  const corruptedRoots: CodexMemoryRepairRoot[] = []
+  for (const memoryRoot of memoryRoots) {
+    const scan = await scanCanonicalJsonlFilesFromRoot(memoryRoot)
+    if (!jsonlScanHasCorruption(scan)) {
+      continue
+    }
+    corruptedRoots.push({
+      memoryRoot,
+      reason: 'repair_required',
+      malformedJsonLines: scan.corruptionCount + scan.skippedFiles.length
+    })
+  }
+  return {
+    state: corruptedRoots.length > 0 ? 'repair_required' : 'ok',
+    corruptedRoots
+  }
 }
 
 async function readKnownProjectMemoryRoots(): Promise<string[]> {

@@ -19,8 +19,9 @@ import {
   readMemoryEdgesFromRoot,
   readPendingMemoriesFromRoot
 } from './memory-store.js'
+import { activeMemoryToSemanticMemory } from './semantic-memory-adapter.js'
 import { tokenizeMemoryText } from './tokenizer.js'
-import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, MemoryPortability, PendingMemory } from './types.js'
+import type { CyreneMemory, MemoryEdge as DurableMemoryEdge, MemoryPortability, PendingMemory, SemanticMemory } from './types.js'
 
 export interface MemoryIndexRoot {
   memoryRoot: string
@@ -113,6 +114,13 @@ export interface MemoryIndexSimilarQuery {
   maxTokens: number
 }
 
+export interface MemoryIndexCandidateHintQuery {
+  currentProjectId: string
+  query: string
+  maxItems: number
+  maxConflictItems?: number
+}
+
 export interface IndexedActiveMemory {
   memory: CyreneMemory
   score: number
@@ -134,6 +142,17 @@ export interface IndexedSimilarMemory extends IndexedActiveMemory {
   sourceProjectName?: string
 }
 
+export interface IndexedCandidateHintMemory {
+  memory: SemanticMemory
+  score: number
+  homeProjectId: string | null
+}
+
+export interface IndexedCandidateHintPool {
+  candidates: IndexedCandidateHintMemory[]
+  validatedMemories: IndexedCandidateHintMemory[]
+}
+
 export interface MemoryIndexAdapter {
   initialize(): Promise<MemoryIndexDiagnostics>
   rebuildFromRoots(input: MemoryIndexRebuildInput): Promise<MemoryIndexDiagnostics>
@@ -147,6 +166,7 @@ export interface MemoryIndexAdapter {
   queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]>
   queryPending(input: MemoryIndexPendingQuery): Promise<IndexedPendingMemory[]>
   querySimilarActive(input: MemoryIndexSimilarQuery): Promise<IndexedSimilarMemory[]>
+  queryCandidateHints(input: MemoryIndexCandidateHintQuery): Promise<IndexedCandidateHintPool>
   diagnostics(): MemoryIndexDiagnostics
   close(): void
 }
@@ -182,6 +202,8 @@ interface MemoryIndexRow {
   content: string
   normalizedKey: string
   tags: string[]
+  updatedAt: string
+  expiresAt?: string
   scores: {
     evidenceStrength?: number
     safety?: number
@@ -190,6 +212,26 @@ interface MemoryIndexRow {
   }
   payload: CyreneMemory | PendingMemory
 }
+
+const QUERY_ACTIVE_SCORE = {
+  relevanceExact: 100,
+  relevanceToken: 20,
+  scopeProject: 30,
+  scopeGlobal: 20,
+  strengthHard: 20,
+  strengthMedium: 12,
+  strengthSoft: 5,
+  confidenceCore: 15,
+  confidenceValidated: 10,
+  confidenceTrial: -100,
+  recencyFresh: 5,
+  conflictPenalty: 80,
+  stalePenalty: 20
+} as const
+
+const RAW_MEMORY_ID_FALLBACK_LIMIT = 50
+const RECENCY_FRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+const MIN_UNRELATED_QUALITY_SIGNAL = 0.1
 
 export async function openMemoryIndexAdapter(input: OpenMemoryIndexAdapterInput): Promise<MemoryIndexAdapter> {
   if (input.forceUnavailableReason !== undefined) {
@@ -292,6 +334,10 @@ class UnavailableMemoryIndexAdapter implements MemoryIndexAdapter {
 
   async querySimilarActive(_input: MemoryIndexSimilarQuery): Promise<IndexedSimilarMemory[]> {
     return []
+  }
+
+  async queryCandidateHints(_input: MemoryIndexCandidateHintQuery): Promise<IndexedCandidateHintPool> {
+    return { candidates: [], validatedMemories: [] }
   }
 
   diagnostics(): MemoryIndexDiagnostics {
@@ -405,6 +451,24 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         created_at text not null,
         approved_at text
       );
+
+      create index if not exists idx_memories_candidate_hints
+      on memories(status, scope, home_project_id, portability, domain, updated_at);
+
+      create index if not exists idx_memories_normalized_key
+      on memories(status, normalized_key, scope, home_project_id);
+
+      create index if not exists idx_memories_payload_public_id
+      on memories(json_extract(payload_json, '$.id'));
+
+      create index if not exists idx_memory_edges_from_status
+      on memory_edges(from_id, status);
+
+      create index if not exists idx_memory_edges_to_status
+      on memory_edges(to_id, status);
+
+      create index if not exists idx_memory_edges_type_status
+      on memory_edges(edge_type, status);
     `)
     this.ensureProjectColumns(db)
     if (!this.initialized) {
@@ -588,8 +652,23 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
 
   async queryMemoryEdges(input: MemoryEdgeQuery): Promise<MemoryEdge[]> {
     await this.initialize()
+    const directEdges = this.queryMemoryEdgesByIndexedIds(input)
+    if (directEdges.length > 0 || input.fromId === undefined || isIndexedMemoryId(input.fromId)) {
+      return directEdges
+    }
+    return this.queryMemoryEdgesByPublicFromId(input.fromId, input)
+  }
+
+  private queryMemoryEdgesByIndexedIds(input: MemoryEdgeQuery, indexedFromIds?: string[]): MemoryEdge[] {
     const conditions: string[] = []
     const values: unknown[] = []
+    if (indexedFromIds !== undefined) {
+      conditions.push(`from_id in (${indexedFromIds.map(() => '?').join(', ')})`)
+      values.push(...indexedFromIds)
+    } else if (input.fromId !== undefined) {
+      conditions.push('from_id = ?')
+      values.push(input.fromId)
+    }
     if (input.toId !== undefined) {
       conditions.push('to_id = ?')
       values.push(input.toId)
@@ -618,7 +697,44 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       order by created_at asc, id asc
     `).all(...values)
       .map(memoryEdgeFromRecord)
-      .filter((edge) => input.fromId === undefined || edge.fromId === input.fromId || indexedMemoryIdPayload(edge.fromId) === input.fromId)
+  }
+
+  private queryMemoryEdgesByPublicFromId(publicId: string, input: MemoryEdgeQuery): MemoryEdge[] {
+    const conditions = ["json_extract(m.payload_json, '$.id') = ?"]
+    const values: unknown[] = [publicId]
+    if (input.toId !== undefined) {
+      conditions.push('e.to_id = ?')
+      values.push(input.toId)
+    }
+    if (input.status !== undefined) {
+      conditions.push('e.status = ?')
+      values.push(input.status)
+    }
+    try {
+      return this.requireDatabase().prepare(`
+        select
+          e.id,
+          e.from_id,
+          e.from_kind,
+          e.to_id,
+          e.to_kind,
+          e.edge_type,
+          e.weight,
+          e.source,
+          e.status,
+          e.evidence_id,
+          e.created_at,
+          e.approved_at
+        from memory_edges e
+        join memories m on m.id = e.from_id
+        where ${conditions.join(' and ')}
+        order by e.created_at asc, e.id asc
+        limit ?
+      `).all(...values, RAW_MEMORY_ID_FALLBACK_LIMIT)
+        .map(memoryEdgeFromRecord)
+    } catch {
+      return []
+    }
   }
 
   async queryActive(input: MemoryIndexActiveQuery): Promise<IndexedActiveMemory[]> {
@@ -630,9 +746,10 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     })
     const ftsMatches = this.queryFtsIds(input.query, 'active')
     const task = input.task
+    const freshRows = structuredRows.filter((row) => !isExpiredRow(row))
     const eligibleRows = task === undefined
-      ? structuredRows
-      : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+      ? freshRows
+      : freshRows.filter((row) => isMemoryEligibleForRetrieval(
         row.payload as CyreneMemory,
         {
           cwd: '',
@@ -670,6 +787,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     const ftsMatches = this.queryFtsIds(input.query, 'pending')
     return selectWithinBudget(
       structuredRows
+        .filter((row) => !isExpiredRow(row))
         .map((row) => ({
           memory: row.payload as PendingMemory,
           score: scoreRow(row, input.query, ftsMatches),
@@ -694,9 +812,10 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     })
     const ftsMatches = this.queryFtsIds(input.query, 'active')
     const task = input.task
+    const freshRows = structuredRows.filter((row) => !isExpiredRow(row))
     const eligibleRows = task === undefined
-      ? structuredRows
-      : structuredRows.filter((row) => isMemoryEligibleForRetrieval(
+      ? freshRows
+      : freshRows.filter((row) => isMemoryEligibleForRetrieval(
         row.payload as CyreneMemory,
         {
           cwd: '',
@@ -731,6 +850,30 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
       input.maxItems,
       input.maxTokens
     )
+  }
+
+  async queryCandidateHints(input: MemoryIndexCandidateHintQuery): Promise<IndexedCandidateHintPool> {
+    await this.initialize()
+    const maxItems = Math.max(0, Math.floor(input.maxItems))
+    if (maxItems === 0) {
+      return { candidates: [], validatedMemories: [] }
+    }
+    const ftsMatches = this.queryFtsIds(input.query, 'active')
+    const candidateRows = this.queryCandidateHintRows(input, ftsMatches, maxItems)
+    const candidates = candidateRows.map((row) => indexedCandidateHintFromRow(row, input.query, ftsMatches))
+    const conflictKeys = new Set(candidates
+      .map((item) => item.memory.reviewState?.normalizedKey)
+      .filter((key): key is string => typeof key === 'string' && key.trim() !== '')
+    )
+    const validatedRows = this.queryCandidateHintConflictRows(
+      input.currentProjectId,
+      conflictKeys,
+      input.maxConflictItems ?? 200
+    )
+    return {
+      candidates,
+      validatedMemories: validatedRows.map((row) => indexedCandidateHintFromRow(row, input.query, ftsMatches))
+    }
   }
 
   diagnostics(): MemoryIndexDiagnostics {
@@ -832,7 +975,7 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
     const indexId = memoryIndexId(root, memory.id)
     const portability = deriveMemoryPortability(memory)
     const homeProjectId = root.scope === 'global' ? null : root.projectId
-    const tags = memory.tags.join(' ')
+    const tags = memoryIndexTagsText(memory)
     const now = new Date().toISOString()
     db.prepare(`
       insert into memories (
@@ -1017,6 +1160,8 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where ${conditions.join(' and ')}
@@ -1044,6 +1189,8 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         normalized_key,
         tags_json,
         scores_json,
+        updated_at,
+        expires_at,
         payload_json
       from memories
       where status = 'active'
@@ -1053,6 +1200,118 @@ class SqliteMemoryIndexAdapter implements MemoryIndexAdapter {
         and portability in ('similar_project', 'project_family')
         and domain in ('project', 'procedural', 'system')
     `).all(input.currentProjectId, ...input.targetProjectIds)
+    return rows.map(rowFromRecord)
+  }
+
+  private queryCandidateHintRows(
+    input: MemoryIndexCandidateHintQuery,
+    ftsMatches: Set<string>,
+    maxItems: number
+  ): MemoryIndexRow[] {
+    const matchedIds = Array.from(ftsMatches).slice(0, maxItems * 4)
+    const ftsRows = matchedIds.length === 0
+      ? []
+      : this.queryCandidateHintRowsWithExtraConditions(
+        input.currentProjectId,
+        [`id in (${matchedIds.map(() => '?').join(', ')})`],
+        matchedIds,
+        maxItems
+      )
+    const remaining = maxItems - ftsRows.length
+    if (remaining <= 0) {
+      return ftsRows
+    }
+    const excludeIds = ftsRows.map((row) => row.id)
+    const recentRows = this.queryCandidateHintRowsWithExtraConditions(
+      input.currentProjectId,
+      excludeIds.length === 0 ? [] : [`id not in (${excludeIds.map(() => '?').join(', ')})`],
+      excludeIds,
+      remaining
+    )
+    return [...ftsRows, ...recentRows]
+  }
+
+  private queryCandidateHintRowsWithExtraConditions(
+    currentProjectId: string,
+    extraConditions: string[],
+    extraValues: unknown[],
+    limit: number
+  ): MemoryIndexRow[] {
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        updated_at,
+        expires_at,
+        payload_json
+      from memories
+      where status = 'active'
+        and scope = 'project'
+        and home_project_id = ?
+        and portability = 'local_only'
+        and domain in ('project', 'procedural', 'system')
+        and payload_json like '%"confidenceTier":"trial"%'
+        and payload_json like '%workflow_hint%'
+        ${extraConditions.length === 0 ? '' : `and ${extraConditions.join(' and ')}`}
+      order by updated_at desc, created_at desc, id asc
+      limit ?
+    `).all(currentProjectId, ...extraValues, limit)
+    return rows.map(rowFromRecord)
+  }
+
+  private queryCandidateHintConflictRows(
+    currentProjectId: string,
+    normalizedKeys: Set<string>,
+    maxItems: number
+  ): MemoryIndexRow[] {
+    const keys = Array.from(normalizedKeys)
+    const limit = Math.max(0, Math.floor(maxItems))
+    if (keys.length === 0 || limit === 0) {
+      return []
+    }
+    const placeholders = keys.map(() => '?').join(', ')
+    const rows = this.requireDatabase().prepare(`
+      select
+        id,
+        status,
+        scope,
+        domain,
+        type,
+        strength,
+        home_project_id,
+        portability,
+        content,
+        normalized_key,
+        tags_json,
+        scores_json,
+        updated_at,
+        expires_at,
+        payload_json
+      from memories
+      where status = 'active'
+        and normalized_key in (${placeholders})
+        and (
+          (scope = 'project' and home_project_id = ? and portability = 'local_only') or
+          (scope = 'global' and portability = 'global')
+        )
+        and (
+          payload_json like '%"confidenceTier":"validated"%' or
+          payload_json like '%"confidenceTier":"project_core"%' or
+          payload_json like '%"confidenceTier":"global_core"%'
+        )
+      order by updated_at desc, created_at desc, id asc
+      limit ?
+    `).all(...keys, currentProjectId, limit)
     return rows.map(rowFromRecord)
   }
 
@@ -1161,6 +1420,10 @@ function indexedMemoryIdPayload(fromId: string): string | undefined {
   }
 }
 
+function isIndexedMemoryId(value: string): boolean {
+  return indexedMemoryIdPayload(value) !== undefined
+}
+
 function memoryEdgeFromRecord(row: Record<string, unknown>): MemoryEdge {
   return {
     id: readString(row.id, 'id'),
@@ -1240,9 +1503,31 @@ function rowFromRecord(row: Record<string, unknown>): MemoryIndexRow {
     content: readString(row.content, 'content'),
     normalizedKey: readString(row.normalized_key, 'normalized_key'),
     tags: JSON.parse(readString(row.tags_json, 'tags_json')) as string[],
+    updatedAt: readString(row.updated_at, 'updated_at'),
+    expiresAt: row.expires_at === null ? undefined : readString(row.expires_at, 'expires_at'),
     scores: JSON.parse(readString(row.scores_json, 'scores_json')) as MemoryIndexRow['scores'],
     payload
   }
+}
+
+function indexedCandidateHintFromRow(
+  row: MemoryIndexRow,
+  query: string,
+  ftsMatches: Set<string>
+): IndexedCandidateHintMemory {
+  return {
+    memory: activeMemoryToSemanticMemory(row.payload as CyreneMemory),
+    score: scoreRow(row, query, ftsMatches),
+    homeProjectId: row.homeProjectId
+  }
+}
+
+function memoryIndexTagsText(memory: CyreneMemory | PendingMemory): string {
+  return [
+    ...memory.tags,
+    ...(memory.useWhen ?? []),
+    ...(memory.doNotUseWhen ?? [])
+  ].join(' ')
 }
 
 function readString(value: unknown, field: string): string {
@@ -1254,17 +1539,36 @@ function readString(value: unknown, field: string): string {
 
 function scoreRow(row: MemoryIndexRow, query: string, ftsMatches: Set<string>): number {
   const tokens = tokenizeMemoryText(query)
-  const relevance = tokens.length === 0 ? 0.2 : relevanceScore(row, tokens)
-  const ftsBoost = ftsMatches.has(row.id) ? 0.2 : 0
-  const safety = typeof row.scores.safety === 'number' ? row.scores.safety : 0.8
-  const usefulness = typeof row.scores.usefulness === 'number' ? row.scores.usefulness : 0.7
-  const evidence = typeof row.scores.evidenceStrength === 'number' ? row.scores.evidenceStrength : 0.7
-  const sensitivity = typeof row.scores.sensitivity === 'number' ? row.scores.sensitivity : 0.2
-  return relevance * 0.45 + usefulness * 0.2 + evidence * 0.15 + safety * 0.1 + ftsBoost - sensitivity * 0.1
+  const relevance = relevanceScore(row, tokens, query)
+  const ftsBoost = ftsMatches.has(row.id) ? QUERY_ACTIVE_SCORE.relevanceToken : 0
+  if (tokens.length > 0 && relevance + ftsBoost <= 0 && !hasUnrelatedQualitySignal(row)) {
+    return 0
+  }
+  const confidenceTier = (row.payload as { confidenceTier?: string }).confidenceTier
+  let score = relevance
+  score += row.scope === 'global' ? QUERY_ACTIVE_SCORE.scopeGlobal : QUERY_ACTIVE_SCORE.scopeProject
+  score += strengthScore(row.strength)
+  score += confidenceScore(confidenceTier)
+  score += ftsBoost
+  score += isRecentlyUpdated(row.updatedAt) ? QUERY_ACTIVE_SCORE.recencyFresh : 0
+  score -= isStale(row.expiresAt) ? QUERY_ACTIVE_SCORE.stalePenalty : 0
+  score -= hasConflictInstruction(row, tokens) ? QUERY_ACTIVE_SCORE.conflictPenalty : 0
+  return score
 }
 
-function relevanceScore(row: MemoryIndexRow, queryTokens: string[]): number {
-  const haystack = tokenizeMemoryText([
+function relevanceScore(row: MemoryIndexRow, queryTokens: string[], query: string): number {
+  if (queryTokens.length === 0) return QUERY_ACTIVE_SCORE.relevanceToken
+  const text = searchableRowText(row)
+  const normalizedQuery = query.trim().toLowerCase()
+  const exact = normalizedQuery !== '' && text.includes(normalizedQuery)
+    ? QUERY_ACTIVE_SCORE.relevanceExact
+    : 0
+  const matches = matchedTokenCount(text, queryTokens)
+  return exact + Math.min(matches, 8) * QUERY_ACTIVE_SCORE.relevanceToken
+}
+
+function searchableRowText(row: MemoryIndexRow): string {
+  return [
     row.content,
     row.normalizedKey,
     row.domain,
@@ -1272,10 +1576,67 @@ function relevanceScore(row: MemoryIndexRow, queryTokens: string[]): number {
     row.strength,
     row.portability,
     ...row.tags
+  ].join(' ').toLowerCase()
+}
+
+function matchedTokenCount(text: string, queryTokens: string[]): number {
+  const haystack = tokenizeMemoryText([
+    text
   ].join(' '))
-  const matches = queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token)))
-  const denominator = Math.min(queryTokens.length, 8)
-  return Math.min(matches.length, denominator) / denominator
+  return queryTokens.filter((token) => haystack.some((candidate) => candidate.includes(token))).length
+}
+
+function strengthScore(strength: string): number {
+  if (strength === 'hard') return QUERY_ACTIVE_SCORE.strengthHard
+  if (strength === 'soft') return QUERY_ACTIVE_SCORE.strengthSoft
+  return QUERY_ACTIVE_SCORE.strengthMedium
+}
+
+function confidenceScore(confidenceTier: string | undefined): number {
+  switch (confidenceTier) {
+    case 'global_core':
+    case 'project_core':
+      return QUERY_ACTIVE_SCORE.confidenceCore
+    case 'validated':
+      return QUERY_ACTIVE_SCORE.confidenceValidated
+    case 'trial':
+      return QUERY_ACTIVE_SCORE.confidenceTrial
+    default:
+      return 0
+  }
+}
+
+function hasConflictInstruction(row: MemoryIndexRow, queryTokens: string[]): boolean {
+  if (queryTokens.length === 0) return false
+  const text = searchableRowText(row)
+  const hasNegation = /\b(do not|don't|never|avoid|skip|must not|without)\b/.test(text)
+  if (!hasNegation) return false
+  return matchedTokenCount(text, queryTokens) >= Math.min(3, queryTokens.length)
+}
+
+function hasUnrelatedQualitySignal(row: MemoryIndexRow): boolean {
+  return (
+    (row.scores.evidenceStrength ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL ||
+    (row.scores.usefulness ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL ||
+    (row.scores.safety ?? 0) > MIN_UNRELATED_QUALITY_SIGNAL
+  )
+}
+
+function isRecentlyUpdated(updatedAt: string): boolean {
+  const timestamp = Date.parse(updatedAt)
+  if (!Number.isFinite(timestamp)) return false
+  return Date.now() - timestamp <= RECENCY_FRESH_WINDOW_MS
+}
+
+function isExpiredRow(row: MemoryIndexRow): boolean {
+  return isStale(row.expiresAt)
+}
+
+function isStale(expiresAt: string | undefined): boolean {
+  if (expiresAt === undefined) return false
+  const timestamp = Date.parse(expiresAt)
+  if (!Number.isFinite(timestamp)) return false
+  return timestamp <= Date.now()
 }
 
 function compareIndexedItems<T extends { score: number; memory: { id: string } }>(left: T, right: T): number {

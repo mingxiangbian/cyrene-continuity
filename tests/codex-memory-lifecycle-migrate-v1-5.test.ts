@@ -714,6 +714,7 @@ describe('Codex memory lifecycle v1.5 migration', () => {
       reason: expect.stringContaining('malformed JSONL'),
       malformedJsonLines: 1
     })
+    expect(projectResult?.reason).toContain('repair_required')
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
     await expect(readFile(join(memoryRoot, 'semantic_memories.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
@@ -748,6 +749,7 @@ describe('Codex memory lifecycle v1.5 migration', () => {
       reason: expect.stringContaining('malformed JSONL'),
       malformedJsonLines: 1
     })
+    expect(projectResult?.reason).toContain('repair_required')
     await expect(readFile(semanticPath, 'utf8')).resolves.toBe(originalSemantic)
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
     await expect(readFile(indexPath, 'utf8')).resolves.toBe(originalIndex)
@@ -783,6 +785,7 @@ describe('Codex memory lifecycle v1.5 migration', () => {
       reason: expect.stringContaining('malformed JSONL'),
       malformedJsonLines: 3
     })
+    expect(projectResult?.reason).toContain('repair_required')
     await expect(readFile(indexPath, 'utf8')).resolves.toBe(invalidIndex)
     await expect(readFile(pendingPath, 'utf8')).resolves.toBe(invalidPending)
     await expect(readFile(semanticPath, 'utf8')).resolves.toBe(invalidSemantic)
@@ -863,6 +866,7 @@ describe('Codex memory lifecycle v1.5 migration', () => {
         reason: expect.stringContaining('malformed JSONL'),
         malformedJsonLines: 1
       })
+      expect(projectResult?.reason).toContain('repair_required')
       await expect(readFile(indexPath, 'utf8')).resolves.toBe(originalIndex)
       await expect(readFile(pendingPath, 'utf8')).resolves.toBe(originalPending)
       await expect(readFile(semanticPath, 'utf8')).resolves.toBe(originalSemantic)
