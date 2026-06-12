@@ -16428,6 +16428,9 @@ async function mergeCodexProjects(input) {
   }
   const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId);
   await assertMergeJsonlFilesSafe(fromMemoryRoot, "source");
+  await assertMergeJsonlFilesSafe(toMemoryRoot, "target");
+  await assertCanonicalJsonlHealthyForMutation(fromMemoryRoot);
+  await assertCanonicalJsonlHealthyForMutation(toMemoryRoot);
   const gate2 = runMemoryMigrationEvalGate({
     fromProjectId,
     toProjectId,
@@ -16439,6 +16442,8 @@ async function mergeCodexProjects(input) {
   const fromProjectRoot = dirname9(fromMemoryRoot);
   const toProjectRoot = dirname9(toMemoryRoot);
   const mergedFiles = await withMemoryMaintenanceLockFromRoot(toMemoryRoot, async (lockedToMemoryRoot) => {
+    await assertMergeJsonlFilesSafe(lockedToMemoryRoot, "target");
+    await assertCanonicalJsonlHealthyForMutation(lockedToMemoryRoot);
     const files = [];
     for (const fileName of MERGE_JSONL_FILES) {
       const merged = await mergeJsonlFile(join17(fromMemoryRoot, fileName), join17(lockedToMemoryRoot, fileName));

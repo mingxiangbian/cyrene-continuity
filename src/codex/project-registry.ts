@@ -12,6 +12,7 @@ import {
   getReadableCodexProjectRoots
 } from './codex-memory-root.js'
 import {
+  assertCanonicalJsonlHealthyForMutation,
   readActiveMemoriesFromRoot,
   readPendingMemoriesFromRoot,
   readTombstonesFromRoot,
@@ -156,6 +157,9 @@ export async function mergeCodexProjects(input: {
   }
   const toMemoryRoot = await ensureCodexProjectMemoryRoot(toProjectId)
   await assertMergeJsonlFilesSafe(fromMemoryRoot, 'source')
+  await assertMergeJsonlFilesSafe(toMemoryRoot, 'target')
+  await assertCanonicalJsonlHealthyForMutation(fromMemoryRoot)
+  await assertCanonicalJsonlHealthyForMutation(toMemoryRoot)
   const gate = runMemoryMigrationEvalGate({
     fromProjectId,
     toProjectId,
@@ -167,6 +171,8 @@ export async function mergeCodexProjects(input: {
   const fromProjectRoot = dirname(fromMemoryRoot)
   const toProjectRoot = dirname(toMemoryRoot)
   const mergedFiles = await withMemoryMaintenanceLockFromRoot(toMemoryRoot, async (lockedToMemoryRoot) => {
+    await assertMergeJsonlFilesSafe(lockedToMemoryRoot, 'target')
+    await assertCanonicalJsonlHealthyForMutation(lockedToMemoryRoot)
     const files: string[] = []
     for (const fileName of MERGE_JSONL_FILES) {
       const merged = await mergeJsonlFile(join(fromMemoryRoot, fileName), join(lockedToMemoryRoot, fileName))
