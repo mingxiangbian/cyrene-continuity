@@ -665,12 +665,17 @@ describe('weekly core and global consolidation job', () => {
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).resolves.toBe('existing profile\n')
   })
 
-  it('skips malformed semantic JSONL apply and leaves file bytes unchanged', async () => {
+  it('skips malformed semantic JSONL apply with repair_required and leaves file bytes unchanged', async () => {
     const root = await createTempDir('cyrene-weekly-malformed-project-')
     const globalRoot = await createTempDir('cyrene-weekly-malformed-global-')
-    const malformed = `${JSON.stringify(semanticMemory({ id: 'validated-1' }))}\n{not-json}\n`
-    await writeFile(join(root, 'semantic_memories.jsonl'), malformed, 'utf8')
+    const semanticPath = join(root, 'semantic_memories.jsonl')
+    const globalSemanticPath = join(globalRoot, 'semantic_memories.jsonl')
+    await writeSemanticMemoriesFromRoot(root, [semanticMemory({ id: 'validated-1' })])
     await appendAppliedContexts(root, 'validated-1')
+    const malformed = `${await readFile(semanticPath, 'utf8')}{not-json}\n`
+    const malformedGlobal = `${JSON.stringify(semanticMemory({ id: 'global-core', scope: 'global', confidenceTier: 'global_core' }))}\n{not-json}\n`
+    await writeFile(semanticPath, malformed, 'utf8')
+    await writeFile(globalSemanticPath, malformedGlobal, 'utf8')
 
     const result = await runCodexMemoryLifecycleWeekly({
       projectRoots: [{ projectId: 'project-1', memoryRoot: root }],
@@ -680,19 +685,29 @@ describe('weekly core and global consolidation job', () => {
     })
 
     expect(result.projectRoots[0]).toMatchObject({
+      skipped: true,
+      reason: 'repair_required',
+      malformedJsonLines: 1,
       promotedValidatedToProjectCore: 0,
       invalidMemories: 1,
-      recommendations: 1,
+      recommendations: 0,
+      malformedSemanticMemories: 1
+    })
+    expect(result.global).toMatchObject({
+      skipped: true,
+      reason: 'repair_required',
+      malformedJsonLines: 1,
+      promotedToGlobalCore: 0,
+      invalidMemories: 1,
+      recommendations: 0,
       malformedSemanticMemories: 1
     })
     await expect(readFile(join(root, 'semantic_memories.jsonl'), 'utf8')).resolves.toBe(malformed)
+    await expect(readFile(globalSemanticPath, 'utf8')).resolves.toBe(malformedGlobal)
     await expect(readFile(join(root, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    const events = await readMemoryEventsFromRoot(root)
-    expect(events).toContainEqual(expect.objectContaining({
-      action: 'audit',
-      reason: 'v1.5 weekly recommended manual review for project memory',
-      details: expect.objectContaining({ reason: 'malformed semantic_memories.jsonl' })
-    }))
+    await expect(readFile(join(globalRoot, 'MODEL_PROFILE.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readMemoryEventsFromRoot(root)).resolves.toEqual([])
+    await expect(readMemoryEventsFromRoot(globalRoot)).resolves.toEqual([])
   })
 
   it('does not globalize repeated named project-specific command details', async () => {

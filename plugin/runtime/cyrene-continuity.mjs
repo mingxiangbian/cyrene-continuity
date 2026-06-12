@@ -31491,21 +31491,22 @@ async function runProjectWeekly(input) {
 }
 async function runProjectWeeklyLocked(input) {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.root.memoryRoot]);
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.root.memoryRoot, input.dryRun);
+  if (repairRequiredLines !== null) {
+    return {
+      result: {
+        ...repairRequiredProjectResult(input.root, repairRequiredLines),
+        indexHealthChecked
+      },
+      coreMemories: []
+    };
+  }
   const strictSemantic = await readSemanticMemoriesStrictFromRoot2(input.root.memoryRoot);
   if (strictSemantic.malformedLines > 0) {
     const result3 = {
-      ...malformedProjectResult(input.root, strictSemantic.malformedLines),
+      ...input.dryRun ? malformedProjectResult(input.root, strictSemantic.malformedLines) : repairRequiredProjectResult(input.root, strictSemantic.malformedLines),
       indexHealthChecked
     };
-    if (!input.dryRun) {
-      await appendMemoryEventFromRoot(input.root.memoryRoot, malformedSemanticMemoryEvent({
-        root: input.root,
-        now: input.now,
-        scope: "project",
-        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
-        malformedLines: strictSemantic.malformedLines
-      }));
-    }
     return { result: result3, coreMemories: [] };
   }
   const [memories, activationEvents, memoryEvents] = await Promise.all([
@@ -31686,21 +31687,19 @@ async function runGlobalWeekly(input) {
 }
 async function runGlobalWeeklyLocked(input) {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.memoryRoot]);
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.memoryRoot, input.dryRun);
+  if (repairRequiredLines !== null) {
+    return {
+      ...repairRequiredGlobalResult(input.memoryRoot, repairRequiredLines),
+      indexHealthChecked
+    };
+  }
   const strictSemantic = await readSemanticMemoriesStrictFromRoot2(input.memoryRoot);
   if (strictSemantic.malformedLines > 0) {
     const result3 = {
-      ...malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines),
+      ...input.dryRun ? malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines) : repairRequiredGlobalResult(input.memoryRoot, strictSemantic.malformedLines),
       indexHealthChecked
     };
-    if (!input.dryRun) {
-      await appendMemoryEventFromRoot(input.memoryRoot, malformedSemanticMemoryEvent({
-        root: { memoryRoot: input.memoryRoot },
-        now: input.now,
-        scope: "global",
-        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
-        malformedLines: strictSemantic.malformedLines
-      }));
-    }
     return result3;
   }
   const [existing, memoryEvents] = await Promise.all([
@@ -32090,21 +32089,6 @@ function profileRegenerationEvent(input) {
     }
   };
 }
-function malformedSemanticMemoryEvent(input) {
-  return {
-    id: randomUUID14(),
-    action: "audit",
-    at: input.now,
-    reason: input.scope === "global" ? "v1.5 weekly recommended manual review for global consolidation" : "v1.5 weekly recommended manual review for project memory",
-    details: {
-      lifecyclePolicyId: input.lifecyclePolicyId,
-      scope: input.scope,
-      projectId: input.root.projectId,
-      reason: "malformed semantic_memories.jsonl",
-      malformedLines: input.malformedLines
-    }
-  };
-}
 function malformedProjectResult(root, malformedSemanticMemories) {
   return {
     memoryRoot: root.memoryRoot,
@@ -32120,6 +32104,15 @@ function malformedProjectResult(root, malformedSemanticMemories) {
     runtimeMetricsRecorded: 0
   };
 }
+function repairRequiredProjectResult(root, malformedJsonLines) {
+  return {
+    ...malformedProjectResult(root, malformedJsonLines),
+    recommendations: 0,
+    malformedJsonLines,
+    skipped: true,
+    reason: "repair_required"
+  };
+}
 function malformedGlobalResult(memoryRoot, malformedSemanticMemories) {
   return {
     memoryRoot,
@@ -32133,6 +32126,35 @@ function malformedGlobalResult(memoryRoot, malformedSemanticMemories) {
     indexHealthChecked: false,
     runtimeMetricsRecorded: 0
   };
+}
+function repairRequiredGlobalResult(memoryRoot, malformedJsonLines) {
+  return {
+    ...malformedGlobalResult(memoryRoot, malformedJsonLines),
+    recommendations: 0,
+    malformedJsonLines,
+    skipped: true,
+    reason: "repair_required"
+  };
+}
+async function repairRequiredMalformedJsonLinesForApply(memoryRoot, dryRun) {
+  if (dryRun) {
+    return null;
+  }
+  try {
+    await assertCanonicalJsonlHealthyForMutation(memoryRoot);
+    return null;
+  } catch (error2) {
+    if (isMemoryJsonlRepairRequiredError(error2)) {
+      return error2.malformedLineCount + error2.skippedFileCount;
+    }
+    if (isJsonlScanPathSafetyError(error2)) {
+      return null;
+    }
+    throw error2;
+  }
+}
+function isJsonlScanPathSafetyError(error2) {
+  return error2 instanceof Error && (error2.message.startsWith("Refusing to scan non-file JSONL path:") || error2.message.startsWith("Refusing to scan JSONL symlink:"));
 }
 async function readSemanticMemoriesStrictFromRoot2(memoryRoot) {
   const filePath = join30(memoryRoot, SEMANTIC_MEMORIES_FILE3);

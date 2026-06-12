@@ -17,7 +17,9 @@ import {
 import { withMemoryMaintenanceLockFromRoot } from '../memory/memory-maintenance.js'
 import {
   appendMemoryEventFromRoot,
+  assertCanonicalJsonlHealthyForMutation,
   assertSafeMemoryDataFileTarget,
+  isMemoryJsonlRepairRequiredError,
   readActivationEventsFromRoot,
   readMemoryEventsFromRoot,
   writeSemanticMemoriesFromRoot
@@ -63,9 +65,12 @@ export interface WeeklyProjectRootResult {
   evalFailures: number
   capExhausted: number
   malformedSemanticMemories: number
+  malformedJsonLines?: number
   fastSummaryUpdated: boolean
   indexHealthChecked: boolean
   runtimeMetricsRecorded: number
+  skipped?: boolean
+  reason?: 'repair_required'
 }
 export interface WeeklyGlobalResult {
   memoryRoot: string
@@ -75,9 +80,12 @@ export interface WeeklyGlobalResult {
   evalFailures: number
   capExhausted: number
   malformedSemanticMemories: number
+  malformedJsonLines?: number
   fastSummaryUpdated: boolean
   indexHealthChecked: boolean
   runtimeMetricsRecorded: number
+  skipped?: boolean
+  reason?: 'repair_required'
 }
 export interface WeeklyLifecycleResult {
   action: 'memory_lifecycle_weekly'
@@ -177,20 +185,24 @@ async function runProjectWeeklyLocked(input: {
   dailyCap: number
 }): Promise<{ result: WeeklyProjectRootResult; coreMemories: ProjectCoreMemory[] }> {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.root.memoryRoot])
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.root.memoryRoot, input.dryRun)
+  if (repairRequiredLines !== null) {
+    return {
+      result: {
+        ...repairRequiredProjectResult(input.root, repairRequiredLines),
+        indexHealthChecked
+      },
+      coreMemories: []
+    }
+  }
+
   const strictSemantic = await readSemanticMemoriesStrictFromRoot(input.root.memoryRoot)
   if (strictSemantic.malformedLines > 0) {
     const result = {
-      ...malformedProjectResult(input.root, strictSemantic.malformedLines),
+      ...(input.dryRun
+        ? malformedProjectResult(input.root, strictSemantic.malformedLines)
+        : repairRequiredProjectResult(input.root, strictSemantic.malformedLines)),
       indexHealthChecked
-    }
-    if (!input.dryRun) {
-      await appendMemoryEventFromRoot(input.root.memoryRoot, malformedSemanticMemoryEvent({
-        root: input.root,
-        now: input.now,
-        scope: 'project',
-        lifecyclePolicyId: PROJECT_LIFECYCLE_POLICY_ID,
-        malformedLines: strictSemantic.malformedLines
-      }))
     }
     return { result, coreMemories: [] }
   }
@@ -411,20 +423,21 @@ async function runGlobalWeeklyLocked(input: {
   dailyCap: number
 }): Promise<WeeklyGlobalResult> {
   const indexHealthChecked = await checkCodexMemoryIndexHealth([input.memoryRoot])
+  const repairRequiredLines = await repairRequiredMalformedJsonLinesForApply(input.memoryRoot, input.dryRun)
+  if (repairRequiredLines !== null) {
+    return {
+      ...repairRequiredGlobalResult(input.memoryRoot, repairRequiredLines),
+      indexHealthChecked
+    }
+  }
+
   const strictSemantic = await readSemanticMemoriesStrictFromRoot(input.memoryRoot)
   if (strictSemantic.malformedLines > 0) {
     const result = {
-      ...malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines),
+      ...(input.dryRun
+        ? malformedGlobalResult(input.memoryRoot, strictSemantic.malformedLines)
+        : repairRequiredGlobalResult(input.memoryRoot, strictSemantic.malformedLines)),
       indexHealthChecked
-    }
-    if (!input.dryRun) {
-      await appendMemoryEventFromRoot(input.memoryRoot, malformedSemanticMemoryEvent({
-        root: { memoryRoot: input.memoryRoot },
-        now: input.now,
-        scope: 'global',
-        lifecyclePolicyId: GLOBAL_LIFECYCLE_POLICY_ID,
-        malformedLines: strictSemantic.malformedLines
-      }))
     }
     return result
   }
@@ -905,30 +918,6 @@ function profileRegenerationEvent(input: {
   }
 }
 
-function malformedSemanticMemoryEvent(input: {
-  root: WeeklyProjectRootInput
-  now: string
-  scope: 'project' | 'global'
-  lifecyclePolicyId: string
-  malformedLines: number
-}): MemoryEvent {
-  return {
-    id: randomUUID(),
-    action: 'audit',
-    at: input.now,
-    reason: input.scope === 'global'
-      ? 'v1.5 weekly recommended manual review for global consolidation'
-      : 'v1.5 weekly recommended manual review for project memory',
-    details: {
-      lifecyclePolicyId: input.lifecyclePolicyId,
-      scope: input.scope,
-      projectId: input.root.projectId,
-      reason: 'malformed semantic_memories.jsonl',
-      malformedLines: input.malformedLines
-    }
-  }
-}
-
 function malformedProjectResult(root: WeeklyProjectRootInput, malformedSemanticMemories: number): WeeklyProjectRootResult {
   return {
     memoryRoot: root.memoryRoot,
@@ -945,6 +934,16 @@ function malformedProjectResult(root: WeeklyProjectRootInput, malformedSemanticM
   }
 }
 
+function repairRequiredProjectResult(root: WeeklyProjectRootInput, malformedJsonLines: number): WeeklyProjectRootResult {
+  return {
+    ...malformedProjectResult(root, malformedJsonLines),
+    recommendations: 0,
+    malformedJsonLines,
+    skipped: true,
+    reason: 'repair_required'
+  }
+}
+
 function malformedGlobalResult(memoryRoot: string, malformedSemanticMemories: number): WeeklyGlobalResult {
   return {
     memoryRoot,
@@ -958,6 +957,42 @@ function malformedGlobalResult(memoryRoot: string, malformedSemanticMemories: nu
     indexHealthChecked: false,
     runtimeMetricsRecorded: 0
   }
+}
+
+function repairRequiredGlobalResult(memoryRoot: string, malformedJsonLines: number): WeeklyGlobalResult {
+  return {
+    ...malformedGlobalResult(memoryRoot, malformedJsonLines),
+    recommendations: 0,
+    malformedJsonLines,
+    skipped: true,
+    reason: 'repair_required'
+  }
+}
+
+async function repairRequiredMalformedJsonLinesForApply(memoryRoot: string, dryRun: boolean): Promise<number | null> {
+  if (dryRun) {
+    return null
+  }
+  try {
+    await assertCanonicalJsonlHealthyForMutation(memoryRoot)
+    return null
+  } catch (error) {
+    if (isMemoryJsonlRepairRequiredError(error)) {
+      return error.malformedLineCount + error.skippedFileCount
+    }
+    if (isJsonlScanPathSafetyError(error)) {
+      return null
+    }
+    throw error
+  }
+}
+
+function isJsonlScanPathSafetyError(error: unknown): boolean {
+  return error instanceof Error &&
+    (
+      error.message.startsWith('Refusing to scan non-file JSONL path:') ||
+      error.message.startsWith('Refusing to scan JSONL symlink:')
+    )
 }
 
 async function readSemanticMemoriesStrictFromRoot(memoryRoot: string): Promise<{
