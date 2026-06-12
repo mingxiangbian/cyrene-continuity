@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createCandidateHintSelectionReceipt } from '../src/codex/candidate-hint-receipts.js'
 import { codexMemoryDbPath } from '../src/codex/codex-memory-index.js'
 import { codexGlobalMemoryRoot, codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import {
@@ -553,10 +554,63 @@ describe('cyrene-continuity codex CLI', () => {
     expect(JSON.stringify(events)).not.toContain('CLI feedback raw query must not persist')
   })
 
+  it('records candidate hint feedback from the CLI with a receipt', async () => {
+    const home = await createTempDir('cyrene-codex-cli-candidate-feedback-home-')
+    process.env.HOME = home
+    const cwd = await createTempDir('cyrene-codex-cli-candidate-feedback-project-')
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ name: 'candidate-feedback-cli-test' }), 'utf8')
+    const { active, contentHash, memoryRoot } = await seedCliActiveMemory(cwd)
+    const project = await identifyCodexProject(cwd)
+    const receipt = await createCandidateHintSelectionReceipt({
+      version: 1,
+      contextId: 'cli-candidate-context',
+      hintId: active.id,
+      memoryId: active.id,
+      contentHash,
+      projectId: project.projectId,
+      mode: 'balanced',
+      selectedAt: new Date().toISOString()
+    })
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), 'node_modules/tsx/dist/cli.mjs'),
+        join(process.cwd(), 'src/main.ts'),
+        '--cwd',
+        cwd,
+        'codex',
+        'memory',
+        'feedback',
+        active.id,
+        '--content-hash',
+        contentHash,
+        '--event',
+        'ignored',
+        '--activation-id',
+        `candidate-hint:${active.id}`,
+        '--candidate-hint-receipt',
+        JSON.stringify(receipt)
+      ],
+      { cwd: process.cwd(), env: cliEnv(home), timeout: 10_000 }
+    )
+    const parsed = JSON.parse(result.stdout)
+
+    expect(parsed.result.action).toBe('recorded')
+    await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({
+        event: 'ignored',
+        candidateHintContextId: 'cli-candidate-context',
+        candidateHintReceiptHash: receipt.receiptHash
+      })
+    ])
+  })
+
   it.each([
     ['invalid event', ['--event', 'retrieved'], 'Invalid --event: retrieved. Expected applied, ignored, corrected, or violated'],
     ['missing content hash', ['--event', 'applied', '--query', 'feedback query'], 'Invalid feedback content hash: missing value'],
-    ['negative event missing reason', ['--event', 'violated'], 'violated feedback requires reason']
+    ['negative event missing reason', ['--event', 'violated'], 'violated feedback requires reason'],
+    ['invalid candidate hint receipt JSON', ['--event', 'ignored', '--activation-id', 'candidate-hint:x', '--candidate-hint-receipt', '{bad-json'], 'Invalid --candidate-hint-receipt: expected JSON object']
   ])('rejects CLI memory feedback with %s', async (_label, args, stderr) => {
     const home = await createTempDir('cyrene-codex-cli-feedback-invalid-home-')
     process.env.HOME = home

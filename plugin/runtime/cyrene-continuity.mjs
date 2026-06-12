@@ -11231,6 +11231,10 @@ async function ensureCodexGlobalMemoryRoot() {
   const globalRoot = await ensureCodexGlobalScopeRoot();
   return ensureSafeDirectory(join6(globalRoot, "memory"), globalRoot);
 }
+async function ensureCodexRuntimeRoot() {
+  const codexDir = await ensureCodexBaseRoot();
+  return ensureSafeDirectory(join6(codexDir, "runtime"), codexDir);
+}
 async function ensureCodexProjectMemoryRoot(projectId) {
   const projectRoot = await ensureCodexProjectRoot(projectId);
   return ensureSafeDirectory(join6(projectRoot, "memory"), projectRoot);
@@ -11241,6 +11245,11 @@ async function getReadableCodexGlobalMemoryRoot() {
     return null;
   }
   return getSafeDirectoryOrNull2(join6(globalRoot, "memory"), globalRoot);
+}
+async function getReadableCodexRuntimeRoot() {
+  const codexDir = await getReadableCodexBaseRoot();
+  if (codexDir === null) return null;
+  return getSafeDirectoryOrNull2(join6(codexDir, "runtime"), codexDir);
 }
 async function getReadableCodexProjectMemoryRoot(projectId) {
   const projectRoot = await getReadableCodexProjectRoot(projectId);
@@ -14682,7 +14691,7 @@ function isErrorCode3(error2, code) {
 }
 
 // src/codex/continuity-context.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash13, randomUUID as randomUUID10 } from "node:crypto";
 
 // src/affect/affect-runtime.ts
 async function buildContinuitySnapshot(input) {
@@ -18602,6 +18611,103 @@ function uniqueInOrder2(values) {
   });
 }
 
+// src/codex/candidate-hint-receipts.ts
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { readFile as readFile14, writeFile as writeFile9 } from "node:fs/promises";
+import { join as join19 } from "node:path";
+var RECEIPT_KEY_FILE = "candidate-hint-receipt.key";
+var RECEIPT_TTL_MS = 24 * 60 * 60 * 1e3;
+async function createCandidateHintSelectionReceipt(input) {
+  const key = await loadOrCreateCandidateHintReceiptVerificationKey();
+  const receipt = receiptPayload(input);
+  return {
+    ...receipt,
+    receiptHash: candidateHintReceiptHash(receipt, key)
+  };
+}
+async function readCandidateHintReceiptVerificationKey() {
+  const root = await getReadableCodexRuntimeRoot();
+  if (root === null) return void 0;
+  try {
+    const value = (await readFile14(join19(root, RECEIPT_KEY_FILE), "utf8")).trim();
+    return /^[a-f0-9]{64}$/.test(value) ? value : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function validateCandidateHintSelectionReceipt(value, expected) {
+  if (!isCandidateHintSelectionReceipt(value)) {
+    return { ok: false, reason: "candidate hint receipt is required for candidate-hint activation" };
+  }
+  if (value.memoryId !== expected.memoryId) {
+    return { ok: false, reason: "candidate hint receipt does not match memory id" };
+  }
+  if (value.contentHash !== expected.contentHash) {
+    return { ok: false, reason: "candidate hint receipt does not match content hash" };
+  }
+  if (value.projectId !== expected.projectId) {
+    return { ok: false, reason: "candidate hint receipt does not match project id" };
+  }
+  if (expected.activationId !== `candidate-hint:${value.hintId}`) {
+    return { ok: false, reason: "candidate hint receipt does not match activation id" };
+  }
+  const selectedAtMs = Date.parse(value.selectedAt);
+  const nowMs = Date.parse(expected.now ?? (/* @__PURE__ */ new Date()).toISOString());
+  if (!Number.isFinite(selectedAtMs) || !Number.isFinite(nowMs) || nowMs - selectedAtMs > RECEIPT_TTL_MS || nowMs < selectedAtMs) {
+    return { ok: false, reason: "candidate hint receipt expired" };
+  }
+  const key = await readCandidateHintReceiptVerificationKey();
+  if (key === void 0) {
+    return { ok: false, reason: "candidate hint receipt hash mismatch" };
+  }
+  const expectedHash = candidateHintReceiptHash(receiptPayload(value), key);
+  if (!safeEqualHex(value.receiptHash, expectedHash)) {
+    return { ok: false, reason: "candidate hint receipt hash mismatch" };
+  }
+  return {
+    ok: true,
+    audit: {
+      candidateHintContextId: value.contextId,
+      candidateHintReceiptHash: value.receiptHash
+    }
+  };
+}
+async function loadOrCreateCandidateHintReceiptVerificationKey() {
+  const existing = await readCandidateHintReceiptVerificationKey();
+  if (existing !== void 0) return existing;
+  const root = await ensureCodexRuntimeRoot();
+  const key = randomBytes(32).toString("hex");
+  await writeFile9(join19(root, RECEIPT_KEY_FILE), `${key}
+`, { mode: 384 });
+  return key;
+}
+function candidateHintReceiptHash(receipt, key) {
+  return createHmac("sha256", key).update(JSON.stringify(receiptPayload(receipt))).digest("hex").slice(0, 32);
+}
+function receiptPayload(receipt) {
+  return {
+    version: 1,
+    contextId: receipt.contextId,
+    hintId: receipt.hintId,
+    memoryId: receipt.memoryId,
+    contentHash: receipt.contentHash,
+    projectId: receipt.projectId,
+    mode: receipt.mode,
+    selectedAt: receipt.selectedAt
+  };
+}
+function isCandidateHintSelectionReceipt(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const receipt = value;
+  return receipt.version === 1 && typeof receipt.contextId === "string" && typeof receipt.hintId === "string" && typeof receipt.memoryId === "string" && typeof receipt.contentHash === "string" && typeof receipt.projectId === "string" && (receipt.mode === "balanced" || receipt.mode === "review") && typeof receipt.selectedAt === "string" && typeof receipt.receiptHash === "string";
+}
+function safeEqualHex(left, right) {
+  if (!/^[a-f0-9]+$/.test(left) || !/^[a-f0-9]+$/.test(right)) return false;
+  const leftBuffer = Buffer.from(left, "hex");
+  const rightBuffer = Buffer.from(right, "hex");
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
 // src/codex/review-redaction.ts
 var RULES = [
   {
@@ -18718,6 +18824,13 @@ async function recordCodexMemoryFeedback(input) {
   if (validation !== void 0) {
     return defaultResult(validation);
   }
+  const candidateHintValidation = await validateCandidateHintFeedbackInput(input, {
+    projectId: project.projectId,
+    now: input.now
+  });
+  if (candidateHintValidation.ok === false) {
+    return defaultResult({ action: "invalid_request", reason: candidateHintValidation.reason });
+  }
   const roots = uniqueInOrder3([projectMemoryRoot, globalMemoryRoot]);
   const foundMemoryRoot = await findActiveMemoryRoot2(roots, input.memoryId);
   if (foundMemoryRoot === void 0) {
@@ -18782,6 +18895,7 @@ async function recordCodexMemoryFeedback(input) {
       ...input.activationId === void 0 ? {} : { activationId: input.activationId },
       ...input.reason === void 0 ? {} : { reason: sanitizeReason(input.reason) },
       ...input.evidenceRef === void 0 ? {} : { evidenceRef: input.evidenceRef },
+      ...candidateHintValidation.audit === void 0 ? {} : candidateHintValidation.audit,
       idempotencyKey,
       createdAt: input.now ?? (/* @__PURE__ */ new Date()).toISOString()
     };
@@ -18818,6 +18932,23 @@ function validatePublicFeedbackInput(input) {
     return { action: "invalid_request", reason: "applied feedback requires query or evidenceRef" };
   }
   return void 0;
+}
+async function validateCandidateHintFeedbackInput(input, context) {
+  const hasCandidateHintActivation = input.activationId?.startsWith("candidate-hint:") === true;
+  if (!hasCandidateHintActivation && input.candidateHintReceipt === void 0) {
+    return { ok: true };
+  }
+  const result3 = await validateCandidateHintSelectionReceipt(input.candidateHintReceipt, {
+    memoryId: input.memoryId,
+    contentHash: input.contentHash,
+    projectId: context.projectId,
+    activationId: input.activationId,
+    now: context.now
+  });
+  if (result3.ok === false) {
+    return result3;
+  }
+  return { ok: true, audit: result3.audit };
 }
 function isPublicActivationFeedbackEvent(value) {
   return PUBLIC_ACTIVATION_FEEDBACK_EVENTS.includes(value);
@@ -19222,25 +19353,25 @@ function definedOnly(input) {
 }
 
 // src/codex/runtime-metrics.ts
-import { appendFile as appendFile2, mkdir as mkdir11, readFile as readFile14 } from "node:fs/promises";
-import { join as join19 } from "node:path";
+import { appendFile as appendFile2, mkdir as mkdir11, readFile as readFile15 } from "node:fs/promises";
+import { join as join20 } from "node:path";
 var RUNTIME_METRICS_FILE = "runtime_metrics.jsonl";
 var RUNTIME_METRIC_EVENTS = /* @__PURE__ */ new Set(["continuity_get", "hook"]);
 var CONTEXT_MODES = /* @__PURE__ */ new Set(["fast", "balanced", "review"]);
 var HOOK_EVENTS = /* @__PURE__ */ new Set(["session_start", "user_prompt_submit", "post_tool_use", "stop"]);
 async function appendRuntimeMetric(memoryRoot, metric) {
   await mkdir11(memoryRoot, { recursive: true });
-  const targetPath = join19(memoryRoot, RUNTIME_METRICS_FILE);
+  const targetPath = join20(memoryRoot, RUNTIME_METRICS_FILE);
   await assertSafeMemoryDataFileTarget(targetPath);
   await appendFile2(targetPath, `${JSON.stringify(runtimeMetricRecord(metric))}
 `, "utf8");
 }
 async function readRuntimeMetrics(memoryRoot) {
-  const targetPath = join19(memoryRoot, RUNTIME_METRICS_FILE);
+  const targetPath = join20(memoryRoot, RUNTIME_METRICS_FILE);
   await assertSafeMemoryDataFileTarget(targetPath);
   let content;
   try {
-    content = await readFile14(targetPath, "utf8");
+    content = await readFile15(targetPath, "utf8");
   } catch (error2) {
     if (isFileErrorCode12(error2, "ENOENT")) return [];
     throw error2;
@@ -19302,13 +19433,13 @@ function isFileErrorCode12(error2, code) {
 }
 
 // src/codex/session-hints.ts
-import { mkdir as mkdir12, readFile as readFile15, rm as rm5, writeFile as writeFile9 } from "node:fs/promises";
-import { join as join20 } from "node:path";
+import { mkdir as mkdir12, readFile as readFile16, rm as rm5, writeFile as writeFile10 } from "node:fs/promises";
+import { join as join21 } from "node:path";
 var SESSION_HINTS_FILE = "session_hints.json";
 var DEFAULT_TTL_MS = 8 * 60 * 60 * 1e3;
 async function replaceCodexSessionHints(memoryRoot, input) {
   await mkdir12(memoryRoot, { recursive: true });
-  const targetPath = join20(memoryRoot, SESSION_HINTS_FILE);
+  const targetPath = join21(memoryRoot, SESSION_HINTS_FILE);
   await assertSafeMemoryDataFileTarget(targetPath);
   const updatedAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const expiresAt = new Date(Date.parse(updatedAt) + (input.ttlMs ?? DEFAULT_TTL_MS)).toISOString();
@@ -19319,15 +19450,15 @@ async function replaceCodexSessionHints(memoryRoot, input) {
     expiresAt,
     hints: input.hints.map(cleanSessionHint)
   };
-  await writeFile9(targetPath, `${JSON.stringify(record2)}
+  await writeFile10(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
 }
 async function readCodexSessionHints(memoryRoot, input) {
-  const targetPath = join20(memoryRoot, SESSION_HINTS_FILE);
+  const targetPath = join21(memoryRoot, SESSION_HINTS_FILE);
   await assertSafeMemoryDataFileTarget(targetPath);
   let content;
   try {
-    content = await readFile15(targetPath, "utf8");
+    content = await readFile16(targetPath, "utf8");
   } catch (error2) {
     if (isFileErrorCode13(error2, "ENOENT")) return [];
     throw error2;
@@ -19345,7 +19476,7 @@ async function readCodexSessionHints(memoryRoot, input) {
   return parsed.hints;
 }
 async function clearCodexSessionHints(memoryRoot) {
-  const targetPath = join20(memoryRoot, SESSION_HINTS_FILE);
+  const targetPath = join21(memoryRoot, SESSION_HINTS_FILE);
   await assertSafeMemoryDataFileTarget(targetPath);
   await rm5(targetPath, { force: true });
 }
@@ -19701,7 +19832,7 @@ function stableCandidateHintId(memoryId, projectId) {
 }
 
 // src/codex/jsonl-bounded-fallback.ts
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 
 // src/codex/retrieval-v2-constants.ts
 var JSONL_FALLBACK_RECORD_CAP = 500;
@@ -19720,7 +19851,7 @@ async function readBoundedActiveJsonlFallback(input) {
   let consumedRecords = 0;
   for (const memoryRoot of input.memoryRoots) {
     const tombstoneScan = await scanJsonlFile(
-      join21(memoryRoot, "tombstones.jsonl"),
+      join22(memoryRoot, "tombstones.jsonl"),
       { fileSizeCapBytes: JSONL_FALLBACK_FILE_SIZE_CAP_BYTES },
       "tombstones.jsonl"
     );
@@ -19768,7 +19899,7 @@ async function readBoundedActiveJsonlFallback(input) {
       break;
     }
     const semanticScan = await scanJsonlFile(
-      join21(memoryRoot, "semantic_memories.jsonl"),
+      join22(memoryRoot, "semantic_memories.jsonl"),
       { fileSizeCapBytes: JSONL_FALLBACK_FILE_SIZE_CAP_BYTES },
       "semantic_memories.jsonl"
     );
@@ -20303,8 +20434,16 @@ async function selectSqliteCandidateHints(input) {
       validatedMemories: candidateHintValidatedMemoryCandidates(pool),
       maxItems: input.policy.candidateHintBudget
     });
+    const selectedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const contextId = randomUUID10();
+    const hints = await Promise.all(result3.hints.map((hint) => labelModelVisibleCandidateHint({
+      hint,
+      contextId,
+      selectedAt,
+      mode: input.policy.mode === "review" ? "review" : "balanced"
+    })));
     return {
-      hints: result3.hints.map(labelModelVisibleCandidateHint),
+      hints,
       metrics: {
         ...result3.metrics,
         candidateHintLatencyMs: elapsedSince(startedAt)
@@ -20352,11 +20491,22 @@ function emptyCandidateHintMetrics() {
 function isValidatedConflictMemory(memory2) {
   return memory2.status === "active" && (memory2.confidenceTier === "validated" || memory2.confidenceTier === "project_core" || memory2.confidenceTier === "global_core");
 }
-function labelModelVisibleCandidateHint(hint) {
+async function labelModelVisibleCandidateHint(input) {
+  const selectionReceipt = await createCandidateHintSelectionReceipt({
+    version: 1,
+    contextId: input.contextId,
+    hintId: input.hint.id,
+    memoryId: input.hint.memoryId,
+    contentHash: input.hint.contentHash,
+    projectId: input.hint.projectId,
+    mode: input.mode,
+    selectedAt: input.selectedAt
+  });
   return {
-    ...hint,
+    ...input.hint,
     text: `Candidate project workflow hint, not validated:
-- ${hint.text.trim()}`
+- ${input.hint.text.trim()}`,
+    selectionReceipt
   };
 }
 function isModelVisibleRoutedMemory(item) {
@@ -21296,32 +21446,32 @@ function uniqueChecks(checks) {
 }
 
 // src/codex/codex-benchmark.ts
-import { join as join34 } from "node:path";
+import { join as join35 } from "node:path";
 
 // benchmark/runner.ts
 import { createHash as createHash18 } from "node:crypto";
 import { execFile as execFile3 } from "node:child_process";
-import { readFile as readFile23 } from "node:fs/promises";
-import { dirname as dirname11, join as join33, resolve as resolve5 } from "node:path";
+import { readFile as readFile24 } from "node:fs/promises";
+import { dirname as dirname11, join as join34, resolve as resolve5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { promisify as promisify3 } from "node:util";
 
 // benchmark/artifacts.ts
-import { mkdir as mkdir13, readFile as readFile16, writeFile as writeFile10 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { mkdir as mkdir13, readFile as readFile17, writeFile as writeFile11 } from "node:fs/promises";
+import { join as join23 } from "node:path";
 async function archiveBenchmarkReports(input) {
   const profile = safeProfileSegment(input.profile);
-  const targetDir = join22(input.artifactRoot, profile);
-  const jsonPath = join22(targetDir, "benchmark_report.json");
-  const markdownPath = join22(targetDir, "benchmark_report.md");
+  const targetDir = join23(input.artifactRoot, profile);
+  const jsonPath = join23(targetDir, "benchmark_report.json");
+  const markdownPath = join23(targetDir, "benchmark_report.md");
   const [json, markdown] = await Promise.all([
-    readFile16(join22(input.outputDir, "benchmark_report.json"), "utf8"),
-    readFile16(join22(input.outputDir, "benchmark_report.md"), "utf8")
+    readFile17(join23(input.outputDir, "benchmark_report.json"), "utf8"),
+    readFile17(join23(input.outputDir, "benchmark_report.md"), "utf8")
   ]);
   await mkdir13(targetDir, { recursive: true });
   await Promise.all([
-    writeFile10(jsonPath, sanitizeBenchmarkArtifact(json), "utf8"),
-    writeFile10(markdownPath, sanitizeBenchmarkArtifact(markdown), "utf8")
+    writeFile11(jsonPath, sanitizeBenchmarkArtifact(json), "utf8"),
+    writeFile11(markdownPath, sanitizeBenchmarkArtifact(markdown), "utf8")
   ]);
   return { jsonPath, markdownPath };
 }
@@ -21491,15 +21641,15 @@ var BENCHMARK_CASES = [
 var BENCHMARK_CASE_IDS = Object.freeze(BENCHMARK_CASES.map((item) => item.id));
 
 // benchmark/report.ts
-import { mkdir as mkdir14, writeFile as writeFile11 } from "node:fs/promises";
-import { join as join23 } from "node:path";
+import { mkdir as mkdir14, writeFile as writeFile12 } from "node:fs/promises";
+import { join as join24 } from "node:path";
 async function writeBenchmarkReports(outputDir, report) {
   await mkdir14(outputDir, { recursive: true });
-  const jsonPath = join23(outputDir, "benchmark_report.json");
-  const markdownPath = join23(outputDir, "benchmark_report.md");
-  await writeFile11(jsonPath, `${JSON.stringify(report, null, 2)}
+  const jsonPath = join24(outputDir, "benchmark_report.json");
+  const markdownPath = join24(outputDir, "benchmark_report.md");
+  await writeFile12(jsonPath, `${JSON.stringify(report, null, 2)}
 `, "utf8");
-  await writeFile11(markdownPath, renderBenchmarkReportMarkdown(report), "utf8");
+  await writeFile12(markdownPath, renderBenchmarkReportMarkdown(report), "utf8");
   return { jsonPath, markdownPath };
 }
 function renderBenchmarkReportMarkdown(report) {
@@ -21972,8 +22122,8 @@ function roundMetric(value) {
 }
 
 // benchmark/cases/tier0-release-gate.ts
-import { mkdir as mkdir16, readFile as readFile17, writeFile as writeFile13 } from "node:fs/promises";
-import { join as join25 } from "node:path";
+import { mkdir as mkdir16, readFile as readFile18, writeFile as writeFile14 } from "node:fs/promises";
+import { join as join26 } from "node:path";
 
 // src/codex/memory-context-preview.ts
 async function runCodexMemoryContextPreview(input) {
@@ -26249,9 +26399,9 @@ async function handleContinuityGet(input, fallbackCwd) {
 
 // benchmark/fixtures.ts
 import { createHash as createHash14 } from "node:crypto";
-import { mkdir as mkdir15, mkdtemp, rm as rm6, writeFile as writeFile12 } from "node:fs/promises";
+import { mkdir as mkdir15, mkdtemp, rm as rm6, writeFile as writeFile13 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join as join24 } from "node:path";
+import { join as join25 } from "node:path";
 var defaultProcessCwd = process.cwd();
 var fixtureEnvironmentQueue = Promise.resolve();
 function seededId(seed, label) {
@@ -26289,12 +26439,12 @@ async function createBenchmarkFixture(input) {
   if (input.preserveFixture === true && (typeof input.preserveReason !== "string" || input.preserveReason.trim() === "")) {
     throw new Error("Benchmark fixture preservation requires a non-empty preserveReason.");
   }
-  const root = await mkdtemp(join24(tmpdir(), "cyrene-benchmark-"));
-  const home = join24(root, "home");
-  const cwd = join24(root, `cyrene-benchmark-project-${seededId(input.seed, "project")}`);
+  const root = await mkdtemp(join25(tmpdir(), "cyrene-benchmark-"));
+  const home = join25(root, "home");
+  const cwd = join25(root, `cyrene-benchmark-project-${seededId(input.seed, "project")}`);
   await mkdir15(home, { recursive: true });
   await mkdir15(cwd, { recursive: true });
-  await writeFile12(join24(cwd, "package.json"), JSON.stringify({ name: `benchmark-${input.caseId.toLowerCase()}` }), "utf8");
+  await writeFile13(join25(cwd, "package.json"), JSON.stringify({ name: `benchmark-${input.caseId.toLowerCase()}` }), "utf8");
   await writeDeterministicGitIdentity(cwd, input);
   let projectId = "";
   let globalMemoryRoot = "";
@@ -26344,10 +26494,10 @@ async function createBenchmarkFixture(input) {
       await writePendingMemoriesFromRoot(globalMemoryRoot, pending.filter((memory2) => memory2.scope === "global"));
     }
     if (input.globalProfile !== void 0) {
-      await writeFile12(join24(globalMemoryRoot, "MODEL_PROFILE.md"), input.globalProfile, "utf8");
+      await writeFile13(join25(globalMemoryRoot, "MODEL_PROFILE.md"), input.globalProfile, "utf8");
     }
     if (input.projectProfile !== void 0) {
-      await writeFile12(join24(projectMemoryRoot, "MODEL_PROFILE.md"), input.projectProfile, "utf8");
+      await writeFile13(join25(projectMemoryRoot, "MODEL_PROFILE.md"), input.projectProfile, "utf8");
     }
     if (input.fastSummary !== void 0) {
       await writeFastSummaryProjection(projectMemoryRoot, {
@@ -26465,12 +26615,12 @@ function pendingMemory(input, memory2, index) {
   };
 }
 async function writeDeterministicGitIdentity(cwd, input) {
-  const gitRoot = join24(cwd, ".git");
-  await mkdir15(join24(gitRoot, "refs", "heads"), { recursive: true });
-  await mkdir15(join24(gitRoot, "objects"), { recursive: true });
-  await writeFile12(join24(gitRoot, "HEAD"), "ref: refs/heads/main\n", "utf8");
-  await writeFile12(
-    join24(gitRoot, "config"),
+  const gitRoot = join25(cwd, ".git");
+  await mkdir15(join25(gitRoot, "refs", "heads"), { recursive: true });
+  await mkdir15(join25(gitRoot, "objects"), { recursive: true });
+  await writeFile13(join25(gitRoot, "HEAD"), "ref: refs/heads/main\n", "utf8");
+  await writeFile13(
+    join25(gitRoot, "config"),
     `[core]
 	repositoryformatversion = 0
 	filemode = true
@@ -26710,10 +26860,10 @@ async function runSimilarBoundary(benchmarkCase, options) {
       dependencies: { "@modelcontextprotocol/sdk": "^1.0.0" },
       devDependencies: { typescript: "^5.0.0" }
     });
-    await writeFile13(join25(fixture.cwd, "package.json"), similarPackage, "utf8");
-    await mkdir16(join25(fixture.metadata.root, "similar-project"), { recursive: true });
-    const otherCwd = join25(fixture.metadata.root, "similar-project");
-    await writeFile13(join25(otherCwd, "package.json"), similarPackage, "utf8");
+    await writeFile14(join26(fixture.cwd, "package.json"), similarPackage, "utf8");
+    await mkdir16(join26(fixture.metadata.root, "similar-project"), { recursive: true });
+    const otherCwd = join26(fixture.metadata.root, "similar-project");
+    await writeFile14(join26(otherCwd, "package.json"), similarPackage, "utf8");
     const otherProject = await identifyCodexProject(otherCwd);
     const otherRoot = codexProjectMemoryRoot(otherProject.projectId);
     await mkdir16(otherRoot, { recursive: true });
@@ -26760,10 +26910,10 @@ async function runCrossProjectAdversarial(benchmarkCase, options) {
       dependencies: { "@modelcontextprotocol/sdk": "^1.0.0", typescript: "^5.0.0" },
       devDependencies: { vitest: "^3.0.0" }
     });
-    await writeFile13(join25(fixture.cwd, "package.json"), similarPackage, "utf8");
-    const otherCwd = join25(fixture.metadata.root, "adversarial-similar-project");
+    await writeFile14(join26(fixture.cwd, "package.json"), similarPackage, "utf8");
+    const otherCwd = join26(fixture.metadata.root, "adversarial-similar-project");
     await mkdir16(otherCwd, { recursive: true });
-    await writeFile13(join25(otherCwd, "package.json"), similarPackage, "utf8");
+    await writeFile14(join26(otherCwd, "package.json"), similarPackage, "utf8");
     const otherProject = await identifyCodexProject(otherCwd);
     const otherRoot = codexProjectMemoryRoot(otherProject.projectId);
     await mkdir16(otherRoot, { recursive: true });
@@ -26822,10 +26972,10 @@ async function runCrossProjectPromptInjection(benchmarkCase, options) {
       dependencies: { "@modelcontextprotocol/sdk": "^1.0.0", typescript: "^5.0.0" },
       devDependencies: { vitest: "^3.0.0" }
     });
-    await writeFile13(join25(fixture.cwd, "package.json"), packageJson, "utf8");
-    const otherCwd = join25(fixture.metadata.root, "prompt-injection-similar-project");
+    await writeFile14(join26(fixture.cwd, "package.json"), packageJson, "utf8");
+    const otherCwd = join26(fixture.metadata.root, "prompt-injection-similar-project");
     await mkdir16(otherCwd, { recursive: true });
-    await writeFile13(join25(otherCwd, "package.json"), packageJson, "utf8");
+    await writeFile14(join26(otherCwd, "package.json"), packageJson, "utf8");
     const otherProject = await identifyCodexProject(otherCwd);
     const otherRoot = codexProjectMemoryRoot(otherProject.projectId);
     await mkdir16(otherRoot, { recursive: true });
@@ -26999,7 +27149,7 @@ async function runSurfaceConsistency(benchmarkCase, options) {
       includePendingDetails: true
     }, fixture.cwd);
     const mcpText = mcpResponse.content[0]?.text ?? "";
-    const skillSource = await readFile17(join25(options.cwd, "plugin", "skills", "cyrene-continuity", "SKILL.md"), "utf8");
+    const skillSource = await readFile18(join26(options.cwd, "plugin", "skills", "cyrene-continuity", "SKILL.md"), "utf8");
     const previewFastText = JSON.stringify(previewFast);
     const skillContractPresent = skillSource.includes("fast and balanced mode must not show pending candidates") && skillSource.includes("review mode is required for pending candidate review");
     const hardFailures = [
@@ -27368,9 +27518,9 @@ function includesNone(text, forbidden) {
 }
 
 // src/codex/codex-memory-lifecycle-daily.ts
-import { createHash as createHash16, randomUUID as randomUUID10 } from "node:crypto";
-import { readFile as readFile18 } from "node:fs/promises";
-import { join as join26 } from "node:path";
+import { createHash as createHash16, randomUUID as randomUUID11 } from "node:crypto";
+import { readFile as readFile19 } from "node:fs/promises";
+import { join as join27 } from "node:path";
 
 // src/codex/fast-summary-maintenance.ts
 var FAST_SUMMARY_GLOBAL_DOMAINS = /* @__PURE__ */ new Set(["procedural", "system"]);
@@ -27847,7 +27997,7 @@ function combineEvalGates(left, right) {
 function addProjectRecommendation(state, memory2, reason, stats, evalGate) {
   state.result.recommendations += 1;
   state.events.push({
-    id: randomUUID10(),
+    id: randomUUID11(),
     action: "audit",
     at: state.now,
     reason: "v1.5 daily lifecycle recommended manual review for project trial memory",
@@ -27875,7 +28025,7 @@ function addProjectRecommendation(state, memory2, reason, stats, evalGate) {
 function addGlobalRecommendation(state, memory2, reason, evalGate, lifecycleFindings = []) {
   state.result.recommendations += 1;
   state.events.push({
-    id: randomUUID10(),
+    id: randomUUID11(),
     action: "audit",
     at: state.now,
     reason: "v1.5 daily lifecycle recommended manual review for global memory candidate",
@@ -27899,7 +28049,7 @@ function addGlobalRecommendation(state, memory2, reason, evalGate, lifecycleFind
 }
 function promoteTrialEvent(state, memory2, stats, evidenceCount, distinctEvidenceCount2, evalGate) {
   return {
-    id: randomUUID10(),
+    id: randomUUID11(),
     action: "promote",
     at: state.now,
     reason: "v1.5 daily trial validation promoted project trial to validated",
@@ -27931,7 +28081,7 @@ function promoteTrialEvent(state, memory2, stats, evidenceCount, distinctEvidenc
 }
 function promoteGlobalEvent(state, memory2, evidenceCount, distinctEvidenceCount2, evalGate) {
   return {
-    id: randomUUID10(),
+    id: randomUUID11(),
     action: "promote",
     at: state.now,
     reason: "v1.5 daily lifecycle promoted explicit global instruction to global_core",
@@ -27954,11 +28104,11 @@ function promoteGlobalEvent(state, memory2, evidenceCount, distinctEvidenceCount
   };
 }
 async function readSemanticMemoriesStrictFromRoot(memoryRoot) {
-  const filePath = join26(memoryRoot, SEMANTIC_MEMORIES_FILE2);
+  const filePath = join27(memoryRoot, SEMANTIC_MEMORIES_FILE2);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(filePath);
-    content = await readFile18(filePath, "utf8");
+    content = await readFile19(filePath, "utf8");
   } catch (error2) {
     if (isFileErrorCode14(error2, "ENOENT")) {
       return { ok: true, records: [] };
@@ -27992,7 +28142,7 @@ function isFileErrorCode14(error2, code) {
 }
 function expireTrialEvent(state, memory2) {
   return {
-    id: randomUUID10(),
+    id: randomUUID11(),
     action: "expire",
     at: state.now,
     reason: "v1.5 daily lifecycle expired stale project trial memory",
@@ -28008,7 +28158,7 @@ function expireTrialEvent(state, memory2) {
 }
 function needsMigrationEvent(state, memory2, findings) {
   return {
-    id: randomUUID10(),
+    id: randomUUID11(),
     action: "audit",
     at: state.now,
     reason: "v1.5 daily lifecycle found invalid active memory",
@@ -28732,7 +28882,7 @@ async function handleActiveMemorySupersede(input, fallbackCwd) {
 }
 
 // src/codex/memory-propose.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 
 // src/codex/memory-triage.ts
 var MAX_REVIEW_RECOMMENDATIONS = 20;
@@ -29265,7 +29415,7 @@ async function proposeCodexMemoryCandidate(input) {
       if (input.recordRejectedCandidate !== false) {
         await appendTombstoneFromRoot(lockedMemoryRoot, decision2.tombstone);
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID11(),
+          id: randomUUID12(),
           action: "reject",
           at: now,
           reason: decision2.reason,
@@ -29284,7 +29434,7 @@ async function proposeCodexMemoryCandidate(input) {
       const reason2 = "normalizedKey conflict with active memory";
       if (input.recordRejectedCandidate !== false) {
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID11(),
+          id: randomUUID12(),
           action: "reject",
           at: now,
           reason: reason2,
@@ -29339,7 +29489,7 @@ async function proposeCodexMemoryCandidate(input) {
       const trial = trialSemanticMemoryFromCandidate(mergedCandidate, now);
       await upsertSemanticMemoriesFromRoot(lockedMemoryRoot, [trial]);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID11(),
+        id: randomUUID12(),
         action: "create",
         at: now,
         reason: "v1.5 admitted low-risk project memory to trial",
@@ -29372,7 +29522,7 @@ async function proposeCodexMemoryCandidate(input) {
       await writeActiveMemoriesFromRoot(lockedMemoryRoot, [...existingMemories, promoted]);
       await writePendingMemoriesFromRoot(lockedMemoryRoot, pendingWithoutMerged);
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID11(),
+        id: randomUUID12(),
         action: "promote",
         at: now,
         reason: autoPromotion.reason,
@@ -29424,7 +29574,7 @@ async function proposeCodexMemoryCandidate(input) {
     }
     if (budgetResult.action === "evict_existing") {
       await appendMemoryEventFromRoot(lockedMemoryRoot, {
-        id: randomUUID11(),
+        id: randomUUID12(),
         action: "audit",
         at: now,
         reason: budgetResult.reason,
@@ -29451,7 +29601,7 @@ async function proposeCodexMemoryCandidate(input) {
       reason = activeReadinessReason;
     }
     await appendMemoryEventFromRoot(lockedMemoryRoot, {
-      id: randomUUID11(),
+      id: randomUUID12(),
       action: "pending",
       at: now,
       reason,
@@ -29593,7 +29743,7 @@ function toPendingMemory(input, now) {
     tags: input.tags ?? []
   });
   return {
-    id: randomUUID11(),
+    id: randomUUID12(),
     domain: input.domain,
     type: input.type,
     strength: input.strength ?? "soft",
@@ -30326,8 +30476,8 @@ function addDays5(iso, days) {
 }
 
 // benchmark/cases/tier2-memory-to-action.ts
-import { mkdir as mkdir17, readFile as readFile19, writeFile as writeFile14 } from "node:fs/promises";
-import { dirname as dirname10, join as join27 } from "node:path";
+import { mkdir as mkdir17, readFile as readFile20, writeFile as writeFile15 } from "node:fs/promises";
+import { dirname as dirname10, join as join28 } from "node:path";
 async function runTier2Case(benchmarkCase, options) {
   const replayCase = replayCaseFor2(benchmarkCase.id);
   if (replayCase === void 0) return void 0;
@@ -30784,9 +30934,9 @@ async function withActionFixture(benchmarkCase, options, seed, now, replayCase, 
 async function writeReplayFixtureFiles(fixture, replayCase) {
   if (replayCase.fixtureFiles === void 0) return;
   for (const file of replayCase.fixtureFiles) {
-    const target = join27(fixture.cwd, file.path);
+    const target = join28(fixture.cwd, file.path);
     await mkdir17(dirname10(target), { recursive: true });
-    await writeFile14(target, file.content, "utf8");
+    await writeFile15(target, file.content, "utf8");
   }
 }
 async function verifyReplayFixture(fixture, replayCase) {
@@ -30802,7 +30952,7 @@ async function verifyReplayFixture(fixture, replayCase) {
 }
 async function fixtureFileContains(fixture, check2) {
   try {
-    const content = await readFile19(join27(fixture.cwd, check2.path), "utf8");
+    const content = await readFile20(join28(fixture.cwd, check2.path), "utf8");
     return content.includes(check2.content);
   } catch {
     return false;
@@ -30841,12 +30991,12 @@ function formatRatio(value) {
 
 // benchmark/cases/tier3-scale-efficiency.ts
 import { stat as stat3 } from "node:fs/promises";
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 
 // src/codex/hook-trace-store.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
-import { appendFile as appendFile3, readFile as readFile20 } from "node:fs/promises";
-import { join as join28 } from "node:path";
+import { randomUUID as randomUUID13 } from "node:crypto";
+import { appendFile as appendFile3, readFile as readFile21 } from "node:fs/promises";
+import { join as join29 } from "node:path";
 var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
 var DEFAULT_LIMIT = 100;
 var SUMMARY_MAX_LENGTH = 500;
@@ -30866,7 +31016,7 @@ async function appendCodexHookTrace(input) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const targetPath = join28(memoryRoot, HOOK_TRACE_FILE2);
+  const targetPath = join29(memoryRoot, HOOK_TRACE_FILE2);
   await assertSafeMemoryDataFileTarget(targetPath);
   await appendFile3(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
@@ -30874,7 +31024,7 @@ async function appendCodexHookTrace(input) {
 }
 function createHookTraceRecord(input, cwd) {
   return {
-    id: randomUUID12(),
+    id: randomUUID13(),
     createdAt: cleanString(input.now ?? (/* @__PURE__ */ new Date()).toISOString()),
     event: input.event,
     cwd: cleanString(cwd),
@@ -30891,11 +31041,11 @@ async function readRecentCodexHookTrace(input) {
   if (memoryRoot === null) {
     return { records: [], warnings: [] };
   }
-  const targetPath = join28(memoryRoot, HOOK_TRACE_FILE2);
+  const targetPath = join29(memoryRoot, HOOK_TRACE_FILE2);
   await assertSafeMemoryDataFileTarget(targetPath);
   let content;
   try {
-    content = await readFile20(targetPath, "utf8");
+    content = await readFile21(targetPath, "utf8");
   } catch (error2) {
     if (isFileErrorCode15(error2, "ENOENT")) {
       return { records: [], warnings: [] };
@@ -31846,8 +31996,8 @@ async function fileSize(path) {
 }
 async function memoryJsonlSize(memoryRoot) {
   const sizes = await Promise.all([
-    fileSize(join29(memoryRoot, "semantic_memories.jsonl")),
-    fileSize(join29(memoryRoot, "review_queue.jsonl"))
+    fileSize(join30(memoryRoot, "semantic_memories.jsonl")),
+    fileSize(join30(memoryRoot, "review_queue.jsonl"))
   ]);
   return sizes.reduce((sum, size) => sum + size, 0);
 }
@@ -31878,18 +32028,18 @@ function mean(values) {
 }
 
 // benchmark/cases/tier4-failure-security.ts
-import { readFile as readFile22, writeFile as writeFile15 } from "node:fs/promises";
-import { join as join32 } from "node:path";
+import { readFile as readFile23, writeFile as writeFile16 } from "node:fs/promises";
+import { join as join33 } from "node:path";
 
 // src/codex/codex-memory-lifecycle-weekly.ts
-import { createHash as createHash17, randomUUID as randomUUID14 } from "node:crypto";
-import { readFile as readFile21 } from "node:fs/promises";
-import { join as join31 } from "node:path";
+import { createHash as createHash17, randomUUID as randomUUID15 } from "node:crypto";
+import { readFile as readFile22 } from "node:fs/promises";
+import { join as join32 } from "node:path";
 
 // src/codex/memory-lifecycle-profile.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { open as open2, rename as rename5, rm as rm7 } from "node:fs/promises";
-import { join as join30 } from "node:path";
+import { join as join31 } from "node:path";
 var GENERATED_HEADER2 = "<!-- Generated by Cyrene Continuity v1.5. Do not edit manually. -->";
 var MODEL_PROFILE_FILE3 = "MODEL_PROFILE.md";
 async function assertLifecycleProfileTargetSafe(memoryRoot) {
@@ -31954,8 +32104,8 @@ function supersededProfileMemoryIds(memories, relations) {
 }
 async function writeSafeGeneratedProfile(memoryRoot, content) {
   await assertLifecycleProfileTargetSafe(memoryRoot);
-  const targetPath = join30(memoryRoot, MODEL_PROFILE_FILE3);
-  const tempPath = join30(memoryRoot, `.${MODEL_PROFILE_FILE3}.${process.pid}.${Date.now()}.${randomUUID13()}.tmp`);
+  const targetPath = join31(memoryRoot, MODEL_PROFILE_FILE3);
+  const tempPath = join31(memoryRoot, `.${MODEL_PROFILE_FILE3}.${process.pid}.${Date.now()}.${randomUUID14()}.tmp`);
   const file = await open2(tempPath, "wx");
   try {
     await file.writeFile(content, "utf8");
@@ -32549,7 +32699,7 @@ function containsProjectSpecificDetail(content) {
 }
 function projectPromotionEvent(input) {
   return {
-    id: randomUUID14(),
+    id: randomUUID15(),
     action: "promote",
     at: input.now,
     reason: "v1.5 weekly promoted validated memory to project_core",
@@ -32575,7 +32725,7 @@ function projectPromotionEvent(input) {
 }
 function globalPromotionEvent(input) {
   return {
-    id: randomUUID14(),
+    id: randomUUID15(),
     action: "promote",
     at: input.now,
     reason: "v1.5 weekly consolidated project_core memory into global_core",
@@ -32600,7 +32750,7 @@ function globalPromotionEvent(input) {
 }
 function recommendationEvent(input) {
   return {
-    id: randomUUID14(),
+    id: randomUUID15(),
     action: "audit",
     at: input.now,
     reason: input.scope === "global" ? "v1.5 weekly recommended manual review for global consolidation" : "v1.5 weekly recommended manual review for project memory",
@@ -32620,7 +32770,7 @@ function recommendationEvent(input) {
 }
 function profileRegenerationEvent(input) {
   return {
-    id: randomUUID14(),
+    id: randomUUID15(),
     action: "audit",
     at: input.now,
     reason: "v1.5 weekly regenerated core memory profile",
@@ -32697,11 +32847,11 @@ function isJsonlScanPathSafetyError2(error2) {
   return error2 instanceof Error && (error2.message.startsWith("Refusing to scan non-file JSONL path:") || error2.message.startsWith("Refusing to scan JSONL symlink:"));
 }
 async function readSemanticMemoriesStrictFromRoot2(memoryRoot) {
-  const filePath = join31(memoryRoot, SEMANTIC_MEMORIES_FILE3);
+  const filePath = join32(memoryRoot, SEMANTIC_MEMORIES_FILE3);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(filePath);
-    content = await readFile21(filePath, "utf8");
+    content = await readFile22(filePath, "utf8");
   } catch (error2) {
     if (isFileErrorCode16(error2, "ENOENT")) {
       return { memories: [], malformedLines: 0 };
@@ -32792,7 +32942,7 @@ async function runSqliteUnavailable(benchmarkCase, options) {
 }
 async function runJsonlCorrupt(benchmarkCase, options) {
   return withTier4Fixture(benchmarkCase, options, {}, async (fixture) => {
-    const semanticPath = join32(fixture.projectMemoryRoot, "semantic_memories.jsonl");
+    const semanticPath = join33(fixture.projectMemoryRoot, "semantic_memories.jsonl");
     const original = `${JSON.stringify(tier4TrialMemory("tier4-jsonl-corrupt-trial"))}
 {bad json}
 `;
@@ -32808,7 +32958,7 @@ async function runJsonlCorrupt(benchmarkCase, options) {
       projectId: fixture.projectId,
       createdAt: options.now ?? benchmarkCase.fixture.now
     }));
-    await writeFile15(semanticPath, original, "utf8");
+    await writeFile16(semanticPath, original, "utf8");
     const result3 = await runCodexMemoryLifecycleDaily({
       cwd: fixture.cwd,
       projectRoots: [{ projectId: fixture.projectId, memoryRoot: fixture.projectMemoryRoot }],
@@ -32816,7 +32966,7 @@ async function runJsonlCorrupt(benchmarkCase, options) {
       now: options.now ?? benchmarkCase.fixture.now
     });
     const [after, events] = await Promise.all([
-      readFile22(semanticPath, "utf8"),
+      readFile23(semanticPath, "utf8"),
       readMemoryEventsFromRoot(fixture.projectMemoryRoot)
     ]);
     const root = result3.roots[0];
@@ -32933,7 +33083,7 @@ async function runSessionHintsExpired(benchmarkCase, options) {
 }
 async function runMcpError(benchmarkCase, options) {
   return withTier4Fixture(benchmarkCase, options, {}, async (fixture) => {
-    const missingCwd = join32(fixture.metadata.root, "missing-project");
+    const missingCwd = join33(fixture.metadata.root, "missing-project");
     const diagnostic = await boundedContinuityGetError({
       cwd: missingCwd,
       userMessage: "bounded MCP error response",
@@ -33433,14 +33583,14 @@ async function runCyreneBenchmark(options) {
       path: SPEC_PATH,
       title: "Cyrene Benchmark Eval System Design",
       date: "2026-06-05",
-      contentHash: await firstFileHash([join33(resolve5(options.cwd), SPEC_PATH), join33(BENCHMARK_SOURCE_ROOT, SPEC_PATH)])
+      contentHash: await firstFileHash([join34(resolve5(options.cwd), SPEC_PATH), join34(BENCHMARK_SOURCE_ROOT, SPEC_PATH)])
     },
     benchmark: {
       version: BENCHMARK_VERSION,
       thresholdVersion: THRESHOLD_VERSION,
       caseCatalogHash: createHash18("sha256").update(JSON.stringify(BENCHMARK_CASES)).digest("hex")
     },
-    package: await packageMetadata([join33(resolve5(options.cwd), "package.json"), join33(BENCHMARK_SOURCE_ROOT, "package.json")]),
+    package: await packageMetadata([join34(resolve5(options.cwd), "package.json"), join34(BENCHMARK_SOURCE_ROOT, "package.json")]),
     git: await gitMetadata(resolve5(options.cwd)),
     runtime: {
       nodeVersion: process.version,
@@ -33716,7 +33866,7 @@ async function git(args, cwd) {
 async function readFirstFileBuffer(paths) {
   for (const path of paths) {
     try {
-      return await readFile23(path);
+      return await readFile24(path);
     } catch (error2) {
       if (!isFileErrorCode17(error2, "ENOENT")) throw error2;
     }
@@ -33726,7 +33876,7 @@ async function readFirstFileBuffer(paths) {
 async function readFirstFileText(paths) {
   for (const path of paths) {
     try {
-      return await readFile23(path, "utf8");
+      return await readFile24(path, "utf8");
     } catch (error2) {
       if (!isFileErrorCode17(error2, "ENOENT")) throw error2;
     }
@@ -33742,7 +33892,7 @@ function uniqueValues(values) {
 
 // src/codex/codex-benchmark.ts
 async function runCodexBenchmark(input) {
-  const outputDir = input.outputDir ?? join34(input.cwd, "benchmark-results");
+  const outputDir = input.outputDir ?? join35(input.cwd, "benchmark-results");
   const report = await runCyreneBenchmark({
     cwd: input.cwd,
     profile: input.profile,
@@ -33752,25 +33902,25 @@ async function runCodexBenchmark(input) {
     preserveFixtures: input.preserveFixtures
   });
   const artifactPaths = input.artifactArchiveDir === void 0 ? void 0 : {
-    jsonPath: join34(input.artifactArchiveDir, input.profile, "benchmark_report.json"),
-    markdownPath: join34(input.artifactArchiveDir, input.profile, "benchmark_report.md")
+    jsonPath: join35(input.artifactArchiveDir, input.profile, "benchmark_report.json"),
+    markdownPath: join35(input.artifactArchiveDir, input.profile, "benchmark_report.md")
   };
   return {
     profile: report.profile,
     passed: report.passed,
     summary: report.summary,
     reportPaths: {
-      jsonPath: join34(outputDir, "benchmark_report.json"),
-      markdownPath: join34(outputDir, "benchmark_report.md")
+      jsonPath: join35(outputDir, "benchmark_report.json"),
+      markdownPath: join35(outputDir, "benchmark_report.md")
     },
     ...artifactPaths === void 0 ? {} : { artifactPaths }
   };
 }
 
 // src/codex/codex-hook-stop.ts
-import { randomUUID as randomUUID20 } from "node:crypto";
-import { lstat as lstat13, open as open4, readFile as readFile26, realpath as realpath6 } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join38, relative as relative5, resolve as resolve6 } from "node:path";
+import { randomUUID as randomUUID21 } from "node:crypto";
+import { lstat as lstat13, open as open4, readFile as readFile27, realpath as realpath6 } from "node:fs/promises";
+import { isAbsolute as isAbsolute5, join as join39, relative as relative5, resolve as resolve6 } from "node:path";
 
 // src/llm-client.ts
 async function callModel(input) {
@@ -33887,7 +34037,7 @@ function mergeAbortSignals(timeoutSignal, inputSignal) {
 }
 
 // src/codex/admission-gate.ts
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 var ONE_TIME_ACTION_PATTERN = /(?:使用|ran|run|checked|检查|修复|完成|准备|reviewed|looked at).*?(?:工具|tool|command|命令|问题|issue|review)/i;
 var NUMERIC_SNAPSHOT_PATTERN = /\d+.*?(?:tests?|测试|files?|文件|pending|候选|branch|分支|commits?|PRs?)/i;
 var TEMPORARY_STATUS_PATTERN = /(?:当前|现在|目前|today|本轮|这次|刚刚|准备|已完成|完成了)/i;
@@ -34114,7 +34264,7 @@ function isDropOnlyAdmission(reasons) {
 }
 function decision(draft, action2, reasons, scores, now, extras = {}) {
   return {
-    id: randomUUID15(),
+    id: randomUUID16(),
     draftId: draft.id,
     action: action2,
     admissionScore: admissionScoreFor(scores),
@@ -34137,7 +34287,7 @@ function clamp(value) {
 }
 
 // src/codex/candidate-drafts.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
+import { randomUUID as randomUUID17 } from "node:crypto";
 function toCandidateDraft(input) {
   const candidateKind = deriveMemoryCandidateKind({
     candidateKind: input.candidate.candidateKind,
@@ -34148,7 +34298,7 @@ function toCandidateDraft(input) {
   const scope = input.candidate.scope ?? "project";
   const sourceOfTruth = nonEmptyString6(input.candidate.sourceOfTruth) ?? sourceOfTruthFromEvidence(input.candidate.evidence);
   return {
-    id: randomUUID16(),
+    id: randomUUID17(),
     content: input.candidate.content,
     candidateKind,
     scope,
@@ -34455,7 +34605,7 @@ function disabledAdmission(input) {
 }
 
 // src/codex/episode-memory.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
+import { randomUUID as randomUUID18 } from "node:crypto";
 var SUMMARY_MAX_LENGTH2 = 500;
 var ITEM_MAX_LENGTH = 240;
 async function appendStopHookEpisodeFailOpen(input) {
@@ -34480,7 +34630,7 @@ function buildStopHookEpisode(input) {
   const sourceTraceIds = [sessionId, turnId].filter((value) => value !== void 0);
   const title = lastNonemptyUserMessage(input.messages) ?? "Codex Stop hook episode";
   return {
-    id: input.id ?? randomUUID17(),
+    id: input.id ?? randomUUID18(),
     projectId: input.projectId,
     title: clean(title, ITEM_MAX_LENGTH),
     summary: clean(input.summary, SUMMARY_MAX_LENGTH2),
@@ -34672,8 +34822,8 @@ import { createHash as createHash21 } from "node:crypto";
 
 // src/codex/project-memory-signals.ts
 import { execFile as execFile4 } from "node:child_process";
-import { open as open3, readdir as readdir6, lstat as lstat12, readFile as readFile24 } from "node:fs/promises";
-import { join as join35 } from "node:path";
+import { open as open3, readdir as readdir6, lstat as lstat12, readFile as readFile25 } from "node:fs/promises";
+import { join as join36 } from "node:path";
 import { promisify as promisify4 } from "node:util";
 var execFileAsync4 = promisify4(execFile4);
 var PROJECT_FILES = [
@@ -34765,7 +34915,7 @@ async function collectProjectFileSignals(root, mode, changedFiles) {
     if (mode === "changed_files" && !changedFiles.has(file)) {
       continue;
     }
-    const text = await readBoundedRegularFile(join35(root, file));
+    const text = await readBoundedRegularFile(join36(root, file));
     if (text === void 0) {
       continue;
     }
@@ -34776,7 +34926,7 @@ async function collectProjectFileSignals(root, mode, changedFiles) {
 async function collectTestSignals(root, mode, changedFiles) {
   let entries;
   try {
-    entries = (await readdir6(join35(root, "tests"), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => `tests/${entry.name}`).sort();
+    entries = (await readdir6(join36(root, "tests"), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => `tests/${entry.name}`).sort();
   } catch (error2) {
     if (isErrorCode4(error2, "ENOENT")) {
       return [];
@@ -34804,11 +34954,11 @@ async function collectReviewSummarySignals(projectId) {
   if (memoryRoot === null) {
     return { signals: [], warnings };
   }
-  const targetPath = join35(memoryRoot, REVIEW_SUMMARIES_FILE2);
+  const targetPath = join36(memoryRoot, REVIEW_SUMMARIES_FILE2);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
-    content = await readFile24(targetPath, "utf8");
+    content = await readFile25(targetPath, "utf8");
   } catch (error2) {
     if (isErrorCode4(error2, "ENOENT")) {
       return { signals: [], warnings };
@@ -35080,9 +35230,9 @@ function isErrorWithStderr(error2) {
 }
 
 // src/codex/project-memory-harvest-preview.ts
-import { createHash as createHash20, randomUUID as randomUUID18 } from "node:crypto";
-import { mkdir as mkdir18, readFile as readFile25, writeFile as writeFile16 } from "node:fs/promises";
-import { join as join36 } from "node:path";
+import { createHash as createHash20, randomUUID as randomUUID19 } from "node:crypto";
+import { mkdir as mkdir18, readFile as readFile26, writeFile as writeFile17 } from "node:fs/promises";
+import { join as join37 } from "node:path";
 var HARVEST_PREVIEW_ROUTES = [
   "trial_eligible",
   "review_required",
@@ -35100,7 +35250,7 @@ async function writeHarvestPreviewArtifact(input) {
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const expiresAt = new Date(Date.parse(createdAt) + HARVEST_PREVIEW_TTL_MS).toISOString();
   const payload = {
-    previewId: `harvest-${randomUUID18()}`,
+    previewId: `harvest-${randomUUID19()}`,
     projectId: input.projectId,
     memoryRoot: input.memoryRoot,
     createdAt,
@@ -35116,9 +35266,9 @@ async function writeHarvestPreviewArtifact(input) {
     ...payload,
     previewHash: previewHashForPayload(payload)
   };
-  const dir = join36(input.memoryRoot, HARVEST_PREVIEWS_DIR);
+  const dir = join37(input.memoryRoot, HARVEST_PREVIEWS_DIR);
   await mkdir18(dir, { recursive: true });
-  await writeFile16(join36(dir, `${artifact.previewId}.json`), `${stableCanonicalJson(artifact)}
+  await writeFile17(join37(dir, `${artifact.previewId}.json`), `${stableCanonicalJson(artifact)}
 `, "utf8");
   return artifact;
 }
@@ -35128,7 +35278,7 @@ async function readHarvestPreviewArtifact(input) {
   }
   let raw;
   try {
-    raw = await readFile25(join36(input.memoryRoot, HARVEST_PREVIEWS_DIR, `${input.previewId}.json`), "utf8");
+    raw = await readFile26(join37(input.memoryRoot, HARVEST_PREVIEWS_DIR, `${input.previewId}.json`), "utf8");
   } catch {
     return { action: "preview_not_found", reason: `Harvest preview artifact was not found. ${previewRequiredAction()}` };
   }
@@ -35721,15 +35871,15 @@ function isRecord6(value) {
 }
 
 // src/codex/review-summary-runtime.ts
-import { createHash as createHash22, randomUUID as randomUUID19 } from "node:crypto";
+import { createHash as createHash22, randomUUID as randomUUID20 } from "node:crypto";
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile4 } from "node:fs/promises";
-import { join as join37 } from "node:path";
+import { join as join38 } from "node:path";
 var REVIEW_SUMMARIES_FILE3 = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join37(root, REVIEW_SUMMARIES_FILE3);
+  const targetPath = join38(root, REVIEW_SUMMARIES_FILE3);
   await assertSafeMemoryDataFileTarget(targetPath);
   await appendFile4(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
@@ -35820,7 +35970,7 @@ async function runCodexReviewSummary(input) {
   }
   const project = await identifyCodexProject(input.cwd);
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID19();
+  const summaryId = randomUUID20();
   const runId = [input.sessionId, input.turnId].filter(Boolean).join(":") || summaryId;
   const createdAt = input.now ?? (/* @__PURE__ */ new Date()).toISOString();
   const inputRedaction = redactReviewText(formatMessages(window));
@@ -36190,7 +36340,7 @@ async function handleCodexStopHookPayloadUnsafe(payload, deps, cwd) {
   if (messages.length === 0) {
     return { action: "noop", reason: "No transcript messages found." };
   }
-  const stopEpisodeId = randomUUID20();
+  const stopEpisodeId = randomUUID21();
   const review = await runReviewSummaryOrSkip({
     payload,
     cwd,
@@ -36365,7 +36515,7 @@ async function recordStopHookFailureSummary(cwd, payload, error2) {
       return { action: "noop", reason: "Project memory is disabled for this project." };
     }
     const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-    const summaryId = randomUUID20();
+    const summaryId = randomUUID21();
     const sessionId = asString4(payload.session_id);
     const turnId = asString4(payload.turn_id);
     const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -36400,7 +36550,7 @@ async function recordModelConfigSkippedSummary(cwd, payload) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const summaryId = randomUUID20();
+  const summaryId = randomUUID21();
   const sessionId = asString4(payload.session_id);
   const turnId = asString4(payload.turn_id);
   const runId = [sessionId, turnId].filter(Boolean).join(":") || summaryId;
@@ -36530,7 +36680,7 @@ async function readTranscriptText(cwd, transcriptPath) {
     if (safePath.size > MAX_TRANSCRIPT_BYTES) {
       return readTranscriptTail(safePath);
     }
-    return await readFile26(safePath.path, "utf8");
+    return await readFile27(safePath.path, "utf8");
   } catch (error2) {
     if (error2 instanceof Error && "code" in error2 && error2.code === "ENOENT") {
       return void 0;
@@ -36592,7 +36742,7 @@ function codexHomePath() {
     return configured;
   }
   const home = process.env.HOME?.trim();
-  return home === void 0 || home === "" ? void 0 : join38(home, ".codex");
+  return home === void 0 || home === "" ? void 0 : join39(home, ".codex");
 }
 function isPathInside5(parent, child) {
   const path = relative5(parent, child);
@@ -36603,9 +36753,9 @@ function asString4(value) {
 }
 
 // src/codex/codex-install.ts
-import { lstat as lstat14, mkdir as mkdir19, rm as rm8, symlink, writeFile as writeFile17 } from "node:fs/promises";
+import { lstat as lstat14, mkdir as mkdir19, rm as rm8, symlink, writeFile as writeFile18 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname12, join as join39, resolve as resolve7 } from "node:path";
+import { dirname as dirname12, join as join40, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -36617,13 +36767,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join39(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join40(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
   await mkdir19(dirname12(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
   await mkdir19(stateRoot, { recursive: true });
-  await writeFile17(join39(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await writeFile18(join40(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -36692,9 +36842,9 @@ async function runCodexMemoryActiveSupersede(input) {
 }
 
 // src/codex/codex-memory-dashboard.ts
-import { readFile as readFile27 } from "node:fs/promises";
+import { readFile as readFile28 } from "node:fs/promises";
 import { homedir as homedir6 } from "node:os";
-import { join as join40 } from "node:path";
+import { join as join41 } from "node:path";
 var REVIEW_SUMMARIES_FILE4 = "review-summaries.jsonl";
 var STOP_HOOK_STALE_MS = 24 * 60 * 60 * 1e3;
 async function formatCodexMemoryDashboard(input) {
@@ -36709,7 +36859,7 @@ async function formatCodexMemoryDashboard(input) {
     readReviewSummaries(projectRoot),
     readDashboardDreamState(projectRoot),
     readModelProfileFromRootIfExists(projectRoot),
-    readOptional2(input.configPath ?? join40(homedir6(), ".codex", "config.toml"))
+    readOptional2(input.configPath ?? join41(homedir6(), ".codex", "config.toml"))
   ]);
   const pendingSummaries = pending.map((candidate) => summarizePendingMemory(candidate, now));
   const warnings = buildDashboardWarnings({
@@ -36755,7 +36905,7 @@ async function readDashboardPendingMemories(roots) {
 async function readReviewSummaries(root) {
   let content;
   try {
-    content = await readOptionalMemoryDataFile(join40(root, REVIEW_SUMMARIES_FILE4));
+    content = await readOptionalMemoryDataFile(join41(root, REVIEW_SUMMARIES_FILE4));
   } catch {
     return [];
   }
@@ -36893,7 +37043,7 @@ function hasEnabledMcpServer2(configText, name) {
 }
 async function readOptional2(path) {
   try {
-    return await readFile27(path, "utf8");
+    return await readFile28(path, "utf8");
   } catch (error2) {
     if (isErrorCode5(error2, "ENOENT")) {
       return "";
@@ -36904,7 +37054,7 @@ async function readOptional2(path) {
 async function readOptionalMemoryDataFile(path) {
   try {
     await assertSafeMemoryDataFileTarget(path);
-    return await readFile27(path, "utf8");
+    return await readFile28(path, "utf8");
   } catch (error2) {
     if (isErrorCode5(error2, "ENOENT")) {
       return "";
@@ -36930,9 +37080,9 @@ function errorMessage6(error2) {
 }
 
 // src/codex/codex-memory-lifecycle-migrate-v1-5.ts
-import { randomUUID as randomUUID21 } from "node:crypto";
-import { lstat as lstat15, readFile as readFile28, realpath as realpath7, rename as rename6, rm as rm9, writeFile as writeFile18 } from "node:fs/promises";
-import { join as join41 } from "node:path";
+import { randomUUID as randomUUID22 } from "node:crypto";
+import { lstat as lstat15, readFile as readFile29, realpath as realpath7, rename as rename6, rm as rm9, writeFile as writeFile19 } from "node:fs/promises";
+import { join as join42 } from "node:path";
 var LEGACY_INDEX_FILE2 = "index.jsonl";
 var LEGACY_PENDING_FILE2 = "pending.jsonl";
 var SEMANTIC_MEMORIES_FILE4 = "semantic_memories.jsonl";
@@ -36970,7 +37120,7 @@ async function runCodexMemoryLifecycleMigrateV15(input) {
       }
     } catch (error2) {
       registryFailure = skippedRootResult(
-        { scope: "project", memoryRoot: join41(codexGlobalMemoryRoot(), "..", "..", "projects") },
+        { scope: "project", memoryRoot: join42(codexGlobalMemoryRoot(), "..", "..", "projects") },
         `project registry listing failed: ${errorMessage7(error2)}`
       );
     }
@@ -37022,9 +37172,9 @@ async function migrateReadableRoot(root, input) {
     };
   }
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
-    readJsonLinesWithMalformed(join41(root.memoryRoot, LEGACY_INDEX_FILE2), isValidLegacyActiveMemory),
-    readJsonLinesWithMalformed(join41(root.memoryRoot, LEGACY_PENDING_FILE2), isValidPendingMemory),
-    readJsonLinesWithMalformed(join41(root.memoryRoot, SEMANTIC_MEMORIES_FILE4), isValidSemanticMemory)
+    readJsonLinesWithMalformed(join42(root.memoryRoot, LEGACY_INDEX_FILE2), isValidLegacyActiveMemory),
+    readJsonLinesWithMalformed(join42(root.memoryRoot, LEGACY_PENDING_FILE2), isValidPendingMemory),
+    readJsonLinesWithMalformed(join42(root.memoryRoot, SEMANTIC_MEMORIES_FILE4), isValidSemanticMemory)
   ]);
   const legacyActive = legacyActiveRead.records;
   const legacyPending = legacyPendingRead.records;
@@ -37235,9 +37385,9 @@ async function migrateReadableRoot(root, input) {
       await appendMemoryEventFromRoot(root.memoryRoot, dropAuditEvent(root, audit, input.now));
     }
     await writeSemanticMemoriesFromRoot(root.memoryRoot, nextSemantic);
-    await writeJsonLinesAtomic3(join41(root.memoryRoot, REVIEW_QUEUE_FILE2), []);
-    await removeMemoryDataFileIfExists2(join41(root.memoryRoot, LEGACY_INDEX_FILE2));
-    await removeMemoryDataFileIfExists2(join41(root.memoryRoot, LEGACY_PENDING_FILE2));
+    await writeJsonLinesAtomic3(join42(root.memoryRoot, REVIEW_QUEUE_FILE2), []);
+    await removeMemoryDataFileIfExists2(join42(root.memoryRoot, LEGACY_INDEX_FILE2));
+    await removeMemoryDataFileIfExists2(join42(root.memoryRoot, LEGACY_PENDING_FILE2));
     await appendMemoryEventFromRoot(root.memoryRoot, completionEvent(result3, input.now));
   }
   return result3;
@@ -37455,7 +37605,7 @@ function dropAuditForSemantic(memory2, sourceStatus, normalizedMemory, dropReaso
 }
 function recommendationEvent2(root, recommendation, now) {
   return {
-    id: randomUUID21(),
+    id: randomUUID22(),
     action: "audit",
     at: now,
     reason: "v1.5 migration recommended manual review for high-risk memory",
@@ -37476,7 +37626,7 @@ function recommendationEvent2(root, recommendation, now) {
 }
 function dropAuditEvent(root, audit, now) {
   return {
-    id: randomUUID21(),
+    id: randomUUID22(),
     action: "audit",
     at: now,
     reason: audit.dropReason === "low-value memory" ? "v1.5 migration dropped low-value memory" : "v1.5 migration dropped memory",
@@ -37499,7 +37649,7 @@ function dropAuditEvent(root, audit, now) {
 }
 function completionEvent(result3, now) {
   return {
-    id: randomUUID21(),
+    id: randomUUID22(),
     action: "audit",
     at: now,
     reason: "completed v1.5 memory lifecycle migration",
@@ -37584,7 +37734,7 @@ async function readJsonLinesWithMalformed(filePath, isValidRecord) {
   let content;
   try {
     await assertSafeMemoryDataFileTarget(filePath);
-    content = await readFile28(filePath, "utf8");
+    content = await readFile29(filePath, "utf8");
   } catch (error2) {
     if (isFileErrorCode18(error2, "ENOENT")) {
       return { records: [], malformedLines: 0 };
@@ -37666,9 +37816,9 @@ function isOptionalBoolean2(value) {
 }
 async function writeJsonLinesAtomic3(filePath, values) {
   await assertSafeMemoryDataFileTarget(filePath);
-  const tempPath = `${filePath}.${process.pid}.${randomUUID21()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${randomUUID22()}.tmp`;
   const content = values.map((value) => JSON.stringify(value)).join("\n");
-  await writeFile18(tempPath, content === "" ? "" : `${content}
+  await writeFile19(tempPath, content === "" ? "" : `${content}
 `, "utf8");
   await rename6(tempPath, filePath);
 }
@@ -37746,7 +37896,7 @@ async function readableMemoryRoot2(memoryRoot) {
 }
 
 // src/codex/semantic-rewrite.ts
-import { randomUUID as randomUUID22 } from "node:crypto";
+import { randomUUID as randomUUID23 } from "node:crypto";
 
 // src/codex/semantic-rewrite-validator.ts
 import { createHash as createHash23 } from "node:crypto";
@@ -37975,7 +38125,7 @@ function semanticRewriteReceipt(input) {
   const newReviewHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? reviewHashForPendingMemory(input.next) : void 0;
   const rewrittenContentHash = input.action === "replace_content" || input.action === "enrich_boundaries" ? contentHashForSemanticRewrite(input.next.content) : void 0;
   return {
-    id: randomUUID22(),
+    id: randomUUID23(),
     pendingMemoryId: input.original.id,
     action: input.action,
     method: input.method,
@@ -38111,7 +38261,7 @@ async function resolveMemoryRoot(input) {
 }
 
 // src/codex/triage-apply.ts
-import { randomUUID as randomUUID23 } from "node:crypto";
+import { randomUUID as randomUUID24 } from "node:crypto";
 function applySafeTriageDecisions(input) {
   const byId = new Map(input.pending.map((candidate) => [candidate.id, candidate]));
   const retainedIds = new Set(input.pending.map((candidate) => candidate.id));
@@ -38205,7 +38355,7 @@ function tombstoneForAutoDroppedCandidate(candidate, now) {
 }
 function memoryEventForTriageDecision(action2, candidate, now, reason, details) {
   return {
-    id: randomUUID23(),
+    id: randomUUID24(),
     action: action2,
     at: now,
     reason,
@@ -38304,13 +38454,13 @@ async function runCodexMemoryTriage(input) {
 }
 
 // src/codex/codex-ui-server.ts
-import { randomBytes } from "node:crypto";
+import { randomBytes as randomBytes2 } from "node:crypto";
 import { createServer } from "node:http";
 
 // src/codex/codex-ui-api.ts
-import { randomUUID as randomUUID24 } from "node:crypto";
-import { readFile as readFile29 } from "node:fs/promises";
-import { join as join42 } from "node:path";
+import { randomUUID as randomUUID25 } from "node:crypto";
+import { readFile as readFile30 } from "node:fs/promises";
+import { join as join43 } from "node:path";
 
 // src/codex/memory-distill.ts
 async function runCodexMemoryDistill(input) {
@@ -39033,7 +39183,7 @@ async function rejectPendingCandidatesFromRoot(input) {
       for (const candidate of rejected) {
         await appendTombstoneFromRoot(lockedMemoryRoot, tombstoneForBatchRejectedCandidate(candidate, now));
         await appendMemoryEventFromRoot(lockedMemoryRoot, {
-          id: randomUUID24(),
+          id: randomUUID25(),
           action: "reject",
           at: now,
           reason: input.reason ?? "Rejected by Codex pending memory review",
@@ -39937,11 +40087,11 @@ function uniqueInOrder8(values) {
   });
 }
 async function readReviewSummaryRecordsForUi(memoryRoot) {
-  const targetPath = join42(memoryRoot, REVIEW_SUMMARIES_FILE5);
+  const targetPath = join43(memoryRoot, REVIEW_SUMMARIES_FILE5);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
-    content = await readFile29(targetPath, "utf8");
+    content = await readFile30(targetPath, "utf8");
   } catch (error2) {
     if (isFileErrorCode19(error2, "ENOENT")) {
       return [];
@@ -42295,7 +42445,7 @@ function isCrossOriginRequest(request) {
   }
 }
 function createUiToken() {
-  return randomBytes(32).toString("hex");
+  return randomBytes2(32).toString("hex");
 }
 function hasValidUiToken(request, expectedToken) {
   return singleHeaderValue(request.headers["x-cyrene-ui-token"]) === expectedToken;
@@ -42483,9 +42633,9 @@ async function runCodexMemoryAutomation(input) {
 }
 
 // src/memory/memory-repair.ts
-import { randomUUID as randomUUID25 } from "node:crypto";
-import { lstat as lstat17, mkdir as mkdir20, open as open5, readFile as readFile30, rm as rm10, rename as rename7 } from "node:fs/promises";
-import { basename as basename6, dirname as dirname13, join as join43 } from "node:path";
+import { randomUUID as randomUUID26 } from "node:crypto";
+import { lstat as lstat17, mkdir as mkdir20, open as open5, readFile as readFile31, rm as rm10, rename as rename7 } from "node:fs/promises";
+import { basename as basename6, dirname as dirname13, join as join44 } from "node:path";
 var REPAIR_DIR = "repair";
 var TOOL_VERSION = "0.1.0";
 var UNSUPPORTED_DIRECTORY_FSYNC_ERROR_CODES = /* @__PURE__ */ new Set(["EINVAL", "EISDIR", "ENOTSUP", "ENOSYS", "EPERM"]);
@@ -42531,7 +42681,7 @@ async function runJsonlRepairFromRoot(input) {
 async function scanCanonicalJsonlFiles(memoryRoot) {
   const files = [];
   for (const relativePath of CANONICAL_JSONL_FILES) {
-    const filePath = join43(memoryRoot, relativePath);
+    const filePath = join44(memoryRoot, relativePath);
     if (!await pathExists3(filePath)) {
       continue;
     }
@@ -42547,7 +42697,7 @@ async function readRepairSource(filePath, relativePath) {
   if (!stats.isFile()) {
     throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`);
   }
-  const bytes = await readFile30(filePath);
+  const bytes = await readFile31(filePath);
   const content = bytes.toString("utf8");
   return {
     relativePath,
@@ -42579,14 +42729,14 @@ function parseJsonlContentForRepair(content, relativePath) {
   return { validRecords, malformed };
 }
 async function applyJsonlRepair(input) {
-  const repairRoot = join43(input.memoryRoot, REPAIR_DIR);
-  const transactionRoot = join43(repairRoot, input.repairTransactionId);
-  const backupRoot = join43(transactionRoot, "backups");
-  const quarantinePath = join43(transactionRoot, "quarantine.jsonl");
-  const pendingSummaryPath = join43(transactionRoot, "summary.pending.json");
-  const summaryPath = join43(transactionRoot, "summary.json");
+  const repairRoot = join44(input.memoryRoot, REPAIR_DIR);
+  const transactionRoot = join44(repairRoot, input.repairTransactionId);
+  const backupRoot = join44(transactionRoot, "backups");
+  const quarantinePath = join44(transactionRoot, "quarantine.jsonl");
+  const pendingSummaryPath = join44(transactionRoot, "summary.pending.json");
+  const summaryPath = join44(transactionRoot, "summary.json");
   const sources = input.scannedFiles.filter((source) => source.scan.malformed.length > 0);
-  const backupPaths = sources.map((source) => join43(backupRoot, source.relativePath));
+  const backupPaths = sources.map((source) => join44(backupRoot, source.relativePath));
   const malformedLineCount = sources.reduce((count, source) => count + source.scan.malformed.length, 0);
   const pendingSummary = {
     status: "pending",
@@ -42608,7 +42758,7 @@ async function applyJsonlRepair(input) {
     await writeJsonFileDurable(pendingSummaryPath, pendingSummary);
     pendingSummaryWritten = true;
     for (const source of sources) {
-      await writeBufferDurable(join43(backupRoot, source.relativePath), source.snapshot.bytes);
+      await writeBufferDurable(join44(backupRoot, source.relativePath), source.snapshot.bytes);
     }
     await writeJsonLinesDurable(
       quarantinePath,
@@ -42677,7 +42827,7 @@ async function captureSourceSnapshot(filePath) {
   if (!stats.isFile()) {
     throw new Error(`Refusing to repair non-file JSONL path: ${filePath}`);
   }
-  const bytes = await readFile30(filePath);
+  const bytes = await readFile31(filePath);
   const content = bytes.toString("utf8");
   return createSourceSnapshot(stats.mtimeMs, content, bytes);
 }
@@ -42706,7 +42856,7 @@ async function writeJsonLinesDurable(filePath, values) {
 }
 async function writeBufferDurable(filePath, content) {
   await ensureDirectory(dirname13(filePath));
-  const tempPath = join43(dirname13(filePath), `.${basename6(filePath)}.${process.pid}.${Date.now()}.${randomUUID25()}.tmp`);
+  const tempPath = join44(dirname13(filePath), `.${basename6(filePath)}.${process.pid}.${Date.now()}.${randomUUID26()}.tmp`);
   const file = await open5(tempPath, "wx");
   let closed = false;
   try {
@@ -42772,7 +42922,7 @@ async function pathExists3(filePath) {
 }
 function createRepairTransactionId(now) {
   const sanitizedNow = now.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  return `repair-${sanitizedNow}-${randomUUID25()}`;
+  return `repair-${sanitizedNow}-${randomUUID26()}`;
 }
 function errorMessage10(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
@@ -42792,9 +42942,9 @@ function isFileErrorCode20(error2, code) {
 }
 
 // src/codex/profile-candidates.ts
-import { createHash as createHash24, randomUUID as randomUUID26 } from "node:crypto";
-import { lstat as lstat18, readFile as readFile31, rename as rename8, writeFile as writeFile19 } from "node:fs/promises";
-import { join as join44 } from "node:path";
+import { createHash as createHash24, randomUUID as randomUUID27 } from "node:crypto";
+import { lstat as lstat18, readFile as readFile32, rename as rename8, writeFile as writeFile20 } from "node:fs/promises";
+import { join as join45 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -42922,7 +43072,7 @@ async function applyCodexProfileCandidate(input) {
     );
     await writePendingProfilePatchFromRoot(lockedRoot, updatedCandidates);
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID26(),
+      id: randomUUID27(),
       action: "promote",
       at: now,
       reason: "Approved by Codex profile candidate review",
@@ -43153,10 +43303,10 @@ function upsertActiveMemory2(active, memory2) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join44(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join45(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
-    const content = await readFile31(targetPath, "utf8");
+    const content = await readFile32(targetPath, "utf8");
     return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   } catch (error2) {
     if (isFileErrorCode21(error2, "ENOENT")) {
@@ -43167,20 +43317,20 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join44(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join45(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID27()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
-  await writeFile19(tempPath, content === "" ? "" : `${content}
+  await writeFile20(tempPath, content === "" ? "" : `${content}
 `, "utf8");
   await rename8(tempPath, targetPath);
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join44(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join45(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
-  const tempPath = `${targetPath}.${process.pid}.${randomUUID26()}.tmp`;
-  await writeFile19(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
+  const tempPath = `${targetPath}.${process.pid}.${randomUUID27()}.tmp`;
+  await writeFile20(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");
   await rename8(tempPath, targetPath);
 }
 function formatPendingProfilePatch(candidates) {
@@ -43319,7 +43469,7 @@ function formatList(values) {
 }
 
 // src/codex/similar-hints-review.ts
-import { createHash as createHash25, randomUUID as randomUUID27 } from "node:crypto";
+import { createHash as createHash25, randomUUID as randomUUID28 } from "node:crypto";
 import { basename as basename7, dirname as dirname14 } from "node:path";
 function reviewHashForSimilarHintMemory(memory2) {
   const payload = {
@@ -43434,7 +43584,7 @@ async function markSimilarHintTransferable(input) {
       active.map((memory2) => memory2.id === lockedMemory.id ? nextMemory : memory2)
     );
     await appendMemoryEventFromRoot(lockedRoot, {
-      id: randomUUID27(),
+      id: randomUUID28(),
       action: "update",
       at: now,
       reason: "Marked active memory transferable for similar-project hints",
@@ -43666,7 +43816,8 @@ async function handleCodexCommand(input) {
       evidenceRef: parseOptionalOption(input.args, "--evidence-ref"),
       query: parseOptionalOption(input.args, "--query"),
       reason: parseOptionalOption(input.args, "--reason"),
-      idempotencyKey: parseOptionalOption(input.args, "--idempotency-key")
+      idempotencyKey: parseOptionalOption(input.args, "--idempotency-key"),
+      candidateHintReceipt: parseOptionalCandidateHintReceipt(input.args)
     });
     if (result3.result.action === "invalid_request") {
       throw new Error(result3.result.reason);
@@ -43914,7 +44065,7 @@ async function handleCodexCommand(input) {
 `);
     return;
   }
-  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory jsonl repair [--dry-run|--apply] [--global]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run|--apply --preview-id <id> --preview-hash <hash>] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
+  console.error("Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--candidate-hint-receipt <json>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory jsonl repair [--dry-run|--apply] [--global]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run|--apply --preview-id <id> --preview-hash <hash>] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>");
   process.exit(1);
 }
 function waitForProcessTermination(server) {
@@ -44050,6 +44201,18 @@ function parsePublicActivationFeedbackEvent(args) {
     return value;
   }
   throw new Error(`Invalid --event: ${value}. Expected applied, ignored, corrected, or violated`);
+}
+function parseOptionalCandidateHintReceipt(args) {
+  const value = parseOptionalOption(args, "--candidate-hint-receipt");
+  if (value === void 0) return void 0;
+  try {
+    const parsed = JSON.parse(value);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+  }
+  throw new Error("Invalid --candidate-hint-receipt: expected JSON object");
 }
 function parseRequiredPositional(args, index, label) {
   const value = args[index];
@@ -54319,6 +54482,17 @@ async function handleMemoryAutomationRun(input, fallbackCwd) {
 }
 
 // src/mcp/tools/memory-feedback.ts
+var candidateHintReceiptSchema = external_exports.object({
+  version: external_exports.literal(1),
+  contextId: external_exports.string(),
+  hintId: external_exports.string(),
+  memoryId: external_exports.string(),
+  contentHash: external_exports.string(),
+  projectId: external_exports.string(),
+  mode: external_exports.enum(["balanced", "review"]),
+  selectedAt: external_exports.string(),
+  receiptHash: external_exports.string()
+});
 var memoryFeedbackInputSchema = {
   memoryId: external_exports.string().min(1),
   contentHash: external_exports.string().min(1),
@@ -54327,7 +54501,8 @@ var memoryFeedbackInputSchema = {
   evidenceRef: external_exports.string().optional(),
   query: external_exports.string().optional(),
   reason: external_exports.string().optional(),
-  idempotencyKey: external_exports.string().optional()
+  idempotencyKey: external_exports.string().optional(),
+  candidateHintReceipt: candidateHintReceiptSchema.optional()
 };
 async function handleMemoryFeedback(input, fallbackCwd) {
   const result3 = await recordCodexMemoryFeedback({
@@ -54339,7 +54514,8 @@ async function handleMemoryFeedback(input, fallbackCwd) {
     evidenceRef: input.evidenceRef,
     query: input.query,
     reason: input.reason,
-    idempotencyKey: input.idempotencyKey
+    idempotencyKey: input.idempotencyKey,
+    candidateHintReceipt: input.candidateHintReceipt
   });
   return jsonText(result3);
 }
@@ -54478,7 +54654,7 @@ function createCyreneMcpServer(options) {
   server.registerTool(
     "cyrene_memory_feedback",
     {
-      description: "Record hash-checked active memory usage feedback as lifecycle evidence; this never promotes, edits, archives, or tombstones memory directly.",
+      description: "Record hash-checked active memory usage feedback or receipt-bound candidate hint usage feedback as lifecycle evidence; this never promotes, edits, archives, or tombstones memory directly.",
       inputSchema: memoryFeedbackInputSchema
     },
     async (input) => handleMemoryFeedback(input, options.cwd)

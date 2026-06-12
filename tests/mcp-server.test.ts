@@ -21,6 +21,7 @@ import { handleMemoryFeedback, memoryFeedbackInputSchema } from '../src/mcp/tool
 import { handleMemoryProfileGet } from '../src/mcp/tools/memory-dream.js'
 import { handleMemoryHarvestProject, memoryHarvestProjectInputSchema } from '../src/mcp/tools/memory-harvest-project.js'
 import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
+import { createCandidateHintSelectionReceipt } from '../src/codex/candidate-hint-receipts.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import { identifyCodexProject } from '../src/codex/project-id.js'
 import { readActivationEventsFromRoot, readActiveMemoriesFromRoot, writeActiveMemoriesFromRoot } from '../src/memory/memory-store.js'
@@ -280,6 +281,7 @@ describe('Cyrene MCP server', () => {
 
     expect(feedbackJson.result.action).toBe('recorded')
     expect(feedbackJson).not.toHaveProperty('cwd')
+    expect(memoryFeedbackInputSchema).toHaveProperty('candidateHintReceipt')
     await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([
       expect.objectContaining({
         memoryId: memory.id,
@@ -287,6 +289,36 @@ describe('Cyrene MCP server', () => {
         queryHash: expect.stringMatching(/^[a-f0-9]{16}$/)
       })
     ])
+
+    const receipt = await createCandidateHintSelectionReceipt({
+      version: 1,
+      contextId: 'mcp-candidate-context',
+      hintId: memory.id,
+      memoryId: memory.id,
+      contentHash: contentHashForActiveMemory(memory),
+      projectId: project.projectId,
+      mode: 'balanced',
+      selectedAt: new Date().toISOString()
+    })
+    const candidateFeedbackJson = JSON.parse(
+      (await handleMemoryFeedback({
+        memoryId: memory.id,
+        contentHash: contentHashForActiveMemory(memory),
+        event: 'ignored',
+        activationId: `candidate-hint:${memory.id}`,
+        candidateHintReceipt: receipt
+      }, cwd)).content[0]?.text ?? '{}'
+    )
+
+    expect(candidateFeedbackJson.result.action).toBe('recorded')
+    await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toContainEqual(
+      expect.objectContaining({
+        memoryId: memory.id,
+        event: 'ignored',
+        candidateHintContextId: 'mcp-candidate-context',
+        candidateHintReceiptHash: receipt.receiptHash
+      })
+    )
   })
 
   it('handles memory promote conflict resolution over MCP', async () => {

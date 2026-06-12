@@ -109,6 +109,8 @@ require the current review hash.
 npm run dev -- codex memory context-preview --message "..." [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]
 npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event applied --query "..."
 npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event ignored [--activation-id <id>] [--evidence-ref <ref>] [--reason <text>]
+npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event applied --activation-id candidate-hint:<hintId> --candidate-hint-receipt '<json>' --query "..."
+npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event ignored --activation-id candidate-hint:<hintId> --candidate-hint-receipt '<json>'
 npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event corrected [--reason <text>]
 npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event violated [--reason <text>]
 ```
@@ -117,8 +119,10 @@ npm run dev -- codex memory feedback <memoryId> --content-hash <hash> --event vi
 `review` is required for pending review content, counts, and diagnostics. JSONL
 fallback is disabled unless `--allow-jsonl-fallback` is passed.
 
-Feedback records explicit usage evidence for active memory only. Raw query text
-is persisted as a hash, and feedback cannot promote memory by itself.
+Feedback records explicit usage evidence for active memory, or receipt-bound
+Candidate Hint usage evidence when the hint was actually applied or explicitly
+ignored. Raw query text is persisted as a hash, and feedback cannot promote
+memory by itself.
 
 ## Memory Maintenance
 

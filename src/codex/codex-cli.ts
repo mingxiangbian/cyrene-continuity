@@ -252,7 +252,8 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
       evidenceRef: parseOptionalOption(input.args, '--evidence-ref'),
       query: parseOptionalOption(input.args, '--query'),
       reason: parseOptionalOption(input.args, '--reason'),
-      idempotencyKey: parseOptionalOption(input.args, '--idempotency-key')
+      idempotencyKey: parseOptionalOption(input.args, '--idempotency-key'),
+      candidateHintReceipt: parseOptionalCandidateHintReceipt(input.args)
     })
     if (result.result.action === 'invalid_request') {
       throw new Error(result.result.reason)
@@ -514,7 +515,7 @@ export async function handleCodexCommand(input: { cwd: string; args: string[]; r
     return
   }
 
-  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory jsonl repair [--dry-run|--apply] [--global]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run|--apply --preview-id <id> --preview-hash <hash>] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
+  console.error('Usage: cyrene-continuity codex <ui [--port <n>]|doctor [--config <path>]|install --dev|install --plugin|install-hook --stop [--dry-run]|hook session-start|hook user-prompt-submit|hook post-tool-use|hook stop|project status|project list|project alias <projectId> <alias>|project merge <from> <to>|benchmark run --profile smoke|gate|full|scale|real-replay|llm|external [--output-dir <path>] [--artifact-archive-dir <path>] [--baseline <path>] [--preserve-fixtures]|eval run --check similar-hints|eval run --check release|memory dashboard|memory review [--limit <n>]|memory triage [--dry-run|--apply]|memory prepare [--dry-run|--apply] [--max-items <n>]|memory automation --job daily|weekly [--dry-run|--apply] [--all-projects]|memory context-preview --message <text> [--task coding|planning|debugging|conversation|memory] [--mode fast|balanced|review] [--include-similar-project-hints] [--include-pending-details] [--include-pending-notice] [--include-diagnostics] [--record-retrieved-events] [--allow-jsonl-fallback] [--max-tokens <n>]|memory summary refresh [--scope project|global]|memory feedback <id> --content-hash <hash> --event applied|ignored|corrected|violated [--activation-id <id>] [--candidate-hint-receipt <json>] [--evidence-ref <ref>] [--query <text>] [--reason <text>]|memory distill [--dry-run]|memory jsonl repair [--dry-run|--apply] [--global]|memory migrate-v2 [--all-projects]|memory lifecycle migrate-v1-5 [--dry-run|--apply] [--all-projects]|memory lifecycle daily [--dry-run|--apply] [--all-projects]|memory lifecycle weekly [--dry-run|--apply] [--all-projects]|memory active archive <id> --content-hash <hash> --reason <text>|memory active tombstone <id> --content-hash <hash> --reason <text> [--days <n>|--indefinite] [--confirm-text <id>]|memory active propose-edit <id> --content-hash <hash> --content <text> --reason <text>|memory active supersede <id> --candidate <candidateId> --content-hash <hash> --review-hash <hash> --reason <text> [--confirm-text <id>]|memory approve <id> --review-hash <hash> [--conflict-resolution supersede|keep-both|reject-new]|memory reject <id> --review-hash <hash>|memory edit <id> --review-hash <hash> --content <text>|memory defer <id> --review-hash <hash> [--days <n>]|memory harvest-project [--dry-run|--apply --preview-id <id> --preview-hash <hash>] [--changed-files] [--since last-summary]|memory status|memory db rebuild|memory maintenance|memory profile|profile reflect --source daily-interview|profile apply --candidate <id> --review-hash <hash>|similar-hints explain [--memory-id <id>|--source-project-id <projectId>]|similar-hints mark-transferable --memory-id <id> --review-hash <hash>>')
   process.exit(1)
 }
 
@@ -671,6 +672,20 @@ function parsePublicActivationFeedbackEvent(args: string[]): PublicActivationFee
     return value
   }
   throw new Error(`Invalid --event: ${value}. Expected applied, ignored, corrected, or violated`)
+}
+
+function parseOptionalCandidateHintReceipt(args: string[]): unknown {
+  const value = parseOptionalOption(args, '--candidate-hint-receipt')
+  if (value === undefined) return undefined
+  try {
+    const parsed = JSON.parse(value)
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed
+    }
+  } catch {
+    // Normalize JSON parse failures into the public CLI argument error below.
+  }
+  throw new Error('Invalid --candidate-hint-receipt: expected JSON object')
 }
 
 function parseRequiredPositional(args: string[], index: number, label: string): string {

@@ -82,7 +82,7 @@ export function createCyreneMcpServer(options: { cwd: string }): McpServer {
     'cyrene_memory_feedback',
     {
       description:
-        'Record hash-checked active memory usage feedback as lifecycle evidence; this never promotes, edits, archives, or tombstones memory directly.',
+        'Record hash-checked active memory usage feedback or receipt-bound candidate hint usage feedback as lifecycle evidence; this never promotes, edits, archives, or tombstones memory directly.',
       inputSchema: memoryFeedbackInputSchema
     },
     async (input) => handleMemoryFeedback(input, options.cwd)
