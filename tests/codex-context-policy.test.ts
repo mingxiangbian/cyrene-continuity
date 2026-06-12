@@ -35,7 +35,7 @@ describe('context policy', () => {
       includeFullProfile: true,
       includeFastSummaries: false,
       recordRetrievedEvents: false,
-      allowJsonlFallback: false
+      allowJsonlFallback: true
     })
   })
 
@@ -51,7 +51,39 @@ describe('context policy', () => {
       includeFullProfile: true,
       includeFastSummaries: false,
       recordRetrievedEvents: false,
-      allowJsonlFallback: false
+      allowJsonlFallback: true
+    })
+  })
+
+  it('keeps JSONL fallback and pending visibility gated by context mode', () => {
+    expect(buildRetrievalPolicy({
+      mode: 'fast',
+      allowJsonlFallback: true,
+      includePendingDetails: true,
+      includePendingNotice: true
+    })).toMatchObject({
+      mode: 'fast',
+      allowJsonlFallback: false,
+      includePendingDetails: false,
+      includePendingNotice: false
+    })
+
+    expect(buildRetrievalPolicy({
+      mode: 'balanced',
+      includePendingDetails: true,
+      includePendingNotice: true
+    })).toMatchObject({
+      mode: 'balanced',
+      allowJsonlFallback: true,
+      includePendingDetails: false,
+      includePendingNotice: false
+    })
+
+    expect(buildRetrievalPolicy({ mode: 'review' })).toMatchObject({
+      mode: 'review',
+      allowJsonlFallback: true,
+      includePendingDetails: true,
+      includePendingNotice: true
     })
   })
 
@@ -75,7 +107,7 @@ describe('context policy', () => {
       includeDiagnostics: true,
       includeSimilarProjectHints: true,
       recordRetrievedEvents: true,
-      allowJsonlFallback: true
+      allowJsonlFallback: false
     })
   })
 

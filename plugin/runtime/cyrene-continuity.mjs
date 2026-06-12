@@ -18883,7 +18883,7 @@ var MODE_DEFAULTS = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: false,
+    allowJsonlFallback: true,
     candidateHintBudget: 1,
     allowHotPathIndexRebuild: false
   },
@@ -18898,7 +18898,7 @@ var MODE_DEFAULTS = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: false,
+    allowJsonlFallback: true,
     candidateHintBudget: 3,
     allowHotPathIndexRebuild: false
   }
@@ -18933,12 +18933,23 @@ function buildRetrievalPolicy(input) {
     task: input.task,
     userMessage: input.userMessage
   }) ?? "fast";
-  return {
+  return enforceModeGates({
     ...MODE_DEFAULTS[mode],
     ...envFlags,
     ...explicitFlags,
     mode,
     allowHotPathIndexRebuild: false
+  });
+}
+function enforceModeGates(policy) {
+  if (policy.mode === "review") {
+    return policy;
+  }
+  return {
+    ...policy,
+    includePendingDetails: false,
+    includePendingNotice: false,
+    ...policy.mode === "fast" ? { allowJsonlFallback: false } : {}
   };
 }
 function inferContextMode(input) {
@@ -19491,6 +19502,187 @@ function stableCandidateHintId(memoryId, projectId) {
   return createHash12("sha256").update(`${projectId}:${memoryId}:candidate-hint`).digest("hex").slice(0, 16);
 }
 
+// src/codex/jsonl-bounded-fallback.ts
+import { join as join21 } from "node:path";
+
+// src/codex/retrieval-v2-constants.ts
+var JSONL_FALLBACK_RECORD_CAP = 500;
+var JSONL_FALLBACK_FILE_SIZE_CAP_BYTES = 5 * 1024 * 1024;
+var BALANCED_CANDIDATE_CAP = 24;
+var HARVEST_PREVIEW_TTL_MS = 24 * 60 * 60 * 1e3;
+
+// src/codex/jsonl-bounded-fallback.ts
+async function readBoundedActiveJsonlFallback(input) {
+  const skippedRoots = /* @__PURE__ */ new Set();
+  let corruptionCount = 0;
+  const tombstonedIds = /* @__PURE__ */ new Set();
+  const tombstonedKeys = /* @__PURE__ */ new Set();
+  const activeSemanticMemories = [];
+  let consumedRecords = 0;
+  for (const memoryRoot of input.memoryRoots) {
+    const tombstoneScan = await scanJsonlFile(
+      join21(memoryRoot, "tombstones.jsonl"),
+      { fileSizeCapBytes: JSONL_FALLBACK_FILE_SIZE_CAP_BYTES },
+      "tombstones.jsonl"
+    );
+    const tombstones = [];
+    let invalidTombstones = 0;
+    for (const record2 of tombstoneScan.records.slice(0, JSONL_FALLBACK_RECORD_CAP)) {
+      if (isMemoryTombstone(record2)) {
+        tombstones.push(record2);
+      } else {
+        invalidTombstones += 1;
+      }
+    }
+    if (tombstoneScan.skippedReason !== void 0 || tombstoneScan.malformed.length > 0 || invalidTombstones > 0) {
+      skippedRoots.add(memoryRoot);
+      corruptionCount += tombstoneScan.malformed.length + invalidTombstones + (tombstoneScan.skippedReason === void 0 ? 0 : 1);
+      continue;
+    }
+    for (const tombstone of tombstones) {
+      if (!isActiveTombstone(tombstone)) {
+        continue;
+      }
+      if (tombstone.memoryId !== void 0) {
+        tombstonedIds.add(tombstone.memoryId);
+      }
+      tombstonedKeys.add(tombstone.normalizedKey);
+    }
+  }
+  if (skippedRoots.size > 0) {
+    return {
+      memories: [],
+      diagnostics: {
+        fallbackMode: "degraded",
+        recordCap: JSONL_FALLBACK_RECORD_CAP,
+        fileSizeCap: JSONL_FALLBACK_FILE_SIZE_CAP_BYTES,
+        selectedCount: 0,
+        skippedRoots: [...skippedRoots],
+        corruptionCount,
+        reason: "fail_closed_missing_lifecycle_side_data"
+      }
+    };
+  }
+  for (const memoryRoot of input.memoryRoots) {
+    if (consumedRecords >= JSONL_FALLBACK_RECORD_CAP) {
+      break;
+    }
+    const semanticScan = await scanJsonlFile(
+      join21(memoryRoot, "semantic_memories.jsonl"),
+      { fileSizeCapBytes: JSONL_FALLBACK_FILE_SIZE_CAP_BYTES },
+      "semantic_memories.jsonl"
+    );
+    if (semanticScan.skippedReason !== void 0 || semanticScan.malformed.length > 0) {
+      skippedRoots.add(memoryRoot);
+      corruptionCount += semanticScan.malformed.length + (semanticScan.skippedReason === void 0 ? 0 : 1);
+      continue;
+    }
+    for (const record2 of semanticScan.records) {
+      if (consumedRecords >= JSONL_FALLBACK_RECORD_CAP) {
+        break;
+      }
+      consumedRecords += 1;
+      if (!isSemanticMemory2(record2)) {
+        corruptionCount += 1;
+        continue;
+      }
+      if (record2.status === "active") {
+        activeSemanticMemories.push(record2);
+      }
+    }
+  }
+  const supersededIds = /* @__PURE__ */ new Set();
+  for (const memory2 of activeSemanticMemories) {
+    for (const supersededId of memory2.supersedes) {
+      supersededIds.add(supersededId);
+    }
+  }
+  const queryTokens = tokenize2(input.query);
+  const scored = activeSemanticMemories.map(semanticMemoryToActiveMemory).filter((memory2) => !tombstonedIds.has(memory2.id) && !tombstonedKeys.has(memory2.normalizedKey) && !supersededIds.has(memory2.id)).map((memory2) => ({
+    memory: memory2,
+    score: scoreMemory2(memory2, queryTokens)
+  })).filter((item) => queryTokens.length === 0 || item.score > 0).sort(compareScoredMemories);
+  const memories = selectWithinBudget2(scored.map((item) => item.memory), BALANCED_CANDIDATE_CAP, input.maxTokens);
+  return {
+    memories,
+    diagnostics: {
+      fallbackMode: "jsonl_bounded_fallback",
+      recordCap: JSONL_FALLBACK_RECORD_CAP,
+      fileSizeCap: JSONL_FALLBACK_FILE_SIZE_CAP_BYTES,
+      selectedCount: memories.length,
+      skippedRoots: [...skippedRoots],
+      corruptionCount
+    }
+  };
+}
+function isActiveTombstone(tombstone) {
+  return tombstone.expiresAt === void 0 || tombstone.expiresAt > (/* @__PURE__ */ new Date()).toISOString();
+}
+function scoreMemory2(memory2, queryTokens) {
+  if (queryTokens.length === 0) {
+    return 0.2;
+  }
+  const haystack = new Set(tokenize2([
+    memory2.content,
+    memory2.normalizedKey,
+    memory2.domain,
+    memory2.type,
+    memory2.strength,
+    ...memory2.useWhen ?? [],
+    ...memory2.tags ?? []
+  ].join(" ")));
+  const matches2 = queryTokens.filter((token) => haystack.has(token) || [...haystack].some((candidate) => candidate.includes(token)));
+  return matches2.length / queryTokens.length;
+}
+function compareScoredMemories(left, right) {
+  const scoreDiff = right.score - left.score;
+  if (scoreDiff !== 0) {
+    return scoreDiff;
+  }
+  const updatedDiff = right.memory.updatedAt.localeCompare(left.memory.updatedAt);
+  if (updatedDiff !== 0) {
+    return updatedDiff;
+  }
+  return left.memory.id.localeCompare(right.memory.id);
+}
+function selectWithinBudget2(memories, maxItems, maxTokens) {
+  const selected = [];
+  let tokenCount = 0;
+  for (const memory2 of memories) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    const itemTokens = estimateTokens(memory2.content);
+    if (itemTokens > maxTokens) {
+      continue;
+    }
+    if (tokenCount + itemTokens > maxTokens) {
+      break;
+    }
+    selected.push(memory2);
+    tokenCount += itemTokens;
+  }
+  return selected;
+}
+function tokenize2(value) {
+  return (value.toLowerCase().match(/[a-z0-9_./:-]+/g) ?? []).map((token) => token.replace(/^[./:-]+|[./:-]+$/g, "")).filter(Boolean);
+}
+function isSemanticMemory2(value) {
+  if (!isRecord3(value)) {
+    return false;
+  }
+  return typeof value.id === "string" && typeof value.status === "string" && typeof value.module === "string" && typeof value.kind === "string" && typeof value.scope === "string" && typeof value.domain === "string" && typeof value.content === "string" && Array.isArray(value.useWhen) && Array.isArray(value.doNotUseWhen) && Array.isArray(value.evidence) && typeof value.reviewPolicy === "string" && Array.isArray(value.supersedes) && value.supersedes.every((item) => typeof item === "string") && typeof value.createdAt === "string" && typeof value.updatedAt === "string";
+}
+function isMemoryTombstone(value) {
+  if (!isRecord3(value)) {
+    return false;
+  }
+  return (value.memoryId === void 0 || typeof value.memoryId === "string") && typeof value.normalizedKey === "string" && typeof value.domain === "string" && typeof value.type === "string" && typeof value.scope === "string" && typeof value.reason === "string" && typeof value.createdAt === "string" && (value.expiresAt === void 0 || typeof value.expiresAt === "string") && (value.replacementMemoryId === void 0 || typeof value.replacementMemoryId === "string");
+}
+function isRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/codex/continuity-context.ts
 var CANDIDATE_HINT_QUERY_MAX_ITEMS = 20;
 async function getCodexContinuityContext(input) {
@@ -19521,7 +19713,7 @@ async function getCodexContinuityContext(input) {
     cwd: input.cwd,
     userCyreneDir: config2.userCyreneDir,
     memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-    extraMemories: policy.mode === "fast" || !policy.allowJsonlFallback ? [] : await readLegacyGlobalCodexMemories(project.projectId),
+    extraMemories: policy.mode === "review" && policy.allowJsonlFallback ? await readLegacyGlobalCodexMemories(project.projectId) : [],
     currentProjectId: project.projectId,
     query: input.userMessage,
     task,
@@ -19668,7 +19860,12 @@ async function getCodexContinuityContext(input) {
         freshness: routedMemory.diagnostics.freshness,
         lastSyncAt: routedMemory.diagnostics.lastSyncAt,
         sourceLatestAt: routedMemory.diagnostics.sourceLatestAt,
-        staleReason: routedMemory.diagnostics.staleReason
+        staleReason: routedMemory.diagnostics.staleReason,
+        recordCap: routedMemory.diagnostics.recordCap,
+        fileSizeCap: routedMemory.diagnostics.fileSizeCap,
+        selectedCount: routedMemory.diagnostics.selectedCount,
+        skippedRoots: routedMemory.diagnostics.skippedRoots,
+        corruptionCount: routedMemory.diagnostics.corruptionCount
       },
       projectSimilarity: routedMemory.projectSimilarityDiagnostics,
       evalGate: routedMemory.evalGateDiagnostics,
@@ -19737,6 +19934,9 @@ async function runtimeActivationMemoriesForRoute(memoryRoot, routedMemory) {
 async function retrieveRoutedMemory(input) {
   const roots = await codexMemoryIndexRoots(input.projectId);
   const indexStatus = await readCodexMemoryIndexStatus(roots.map((root) => root.memoryRoot));
+  if (indexStatus.available && indexStatus.freshness === "empty" && !input.policy.includeSimilarProjectHints) {
+    return emptyRoutedMemory(emptySqliteRetrievalDiagnostics(indexStatus, input.policy), "memory_index_empty");
+  }
   if (!isQueryableIndexStatus(indexStatus)) {
     return fallbackRoutedMemory(input.fallback, jsonlRetrievalDiagnostics(indexStatus, input.policy), input.projectId, input.policy);
   }
@@ -20007,8 +20207,14 @@ function estimateContinuityContextTokens(context) {
   }));
 }
 async function fallbackRoutedMemory(input, diagnostics, projectId, policy) {
+  if (policy.mode === "fast") {
+    return emptyRoutedMemory(degradedIndexDiagnostics(diagnostics, policy), "index_stale");
+  }
   if (!policy.allowJsonlFallback) {
     return emptyRoutedMemory(jsonlFallbackDisabledDiagnostics(diagnostics, policy), "jsonl_fallback_disabled");
+  }
+  if (policy.mode === "balanced") {
+    return boundedJsonlFallbackRoutedMemory(input, diagnostics, projectId, policy);
   }
   const memories = await retrieveMemories(input);
   let pendingLatencyMs = 0;
@@ -20035,6 +20241,45 @@ async function fallbackRoutedMemory(input, diagnostics, projectId, policy) {
     },
     runtimeMetrics: {
       pendingLatencyMs,
+      similarLatencyMs: 0,
+      candidateHintMetrics: emptyCandidateHintMetrics()
+    }
+  };
+}
+async function boundedJsonlFallbackRoutedMemory(input, diagnostics, projectId, policy) {
+  const memoryRoots = input.memoryRoots ?? (input.memoryRoot === void 0 ? [] : [input.memoryRoot]);
+  const result3 = await readBoundedActiveJsonlFallback({
+    memoryRoots,
+    currentProjectId: projectId,
+    query: input.query,
+    maxTokens: input.maxTokens
+  });
+  const memories = result3.memories.map((memory2) => ({
+    memory: memory2,
+    score: 1,
+    explain: ["jsonl_bounded_fallback"]
+  }));
+  const boundedDiagnostics = boundedJsonlRetrievalDiagnostics(diagnostics, policy, result3.diagnostics);
+  return {
+    globalMemory: memories.filter(({ memory: memory2 }) => memory2.scope === "global"),
+    projectMemory: memories.filter(({ memory: memory2 }) => memory2.scope !== "global"),
+    pendingHypotheses: [],
+    similarProjectHints: [],
+    candidateHints: [],
+    graphEdgeTypesByMemoryKey: /* @__PURE__ */ new Map(),
+    diagnostics: boundedDiagnostics,
+    projectSimilarityDiagnostics: {
+      indexedProjects: 0,
+      candidateProjects: 0,
+      selectedProjects: 0,
+      reason: result3.diagnostics.reason ?? (diagnostics.freshness === "stale" ? "memory_index_stale" : "memory_index_unavailable")
+    },
+    evalGateDiagnostics: {
+      passed: true,
+      failedChecks: []
+    },
+    runtimeMetrics: {
+      pendingLatencyMs: 0,
       similarLatencyMs: 0,
       candidateHintMetrics: emptyCandidateHintMetrics()
     }
@@ -20150,8 +20395,39 @@ function jsonlFallbackDisabledDiagnostics(diagnostics, policy) {
     reason: diagnostics.reason ?? "jsonl_fallback_disabled"
   };
 }
+function degradedIndexDiagnostics(diagnostics, policy) {
+  return {
+    ...diagnostics,
+    source: "sqlite",
+    routes: routesForPolicy("sqlite", policy),
+    fallbackMode: "sqlite",
+    reason: diagnostics.freshness === "stale" ? "index_stale" : "index_unavailable"
+  };
+}
+function boundedJsonlRetrievalDiagnostics(diagnostics, policy, fallback) {
+  return {
+    ...diagnostics,
+    source: "jsonl",
+    routes: routesForPolicy("jsonl", policy),
+    fallbackMode: fallback.fallbackMode,
+    ...fallback.reason === void 0 ? {} : { reason: fallback.reason },
+    recordCap: fallback.recordCap,
+    fileSizeCap: fallback.fileSizeCap,
+    selectedCount: fallback.selectedCount,
+    skippedRoots: fallback.skippedRoots,
+    corruptionCount: fallback.corruptionCount
+  };
+}
 function sqliteRetrievalDiagnostics(status, diagnostics, policy) {
   return retrievalDiagnosticsFromStatus(status, "sqlite", routesForPolicy("sqlite", policy), diagnostics);
+}
+function emptySqliteRetrievalDiagnostics(status, policy) {
+  return retrievalDiagnosticsFromStatus(status, "sqlite", routesForPolicy("sqlite", policy), {
+    available: status.available,
+    dbPath: status.dbPath,
+    ftsTokenizer: status.ftsTokenizer,
+    reason: status.reason
+  });
 }
 function jsonlRetrievalDiagnostics(status, policy, diagnostics = {}) {
   return retrievalDiagnosticsFromStatus(status, "jsonl", routesForPolicy("jsonl", policy), diagnostics);
@@ -20371,11 +20647,11 @@ function canonicalGlobalMemorySignature(memory2) {
   ]);
 }
 function scorePendingMemory(memory2, query) {
-  const tokens = tokenize2(query);
+  const tokens = tokenize3(query);
   if (tokens.length === 0) {
     return 0.2;
   }
-  const haystack = tokenize2([
+  const haystack = tokenize3([
     memory2.content,
     memory2.normalizedKey,
     memory2.domain,
@@ -20436,7 +20712,7 @@ function selectPendingWithinBudget(items, maxItems, maxTokens) {
   }
   return selected;
 }
-function tokenize2(text) {
+function tokenize3(text) {
   return text.toLowerCase().split(/[^a-z0-9_]+/).map((token) => token.trim()).filter(Boolean);
 }
 function toRoutedMemoryDigestItem(item, input) {
@@ -20476,6 +20752,7 @@ function toPendingHypothesisDigestItem(item) {
     status: item.memory.status,
     content: item.memory.content,
     provisional: true,
+    reviewOnly: true,
     score: item.score
   };
 }
@@ -20819,27 +21096,27 @@ function uniqueChecks(checks) {
 }
 
 // src/codex/codex-benchmark.ts
-import { join as join33 } from "node:path";
+import { join as join34 } from "node:path";
 
 // benchmark/runner.ts
 import { createHash as createHash18 } from "node:crypto";
 import { execFile as execFile3 } from "node:child_process";
 import { readFile as readFile23 } from "node:fs/promises";
-import { dirname as dirname11, join as join32, resolve as resolve5 } from "node:path";
+import { dirname as dirname11, join as join33, resolve as resolve5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { promisify as promisify3 } from "node:util";
 
 // benchmark/artifacts.ts
 import { mkdir as mkdir13, readFile as readFile16, writeFile as writeFile10 } from "node:fs/promises";
-import { join as join21 } from "node:path";
+import { join as join22 } from "node:path";
 async function archiveBenchmarkReports(input) {
   const profile = safeProfileSegment(input.profile);
-  const targetDir = join21(input.artifactRoot, profile);
-  const jsonPath = join21(targetDir, "benchmark_report.json");
-  const markdownPath = join21(targetDir, "benchmark_report.md");
+  const targetDir = join22(input.artifactRoot, profile);
+  const jsonPath = join22(targetDir, "benchmark_report.json");
+  const markdownPath = join22(targetDir, "benchmark_report.md");
   const [json, markdown] = await Promise.all([
-    readFile16(join21(input.outputDir, "benchmark_report.json"), "utf8"),
-    readFile16(join21(input.outputDir, "benchmark_report.md"), "utf8")
+    readFile16(join22(input.outputDir, "benchmark_report.json"), "utf8"),
+    readFile16(join22(input.outputDir, "benchmark_report.md"), "utf8")
   ]);
   await mkdir13(targetDir, { recursive: true });
   await Promise.all([
@@ -21015,11 +21292,11 @@ var BENCHMARK_CASE_IDS = Object.freeze(BENCHMARK_CASES.map((item) => item.id));
 
 // benchmark/report.ts
 import { mkdir as mkdir14, writeFile as writeFile11 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 async function writeBenchmarkReports(outputDir, report) {
   await mkdir14(outputDir, { recursive: true });
-  const jsonPath = join22(outputDir, "benchmark_report.json");
-  const markdownPath = join22(outputDir, "benchmark_report.md");
+  const jsonPath = join23(outputDir, "benchmark_report.json");
+  const markdownPath = join23(outputDir, "benchmark_report.md");
   await writeFile11(jsonPath, `${JSON.stringify(report, null, 2)}
 `, "utf8");
   await writeFile11(markdownPath, renderBenchmarkReportMarkdown(report), "utf8");
@@ -21496,7 +21773,7 @@ function roundMetric(value) {
 
 // benchmark/cases/tier0-release-gate.ts
 import { mkdir as mkdir16, readFile as readFile17, writeFile as writeFile13 } from "node:fs/promises";
-import { join as join24 } from "node:path";
+import { join as join25 } from "node:path";
 
 // src/codex/memory-context-preview.ts
 async function runCodexMemoryContextPreview(input) {
@@ -25774,7 +26051,7 @@ async function handleContinuityGet(input, fallbackCwd) {
 import { createHash as createHash14 } from "node:crypto";
 import { mkdir as mkdir15, mkdtemp, rm as rm6, writeFile as writeFile12 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 var defaultProcessCwd = process.cwd();
 var fixtureEnvironmentQueue = Promise.resolve();
 function seededId(seed, label) {
@@ -25812,12 +26089,12 @@ async function createBenchmarkFixture(input) {
   if (input.preserveFixture === true && (typeof input.preserveReason !== "string" || input.preserveReason.trim() === "")) {
     throw new Error("Benchmark fixture preservation requires a non-empty preserveReason.");
   }
-  const root = await mkdtemp(join23(tmpdir(), "cyrene-benchmark-"));
-  const home = join23(root, "home");
-  const cwd = join23(root, `cyrene-benchmark-project-${seededId(input.seed, "project")}`);
+  const root = await mkdtemp(join24(tmpdir(), "cyrene-benchmark-"));
+  const home = join24(root, "home");
+  const cwd = join24(root, `cyrene-benchmark-project-${seededId(input.seed, "project")}`);
   await mkdir15(home, { recursive: true });
   await mkdir15(cwd, { recursive: true });
-  await writeFile12(join23(cwd, "package.json"), JSON.stringify({ name: `benchmark-${input.caseId.toLowerCase()}` }), "utf8");
+  await writeFile12(join24(cwd, "package.json"), JSON.stringify({ name: `benchmark-${input.caseId.toLowerCase()}` }), "utf8");
   await writeDeterministicGitIdentity(cwd, input);
   let projectId = "";
   let globalMemoryRoot = "";
@@ -25867,10 +26144,10 @@ async function createBenchmarkFixture(input) {
       await writePendingMemoriesFromRoot(globalMemoryRoot, pending.filter((memory2) => memory2.scope === "global"));
     }
     if (input.globalProfile !== void 0) {
-      await writeFile12(join23(globalMemoryRoot, "MODEL_PROFILE.md"), input.globalProfile, "utf8");
+      await writeFile12(join24(globalMemoryRoot, "MODEL_PROFILE.md"), input.globalProfile, "utf8");
     }
     if (input.projectProfile !== void 0) {
-      await writeFile12(join23(projectMemoryRoot, "MODEL_PROFILE.md"), input.projectProfile, "utf8");
+      await writeFile12(join24(projectMemoryRoot, "MODEL_PROFILE.md"), input.projectProfile, "utf8");
     }
     if (input.fastSummary !== void 0) {
       await writeFastSummaryProjection(projectMemoryRoot, {
@@ -25988,12 +26265,12 @@ function pendingMemory(input, memory2, index) {
   };
 }
 async function writeDeterministicGitIdentity(cwd, input) {
-  const gitRoot = join23(cwd, ".git");
-  await mkdir15(join23(gitRoot, "refs", "heads"), { recursive: true });
-  await mkdir15(join23(gitRoot, "objects"), { recursive: true });
-  await writeFile12(join23(gitRoot, "HEAD"), "ref: refs/heads/main\n", "utf8");
+  const gitRoot = join24(cwd, ".git");
+  await mkdir15(join24(gitRoot, "refs", "heads"), { recursive: true });
+  await mkdir15(join24(gitRoot, "objects"), { recursive: true });
+  await writeFile12(join24(gitRoot, "HEAD"), "ref: refs/heads/main\n", "utf8");
   await writeFile12(
-    join23(gitRoot, "config"),
+    join24(gitRoot, "config"),
     `[core]
 	repositoryformatversion = 0
 	filemode = true
@@ -26233,10 +26510,10 @@ async function runSimilarBoundary(benchmarkCase, options) {
       dependencies: { "@modelcontextprotocol/sdk": "^1.0.0" },
       devDependencies: { typescript: "^5.0.0" }
     });
-    await writeFile13(join24(fixture.cwd, "package.json"), similarPackage, "utf8");
-    await mkdir16(join24(fixture.metadata.root, "similar-project"), { recursive: true });
-    const otherCwd = join24(fixture.metadata.root, "similar-project");
-    await writeFile13(join24(otherCwd, "package.json"), similarPackage, "utf8");
+    await writeFile13(join25(fixture.cwd, "package.json"), similarPackage, "utf8");
+    await mkdir16(join25(fixture.metadata.root, "similar-project"), { recursive: true });
+    const otherCwd = join25(fixture.metadata.root, "similar-project");
+    await writeFile13(join25(otherCwd, "package.json"), similarPackage, "utf8");
     const otherProject = await identifyCodexProject(otherCwd);
     const otherRoot = codexProjectMemoryRoot(otherProject.projectId);
     await mkdir16(otherRoot, { recursive: true });
@@ -26283,10 +26560,10 @@ async function runCrossProjectAdversarial(benchmarkCase, options) {
       dependencies: { "@modelcontextprotocol/sdk": "^1.0.0", typescript: "^5.0.0" },
       devDependencies: { vitest: "^3.0.0" }
     });
-    await writeFile13(join24(fixture.cwd, "package.json"), similarPackage, "utf8");
-    const otherCwd = join24(fixture.metadata.root, "adversarial-similar-project");
+    await writeFile13(join25(fixture.cwd, "package.json"), similarPackage, "utf8");
+    const otherCwd = join25(fixture.metadata.root, "adversarial-similar-project");
     await mkdir16(otherCwd, { recursive: true });
-    await writeFile13(join24(otherCwd, "package.json"), similarPackage, "utf8");
+    await writeFile13(join25(otherCwd, "package.json"), similarPackage, "utf8");
     const otherProject = await identifyCodexProject(otherCwd);
     const otherRoot = codexProjectMemoryRoot(otherProject.projectId);
     await mkdir16(otherRoot, { recursive: true });
@@ -26345,10 +26622,10 @@ async function runCrossProjectPromptInjection(benchmarkCase, options) {
       dependencies: { "@modelcontextprotocol/sdk": "^1.0.0", typescript: "^5.0.0" },
       devDependencies: { vitest: "^3.0.0" }
     });
-    await writeFile13(join24(fixture.cwd, "package.json"), packageJson, "utf8");
-    const otherCwd = join24(fixture.metadata.root, "prompt-injection-similar-project");
+    await writeFile13(join25(fixture.cwd, "package.json"), packageJson, "utf8");
+    const otherCwd = join25(fixture.metadata.root, "prompt-injection-similar-project");
     await mkdir16(otherCwd, { recursive: true });
-    await writeFile13(join24(otherCwd, "package.json"), packageJson, "utf8");
+    await writeFile13(join25(otherCwd, "package.json"), packageJson, "utf8");
     const otherProject = await identifyCodexProject(otherCwd);
     const otherRoot = codexProjectMemoryRoot(otherProject.projectId);
     await mkdir16(otherRoot, { recursive: true });
@@ -26522,7 +26799,7 @@ async function runSurfaceConsistency(benchmarkCase, options) {
       includePendingDetails: true
     }, fixture.cwd);
     const mcpText = mcpResponse.content[0]?.text ?? "";
-    const skillSource = await readFile17(join24(options.cwd, "plugin", "skills", "cyrene-continuity", "SKILL.md"), "utf8");
+    const skillSource = await readFile17(join25(options.cwd, "plugin", "skills", "cyrene-continuity", "SKILL.md"), "utf8");
     const previewFastText = JSON.stringify(previewFast);
     const skillContractPresent = skillSource.includes("fast and balanced mode must not show pending candidates") && skillSource.includes("review mode is required for pending candidate review");
     const hardFailures = [
@@ -26893,7 +27170,7 @@ function includesNone(text, forbidden) {
 // src/codex/codex-memory-lifecycle-daily.ts
 import { createHash as createHash16, randomUUID as randomUUID10 } from "node:crypto";
 import { readFile as readFile18 } from "node:fs/promises";
-import { join as join25 } from "node:path";
+import { join as join26 } from "node:path";
 
 // src/codex/fast-summary-maintenance.ts
 var FAST_SUMMARY_GLOBAL_DOMAINS = /* @__PURE__ */ new Set(["procedural", "system"]);
@@ -27480,7 +27757,7 @@ function promoteGlobalEvent(state, memory2, evidenceCount, distinctEvidenceCount
   };
 }
 async function readSemanticMemoriesStrictFromRoot(memoryRoot) {
-  const filePath = join25(memoryRoot, SEMANTIC_MEMORIES_FILE2);
+  const filePath = join26(memoryRoot, SEMANTIC_MEMORIES_FILE2);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(filePath);
@@ -29844,7 +30121,7 @@ function addDays5(iso, days) {
 
 // benchmark/cases/tier2-memory-to-action.ts
 import { mkdir as mkdir17, readFile as readFile19, writeFile as writeFile14 } from "node:fs/promises";
-import { dirname as dirname10, join as join26 } from "node:path";
+import { dirname as dirname10, join as join27 } from "node:path";
 async function runTier2Case(benchmarkCase, options) {
   const replayCase = replayCaseFor2(benchmarkCase.id);
   if (replayCase === void 0) return void 0;
@@ -30301,7 +30578,7 @@ async function withActionFixture(benchmarkCase, options, seed, now, replayCase, 
 async function writeReplayFixtureFiles(fixture, replayCase) {
   if (replayCase.fixtureFiles === void 0) return;
   for (const file of replayCase.fixtureFiles) {
-    const target = join26(fixture.cwd, file.path);
+    const target = join27(fixture.cwd, file.path);
     await mkdir17(dirname10(target), { recursive: true });
     await writeFile14(target, file.content, "utf8");
   }
@@ -30319,7 +30596,7 @@ async function verifyReplayFixture(fixture, replayCase) {
 }
 async function fixtureFileContains(fixture, check2) {
   try {
-    const content = await readFile19(join26(fixture.cwd, check2.path), "utf8");
+    const content = await readFile19(join27(fixture.cwd, check2.path), "utf8");
     return content.includes(check2.content);
   } catch {
     return false;
@@ -30358,12 +30635,12 @@ function formatRatio(value) {
 
 // benchmark/cases/tier3-scale-efficiency.ts
 import { stat as stat3 } from "node:fs/promises";
-import { join as join28 } from "node:path";
+import { join as join29 } from "node:path";
 
 // src/codex/hook-trace-store.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { appendFile as appendFile3, readFile as readFile20 } from "node:fs/promises";
-import { join as join27 } from "node:path";
+import { join as join28 } from "node:path";
 var HOOK_TRACE_FILE2 = "hook-trace.jsonl";
 var DEFAULT_LIMIT = 100;
 var SUMMARY_MAX_LENGTH = 500;
@@ -30383,7 +30660,7 @@ async function appendCodexHookTrace(input) {
     };
   }
   const memoryRoot = await ensureCodexProjectMemoryRoot(project.projectId);
-  const targetPath = join27(memoryRoot, HOOK_TRACE_FILE2);
+  const targetPath = join28(memoryRoot, HOOK_TRACE_FILE2);
   await assertSafeMemoryDataFileTarget(targetPath);
   await appendFile3(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
@@ -30408,7 +30685,7 @@ async function readRecentCodexHookTrace(input) {
   if (memoryRoot === null) {
     return { records: [], warnings: [] };
   }
-  const targetPath = join27(memoryRoot, HOOK_TRACE_FILE2);
+  const targetPath = join28(memoryRoot, HOOK_TRACE_FILE2);
   await assertSafeMemoryDataFileTarget(targetPath);
   let content;
   try {
@@ -30569,7 +30846,7 @@ function parsePayload(raw) {
     return {};
   }
   const parsed = JSON.parse(trimmed);
-  return isRecord3(parsed) ? parsed : void 0;
+  return isRecord4(parsed) ? parsed : void 0;
 }
 function toTraceInput(event, payload) {
   const cwd = asString(payload.cwd) ?? process.cwd();
@@ -30608,8 +30885,8 @@ function signalsForEvent(event, prompt, tool) {
   return [];
 }
 function parseTool(payload) {
-  const nested = isRecord3(payload.tool) ? payload.tool : {};
-  const toolInput = isRecord3(payload.tool_input) ? payload.tool_input : isRecord3(payload.toolInput) ? payload.toolInput : {};
+  const nested = isRecord4(payload.tool) ? payload.tool : {};
+  const toolInput = isRecord4(payload.tool_input) ? payload.tool_input : isRecord4(payload.toolInput) ? payload.toolInput : {};
   const name = firstString(
     nested.name,
     nested.tool_name,
@@ -30654,7 +30931,7 @@ function responseSummary(value) {
   if (direct !== void 0) {
     return direct;
   }
-  if (!isRecord3(value)) {
+  if (!isRecord4(value)) {
     return void 0;
   }
   return firstString(value.output, value.result, value.content, value.text, value.stdout, value.stderr) ?? JSON.stringify(value);
@@ -30703,7 +30980,7 @@ function compact(value, maxLength) {
   const cleaned = value.replace(/\s+/g, " ").trim();
   return cleaned.length <= maxLength ? cleaned : `${cleaned.slice(0, Math.max(0, maxLength - 1))}...`;
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -31360,8 +31637,8 @@ async function fileSize(path) {
 }
 async function memoryJsonlSize(memoryRoot) {
   const sizes = await Promise.all([
-    fileSize(join28(memoryRoot, "semantic_memories.jsonl")),
-    fileSize(join28(memoryRoot, "review_queue.jsonl"))
+    fileSize(join29(memoryRoot, "semantic_memories.jsonl")),
+    fileSize(join29(memoryRoot, "review_queue.jsonl"))
   ]);
   return sizes.reduce((sum, size) => sum + size, 0);
 }
@@ -31393,17 +31670,17 @@ function mean(values) {
 
 // benchmark/cases/tier4-failure-security.ts
 import { readFile as readFile22, writeFile as writeFile15 } from "node:fs/promises";
-import { join as join31 } from "node:path";
+import { join as join32 } from "node:path";
 
 // src/codex/codex-memory-lifecycle-weekly.ts
 import { createHash as createHash17, randomUUID as randomUUID14 } from "node:crypto";
 import { readFile as readFile21 } from "node:fs/promises";
-import { join as join30 } from "node:path";
+import { join as join31 } from "node:path";
 
 // src/codex/memory-lifecycle-profile.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { open as open2, rename as rename5, rm as rm7 } from "node:fs/promises";
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 var GENERATED_HEADER2 = "<!-- Generated by Cyrene Continuity v1.5. Do not edit manually. -->";
 var MODEL_PROFILE_FILE3 = "MODEL_PROFILE.md";
 async function assertLifecycleProfileTargetSafe(memoryRoot) {
@@ -31468,8 +31745,8 @@ function supersededProfileMemoryIds(memories, relations) {
 }
 async function writeSafeGeneratedProfile(memoryRoot, content) {
   await assertLifecycleProfileTargetSafe(memoryRoot);
-  const targetPath = join29(memoryRoot, MODEL_PROFILE_FILE3);
-  const tempPath = join29(memoryRoot, `.${MODEL_PROFILE_FILE3}.${process.pid}.${Date.now()}.${randomUUID13()}.tmp`);
+  const targetPath = join30(memoryRoot, MODEL_PROFILE_FILE3);
+  const tempPath = join30(memoryRoot, `.${MODEL_PROFILE_FILE3}.${process.pid}.${Date.now()}.${randomUUID13()}.tmp`);
   const file = await open2(tempPath, "wx");
   try {
     await file.writeFile(content, "utf8");
@@ -32214,7 +32491,7 @@ function isJsonlScanPathSafetyError2(error2) {
   return error2 instanceof Error && (error2.message.startsWith("Refusing to scan non-file JSONL path:") || error2.message.startsWith("Refusing to scan JSONL symlink:"));
 }
 async function readSemanticMemoriesStrictFromRoot2(memoryRoot) {
-  const filePath = join30(memoryRoot, SEMANTIC_MEMORIES_FILE3);
+  const filePath = join31(memoryRoot, SEMANTIC_MEMORIES_FILE3);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(filePath);
@@ -32309,7 +32586,7 @@ async function runSqliteUnavailable(benchmarkCase, options) {
 }
 async function runJsonlCorrupt(benchmarkCase, options) {
   return withTier4Fixture(benchmarkCase, options, {}, async (fixture) => {
-    const semanticPath = join31(fixture.projectMemoryRoot, "semantic_memories.jsonl");
+    const semanticPath = join32(fixture.projectMemoryRoot, "semantic_memories.jsonl");
     const original = `${JSON.stringify(tier4TrialMemory("tier4-jsonl-corrupt-trial"))}
 {bad json}
 `;
@@ -32450,7 +32727,7 @@ async function runSessionHintsExpired(benchmarkCase, options) {
 }
 async function runMcpError(benchmarkCase, options) {
   return withTier4Fixture(benchmarkCase, options, {}, async (fixture) => {
-    const missingCwd = join31(fixture.metadata.root, "missing-project");
+    const missingCwd = join32(fixture.metadata.root, "missing-project");
     const diagnostic = await boundedContinuityGetError({
       cwd: missingCwd,
       userMessage: "bounded MCP error response",
@@ -32950,14 +33227,14 @@ async function runCyreneBenchmark(options) {
       path: SPEC_PATH,
       title: "Cyrene Benchmark Eval System Design",
       date: "2026-06-05",
-      contentHash: await firstFileHash([join32(resolve5(options.cwd), SPEC_PATH), join32(BENCHMARK_SOURCE_ROOT, SPEC_PATH)])
+      contentHash: await firstFileHash([join33(resolve5(options.cwd), SPEC_PATH), join33(BENCHMARK_SOURCE_ROOT, SPEC_PATH)])
     },
     benchmark: {
       version: BENCHMARK_VERSION,
       thresholdVersion: THRESHOLD_VERSION,
       caseCatalogHash: createHash18("sha256").update(JSON.stringify(BENCHMARK_CASES)).digest("hex")
     },
-    package: await packageMetadata([join32(resolve5(options.cwd), "package.json"), join32(BENCHMARK_SOURCE_ROOT, "package.json")]),
+    package: await packageMetadata([join33(resolve5(options.cwd), "package.json"), join33(BENCHMARK_SOURCE_ROOT, "package.json")]),
     git: await gitMetadata(resolve5(options.cwd)),
     runtime: {
       nodeVersion: process.version,
@@ -33259,7 +33536,7 @@ function uniqueValues(values) {
 
 // src/codex/codex-benchmark.ts
 async function runCodexBenchmark(input) {
-  const outputDir = input.outputDir ?? join33(input.cwd, "benchmark-results");
+  const outputDir = input.outputDir ?? join34(input.cwd, "benchmark-results");
   const report = await runCyreneBenchmark({
     cwd: input.cwd,
     profile: input.profile,
@@ -33269,16 +33546,16 @@ async function runCodexBenchmark(input) {
     preserveFixtures: input.preserveFixtures
   });
   const artifactPaths = input.artifactArchiveDir === void 0 ? void 0 : {
-    jsonPath: join33(input.artifactArchiveDir, input.profile, "benchmark_report.json"),
-    markdownPath: join33(input.artifactArchiveDir, input.profile, "benchmark_report.md")
+    jsonPath: join34(input.artifactArchiveDir, input.profile, "benchmark_report.json"),
+    markdownPath: join34(input.artifactArchiveDir, input.profile, "benchmark_report.md")
   };
   return {
     profile: report.profile,
     passed: report.passed,
     summary: report.summary,
     reportPaths: {
-      jsonPath: join33(outputDir, "benchmark_report.json"),
-      markdownPath: join33(outputDir, "benchmark_report.md")
+      jsonPath: join34(outputDir, "benchmark_report.json"),
+      markdownPath: join34(outputDir, "benchmark_report.md")
     },
     ...artifactPaths === void 0 ? {} : { artifactPaths }
   };
@@ -33287,7 +33564,7 @@ async function runCodexBenchmark(input) {
 // src/codex/codex-hook-stop.ts
 import { randomUUID as randomUUID19 } from "node:crypto";
 import { lstat as lstat13, open as open4, readFile as readFile25, realpath as realpath6 } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join36, relative as relative5, resolve as resolve6 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join37, relative as relative5, resolve as resolve6 } from "node:path";
 
 // src/llm-client.ts
 async function callModel(input) {
@@ -34190,7 +34467,7 @@ import { createHash as createHash20 } from "node:crypto";
 // src/codex/project-memory-signals.ts
 import { execFile as execFile4 } from "node:child_process";
 import { open as open3, readdir as readdir6, lstat as lstat12, readFile as readFile24 } from "node:fs/promises";
-import { join as join34 } from "node:path";
+import { join as join35 } from "node:path";
 import { promisify as promisify4 } from "node:util";
 var execFileAsync4 = promisify4(execFile4);
 var PROJECT_FILES = [
@@ -34282,7 +34559,7 @@ async function collectProjectFileSignals(root, mode, changedFiles) {
     if (mode === "changed_files" && !changedFiles.has(file)) {
       continue;
     }
-    const text = await readBoundedRegularFile(join34(root, file));
+    const text = await readBoundedRegularFile(join35(root, file));
     if (text === void 0) {
       continue;
     }
@@ -34293,7 +34570,7 @@ async function collectProjectFileSignals(root, mode, changedFiles) {
 async function collectTestSignals(root, mode, changedFiles) {
   let entries;
   try {
-    entries = (await readdir6(join34(root, "tests"), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => `tests/${entry.name}`).sort();
+    entries = (await readdir6(join35(root, "tests"), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => `tests/${entry.name}`).sort();
   } catch (error2) {
     if (isErrorCode4(error2, "ENOENT")) {
       return [];
@@ -34321,7 +34598,7 @@ async function collectReviewSummarySignals(projectId) {
   if (memoryRoot === null) {
     return { signals: [], warnings };
   }
-  const targetPath = join34(memoryRoot, REVIEW_SUMMARIES_FILE2);
+  const targetPath = join35(memoryRoot, REVIEW_SUMMARIES_FILE2);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
@@ -34704,7 +34981,7 @@ function buildCodexProjectMemoryHarvestPrompt(signals) {
 }
 function parseCodexProjectMemoryHarvestResponse(content) {
   const parsed = JSON.parse(extractJsonObject(content));
-  if (!isRecord4(parsed)) {
+  if (!isRecord5(parsed)) {
     throw new Error("Project memory harvest response is not a JSON object.");
   }
   return {
@@ -34713,7 +34990,7 @@ function parseCodexProjectMemoryHarvestResponse(content) {
   };
 }
 function sanitizeProjectMemoryCandidate(value, signals, config2) {
-  if (!isRecord4(value)) {
+  if (!isRecord5(value)) {
     return void 0;
   }
   const candidateKind = parseProjectCandidateKind(value.candidateKind) ?? parseProjectCandidateKind(value.candidate_kind);
@@ -34935,7 +35212,7 @@ function extractJsonObject(content) {
   }
   throw new Error("Project memory harvest response JSON was incomplete.");
 }
-function isRecord4(value) {
+function isRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -34944,11 +35221,11 @@ import { createHash as createHash21, randomUUID as randomUUID18 } from "node:cry
 
 // src/codex/review-summary-store.ts
 import { appendFile as appendFile4 } from "node:fs/promises";
-import { join as join35 } from "node:path";
+import { join as join36 } from "node:path";
 var REVIEW_SUMMARIES_FILE3 = "review-summaries.jsonl";
 async function appendCodexReviewSummary(memoryRoot, record2) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join35(root, REVIEW_SUMMARIES_FILE3);
+  const targetPath = join36(root, REVIEW_SUMMARIES_FILE3);
   await assertSafeMemoryDataFileTarget(targetPath);
   await appendFile4(targetPath, `${JSON.stringify(record2)}
 `, "utf8");
@@ -34971,12 +35248,12 @@ function recentTranscriptMessages(messages, limit = 40) {
   return messages.slice(-limit);
 }
 function parseTranscriptLine(value) {
-  const record2 = isRecord5(value) ? value : void 0;
+  const record2 = isRecord6(value) ? value : void 0;
   const eventMessage = parseCodexEventMessage(record2);
   if (eventMessage !== void 0) {
     return [eventMessage];
   }
-  const source = isRecord5(record2?.message) ? record2.message : record2;
+  const source = isRecord6(record2?.message) ? record2.message : record2;
   const role = asString3(source?.role);
   const content = contentToString(source?.content);
   if (role === void 0 || content === void 0) {
@@ -34988,7 +35265,7 @@ function parseCodexEventMessage(record2) {
   if (record2?.type !== "event_msg") {
     return void 0;
   }
-  const payload = isRecord5(record2.payload) ? record2.payload : void 0;
+  const payload = isRecord6(record2.payload) ? record2.payload : void 0;
   const payloadType = asString3(payload?.type);
   const message = asString3(payload?.message);
   if (message === void 0) {
@@ -35013,7 +35290,7 @@ function contentToString(value) {
     if (typeof entry === "string") {
       return [entry];
     }
-    if (isRecord5(entry) && typeof entry.text === "string") {
+    if (isRecord6(entry) && typeof entry.text === "string") {
       return [entry.text];
     }
     return [];
@@ -35023,7 +35300,7 @@ function contentToString(value) {
 function asString3(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -35158,7 +35435,7 @@ function buildCodexReviewSummaryPrompt(redactedTranscript) {
 function parseReviewSummaryResponse(content) {
   const objectText = extractJsonObject2(content);
   const parsed = JSON.parse(objectText);
-  if (!isRecord6(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
+  if (!isRecord7(parsed) || typeof parsed.summary !== "string" || parsed.summary.trim() === "") {
     throw new Error("Review summary response is missing summary.");
   }
   return {
@@ -35170,7 +35447,7 @@ function formatMessages(messages) {
   return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
 }
 function redactCandidate(value, runId, sessionId, redactedSummary, redactor, config2) {
-  if (!isRecord6(value)) {
+  if (!isRecord7(value)) {
     return void 0;
   }
   const domain = parseEnum(value.domain, MEMORY_DOMAINS);
@@ -35210,7 +35487,7 @@ function redactCandidate(value, runId, sessionId, redactedSummary, redactor, con
 }
 function redactEvidence(value, runId, sessionId, redactedSummary, sourceKind, redactor, maxLength) {
   const evidence = Array.isArray(value) ? value.flatMap((entry) => {
-    if (!isRecord6(entry)) {
+    if (!isRecord7(entry)) {
       return [];
     }
     const summary = parseBoundedString(entry.summary, redactor, maxLength);
@@ -35279,7 +35556,7 @@ function truncateWithSuffix3(value, maxChars) {
   return `${value.slice(0, maxChars - 3)}...`;
 }
 function parseScores(value) {
-  if (!isRecord6(value)) {
+  if (!isRecord7(value)) {
     return void 0;
   }
   const scores = {};
@@ -35340,7 +35617,7 @@ function parseEnum(value, allowed) {
 function parseString(value) {
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null;
 }
 
@@ -35811,7 +36088,7 @@ function codexHomePath() {
     return configured;
   }
   const home = process.env.HOME?.trim();
-  return home === void 0 || home === "" ? void 0 : join36(home, ".codex");
+  return home === void 0 || home === "" ? void 0 : join37(home, ".codex");
 }
 function isPathInside5(parent, child) {
   const path = relative5(parent, child);
@@ -35824,7 +36101,7 @@ function asString4(value) {
 // src/codex/codex-install.ts
 import { lstat as lstat14, mkdir as mkdir18, rm as rm8, symlink, writeFile as writeFile16 } from "node:fs/promises";
 import { homedir as homedir5 } from "node:os";
-import { dirname as dirname12, join as join37, resolve as resolve7 } from "node:path";
+import { dirname as dirname12, join as join38, resolve as resolve7 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var CURRENT_CYRENE_MCP_CONFIG_TABLE2 = '[mcp_servers."cyrene-continuity"]';
 var LEGACY_CYRENE_MCP_CONFIG_TABLE2 = "[mcp_servers.cyrene]";
@@ -35836,13 +36113,13 @@ async function installCodexDevBridge(input = {}) {
     "skills",
     "cyrene-continuity"
   );
-  const skillTarget = join37(homedir5(), ".agents", "skills", "cyrene-continuity");
+  const skillTarget = join38(homedir5(), ".agents", "skills", "cyrene-continuity");
   const stateRoot = codexGlobalRoot();
   await mkdir18(dirname12(skillTarget), { recursive: true });
   await removeExistingSkillSymlink(skillTarget);
   await symlink(skillSource, skillTarget, "dir");
   await mkdir18(stateRoot, { recursive: true });
-  await writeFile16(join37(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
+  await writeFile16(join38(stateRoot, ".keep"), "created by cyrene-continuity codex install --dev\n", "utf8");
   return [
     "Cyrene Codex dev bridge installed.",
     "",
@@ -35913,7 +36190,7 @@ async function runCodexMemoryActiveSupersede(input) {
 // src/codex/codex-memory-dashboard.ts
 import { readFile as readFile26 } from "node:fs/promises";
 import { homedir as homedir6 } from "node:os";
-import { join as join38 } from "node:path";
+import { join as join39 } from "node:path";
 var REVIEW_SUMMARIES_FILE4 = "review-summaries.jsonl";
 var STOP_HOOK_STALE_MS = 24 * 60 * 60 * 1e3;
 async function formatCodexMemoryDashboard(input) {
@@ -35928,7 +36205,7 @@ async function formatCodexMemoryDashboard(input) {
     readReviewSummaries(projectRoot),
     readDashboardDreamState(projectRoot),
     readModelProfileFromRootIfExists(projectRoot),
-    readOptional2(input.configPath ?? join38(homedir6(), ".codex", "config.toml"))
+    readOptional2(input.configPath ?? join39(homedir6(), ".codex", "config.toml"))
   ]);
   const pendingSummaries = pending.map((candidate) => summarizePendingMemory(candidate, now));
   const warnings = buildDashboardWarnings({
@@ -35974,7 +36251,7 @@ async function readDashboardPendingMemories(roots) {
 async function readReviewSummaries(root) {
   let content;
   try {
-    content = await readOptionalMemoryDataFile(join38(root, REVIEW_SUMMARIES_FILE4));
+    content = await readOptionalMemoryDataFile(join39(root, REVIEW_SUMMARIES_FILE4));
   } catch {
     return [];
   }
@@ -36151,7 +36428,7 @@ function errorMessage6(error2) {
 // src/codex/codex-memory-lifecycle-migrate-v1-5.ts
 import { randomUUID as randomUUID20 } from "node:crypto";
 import { lstat as lstat15, readFile as readFile27, realpath as realpath7, rename as rename6, rm as rm9, writeFile as writeFile17 } from "node:fs/promises";
-import { join as join39 } from "node:path";
+import { join as join40 } from "node:path";
 var LEGACY_INDEX_FILE2 = "index.jsonl";
 var LEGACY_PENDING_FILE2 = "pending.jsonl";
 var SEMANTIC_MEMORIES_FILE4 = "semantic_memories.jsonl";
@@ -36188,7 +36465,7 @@ async function runCodexMemoryLifecycleMigrateV15(input) {
       }
     } catch (error2) {
       registryFailure = skippedRootResult(
-        { scope: "project", memoryRoot: join39(codexGlobalMemoryRoot(), "..", "..", "projects") },
+        { scope: "project", memoryRoot: join40(codexGlobalMemoryRoot(), "..", "..", "projects") },
         `project registry listing failed: ${errorMessage7(error2)}`
       );
     }
@@ -36231,9 +36508,9 @@ async function migrateReadableRoot(root, input) {
     };
   }
   const [legacyActiveRead, legacyPendingRead, semanticRead] = await Promise.all([
-    readJsonLinesWithMalformed(join39(root.memoryRoot, LEGACY_INDEX_FILE2), isValidLegacyActiveMemory),
-    readJsonLinesWithMalformed(join39(root.memoryRoot, LEGACY_PENDING_FILE2), isValidPendingMemory),
-    readJsonLinesWithMalformed(join39(root.memoryRoot, SEMANTIC_MEMORIES_FILE4), isValidSemanticMemory)
+    readJsonLinesWithMalformed(join40(root.memoryRoot, LEGACY_INDEX_FILE2), isValidLegacyActiveMemory),
+    readJsonLinesWithMalformed(join40(root.memoryRoot, LEGACY_PENDING_FILE2), isValidPendingMemory),
+    readJsonLinesWithMalformed(join40(root.memoryRoot, SEMANTIC_MEMORIES_FILE4), isValidSemanticMemory)
   ]);
   const legacyActive = legacyActiveRead.records;
   const legacyPending = legacyPendingRead.records;
@@ -36444,9 +36721,9 @@ async function migrateReadableRoot(root, input) {
       await appendMemoryEventFromRoot(root.memoryRoot, dropAuditEvent(root, audit, input.now));
     }
     await writeSemanticMemoriesFromRoot(root.memoryRoot, nextSemantic);
-    await writeJsonLinesAtomic3(join39(root.memoryRoot, REVIEW_QUEUE_FILE2), []);
-    await removeMemoryDataFileIfExists2(join39(root.memoryRoot, LEGACY_INDEX_FILE2));
-    await removeMemoryDataFileIfExists2(join39(root.memoryRoot, LEGACY_PENDING_FILE2));
+    await writeJsonLinesAtomic3(join40(root.memoryRoot, REVIEW_QUEUE_FILE2), []);
+    await removeMemoryDataFileIfExists2(join40(root.memoryRoot, LEGACY_INDEX_FILE2));
+    await removeMemoryDataFileIfExists2(join40(root.memoryRoot, LEGACY_PENDING_FILE2));
     await appendMemoryEventFromRoot(root.memoryRoot, completionEvent(result3, input.now));
   }
   return result3;
@@ -36821,24 +37098,24 @@ async function readJsonLinesWithMalformed(filePath, isValidRecord) {
   return { records, malformedLines };
 }
 function isValidLegacyActiveMemory(value) {
-  return isRecord7(value) && isNonEmptyString(value.id) && value.status === "active" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt) && isStringArray3(value.tags);
+  return isRecord8(value) && isNonEmptyString(value.id) && value.status === "active" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt) && isStringArray3(value.tags);
 }
 function isValidPendingMemory(value) {
-  return isRecord7(value) && isNonEmptyString(value.id) && value.status === "pending" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isStringArray3(value.useWhen, true) && isStringArray3(value.doNotUseWhen, true) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && typeof value.seenCount === "number" && isNonEmptyString(value.firstSeenAt) && isNonEmptyString(value.lastSeenAt) && isNonEmptyString(value.expiresAt) && isStringArray3(value.tags);
+  return isRecord8(value) && isNonEmptyString(value.id) && value.status === "pending" && oneOf(MEMORY_DOMAINS, value.domain) && oneOf(MEMORY_TYPES, value.type) && oneOf(MEMORY_STRENGTHS, value.strength) && oneOf(MEMORY_SCOPES, value.scope) && isNonEmptyString(value.content) && isStringArray3(value.useWhen, true) && isStringArray3(value.doNotUseWhen, true) && isNonEmptyString(value.normalizedKey) && oneOf(MEMORY_SOURCES2, value.source) && isEvidenceArray(value.evidence) && isMemoryScores(value.scores) && typeof value.seenCount === "number" && isNonEmptyString(value.firstSeenAt) && isNonEmptyString(value.lastSeenAt) && isNonEmptyString(value.expiresAt) && isStringArray3(value.tags);
 }
 function isValidSemanticMemory(value) {
-  return isRecord7(value) && isNonEmptyString(value.id) && oneOf(SEMANTIC_MEMORY_STATUSES, value.status) && oneOf(MEMORY_MODULES, value.module) && oneOf(MEMORY_CANDIDATE_KINDS2, value.kind) && oneOf(MEMORY_SCOPES, value.scope) && oneOf(MEMORY_DOMAINS, value.domain) && isNonEmptyString(value.content) && isStringArray3(value.useWhen) && isStringArray3(value.doNotUseWhen) && isOptionalString2(value.sourceOfTruth) && isStructuredEvidenceArray(value.evidence) && (value.routing === void 0 || isValidRouting(value.routing)) && oneOf(UPDATE_POLICIES, value.reviewPolicy) && (value.reviewState === void 0 || isValidSemanticReviewState(value.reviewState)) && (value.confidenceTier === void 0 || oneOf(CONFIDENCE_TIERS, value.confidenceTier)) && (value.activationPolicy === void 0 || isValidActivationPolicy(value.activationPolicy)) && isStringArray3(value.supersedes) && isOptionalString2(value.expiresAt) && isOptionalString2(value.reviewAfter) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt);
+  return isRecord8(value) && isNonEmptyString(value.id) && oneOf(SEMANTIC_MEMORY_STATUSES, value.status) && oneOf(MEMORY_MODULES, value.module) && oneOf(MEMORY_CANDIDATE_KINDS2, value.kind) && oneOf(MEMORY_SCOPES, value.scope) && oneOf(MEMORY_DOMAINS, value.domain) && isNonEmptyString(value.content) && isStringArray3(value.useWhen) && isStringArray3(value.doNotUseWhen) && isOptionalString2(value.sourceOfTruth) && isStructuredEvidenceArray(value.evidence) && (value.routing === void 0 || isValidRouting(value.routing)) && oneOf(UPDATE_POLICIES, value.reviewPolicy) && (value.reviewState === void 0 || isValidSemanticReviewState(value.reviewState)) && (value.confidenceTier === void 0 || oneOf(CONFIDENCE_TIERS, value.confidenceTier)) && (value.activationPolicy === void 0 || isValidActivationPolicy(value.activationPolicy)) && isStringArray3(value.supersedes) && isOptionalString2(value.expiresAt) && isOptionalString2(value.reviewAfter) && isNonEmptyString(value.createdAt) && isNonEmptyString(value.updatedAt);
 }
 function isValidRouting(value) {
-  return isRecord7(value) && oneOf(MEMORY_MODULES, value.module) && oneOf(UPDATE_POLICIES, value.updatePolicy) && oneOf(ROUTING_RISKS, value.risk) && isStringArray3(value.reasons);
+  return isRecord8(value) && oneOf(MEMORY_MODULES, value.module) && oneOf(UPDATE_POLICIES, value.updatePolicy) && oneOf(ROUTING_RISKS, value.risk) && isStringArray3(value.reasons);
 }
 function isValidSemanticReviewState(value) {
-  return isRecord7(value) && isOptionalString2(value.normalizedKey) && isOptionalString2(value.sourceOfTruth) && (value.type === void 0 || oneOf(MEMORY_TYPES, value.type)) && (value.strength === void 0 || oneOf(MEMORY_STRENGTHS, value.strength)) && (value.source === void 0 || oneOf(MEMORY_SOURCES2, value.source)) && (value.portability === void 0 || oneOf(MEMORY_PORTABILITIES, value.portability)) && (value.profileVisibility === void 0 || oneOf(MEMORY_PROFILE_VISIBILITIES, value.profileVisibility)) && (value.scores === void 0 || isMemoryScores(value.scores)) && isStringArray3(value.tags, true) && isOptionalFiniteNumber(value.seenCount) && isOptionalString2(value.firstSeenAt) && isOptionalString2(value.lastSeenAt) && isOptionalString2(value.expiresAt) && isOptionalString2(value.promoteAfter) && (value.admittedBy === void 0 || oneOf(ADMITTED_BY_VALUES, value.admittedBy)) && (value.admissionAction === void 0 || oneOf(ADMISSION_ACTIONS, value.admissionAction)) && isOptionalFiniteNumber(value.admissionScore) && isStringArray3(value.admissionReasons, true) && isStringArray3(value.sourceEpisodeIds, true) && isStringArray3(value.sourceDraftIds, true) && isOptionalBoolean2(value.userConfirmed) && (value.normalizedKeyConflictResolution === void 0 || oneOf(NORMALIZED_KEY_CONFLICT_RESOLUTIONS2, value.normalizedKeyConflictResolution)) && isStringArray3(value.conflictsWith, true);
+  return isRecord8(value) && isOptionalString2(value.normalizedKey) && isOptionalString2(value.sourceOfTruth) && (value.type === void 0 || oneOf(MEMORY_TYPES, value.type)) && (value.strength === void 0 || oneOf(MEMORY_STRENGTHS, value.strength)) && (value.source === void 0 || oneOf(MEMORY_SOURCES2, value.source)) && (value.portability === void 0 || oneOf(MEMORY_PORTABILITIES, value.portability)) && (value.profileVisibility === void 0 || oneOf(MEMORY_PROFILE_VISIBILITIES, value.profileVisibility)) && (value.scores === void 0 || isMemoryScores(value.scores)) && isStringArray3(value.tags, true) && isOptionalFiniteNumber(value.seenCount) && isOptionalString2(value.firstSeenAt) && isOptionalString2(value.lastSeenAt) && isOptionalString2(value.expiresAt) && isOptionalString2(value.promoteAfter) && (value.admittedBy === void 0 || oneOf(ADMITTED_BY_VALUES, value.admittedBy)) && (value.admissionAction === void 0 || oneOf(ADMISSION_ACTIONS, value.admissionAction)) && isOptionalFiniteNumber(value.admissionScore) && isStringArray3(value.admissionReasons, true) && isStringArray3(value.sourceEpisodeIds, true) && isStringArray3(value.sourceDraftIds, true) && isOptionalBoolean2(value.userConfirmed) && (value.normalizedKeyConflictResolution === void 0 || oneOf(NORMALIZED_KEY_CONFLICT_RESOLUTIONS2, value.normalizedKeyConflictResolution)) && isStringArray3(value.conflictsWith, true);
 }
 function isValidActivationPolicy(value) {
-  return isRecord7(value) && Array.isArray(value.allowedModes) && value.allowedModes.every((mode) => oneOf(ACTIVATION_MODES, mode)) && oneOf(RUNTIME_ACTIVATION_STRENGTHS, value.maxRuntimeStrength);
+  return isRecord8(value) && Array.isArray(value.allowedModes) && value.allowedModes.every((mode) => oneOf(ACTIVATION_MODES, mode)) && oneOf(RUNTIME_ACTIVATION_STRENGTHS, value.maxRuntimeStrength);
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonEmptyString(value) {
@@ -36854,15 +37131,15 @@ function oneOf(values, value) {
   return typeof value === "string" && values.includes(value);
 }
 function isEvidenceArray(value) {
-  return Array.isArray(value) && value.every(isRecord7);
+  return Array.isArray(value) && value.every(isRecord8);
 }
 function isStructuredEvidenceArray(value) {
   return Array.isArray(value) && value.every(
-    (entry) => isRecord7(entry) && isNonEmptyString(entry.id) && isNonEmptyString(entry.sourceKind) && isNonEmptyString(entry.sourceRef) && isNonEmptyString(entry.whatHappened) && isNonEmptyString(entry.whyImportant)
+    (entry) => isRecord8(entry) && isNonEmptyString(entry.id) && isNonEmptyString(entry.sourceKind) && isNonEmptyString(entry.sourceRef) && isNonEmptyString(entry.whatHappened) && isNonEmptyString(entry.whyImportant)
   );
 }
 function isMemoryScores(value) {
-  return isRecord7(value) && isFiniteNumber(value.evidenceStrength) && isFiniteNumber(value.stability) && isFiniteNumber(value.usefulness) && isFiniteNumber(value.safety) && isFiniteNumber(value.sensitivity);
+  return isRecord8(value) && isFiniteNumber(value.evidenceStrength) && isFiniteNumber(value.stability) && isFiniteNumber(value.usefulness) && isFiniteNumber(value.safety) && isFiniteNumber(value.sensitivity);
 }
 function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -37519,7 +37796,7 @@ import { createServer } from "node:http";
 // src/codex/codex-ui-api.ts
 import { randomUUID as randomUUID23 } from "node:crypto";
 import { readFile as readFile28 } from "node:fs/promises";
-import { join as join40 } from "node:path";
+import { join as join41 } from "node:path";
 
 // src/codex/memory-distill.ts
 async function runCodexMemoryDistill(input) {
@@ -38173,7 +38450,7 @@ async function handleCodexUiApiRequest(input) {
 }
 async function handleBatchPendingReject(input, selection) {
   const body = input.body;
-  if (!isRecord8(body) || !Array.isArray(body.candidates)) {
+  if (!isRecord9(body) || !Array.isArray(body.candidates)) {
     return failure(400, "invalid_request", "Batch pending reject requires candidates.");
   }
   const candidates = parseBatchRejectCandidates(body.candidates);
@@ -38285,7 +38562,7 @@ function tombstoneForBatchRejectedCandidate(candidate, now) {
 function parseBatchRejectCandidates(value) {
   const candidates = [];
   for (const item of value) {
-    if (!isRecord8(item) || typeof item.id !== "string" || item.id.trim() === "") {
+    if (!isRecord9(item) || typeof item.id !== "string" || item.id.trim() === "") {
       return { error: failure(400, "invalid_request", "Batch pending reject candidate id is required.") };
     }
     if (typeof item.reviewHash !== "string" || item.reviewHash.trim() === "") {
@@ -38316,7 +38593,7 @@ function parseProjectDeleteRoute(pathname) {
 }
 async function handleProjectDeleteRoute(input, route) {
   const body = input.body;
-  if (!isRecord8(body) || typeof body.confirmProjectId !== "string") {
+  if (!isRecord9(body) || typeof body.confirmProjectId !== "string") {
     return failure(400, "invalid_request", "Project memory deletion requires confirmProjectId.");
   }
   if (body.confirmProjectId.trim() !== route.projectId) {
@@ -38338,7 +38615,7 @@ async function handleProjectDeleteRoute(input, route) {
 }
 async function handleMemoryWriteRoute(input, route, selection) {
   const body = input.body;
-  if (!isRecord8(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
+  if (!isRecord9(body) || typeof body.reviewHash !== "string" || body.reviewHash.trim() === "") {
     return failure(400, "invalid_request", "Write requests require reviewHash.");
   }
   const reviewHash = body.reviewHash.trim();
@@ -38389,7 +38666,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
   if (typeof body.changeNote !== "string" || body.changeNote.trim() === "") {
     return failure(400, "invalid_request", "Edit requires a change note.");
   }
-  if (!isRecord8(body.patch)) {
+  if (!isRecord9(body.patch)) {
     return failure(400, "invalid_request", "Edit requires a patch object.");
   }
   const patch = parseEditPatch(body.patch);
@@ -38411,7 +38688,7 @@ async function handleMemoryWriteRoute(input, route, selection) {
 }
 async function handleActiveMemoryWriteRoute(input, route) {
   const body = input.body;
-  if (!isRecord8(body) || typeof body.contentHash !== "string" || body.contentHash.trim() === "") {
+  if (!isRecord9(body) || typeof body.contentHash !== "string" || body.contentHash.trim() === "") {
     return failure(400, "invalid_request", "Active memory write requests require contentHash.");
   }
   if (typeof body.reason !== "string" || body.reason.trim() === "") {
@@ -38507,7 +38784,7 @@ function parseEditPatch(value) {
     patch.tags = value.tags.map((item) => item.trim()).filter(Boolean);
   }
   if (value.scores !== void 0) {
-    if (!isRecord8(value.scores)) {
+    if (!isRecord9(value.scores)) {
       return { error: failure(400, "invalid_request", "Edit patch scores must be an object.") };
     }
     const scores = parseScorePatch(value.scores);
@@ -38864,7 +39141,7 @@ function rootScopeForMemoryRoot(selection, memoryRoot) {
   return memoryRoot === selection.globalMemoryRoot ? "global" : "project";
 }
 function sourceBoundaryForMemory(memory2) {
-  const semanticMemory = isRecord8(memory2.semanticMemory) ? memory2.semanticMemory : void 0;
+  const semanticMemory = isRecord9(memory2.semanticMemory) ? memory2.semanticMemory : void 0;
   const normalizedKey = stringValue(memory2.normalizedKey);
   const evidenceRecords = [
     ...evidenceRecordsFor(memory2.evidence),
@@ -38884,7 +39161,7 @@ function sourceBoundaryForMemory(memory2) {
       evidenceRefs: uniqueInOrder8([sourceOfTruth, ...evidenceRefs2])
     };
   }
-  const episodeEvidence = isRecord8(memory2.episodeEvidence) ? memory2.episodeEvidence : void 0;
+  const episodeEvidence = isRecord9(memory2.episodeEvidence) ? memory2.episodeEvidence : void 0;
   const episodeSource = usableSourceKind(episodeEvidence?.source);
   if (evidenceRefs2.length > 0) {
     const sourceKind = evidenceSourceKind ?? episodeSource ?? directSource;
@@ -38926,7 +39203,7 @@ function pollutionFlagsForMemory(origin, memory2, sourceBoundary) {
 }
 function evidenceRecordsFor(value) {
   if (!Array.isArray(value)) return [];
-  return value.filter((item) => isRecord8(item));
+  return value.filter((item) => isRecord9(item));
 }
 function evidenceRefsForEvidence(evidence) {
   return [
@@ -39136,7 +39413,7 @@ function uniqueInOrder8(values) {
   });
 }
 async function readReviewSummaryRecordsForUi(memoryRoot) {
-  const targetPath = join40(memoryRoot, REVIEW_SUMMARIES_FILE5);
+  const targetPath = join41(memoryRoot, REVIEW_SUMMARIES_FILE5);
   let content;
   try {
     await assertSafeMemoryDataFileTarget(targetPath);
@@ -39198,16 +39475,16 @@ function labelForGlobalLifecycleMemory(memory2) {
   return void 0;
 }
 function isReviewSummaryRecord2(value) {
-  if (!isRecord8(value)) return false;
+  if (!isRecord9(value)) return false;
   return typeof value.id === "string" && typeof value.runId === "string" && optionalString(value.sessionId) && optionalString(value.turnId) && typeof value.createdAt === "string" && (value.status === "ok" || value.status === "failed") && typeof value.summary === "string" && isRedaction(value.redaction) && Array.isArray(value.candidateIds) && value.candidateIds.every((item) => typeof item === "string") && optionalString(value.failureReason);
 }
 function isRedaction(value) {
-  return isRecord8(value) && isRecord8(value.input) && isRecord8(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
+  return isRecord9(value) && isRecord9(value.input) && isRecord9(value.output) && Object.values(value.input).every((item) => typeof item === "number") && Object.values(value.output).every((item) => typeof item === "number");
 }
 function optionalString(value) {
   return value === void 0 || typeof value === "string";
 }
-function isRecord8(value) {
+function isRecord9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function ok(data) {
@@ -41668,7 +41945,7 @@ async function runCodexMemoryAutomation(input) {
 // src/memory/memory-repair.ts
 import { randomUUID as randomUUID24 } from "node:crypto";
 import { lstat as lstat17, mkdir as mkdir19, open as open5, readFile as readFile29, rm as rm10, rename as rename7 } from "node:fs/promises";
-import { basename as basename6, dirname as dirname13, join as join41 } from "node:path";
+import { basename as basename6, dirname as dirname13, join as join42 } from "node:path";
 var REPAIR_DIR = "repair";
 var TOOL_VERSION = "0.1.0";
 var UNSUPPORTED_DIRECTORY_FSYNC_ERROR_CODES = /* @__PURE__ */ new Set(["EINVAL", "EISDIR", "ENOTSUP", "ENOSYS", "EPERM"]);
@@ -41714,7 +41991,7 @@ async function runJsonlRepairFromRoot(input) {
 async function scanCanonicalJsonlFiles(memoryRoot) {
   const files = [];
   for (const relativePath of CANONICAL_JSONL_FILES) {
-    const filePath = join41(memoryRoot, relativePath);
+    const filePath = join42(memoryRoot, relativePath);
     if (!await pathExists3(filePath)) {
       continue;
     }
@@ -41762,14 +42039,14 @@ function parseJsonlContentForRepair(content, relativePath) {
   return { validRecords, malformed };
 }
 async function applyJsonlRepair(input) {
-  const repairRoot = join41(input.memoryRoot, REPAIR_DIR);
-  const transactionRoot = join41(repairRoot, input.repairTransactionId);
-  const backupRoot = join41(transactionRoot, "backups");
-  const quarantinePath = join41(transactionRoot, "quarantine.jsonl");
-  const pendingSummaryPath = join41(transactionRoot, "summary.pending.json");
-  const summaryPath = join41(transactionRoot, "summary.json");
+  const repairRoot = join42(input.memoryRoot, REPAIR_DIR);
+  const transactionRoot = join42(repairRoot, input.repairTransactionId);
+  const backupRoot = join42(transactionRoot, "backups");
+  const quarantinePath = join42(transactionRoot, "quarantine.jsonl");
+  const pendingSummaryPath = join42(transactionRoot, "summary.pending.json");
+  const summaryPath = join42(transactionRoot, "summary.json");
   const sources = input.scannedFiles.filter((source) => source.scan.malformed.length > 0);
-  const backupPaths = sources.map((source) => join41(backupRoot, source.relativePath));
+  const backupPaths = sources.map((source) => join42(backupRoot, source.relativePath));
   const malformedLineCount = sources.reduce((count, source) => count + source.scan.malformed.length, 0);
   const pendingSummary = {
     status: "pending",
@@ -41791,7 +42068,7 @@ async function applyJsonlRepair(input) {
     await writeJsonFileDurable(pendingSummaryPath, pendingSummary);
     pendingSummaryWritten = true;
     for (const source of sources) {
-      await writeBufferDurable(join41(backupRoot, source.relativePath), source.snapshot.bytes);
+      await writeBufferDurable(join42(backupRoot, source.relativePath), source.snapshot.bytes);
     }
     await writeJsonLinesDurable(
       quarantinePath,
@@ -41889,7 +42166,7 @@ async function writeJsonLinesDurable(filePath, values) {
 }
 async function writeBufferDurable(filePath, content) {
   await ensureDirectory(dirname13(filePath));
-  const tempPath = join41(dirname13(filePath), `.${basename6(filePath)}.${process.pid}.${Date.now()}.${randomUUID24()}.tmp`);
+  const tempPath = join42(dirname13(filePath), `.${basename6(filePath)}.${process.pid}.${Date.now()}.${randomUUID24()}.tmp`);
   const file = await open5(tempPath, "wx");
   let closed = false;
   try {
@@ -41977,7 +42254,7 @@ function isFileErrorCode20(error2, code) {
 // src/codex/profile-candidates.ts
 import { createHash as createHash23, randomUUID as randomUUID25 } from "node:crypto";
 import { lstat as lstat18, readFile as readFile30, rename as rename8, writeFile as writeFile18 } from "node:fs/promises";
-import { join as join42 } from "node:path";
+import { join as join43 } from "node:path";
 var PROFILE_CANDIDATES_FILE2 = "profile_candidates.jsonl";
 var MODEL_PROFILE_PENDING_FILE = "MODEL_PROFILE.pending.md";
 function reviewHashForProfileCandidate(candidate) {
@@ -42336,7 +42613,7 @@ function upsertActiveMemory2(active, memory2) {
 }
 async function readProfileCandidatesFromRoot(memoryRoot) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join42(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join43(root, PROFILE_CANDIDATES_FILE2);
   try {
     await assertSafeProfileFileTarget(targetPath, "profile candidate");
     const content = await readFile30(targetPath, "utf8");
@@ -42350,7 +42627,7 @@ async function readProfileCandidatesFromRoot(memoryRoot) {
 }
 async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join42(root, PROFILE_CANDIDATES_FILE2);
+  const targetPath = join43(root, PROFILE_CANDIDATES_FILE2);
   await assertSafeProfileFileTarget(targetPath, "profile candidate");
   const tempPath = `${targetPath}.${process.pid}.${randomUUID25()}.tmp`;
   const content = candidates.map((candidate) => JSON.stringify(candidate)).join("\n");
@@ -42360,7 +42637,7 @@ async function writeProfileCandidatesFromRoot(memoryRoot, candidates) {
 }
 async function writePendingProfilePatchFromRoot(memoryRoot, candidates) {
   const root = await ensureWritableMemoryRootPath(memoryRoot);
-  const targetPath = join42(root, MODEL_PROFILE_PENDING_FILE);
+  const targetPath = join43(root, MODEL_PROFILE_PENDING_FILE);
   await assertSafeProfileFileTarget(targetPath, "pending profile patch");
   const tempPath = `${targetPath}.${process.pid}.${randomUUID25()}.tmp`;
   await writeFile18(tempPath, formatPendingProfilePatch(candidates.map(summarizeProfileCandidate)), "utf8");

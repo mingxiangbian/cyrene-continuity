@@ -36,11 +36,7 @@ import {
   type RetrievalFacet,
   type RetrievalPlan
 } from './retrieval-planner.js'
-import type {
-  CodexMemoryFallbackMode,
-  CodexMemoryIndexFreshness,
-  CodexMemoryIndexStatus
-} from './codex-memory-index-status.js'
+import type { CodexMemoryIndexFreshness, CodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import { readCodexMemoryIndexStatus } from './codex-memory-index-status.js'
 import {
   codexGlobalMemoryRoot,
@@ -70,8 +66,13 @@ import {
   type CandidateHintSelectionMetrics,
   type CandidateHintValidatedMemoryCandidate
 } from './candidate-hints.js'
+import {
+  readBoundedActiveJsonlFallback,
+  type BoundedActiveJsonlFallbackDiagnostics
+} from './jsonl-bounded-fallback.js'
 
 type CodexContinuityTask = NonNullable<RetrieveMemoriesInput['task']>
+type CodexRetrievalFallbackMode = 'sqlite' | 'jsonl' | 'jsonl_bounded_fallback' | 'degraded'
 
 interface RoutedMemoryDigestItem {
   id: string
@@ -96,6 +97,7 @@ interface PendingHypothesisDigestItem {
   status: 'pending'
   content: string
   provisional: true
+  reviewOnly: true
   score: number
 }
 
@@ -160,11 +162,16 @@ export interface RetrievalExcludedMemory {
 interface RetrievalDiagnostics extends MemoryIndexDiagnostics {
   source: RetrievalSource
   routes: RetrievalRoute[]
-  fallbackMode: CodexMemoryFallbackMode
+  fallbackMode: CodexRetrievalFallbackMode
   freshness: CodexMemoryIndexFreshness
   lastSyncAt?: string
   sourceLatestAt?: string
   staleReason?: string
+  recordCap?: number
+  fileSizeCap?: number
+  selectedCount?: number
+  skippedRoots?: string[]
+  corruptionCount?: number
 }
 
 interface ReviewReminder {
@@ -221,11 +228,16 @@ export interface CodexContinuityContext {
       ftsTokenizer?: string
       source: RetrievalSource
       routes: RetrievalRoute[]
-      fallbackMode: CodexMemoryFallbackMode
+      fallbackMode: CodexRetrievalFallbackMode
       freshness: CodexMemoryIndexFreshness
       lastSyncAt?: string
       sourceLatestAt?: string
       staleReason?: string
+      recordCap?: number
+      fileSizeCap?: number
+      selectedCount?: number
+      skippedRoots?: string[]
+      corruptionCount?: number
     }
     projectSimilarity?: ProjectSimilarityDiagnostics
     evalGate?: EvalGateDiagnostics
@@ -306,7 +318,7 @@ export async function getCodexContinuityContext(input: {
       cwd: input.cwd,
       userCyreneDir: config.userCyreneDir,
       memoryRoots: [globalMemoryRoot, projectMemoryRoot],
-      extraMemories: policy.mode === 'fast' || !policy.allowJsonlFallback ? [] : await readLegacyGlobalCodexMemories(project.projectId),
+      extraMemories: policy.mode === 'review' && policy.allowJsonlFallback ? await readLegacyGlobalCodexMemories(project.projectId) : [],
       currentProjectId: project.projectId,
       query: input.userMessage,
       task,
@@ -465,7 +477,12 @@ export async function getCodexContinuityContext(input: {
             freshness: routedMemory.diagnostics.freshness,
             lastSyncAt: routedMemory.diagnostics.lastSyncAt,
             sourceLatestAt: routedMemory.diagnostics.sourceLatestAt,
-            staleReason: routedMemory.diagnostics.staleReason
+            staleReason: routedMemory.diagnostics.staleReason,
+            recordCap: routedMemory.diagnostics.recordCap,
+            fileSizeCap: routedMemory.diagnostics.fileSizeCap,
+            selectedCount: routedMemory.diagnostics.selectedCount,
+            skippedRoots: routedMemory.diagnostics.skippedRoots,
+            corruptionCount: routedMemory.diagnostics.corruptionCount
           },
           projectSimilarity: routedMemory.projectSimilarityDiagnostics,
           evalGate: routedMemory.evalGateDiagnostics,
@@ -563,6 +580,9 @@ async function retrieveRoutedMemory(input: {
 }): Promise<RoutedMemoryResult> {
   const roots = await codexMemoryIndexRoots(input.projectId)
   const indexStatus = await readCodexMemoryIndexStatus(roots.map((root) => root.memoryRoot))
+  if (indexStatus.available && indexStatus.freshness === 'empty' && !input.policy.includeSimilarProjectHints) {
+    return emptyRoutedMemory(emptySqliteRetrievalDiagnostics(indexStatus, input.policy), 'memory_index_empty')
+  }
   if (!isQueryableIndexStatus(indexStatus)) {
     return fallbackRoutedMemory(input.fallback, jsonlRetrievalDiagnostics(indexStatus, input.policy), input.projectId, input.policy)
   }
@@ -900,8 +920,14 @@ async function fallbackRoutedMemory(
   projectId: string,
   policy: RetrievalPolicy
 ): Promise<RoutedMemoryResult> {
+  if (policy.mode === 'fast') {
+    return emptyRoutedMemory(degradedIndexDiagnostics(diagnostics, policy), 'index_stale')
+  }
   if (!policy.allowJsonlFallback) {
     return emptyRoutedMemory(jsonlFallbackDisabledDiagnostics(diagnostics, policy), 'jsonl_fallback_disabled')
+  }
+  if (policy.mode === 'balanced') {
+    return boundedJsonlFallbackRoutedMemory(input, diagnostics, projectId, policy)
   }
   const memories = await retrieveMemories(input)
   let pendingLatencyMs = 0
@@ -930,6 +956,51 @@ async function fallbackRoutedMemory(
     },
     runtimeMetrics: {
       pendingLatencyMs,
+      similarLatencyMs: 0,
+      candidateHintMetrics: emptyCandidateHintMetrics()
+    }
+  }
+}
+
+async function boundedJsonlFallbackRoutedMemory(
+  input: RetrieveMemoriesInput,
+  diagnostics: RetrievalDiagnostics,
+  projectId: string,
+  policy: RetrievalPolicy
+): Promise<RoutedMemoryResult> {
+  const memoryRoots = input.memoryRoots ?? (input.memoryRoot === undefined ? [] : [input.memoryRoot])
+  const result = await readBoundedActiveJsonlFallback({
+    memoryRoots,
+    currentProjectId: projectId,
+    query: input.query,
+    maxTokens: input.maxTokens
+  })
+  const memories = result.memories.map((memory) => ({
+    memory,
+    score: 1,
+    explain: ['jsonl_bounded_fallback']
+  }))
+  const boundedDiagnostics = boundedJsonlRetrievalDiagnostics(diagnostics, policy, result.diagnostics)
+  return {
+    globalMemory: memories.filter(({ memory }) => memory.scope === 'global'),
+    projectMemory: memories.filter(({ memory }) => memory.scope !== 'global'),
+    pendingHypotheses: [],
+    similarProjectHints: [],
+    candidateHints: [],
+    graphEdgeTypesByMemoryKey: new Map(),
+    diagnostics: boundedDiagnostics,
+    projectSimilarityDiagnostics: {
+      indexedProjects: 0,
+      candidateProjects: 0,
+      selectedProjects: 0,
+      reason: result.diagnostics.reason ?? (diagnostics.freshness === 'stale' ? 'memory_index_stale' : 'memory_index_unavailable')
+    },
+    evalGateDiagnostics: {
+      passed: true,
+      failedChecks: []
+    },
+    runtimeMetrics: {
+      pendingLatencyMs: 0,
       similarLatencyMs: 0,
       candidateHintMetrics: emptyCandidateHintMetrics()
     }
@@ -1083,12 +1154,56 @@ function jsonlFallbackDisabledDiagnostics(
   }
 }
 
+function degradedIndexDiagnostics(
+  diagnostics: RetrievalDiagnostics,
+  policy: RetrievalPolicy
+): RetrievalDiagnostics {
+  return {
+    ...diagnostics,
+    source: 'sqlite',
+    routes: routesForPolicy('sqlite', policy),
+    fallbackMode: 'sqlite',
+    reason: diagnostics.freshness === 'stale' ? 'index_stale' : 'index_unavailable'
+  }
+}
+
+function boundedJsonlRetrievalDiagnostics(
+  diagnostics: RetrievalDiagnostics,
+  policy: RetrievalPolicy,
+  fallback: BoundedActiveJsonlFallbackDiagnostics
+): RetrievalDiagnostics {
+  return {
+    ...diagnostics,
+    source: 'jsonl',
+    routes: routesForPolicy('jsonl', policy),
+    fallbackMode: fallback.fallbackMode,
+    ...(fallback.reason === undefined ? {} : { reason: fallback.reason }),
+    recordCap: fallback.recordCap,
+    fileSizeCap: fallback.fileSizeCap,
+    selectedCount: fallback.selectedCount,
+    skippedRoots: fallback.skippedRoots,
+    corruptionCount: fallback.corruptionCount
+  }
+}
+
 function sqliteRetrievalDiagnostics(
   status: CodexMemoryIndexStatus,
   diagnostics: MemoryIndexDiagnostics,
   policy: RetrievalPolicy
 ): RetrievalDiagnostics {
   return retrievalDiagnosticsFromStatus(status, 'sqlite', routesForPolicy('sqlite', policy), diagnostics)
+}
+
+function emptySqliteRetrievalDiagnostics(
+  status: CodexMemoryIndexStatus,
+  policy: RetrievalPolicy
+): RetrievalDiagnostics {
+  return retrievalDiagnosticsFromStatus(status, 'sqlite', routesForPolicy('sqlite', policy), {
+    available: status.available,
+    dbPath: status.dbPath,
+    ftsTokenizer: status.ftsTokenizer,
+    reason: status.reason
+  })
 }
 
 function jsonlRetrievalDiagnostics(
@@ -1504,6 +1619,7 @@ function toPendingHypothesisDigestItem(item: IndexedPendingMemory): PendingHypot
     status: item.memory.status,
     content: item.memory.content,
     provisional: true,
+    reviewOnly: true,
     score: item.score
   }
 }

@@ -65,7 +65,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: false,
+    allowJsonlFallback: true,
     candidateHintBudget: 1,
     allowHotPathIndexRebuild: false
   },
@@ -80,7 +80,7 @@ const MODE_DEFAULTS: Record<ContextMode, RetrievalPolicy> = {
     includeFullProfile: true,
     includeFastSummaries: false,
     recordRetrievedEvents: false,
-    allowJsonlFallback: false,
+    allowJsonlFallback: true,
     candidateHintBudget: 3,
     allowHotPathIndexRebuild: false
   }
@@ -120,12 +120,24 @@ export function buildRetrievalPolicy(input: BuildRetrievalPolicyInput): Retrieva
       userMessage: input.userMessage
     }) ??
     'fast'
-  return {
+  return enforceModeGates({
     ...MODE_DEFAULTS[mode],
     ...envFlags,
     ...explicitFlags,
     mode,
     allowHotPathIndexRebuild: false
+  })
+}
+
+function enforceModeGates(policy: RetrievalPolicy): RetrievalPolicy {
+  if (policy.mode === 'review') {
+    return policy
+  }
+  return {
+    ...policy,
+    includePendingDetails: false,
+    includePendingNotice: false,
+    ...(policy.mode === 'fast' ? { allowJsonlFallback: false } : {})
   }
 }
 
