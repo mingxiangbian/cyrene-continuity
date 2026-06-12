@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { contentHashForActiveMemory } from '../src/codex/active-memory-review.js'
+import { createCandidateHintSelectionReceipt } from '../src/codex/candidate-hint-receipts.js'
 import { codexProjectMemoryRoot } from '../src/codex/codex-memory-root.js'
 import {
   appendActivationEventFailOpen,
@@ -202,10 +203,40 @@ describe('Codex memory feedback', () => {
     expect((events[0] as { idempotencyKey?: string } | undefined)?.idempotencyKey).toMatch(/^[a-f0-9]{16}$/)
   })
 
-  it('records candidate hint feedback with activation id, content hash, project id, and query hash', async () => {
+  it('requires a receipt for candidate hint feedback', async () => {
+    const { cwd, memoryRoot, memory } = await seedActiveProjectMemory()
+
+    const result = await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: memory.id,
+      contentHash: contentHashForActiveMemory(memory),
+      event: 'applied',
+      activationId: 'candidate-hint:feedback-active-1',
+      query: 'Candidate hint feedback should bind to the shown workflow hint.',
+      now: '2026-06-04T00:00:00.000Z'
+    })
+
+    expect(result.result).toEqual({
+      action: 'invalid_request',
+      reason: 'candidate hint receipt is required for candidate-hint activation'
+    })
+    expect(await readActivationEventsFromRoot(memoryRoot)).toEqual([])
+  })
+
+  it('records candidate hint feedback with receipt audit fields but not the full receipt', async () => {
     const { cwd, memoryRoot, memory } = await seedActiveProjectMemory()
     const project = await identifyCodexProject(cwd)
     const contentHash = contentHashForActiveMemory(memory)
+    const receipt = await createCandidateHintSelectionReceipt({
+      version: 1,
+      contextId: 'candidate-context-1',
+      hintId: 'feedback-active-1',
+      memoryId: memory.id,
+      contentHash,
+      projectId: project.projectId,
+      mode: 'balanced',
+      selectedAt: '2026-06-04T00:00:00.000Z'
+    })
 
     const result = await recordCodexMemoryFeedback({
       cwd,
@@ -213,8 +244,9 @@ describe('Codex memory feedback', () => {
       contentHash,
       event: 'applied',
       activationId: 'candidate-hint:feedback-active-1',
+      candidateHintReceipt: receipt,
       query: 'Candidate hint feedback should bind to the shown workflow hint.',
-      now: '2026-06-04T00:00:00.000Z'
+      now: '2026-06-04T00:00:01.000Z'
     })
 
     expect(result.result).toMatchObject({
@@ -231,9 +263,93 @@ describe('Codex memory feedback', () => {
       event: 'applied',
       activationId: 'candidate-hint:feedback-active-1',
       contentHash,
+      candidateHintContextId: 'candidate-context-1',
+      candidateHintReceiptHash: receipt.receiptHash,
       queryHash: expect.stringMatching(/^[a-f0-9]{16}$/)
     })
+    expect(events[0]).not.toHaveProperty('candidateHintReceipt')
     expect(JSON.stringify(events)).not.toContain('Candidate hint feedback should bind')
+  })
+
+  it('records ignored candidate hint feedback with a matching receipt as neutral evidence', async () => {
+    const { cwd, memoryRoot, memory } = await seedActiveProjectMemory()
+    const project = await identifyCodexProject(cwd)
+    const contentHash = contentHashForActiveMemory(memory)
+    const receipt = await createCandidateHintSelectionReceipt({
+      version: 1,
+      contextId: 'candidate-context-ignored',
+      hintId: 'feedback-active-1',
+      memoryId: memory.id,
+      contentHash,
+      projectId: project.projectId,
+      mode: 'balanced',
+      selectedAt: '2026-06-04T00:00:00.000Z'
+    })
+
+    const result = await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: memory.id,
+      contentHash,
+      event: 'ignored',
+      activationId: 'candidate-hint:feedback-active-1',
+      candidateHintReceipt: receipt,
+      now: '2026-06-04T00:00:01.000Z'
+    })
+
+    expect(result.result).toMatchObject({
+      action: 'recorded',
+      memoryId: memory.id,
+      event: 'ignored'
+    })
+    await expect(readActivationEventsFromRoot(memoryRoot)).resolves.toEqual([
+      expect.objectContaining({
+        event: 'ignored',
+        candidateHintContextId: 'candidate-context-ignored',
+        candidateHintReceiptHash: receipt.receiptHash
+      })
+    ])
+  })
+
+  it.each([
+    ['memory id', { memoryId: 'other-memory' }, 'candidate hint receipt does not match memory id'],
+    ['content hash', { contentHash: 'other-hash' }, 'candidate hint receipt does not match content hash'],
+    ['project id', { projectId: 'other-project' }, 'candidate hint receipt does not match project id'],
+    ['activation id', { activationId: 'candidate-hint:other-hint' }, 'candidate hint receipt does not match activation id'],
+    ['expired', { now: '2026-06-05T00:00:01.000Z' }, 'candidate hint receipt expired'],
+    ['hash', { receiptHash: '0'.repeat(32) }, 'candidate hint receipt hash mismatch']
+  ] as const)('rejects candidate hint receipt mismatch: %s', async (_label, override, reason) => {
+    const { cwd, memoryRoot, memory } = await seedActiveProjectMemory()
+    const project = await identifyCodexProject(cwd)
+    const contentHash = contentHashForActiveMemory(memory)
+    const receipt = await createCandidateHintSelectionReceipt({
+      version: 1,
+      contextId: 'candidate-context-mismatch',
+      hintId: 'feedback-active-1',
+      memoryId: memory.id,
+      contentHash,
+      projectId: project.projectId,
+      mode: 'balanced',
+      selectedAt: '2026-06-04T00:00:00.000Z'
+    })
+    const candidateHintReceipt = {
+      ...receipt,
+      ...('receiptHash' in override ? { receiptHash: override.receiptHash } : {}),
+      projectId: 'projectId' in override ? override.projectId : receipt.projectId
+    }
+
+    const result = await recordCodexMemoryFeedback({
+      cwd,
+      memoryId: 'memoryId' in override ? override.memoryId : memory.id,
+      contentHash: 'contentHash' in override ? override.contentHash : contentHash,
+      event: 'applied',
+      activationId: 'activationId' in override ? override.activationId : 'candidate-hint:feedback-active-1',
+      candidateHintReceipt,
+      query: 'Candidate hint mismatch.',
+      now: 'now' in override ? override.now : '2026-06-04T00:00:01.000Z'
+    })
+
+    expect(result.result).toEqual({ action: 'invalid_request', reason })
+    expect(await readActivationEventsFromRoot(memoryRoot)).toEqual([])
   })
 
   it('does not record batched applied feedback from candidate hint memory ids alone', async () => {

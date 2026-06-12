@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { contentHashForActiveMemory } from './active-memory-review.js'
 import {
+  validateCandidateHintSelectionReceipt,
+  type CandidateHintReceiptAudit
+} from './candidate-hint-receipts.js'
+import {
   codexGlobalMemoryRoot,
   codexProjectMemoryRoot,
   getReadableCodexGlobalMemoryRoot,
@@ -36,6 +40,7 @@ export interface CodexMemoryFeedbackInput {
   query?: string
   reason?: string
   idempotencyKey?: string
+  candidateHintReceipt?: unknown
   now?: string
 }
 
@@ -78,7 +83,12 @@ export interface CodexMemoryFeedbackResult {
       }
 }
 
-type ActivationFeedbackEvent = ActivationEvent & { contentHash?: string; idempotencyKey?: string }
+type ActivationFeedbackEvent = ActivationEvent & {
+  contentHash?: string
+  idempotencyKey?: string
+  candidateHintContextId?: string
+  candidateHintReceiptHash?: string
+}
 
 function queryHashFor(query: string): string {
   return createHash('sha256').update(query).digest('hex').slice(0, 16)
@@ -102,6 +112,13 @@ export async function recordCodexMemoryFeedback(
   const validation = validatePublicFeedbackInput(input)
   if (validation !== undefined) {
     return defaultResult(validation)
+  }
+  const candidateHintValidation = await validateCandidateHintFeedbackInput(input, {
+    projectId: project.projectId,
+    now: input.now
+  })
+  if (candidateHintValidation.ok === false) {
+    return defaultResult({ action: 'invalid_request', reason: candidateHintValidation.reason })
   }
 
   const roots = uniqueInOrder([projectMemoryRoot, globalMemoryRoot])
@@ -171,6 +188,7 @@ export async function recordCodexMemoryFeedback(
       ...(input.activationId === undefined ? {} : { activationId: input.activationId }),
       ...(input.reason === undefined ? {} : { reason: sanitizeReason(input.reason) }),
       ...(input.evidenceRef === undefined ? {} : { evidenceRef: input.evidenceRef }),
+      ...(candidateHintValidation.audit === undefined ? {} : candidateHintValidation.audit),
       idempotencyKey,
       createdAt: input.now ?? new Date().toISOString()
     }
@@ -210,6 +228,31 @@ function validatePublicFeedbackInput(
     return { action: 'invalid_request', reason: 'applied feedback requires query or evidenceRef' }
   }
   return undefined
+}
+
+async function validateCandidateHintFeedbackInput(
+  input: CodexMemoryFeedbackInput,
+  context: { projectId: string; now?: string }
+): Promise<
+  | { ok: true; audit?: CandidateHintReceiptAudit }
+  | { ok: false; reason: string }
+> {
+  const hasCandidateHintActivation = input.activationId?.startsWith('candidate-hint:') === true
+  if (!hasCandidateHintActivation && input.candidateHintReceipt === undefined) {
+    return { ok: true }
+  }
+
+  const result = await validateCandidateHintSelectionReceipt(input.candidateHintReceipt, {
+    memoryId: input.memoryId,
+    contentHash: input.contentHash,
+    projectId: context.projectId,
+    activationId: input.activationId,
+    now: context.now
+  })
+  if (result.ok === false) {
+    return result
+  }
+  return { ok: true, audit: result.audit }
 }
 
 function isPublicActivationFeedbackEvent(value: unknown): value is PublicActivationFeedbackEvent {

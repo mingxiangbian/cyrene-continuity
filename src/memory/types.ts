@@ -425,6 +425,8 @@ export interface ActivationEvent {
   event: ActivationEventType
   activationId?: string
   contentHash?: string
+  candidateHintContextId?: string
+  candidateHintReceiptHash?: string
   reason?: string
   evidenceRef?: string
   createdAt: string
